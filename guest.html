@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>งานแต่งงาน คุณต้อม & คุณนุ่น – EventDD</title>
+  <script>document.documentElement.setAttribute('data-theme',localStorage.getItem('edd-theme')||'light');</script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    :root, [data-theme="light"] {
+      --bg:        #f0fbff;
+      --surface:   #ffffff;
+      --border:    rgba(8,145,178,.12);
+      --border2:   rgba(8,145,178,.07);
+      --primary:   #0891b2;
+      --primary-h: #0e7490;
+      --primary-l: #cffafe;
+      --accent:    #06b6d4;
+      --text:      #0c1e2e;
+      --text2:     #1e4a5c;
+      --muted:     #6fa8be;
+      --safe-bot:  env(safe-area-inset-bottom, 0px);
+      --shadow-sm: 0 1px 8px rgba(8,145,178,.08);
+      --shadow:    0 2px 16px rgba(8,145,178,.12);
+    }
+    /* ─── DARK MODE (ocean dark) ─── */
+    [data-theme="dark"] {
+      --bg:        #04161e;
+      --surface:   #072330;
+      --border:    rgba(8,145,178,.2);
+      --border2:   rgba(8,145,178,.12);
+      --primary:   #0891b2;
+      --primary-h: #0e7490;
+      --primary-l: rgba(8,145,178,.18);
+      --accent:    #22d3ee;
+      --text:      #e0f7fc;
+      --text2:     #b2ebf2;
+      --muted:     #5b9ab5;
+      --shadow-sm: 0 1px 8px rgba(0,0,0,.3);
+      --shadow:    0 2px 16px rgba(0,0,0,.4);
+    }
+    [data-theme="dark"] .topbar,
+    [data-theme="dark"] #selectTopbar { background: rgba(4,22,30,.95) !important; border-bottom-color: var(--border2); }
+    [data-theme="dark"] .bottom-nav { background: rgba(4,22,30,.96) !important; }
+    [data-theme="dark"] .sheet { background: var(--surface); }
+    [data-theme="dark"] .lightbox-bg { background: rgba(0,10,18,.95); }
+    .theme-btn-g { width:34px; height:34px; border-radius:99px; background:var(--primary-l); color:var(--primary); display:flex; align-items:center; justify-content:center; font-size:16px; cursor:pointer; transition:all .15s; border:1.5px solid var(--border); flex-shrink:0; }
+    * { font-family: 'Noto Sans Thai', sans-serif; -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+    html, body { background: var(--bg); color: var(--text); min-height: 100vh; overscroll-behavior: none; transition: background .25s, color .25s; }
+
+    .screen { display: none; flex-direction: column; min-height: calc(100dvh - 80px); padding-bottom: calc(80px + var(--safe-bot)); }
+    .screen.active { display: flex; }
+
+    /* TOPBAR */
+    .topbar {
+      position: sticky; top: 0; z-index: 20;
+      background: rgba(255,255,255,.9);
+      border-bottom: 1px solid var(--border2);
+      padding-top: env(safe-area-inset-top, 0px);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    }
+
+    /* BOTTOM NAV */
+    .bottom-nav {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
+      background: rgba(255,255,255,.94);
+      border-top: 1px solid var(--border2);
+      padding-bottom: var(--safe-bot);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    }
+    .nav-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; flex: 1; padding: 10px 4px 8px; color: var(--muted); cursor: pointer; transition: color .15s; position: relative; }
+    .nav-btn.active { color: var(--primary); }
+    .nav-btn .label { font-size: 10px; font-weight: 600; line-height: 1; }
+    .nav-badge { position: absolute; top: 6px; right: 10px; background: var(--primary); color: #fff; font-size: 9px; font-weight: 800; min-width: 16px; height: 16px; border-radius: 99px; display: flex; align-items: center; justify-content: center; padding: 0 4px; }
+
+    /* SCAN FAB */
+    .scan-fab-wrap { flex: 1; display: flex; align-items: flex-start; justify-content: center; padding-top: 2px; }
+    .scan-fab {
+      width: 60px; height: 60px; border-radius: 999px; margin-top: -20px;
+      background: linear-gradient(145deg, #0891b2, #0e7490);
+      box-shadow: 0 6px 24px rgba(8,145,178,.4), 0 0 0 4px #fff, 0 0 0 6px rgba(8,145,178,.1);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: transform .15s, box-shadow .15s;
+    }
+    .scan-fab:active { transform: scale(.91); box-shadow: 0 3px 12px rgba(8,145,178,.3), 0 0 0 4px #fff; }
+
+    /* CARDS */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow-sm); }
+    .card-sm { background: var(--surface); border: 1px solid var(--border2); border-radius: 14px; box-shadow: var(--shadow-sm); }
+    .chip { background: var(--primary-l); color: var(--primary); border-radius: 99px; font-size: 11px; font-weight: 700; padding: 3px 10px; display: inline-block; }
+
+    /* BUTTONS */
+    .btn-primary { background: var(--primary); color: #fff; font-weight: 700; border-radius: 14px; transition: all .15s; box-shadow: 0 4px 14px rgba(8,145,178,.32); display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .btn-primary:active { background: var(--primary-h); transform: scale(.97); box-shadow: none; }
+    .btn-ghost { background: var(--primary-l); color: var(--primary); border-radius: 12px; font-weight: 700; transition: all .15s; display: flex; align-items: center; justify-content: center; gap: 6px; }
+    .btn-ghost:active { background: #a5f3fc; transform: scale(.97); }
+    .btn-dl { background: linear-gradient(135deg, #0891b2, #0e7490); color: #fff; font-weight: 700; border-radius: 14px; transition: all .15s; box-shadow: 0 4px 14px rgba(8,145,178,.3); display: flex; align-items: center; justify-content: center; gap: 6px; }
+    .btn-dl:active { transform: scale(.97); box-shadow: none; }
+    .btn-outline { background: transparent; border: 1.5px solid var(--border); color: var(--text2); border-radius: 12px; font-weight: 600; transition: all .15s; }
+    .btn-outline:active { background: var(--primary-l); }
+
+    /* PHOTO GRID */
+    .photo-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 3px; }
+    .photo-grid.cols2 { grid-template-columns: repeat(2,1fr); gap: 8px; }
+    .photo-item { position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden; cursor: pointer; }
+    .photo-item .inner { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 2.6rem; transition: transform .15s; }
+    .photo-item:active .inner { transform: scale(.94); }
+    .photo-item .check { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 99px; background: rgba(255,255,255,.5); border: 2px solid rgba(255,255,255,.8); display: flex; align-items: center; justify-content: center; transition: all .15s; }
+    .photo-item.selected .check { background: var(--primary); border-color: var(--primary); color: #fff; }
+    .heart-badge { display: none; position: absolute; bottom: 6px; left: 6px; background: rgba(239,68,68,.85); border-radius: 99px; padding: 2px 7px; font-size: 10px; color: #fff; align-items: center; gap: 2px; }
+    .photo-item.liked .heart-badge { display: flex; }
+
+    /* PROGRESS */
+    .progress-track { background: rgba(8,145,178,.1); border-radius: 99px; overflow: hidden; }
+    .progress-fill { background: linear-gradient(90deg, var(--primary), var(--accent)); border-radius: 99px; transition: width .3s; }
+
+    /* CAMERA VIEWFINDER */
+    .vf-wrap { position: relative; width: 220px; height: 220px; margin: 0 auto; }
+    .vf-corner { position: absolute; width: 24px; height: 24px; border-color: var(--primary); border-style: solid; }
+    .vf-tl { top: 0; left: 0; border-width: 3px 0 0 3px; border-radius: 6px 0 0 0; }
+    .vf-tr { top: 0; right: 0; border-width: 3px 3px 0 0; border-radius: 0 6px 0 0; }
+    .vf-bl { bottom: 0; left: 0; border-width: 0 0 3px 3px; border-radius: 0 0 0 6px; }
+    .vf-br { bottom: 0; right: 0; border-width: 0 3px 3px 0; border-radius: 0 0 6px 0; }
+    .scan-beam { animation: beam 2.2s ease-in-out infinite; }
+    @keyframes beam {
+      0%   { transform: translateY(-90px); opacity: 0; }
+      10%  { opacity: 1; }
+      90%  { opacity: 1; }
+      100% { transform: translateY(90px); opacity: 0; }
+    }
+    .face-dot { animation: blink 3s ease-in-out infinite; }
+    @keyframes blink { 0%,80%,100%{opacity:.35} 40%{opacity:1} }
+
+    /* ANIMATIONS */
+    .pulse-ring { animation: pr 2.2s ease-in-out infinite; }
+    @keyframes pr { 0%,100%{transform:scale(1);opacity:.4} 50%{transform:scale(1.08);opacity:.12} }
+    .fade-in { animation: fi .25s ease; }
+    @keyframes fi { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+    .pulse-live { animation: pl 2s infinite; }
+    @keyframes pl { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+    /* LIGHTBOX */
+    .lightbox-bg { background: rgba(4,22,38,.9); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+    .sheet { background: #fff; border-radius: 24px 24px 0 0; }
+
+    /* MISC */
+    .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; text-align: center; padding: 40px 24px; }
+    .info-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--border2); }
+    .info-row:last-child { border-bottom: none; }
+    .info-icon { width: 34px; height: 34px; border-radius: 10px; background: var(--primary-l); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-thumb { background: rgba(8,145,178,.2); border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+<!-- ═══ TOPBAR ═══ -->
+<div class="topbar" id="mainTopbar">
+  <div class="flex items-center px-4 py-3 gap-3">
+    <!-- event icon -->
+    <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style="background:var(--primary-l)">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+    </div>
+    <div class="flex-1 min-w-0">
+      <div class="font-black text-sm leading-tight" style="color:var(--text)">คุณต้อม & คุณนุ่น</div>
+      <div class="text-[10px] leading-tight" style="color:var(--muted)">25 ม.ค. 2568 · แกรนด์ไฮแอท เอราวัณ</div>
+    </div>
+    <div class="flex items-center gap-1.5 text-[11px] font-bold shrink-0" style="color:#059669">
+      <span class="w-1.5 h-1.5 rounded-full pulse-live" style="background:#059669"></span>248 ภาพ
+    </div>
+    <button onclick="toggleThemeGuest()" class="theme-btn-g" id="themeBtnG" title="Toggle theme">🌙</button>
+  </div>
+</div>
+
+<!-- SELECT TOPBAR -->
+<div class="topbar hidden" id="selectTopbar" style="background:rgba(255,255,255,.94)">
+  <div class="flex items-center px-4 py-3 gap-3">
+    <button onclick="exitSelectMode()" class="text-sm font-semibold" style="color:var(--primary)">ยกเลิก</button>
+    <div class="flex-1 text-center text-sm font-black" style="color:var(--text)" id="selectCount">เลือก 0 ภาพ</div>
+    <button onclick="downloadSelected()" class="btn-primary text-xs px-3 py-1.5">โหลด</button>
+  </div>
+</div>
+
+<!-- ═══════════ SCREENS ═══════════ -->
+
+<!-- HOME -->
+<div id="screen-home" class="screen active fade-in px-4 pt-5 gap-5">
+
+  <!-- LIFF profile -->
+  <div id="liffProfile" class="hidden card-sm flex items-center gap-3 px-4 py-3">
+    <div id="liffAvatar" class="w-10 h-10 rounded-full overflow-hidden shrink-0 flex items-center justify-center" style="background:var(--primary-l)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+    </div>
+    <div class="flex-1 min-w-0">
+      <div class="text-sm font-black truncate" style="color:var(--text)" id="liffName">—</div>
+      <div class="text-[11px]" style="color:var(--muted)">เข้าใช้ผ่าน LINE</div>
+    </div>
+    <span class="chip">LINE</span>
+  </div>
+
+  <!-- CAMERA / FACE SCAN ILLUSTRATION -->
+  <div class="card px-5 pt-7 pb-6 text-center relative overflow-hidden">
+    <!-- soft glow -->
+    <div style="position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:280px;height:220px;background:radial-gradient(ellipse,rgba(8,145,178,.1) 0%,transparent 70%);pointer-events:none"></div>
+
+    <!-- VIEWFINDER -->
+    <div class="vf-wrap mb-5">
+      <!-- outer glow ring -->
+      <div class="absolute inset-0 rounded-full pulse-ring" style="background:rgba(8,145,178,.05);border:2px solid rgba(8,145,178,.15)"></div>
+
+      <!-- camera feed area -->
+      <div class="absolute inset-4 rounded-2xl overflow-hidden" style="background:linear-gradient(160deg,#e0f7fc,#b2ebf2,#e0f2fe)">
+        <!-- face silhouette SVG -->
+        <svg viewBox="0 0 160 180" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg" style="opacity:.7">
+          <!-- neck + body hint -->
+          <path d="M65 148 Q80 158 95 148 L98 180 H62 Z" fill="rgba(8,145,178,.12)" />
+          <!-- face oval -->
+          <ellipse cx="80" cy="90" rx="40" ry="50" fill="rgba(8,145,178,.09)" stroke="rgba(8,145,178,.25)" stroke-width="1.5"/>
+          <!-- left eye -->
+          <ellipse cx="66" cy="82" rx="6" ry="5" fill="rgba(8,145,178,.18)" stroke="rgba(8,145,178,.4)" stroke-width="1.2" class="face-dot"/>
+          <!-- right eye -->
+          <ellipse cx="94" cy="82" rx="6" ry="5" fill="rgba(8,145,178,.18)" stroke="rgba(8,145,178,.4)" stroke-width="1.2" class="face-dot"/>
+          <!-- nose bridge line -->
+          <path d="M80 88 Q77 96 72 100 Q80 104 88 100 Q83 96 80 88" fill="rgba(8,145,178,.1)" stroke="rgba(8,145,178,.2)" stroke-width="1"/>
+          <!-- mouth -->
+          <path d="M68 112 Q80 122 92 112" fill="none" stroke="rgba(8,145,178,.35)" stroke-width="1.5" stroke-linecap="round" class="face-dot"/>
+          <!-- ear L -->
+          <ellipse cx="40" cy="90" rx="5" ry="8" fill="rgba(8,145,178,.08)" stroke="rgba(8,145,178,.2)" stroke-width="1"/>
+          <!-- ear R -->
+          <ellipse cx="120" cy="90" rx="5" ry="8" fill="rgba(8,145,178,.08)" stroke="rgba(8,145,178,.2)" stroke-width="1"/>
+          <!-- face landmark dots -->
+          <circle cx="66" cy="82" r="2" fill="rgba(8,145,178,.5)" class="face-dot"/>
+          <circle cx="94" cy="82" r="2" fill="rgba(8,145,178,.5)" class="face-dot"/>
+          <circle cx="80" cy="88" r="1.5" fill="rgba(8,145,178,.4)"/>
+          <circle cx="80" cy="112" r="1.5" fill="rgba(8,145,178,.4)"/>
+          <!-- scan beam -->
+          <rect class="scan-beam" x="35" y="0" width="90" height="2" rx="1" fill="rgba(8,145,178,.7)" filter="url(#glow)"/>
+          <defs>
+            <filter id="glow" x="-30%" y="-300%" width="160%" height="700%">
+              <feGaussianBlur stdDeviation="2" result="blur"/>
+              <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+          </defs>
+        </svg>
+        <!-- face detection box -->
+        <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-52%);width:58%;height:68%;border:1.5px solid rgba(8,145,178,.45);border-radius:6px;pointer-events:none"></div>
+        <!-- detection dot grid (top-right corner) -->
+        <div style="position:absolute;top:10px;right:10px;display:grid;grid-template-columns:repeat(3,4px);gap:3px">
+          <div style="width:4px;height:4px;background:rgba(8,145,178,.5);border-radius:50%"></div>
+          <div style="width:4px;height:4px;background:rgba(8,145,178,.35);border-radius:50%"></div>
+          <div style="width:4px;height:4px;background:rgba(8,145,178,.5);border-radius:50%"></div>
+          <div style="width:4px;height:4px;background:rgba(8,145,178,.35);border-radius:50%"></div>
+          <div style="width:4px;height:4px;background:rgba(8,145,178,.55);border-radius:50%"></div>
+          <div style="width:4px;height:4px;background:rgba(8,145,178,.35);border-radius:50%"></div>
+        </div>
+        <!-- AI detected label -->
+        <div style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(8,145,178,.85);color:#fff;font-size:9px;font-weight:700;padding:2px 8px;border-radius:99px;white-space:nowrap">AI ตรวจพบใบหน้า ✓</div>
+      </div>
+
+      <!-- viewfinder corners -->
+      <div class="vf-corner vf-tl"></div>
+      <div class="vf-corner vf-tr"></div>
+      <div class="vf-corner vf-bl"></div>
+      <div class="vf-corner vf-br"></div>
+    </div>
+
+    <h2 class="text-lg font-black mb-1.5 leading-snug" style="color:var(--text)">เปิดกล้องสแกนใบหน้า</h2>
+    <p class="text-sm leading-relaxed mb-5" style="color:var(--text2)">ให้ AI จดจำใบหน้าแล้วค้นหา<br/>ทุกภาพที่มีคุณในงานทันที</p>
+
+    <button onclick="triggerScan()" class="btn-primary w-full py-3.5 text-[15px] font-black">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+      เปิดกล้องสแกน
+    </button>
+  </div>
+
+  <!-- QUICK ACTIONS -->
+  <div class="grid grid-cols-2 gap-3">
+    <button onclick="goTo('all')" class="card-sm py-4 flex flex-col items-center gap-2.5 active:scale-95 transition-transform">
+      <div class="w-10 h-10 rounded-xl flex items-center justify-center" style="background:var(--primary-l)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      </div>
+      <div>
+        <div class="text-sm font-black" style="color:var(--text)">ดูทั้งหมด</div>
+        <div class="text-[11px]" style="color:var(--muted)">248 ภาพ</div>
+      </div>
+    </button>
+    <button onclick="goTo('liked')" class="card-sm py-4 flex flex-col items-center gap-2.5 active:scale-95 transition-transform">
+      <div class="w-10 h-10 rounded-xl flex items-center justify-center" style="background:#fff0f3">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#e11d48" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      </div>
+      <div>
+        <div class="text-sm font-black" style="color:var(--text)">ถูกใจไว้</div>
+        <div class="text-[11px]" style="color:var(--muted)" id="likedCount2">0 ภาพ</div>
+      </div>
+    </button>
+  </div>
+
+  <!-- EVENT INFO -->
+  <div class="card px-4 py-1 mb-2">
+    <div class="info-row">
+      <div class="info-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      </div>
+      <span class="text-sm" style="color:var(--text2)">วันเสาร์ที่ 25 มกราคม 2568</span>
+    </div>
+    <div class="info-row">
+      <div class="info-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+      </div>
+      <span class="text-sm" style="color:var(--text2)">โรงแรมแกรนด์ไฮแอท เอราวัณ กรุงเทพฯ</span>
+    </div>
+    <div class="info-row">
+      <div class="info-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+      </div>
+      <span class="text-sm" style="color:var(--text2)">ช่างภาพ: <strong style="color:var(--primary)">@สมชาย_photo</strong></span>
+    </div>
+    <div class="info-row">
+      <div class="info-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </div>
+      <span class="text-sm" style="color:var(--text2)">ภาพพร้อมดาวน์โหลด <strong style="color:var(--text)">28 วัน</strong></span>
+    </div>
+  </div>
+
+</div>
+
+<!-- SCANNING -->
+<div id="screen-scan" class="screen items-center justify-center px-6 fade-in">
+  <div class="text-center w-full max-w-xs">
+    <div class="vf-wrap mb-7">
+      <div class="absolute inset-0 rounded-full pulse-ring" style="background:rgba(8,145,178,.06);border:2px solid rgba(8,145,178,.18)"></div>
+      <div class="absolute inset-5 rounded-xl" style="background:rgba(8,145,178,.04);border:1px solid rgba(8,145,178,.1)"></div>
+      <div class="absolute inset-5 rounded-xl overflow-hidden flex items-center justify-center" style="background:linear-gradient(160deg,#e0f7fc,#b2ebf2)">
+        <svg viewBox="0 0 120 140" width="90" height="110">
+          <ellipse cx="60" cy="65" rx="30" ry="38" fill="rgba(8,145,178,.1)" stroke="rgba(8,145,178,.3)" stroke-width="1.5"/>
+          <ellipse cx="48" cy="58" rx="5" ry="4" fill="rgba(8,145,178,.2)" stroke="rgba(8,145,178,.5)" stroke-width="1" class="face-dot"/>
+          <ellipse cx="72" cy="58" rx="5" ry="4" fill="rgba(8,145,178,.2)" stroke="rgba(8,145,178,.5)" stroke-width="1" class="face-dot"/>
+          <path d="M50 80 Q60 88 70 80" fill="none" stroke="rgba(8,145,178,.45)" stroke-width="1.5" stroke-linecap="round" class="face-dot"/>
+          <rect class="scan-beam" x="25" y="0" width="70" height="1.5" rx="1" fill="rgba(8,145,178,.8)"/>
+        </svg>
+        <div style="position:absolute;bottom:6px;left:50%;transform:translateX(-50%);background:rgba(8,145,178,.85);color:#fff;font-size:8px;font-weight:800;padding:2px 8px;border-radius:99px;white-space:nowrap" id="scanLabel">กำลังโหลด...</div>
+      </div>
+      <div class="vf-corner vf-tl"></div>
+      <div class="vf-corner vf-tr"></div>
+      <div class="vf-corner vf-bl"></div>
+      <div class="vf-corner vf-br"></div>
+    </div>
+    <h2 class="text-xl font-black mb-2" style="color:var(--text)">AI กำลังค้นหา...</h2>
+    <p class="text-sm mb-6" style="color:var(--text2)" id="scanStatusText">กำลังโหลด InsightFace model...</p>
+    <div class="progress-track h-2.5 mb-2"><div class="progress-fill h-2.5" id="scanProgress" style="width:0%"></div></div>
+    <p class="text-xs mt-1" style="color:var(--muted)" id="scanPct">0%</p>
+    <button onclick="goTo('home')" class="mt-8 text-sm font-semibold" style="color:var(--muted)">ยกเลิก</button>
+  </div>
+</div>
+
+<!-- MY PHOTOS -->
+<div id="screen-mine" class="screen fade-in">
+  <div class="px-4 pt-4 pb-3 flex items-center justify-between">
+    <div>
+      <h2 class="font-black text-base" style="color:var(--text)">ภาพของฉัน</h2>
+      <p class="text-xs" style="color:var(--muted)">พบ <span id="mineCount" class="font-bold" style="color:var(--primary)">0</span> ภาพ</p>
+    </div>
+    <div class="flex gap-2">
+      <button onclick="enterSelectMode('mine')" class="btn-outline text-xs px-3 py-2">เลือก</button>
+      <button onclick="downloadAllMine()" class="btn-dl text-xs px-3 py-2">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        ทั้งหมด
+      </button>
+    </div>
+  </div>
+  <div class="flex-1 px-1 pb-2"><div class="photo-grid" id="mineGrid"></div></div>
+</div>
+
+<!-- LIKED -->
+<div id="screen-liked" class="screen fade-in">
+  <div class="px-4 pt-4 pb-3 flex items-center justify-between">
+    <div>
+      <h2 class="font-black text-base" style="color:var(--text)">ถูกใจไว้</h2>
+      <p class="text-xs" style="color:var(--muted)"><span id="likedCountLabel">0</span> ภาพ</p>
+    </div>
+    <div class="flex gap-2">
+      <button onclick="enterSelectMode('liked')" class="btn-outline text-xs px-3 py-2">เลือก</button>
+      <button onclick="downloadAllLiked()" class="btn-dl text-xs px-3 py-2">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        ทั้งหมด
+      </button>
+    </div>
+  </div>
+  <div class="flex-1 px-1 pb-2">
+    <div class="empty" id="likedEmpty">
+      <div class="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 mx-auto" style="background:#fff0f3">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#e11d48" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      </div>
+      <div class="text-base font-black mb-1" style="color:var(--text)">ยังไม่มีภาพที่ถูกใจ</div>
+      <div class="text-sm" style="color:var(--muted)">กดไอคอนหัวใจในภาพเพื่อบันทึกไว้ที่นี่</div>
+    </div>
+    <div class="photo-grid cols2 px-3 hidden" id="likedGrid"></div>
+  </div>
+</div>
+
+<!-- ALL PHOTOS -->
+<div id="screen-all" class="screen fade-in">
+  <div class="px-4 pt-4 pb-3 flex items-center justify-between">
+    <div>
+      <h2 class="font-black text-base" style="color:var(--text)">ภาพทั้งหมด</h2>
+      <p class="text-xs" style="color:var(--muted)">248 ภาพ</p>
+    </div>
+    <button onclick="enterSelectMode('all')" class="btn-outline text-xs px-3 py-2">เลือก</button>
+  </div>
+  <div class="flex-1 px-1 pb-2"><div class="photo-grid" id="allGrid"></div></div>
+</div>
+
+<!-- ═══ BOTTOM NAV ═══ -->
+<div class="bottom-nav">
+  <div class="flex items-stretch" style="height:64px">
+
+    <button class="nav-btn active" id="nav-home" onclick="goTo('home')">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      <span class="label">หน้าแรก</span>
+    </button>
+
+    <button class="nav-btn" id="nav-liked" onclick="goTo('liked')">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      <span class="label">ถูกใจ</span>
+      <span class="nav-badge hidden" id="likedBadge">0</span>
+    </button>
+
+    <!-- CENTER SCAN FAB -->
+    <div class="scan-fab-wrap">
+      <div class="scan-fab" onclick="triggerScan()">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+      </div>
+    </div>
+
+    <button class="nav-btn" id="nav-mine" onclick="goTo('mine')">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span class="label">ภาพฉัน</span>
+      <span class="nav-badge hidden" id="mineBadge">0</span>
+    </button>
+
+    <button class="nav-btn" id="nav-all" onclick="goTo('all')">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      <span class="label">ทั้งหมด</span>
+    </button>
+
+  </div>
+</div>
+
+<!-- ═══ LIGHTBOX ═══ -->
+<div id="lightbox" class="hidden fixed inset-0 z-50 flex flex-col items-center justify-end lightbox-bg" onclick="closeLightbox()">
+  <div class="sheet w-full max-w-lg" onclick="event.stopPropagation()">
+    <div id="lbImgWrap" class="w-full flex items-center justify-center overflow-hidden"
+      style="height:280px;border-radius:20px;margin:-140px 16px 0;width:calc(100% - 32px);box-shadow:0 20px 60px rgba(0,0,0,.3)">
+    </div>
+    <div class="px-4 pt-5 pb-3">
+      <div class="flex gap-2.5 mb-3">
+        <button id="lbLikeBtn" onclick="toggleLike()" class="btn-ghost flex-1 py-3 text-sm">
+          <span id="lbLikeIcon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          </span>
+          ถูกใจ
+        </button>
+        <button onclick="lbDownload()" class="btn-dl flex-[2] py-3 text-sm">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          ดาวน์โหลด
+        </button>
+        <button onclick="lbShare()" class="btn-outline px-4 py-3" style="border-radius:12px">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        </button>
+      </div>
+      <div class="rounded-xl px-3 py-2.5 flex items-center gap-2" style="background:#e0f7fa">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+        <span class="text-xs" style="color:var(--text2)">ภาพโดย <strong style="color:var(--primary)">@สมชาย_photo</strong> · มี watermark</span>
+      </div>
+    </div>
+    <div style="height:calc(var(--safe-bot) + 12px)"></div>
+  </div>
+</div>
+
+<!-- DOWNLOAD PROGRESS -->
+<div id="dlProgress" class="hidden fixed z-40 card px-4 py-3" style="bottom:88px;left:12px;right:12px">
+  <div class="flex items-center justify-between text-xs mb-2">
+    <div class="flex items-center gap-2 font-bold" style="color:var(--text)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      กำลังดาวน์โหลด...
+    </div>
+    <span style="color:var(--muted)" id="dlPct">0%</span>
+  </div>
+  <div class="progress-track h-2"><div class="progress-fill h-2" id="dlBar" style="width:0%"></div></div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"
+  class="fixed left-1/2 -translate-x-1/2 text-sm px-5 py-3 rounded-full shadow-lg opacity-0 pointer-events-none z-50 whitespace-nowrap font-semibold transition-all duration-200"
+  style="bottom:90px;background:#fff;color:var(--text);border:1px solid var(--border);box-shadow:0 4px 20px rgba(8,145,178,.18)">
+</div>
+
+<script>
+const EMOJIS = ['👰','🤵','💐','🎂','💍','🥂','👨‍👩‍👧','🎊','💒','🕊️','🌸','✨','👏','😊','🥳','💕','🌹','🎶','📸','🫶','🎉','🥹','😍','🤩','💫','🙏','🌺','🍾','🎵','💝'];
+const BG_LIGHT = [
+  'linear-gradient(135deg,#cffafe,#e0f2fe)',
+  'linear-gradient(135deg,#bae6fd,#cffafe)',
+  'linear-gradient(135deg,#e0f2fe,#f0fdff)',
+  'linear-gradient(135deg,#a5f3fc,#bae6fd)',
+  'linear-gradient(135deg,#f0fdff,#cffafe)',
+  'linear-gradient(135deg,#ccfbf1,#cffafe)',
+];
+const SCAN_STEPS = [
+  'กำลังโหลด InsightFace model...',
+  'กำลัง detect ใบหน้า...',
+  'กำลัง vector search ใน 248 ภาพ...',
+  'รวบรวมผลลัพธ์...'
+];
+
+let likedSet = new Set();
+let selectedSet = new Set();
+let minePhotos = [];
+let allPhotos  = [];
+let currentSelectScreen = '';
+let currentLbId = null;
+let lbLiked = false;
+
+// LIFF
+async function initLiff() {
+  try {
+    await liff.init({ liffId: 'YOUR_LIFF_ID' });
+    if (liff.isLoggedIn()) {
+      const p = await liff.getProfile();
+      document.getElementById('liffProfile').classList.remove('hidden');
+      document.getElementById('liffName').textContent = p.displayName;
+      if (p.pictureUrl) {
+        document.getElementById('liffAvatar').innerHTML = `<img src="${p.pictureUrl}" class="w-full h-full object-cover" style="border-radius:50%"/>`;
+      }
+    }
+  } catch(_) {}
+}
+
+// Nav
+function goTo(name) {
+  exitSelectMode();
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+  const nb = document.getElementById('nav-' + name);
+  if (nb) nb.classList.add('active');
+  if (name === 'liked') renderLiked();
+}
+
+// Scan
+function triggerScan() {
+  goTo('scan');
+  let p = 0;
+  const labels = ['กำลังโหลด...','ตรวจจับใบหน้า','กำลังค้นหา','เสร็จแล้ว!'];
+  const iv = setInterval(() => {
+    p += Math.random() * 14 + 4;
+    if (p > 100) p = 100;
+    document.getElementById('scanProgress').style.width = p + '%';
+    document.getElementById('scanPct').textContent = Math.round(p) + '%';
+    document.getElementById('scanStatusText').textContent = SCAN_STEPS[Math.min(Math.floor(p / 26), 3)];
+    const sl = document.getElementById('scanLabel');
+    if (sl) sl.textContent = labels[Math.min(Math.floor(p / 26), 3)];
+    if (p >= 100) { clearInterval(iv); setTimeout(showMineResults, 500); }
+  }, 260);
+}
+
+function showMineResults() {
+  const n = Math.floor(Math.random() * 9) + 6;
+  minePhotos = Array.from({length: n}, (_, i) => ({
+    id: 'mine_' + i, emoji: EMOJIS[i % EMOJIS.length], bg: BG_LIGHT[i % BG_LIGHT.length]
+  }));
+  renderMine();
+  document.getElementById('mineCount').textContent = n;
+  document.getElementById('mineBadge').textContent = n;
+  document.getElementById('mineBadge').classList.remove('hidden');
+  goTo('mine');
+  showToast('พบ ' + n + ' ภาพที่มีคุณ!');
+}
+
+// Render
+function checkSvg() {
+  return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+}
+function makePhotoEl(photo, onTap) {
+  const d = document.createElement('div');
+  d.className = 'photo-item' + (likedSet.has(photo.id) ? ' liked' : '') + (selectedSet.has(photo.id) ? ' selected' : '');
+  d.id = 'pitem-' + photo.id;
+  d.innerHTML = `
+    <div class="inner" style="background:${photo.bg}">${photo.emoji}</div>
+    <div class="check">${checkSvg()}</div>
+    <div class="heart-badge">
+      <svg width="9" height="9" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+    </div>`;
+  d.addEventListener('click', () => onTap(photo));
+  return d;
+}
+
+function renderMine() {
+  const g = document.getElementById('mineGrid'); g.innerHTML = '';
+  minePhotos.forEach(p => g.appendChild(makePhotoEl(p, ph => openLightbox(ph))));
+}
+function renderLiked() {
+  const photos = [...likedSet].map(id => minePhotos.find(p=>p.id===id) || allPhotos.find(p=>p.id===id)).filter(Boolean);
+  const empty = document.getElementById('likedEmpty');
+  const grid  = document.getElementById('likedGrid');
+  document.getElementById('likedCountLabel').textContent = photos.length;
+  if (photos.length === 0) { empty.classList.remove('hidden'); grid.classList.add('hidden'); }
+  else {
+    empty.classList.add('hidden'); grid.classList.remove('hidden'); grid.innerHTML = '';
+    photos.forEach(p => grid.appendChild(makePhotoEl(p, ph => openLightbox(ph))));
+  }
+}
+function renderAll() {
+  if (!allPhotos.length) allPhotos = Array.from({length:30},(_,i)=>({id:'all_'+i,emoji:EMOJIS[i%EMOJIS.length],bg:BG_LIGHT[i%BG_LIGHT.length]}));
+  const g = document.getElementById('allGrid'); g.innerHTML = '';
+  allPhotos.forEach(p => g.appendChild(makePhotoEl(p, ph => openLightbox(ph))));
+}
+renderAll();
+
+// Liked
+const heartFilled = `<svg width="16" height="16" viewBox="0 0 24 24" fill="#e11d48" stroke="#e11d48" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+const heartEmpty  = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+
+function toggleLike() {
+  if (!currentLbId) return;
+  if (likedSet.has(currentLbId)) {
+    likedSet.delete(currentLbId); document.getElementById('lbLikeIcon').innerHTML = heartEmpty; showToast('เอาออกจากถูกใจแล้ว');
+  } else {
+    likedSet.add(currentLbId); document.getElementById('lbLikeIcon').innerHTML = heartFilled; showToast('เพิ่มในถูกใจแล้ว');
+  }
+  updateLikedBadge(); refreshItem(currentLbId);
+}
+function updateLikedBadge() {
+  const n = likedSet.size;
+  const b = document.getElementById('likedBadge');
+  document.getElementById('likedCount2').textContent = n + ' ภาพ';
+  if (n > 0) { b.textContent = n; b.classList.remove('hidden'); } else b.classList.add('hidden');
+}
+function refreshItem(id) {
+  const el = document.getElementById('pitem-' + id); if (!el) return;
+  el.classList.toggle('liked', likedSet.has(id));
+  el.classList.toggle('selected', selectedSet.has(id));
+}
+
+// Select
+function enterSelectMode(screen) {
+  currentSelectScreen = screen; selectedSet.clear();
+  document.getElementById('mainTopbar').classList.add('hidden');
+  document.getElementById('selectTopbar').classList.remove('hidden');
+  updateSelectBar();
+}
+function exitSelectMode() {
+  selectedSet.clear(); currentSelectScreen = '';
+  document.getElementById('mainTopbar').classList.remove('hidden');
+  document.getElementById('selectTopbar').classList.add('hidden');
+}
+function updateSelectBar() { document.getElementById('selectCount').textContent = 'เลือก ' + selectedSet.size + ' ภาพ'; }
+function toggleSelect(id) { if(selectedSet.has(id)) selectedSet.delete(id); else selectedSet.add(id); refreshItem(id); updateSelectBar(); }
+
+// Lightbox
+function openLightbox(photo) {
+  if (currentSelectScreen) { toggleSelect(photo.id); return; }
+  currentLbId = photo.id;
+  const wrap = document.getElementById('lbImgWrap');
+  wrap.style.background = photo.bg;
+  wrap.innerHTML = `<span style="font-size:6rem">${photo.emoji}</span>`;
+  document.getElementById('lbLikeIcon').innerHTML = likedSet.has(photo.id) ? heartFilled : heartEmpty;
+  document.getElementById('lightbox').classList.remove('hidden');
+}
+function closeLightbox() { document.getElementById('lightbox').classList.add('hidden'); currentLbId = null; }
+function lbDownload() { closeLightbox(); runDownload(1); }
+function lbShare() {
+  closeLightbox();
+  if (typeof liff !== 'undefined' && liff.isApiAvailable && liff.isApiAvailable('shareTargetPicker')) {
+    liff.shareTargetPicker([{type:'text',text:'📸 ดูภาพงานแต่งงาน คุณต้อม & คุณนุ่น\n'+location.href}]);
+  } else if (navigator.share) {
+    navigator.share({title:'EventDD – งานแต่งงาน', url: location.href});
+  } else { navigator.clipboard?.writeText(location.href); showToast('คัดลอกลิงก์แล้ว!'); }
+}
+
+// Download
+function runDownload(n) {
+  const box = document.getElementById('dlProgress'); box.classList.remove('hidden');
+  let p = 0;
+  const iv = setInterval(() => {
+    p += Math.random() * 18 + 8; if (p>100) p=100;
+    document.getElementById('dlBar').style.width = p + '%';
+    document.getElementById('dlPct').textContent = Math.round(p) + '%';
+    if (p >= 100) { clearInterval(iv); setTimeout(() => { box.classList.add('hidden'); showToast('ดาวน์โหลด ' + n + ' ภาพสำเร็จ!'); }, 500); }
+  }, 200);
+}
+function downloadAllMine()  { if(!minePhotos.length){showToast('ยังไม่ได้สแกน');return;} runDownload(minePhotos.length); }
+function downloadAllLiked() { if(!likedSet.size){showToast('ยังไม่มีภาพที่ถูกใจ');return;} runDownload(likedSet.size); }
+function downloadSelected() { if(!selectedSet.size){showToast('เลือกภาพก่อนนะ');return;} const n=selectedSet.size; exitSelectMode(); runDownload(n); }
+
+// Toast
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.opacity = '1'; t.style.transform = 'translateX(-50%) translateY(0)';
+  clearTimeout(t._t);
+  t._t = setTimeout(()=>{ t.style.opacity='0'; t.style.transform='translateX(-50%) translateY(8px)'; }, 2600);
+}
+
+initLiff();
+
+function toggleThemeGuest(){
+  const h=document.documentElement;
+  const t=h.getAttribute('data-theme')==='light'?'dark':'light';
+  h.setAttribute('data-theme',t);
+  localStorage.setItem('edd-theme',t);
+  const btn=document.getElementById('themeBtnG');
+  if(btn) btn.textContent=t==='light'?'🌙':'☀️';
+}
+// Init guest theme button
+(function(){
+  const t=document.documentElement.getAttribute('data-theme')||'light';
+  const btn=document.getElementById('themeBtnG');
+  if(btn) btn.textContent=t==='light'?'🌙':'☀️';
+})();
+</script>
+</body>
+</html>

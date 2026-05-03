@@ -1,0 +1,161 @@
+version: "3.9"
+
+# ============================================================
+#  ShotX — Production Docker Compose
+#
+#  โครงสร้าง repo (monorepo):
+#    shotx/
+#      frontend/   ← Next.js
+#      backend/    ← NestJS
+#      worker/     ← Python FastAPI
+#      infra/
+#      Caddyfile
+#      .env.production
+#      docker-compose.production.yml  ← ไฟล์นี้
+#
+#  วิธีรัน (ต้องอยู่ใน /opt/shotx):
+#    docker compose --env-file .env.production \
+#                   -f docker-compose.production.yml \
+#                   up -d
+#
+#  หรือใช้ deploy.sh ซึ่งจัดการให้อัตโนมัติ
+# ============================================================
+
+services:
+
+  # ── Reverse proxy + Auto HTTPS ────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - web
+
+  # ── Next.js Frontend ──────────────────────────────────────
+  # build context = repo root (.) เพราะ Dockerfile ใช้ COPY frontend/...
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        # ค่านี้ถูก bake เข้าไปใน JS bundle ตอน build
+        # ดึงจาก .env.production ผ่าน --env-file
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID}
+    restart: unless-stopped
+    expose:
+      - "3000"
+    networks:
+      - web
+
+  # ── NestJS Backend ────────────────────────────────────────
+  # build context = repo root (.) เพราะ Dockerfile ใช้ COPY backend/...
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file: .env.production          # โหลด JWT_SECRET, STORAGE_*, GOOGLE_* ฯลฯ
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-shotx}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-shotx}"
+      REDIS_URL: redis://redis:6379
+      APP_URL: ${APP_URL}
+    volumes:
+      - uploads_data:${STORAGE_DIR:-/var/www/shotx/uploads}
+    expose:
+      - "4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - web
+      - internal
+
+  # ── Python AI Worker ──────────────────────────────────────
+  # build context = repo root (.) เพราะ Dockerfile ใช้ COPY worker/...
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    restart: unless-stopped
+    env_file: .env.production          # โหลด INSIGHTFACE_MODEL ฯลฯ
+    environment:
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-shotx}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-shotx}"
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - internal
+
+  # ── PostgreSQL + pgvector ─────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-shotx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-shotx}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shotx} -d ${POSTGRES_DB:-shotx}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ── Redis ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - redis_data:/data
+    expose:
+      - "6379"
+    networks:
+      - internal
+
+# ── Named volumes ─────────────────────────────────────────────
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:
+  caddy_data:
+  caddy_config:
+
+# ── Networks ──────────────────────────────────────────────────
+networks:
+  web:
+  internal:
+    internal: true   # postgres, redis, worker ไม่ถูก expose ออกอินเทอร์เน็ต

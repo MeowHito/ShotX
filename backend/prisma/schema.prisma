@@ -1,0 +1,265 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgcrypto, vector]
+}
+
+enum Plan {
+  basic
+  standard
+  pro
+}
+
+enum AccountStatus {
+  active
+  suspended
+  expired
+}
+
+enum EventStatus {
+  active
+  locked
+  deleted
+}
+
+enum AiStatus {
+  pending
+  processing
+  done
+  failed
+}
+
+enum QueueType {
+  fast
+  standard
+}
+
+enum JobStatus {
+  queued
+  processing
+  done
+  failed
+  skipped
+}
+
+model Photographer {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String          @db.VarChar(200)
+  email             String          @unique @db.VarChar(255)
+  passwordHash      String?         @map("password_hash") @db.VarChar(255)
+  googleId          String?         @unique @map("google_id") @db.VarChar(100)
+  authProvider      String          @default("password") @map("auth_provider") @db.VarChar(20)
+  role              String          @default("photographer") @db.VarChar(20)
+  plan              Plan            @default(basic)
+  status            AccountStatus   @default(active)
+  storageUsedBytes  BigInt          @default(0) @map("storage_used_bytes")
+  fastQuotaUsed     Int             @default(0) @map("fast_quota_used")
+  quotaResetAt      DateTime        @default(dbgenerated("date_trunc('month', NOW()) + INTERVAL '1 month'")) @map("quota_reset_at") @db.Timestamptz(6)
+  avatarUrl         String?         @map("avatar_url")
+  timezone          String          @default("Asia/Bangkok") @db.VarChar(50)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  events            Event[]
+  subscriptions     Subscription[]
+  watermarkConfig   WatermarkConfig?
+  aiJobs            AiJob[]
+
+  @@map("photographers")
+}
+
+model Subscription {
+  id                   String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  photographerId       String       @map("photographer_id") @db.Uuid
+  plan                 Plan
+  status               String       @default("active") @db.VarChar(20)
+  stripeSubscriptionId String?      @map("stripe_subscription_id") @db.VarChar(100)
+  stripeCustomerId     String?      @map("stripe_customer_id") @db.VarChar(100)
+  amountThb            Int          @map("amount_thb")
+  currentPeriodStart   DateTime     @map("current_period_start") @db.Timestamptz(6)
+  currentPeriodEnd     DateTime     @map("current_period_end") @db.Timestamptz(6)
+  createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  photographer         Photographer @relation(fields: [photographerId], references: [id], onDelete: Cascade)
+
+  @@index([photographerId])
+  @@index([photographerId, status, currentPeriodEnd], map: "subscriptions_photographer_status_end_idx")
+  @@index([currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+model Event {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  photographerId String        @map("photographer_id") @db.Uuid
+  name           String        @db.VarChar(300)
+  eventDate      DateTime?     @map("event_date") @db.Date
+  venue          String?       @db.VarChar(300)
+  slug           String        @unique @db.VarChar(100)
+  qrCodeUrl      String?       @map("qr_code_url")
+  status         EventStatus   @default(active)
+  photoCount     Int           @default(0) @map("photo_count")
+  expiresAt      DateTime      @map("expires_at") @db.Timestamptz(6)
+  lockedAt       DateTime?     @map("locked_at") @db.Timestamptz(6)
+  deleteAt       DateTime?     @map("delete_at") @db.Timestamptz(6)
+  totalViews     Int           @default(0) @map("total_views")
+  totalDownloads Int           @default(0) @map("total_downloads")
+  totalSearches  Int           @default(0) @map("total_searches")
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  photographer   Photographer  @relation(fields: [photographerId], references: [id], onDelete: Cascade)
+  photos         Photo[]
+  faces          PhotoFace[]
+  searches       GuestSearch[]
+  downloads      Download[]
+
+  @@index([photographerId])
+  @@index([photographerId, status, createdAt], map: "events_photographer_status_created_idx")
+  @@index([slug])
+  @@index([expiresAt])
+  @@map("events")
+}
+
+model Photo {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eventId       String      @map("event_id") @db.Uuid
+  filename      String      @db.VarChar(500)
+  fileUrl       String      @map("file_url")
+  thumbnailUrl  String      @map("thumbnail_url")
+  fileSizeBytes BigInt      @default(0) @map("file_size_bytes")
+  width         Int?
+  height        Int?
+  mimeType      String      @default("image/jpeg") @map("mime_type") @db.VarChar(50)
+  aiStatus      AiStatus    @default(pending) @map("ai_status")
+  faceCount     Int         @default(0) @map("face_count")
+  processedAt   DateTime?   @map("processed_at") @db.Timestamptz(6)
+  aiError       String?     @map("ai_error")
+  queueType     QueueType?  @map("queue_type")
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  event         Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  faces         PhotoFace[]
+  jobs          AiJob[]
+  results       SearchResult[]
+  downloads     Download[]
+
+  @@index([eventId])
+  @@index([aiStatus])
+  @@index([eventId, aiStatus])
+  @@index([eventId, createdAt], map: "photos_event_created_idx")
+  @@index([eventId, aiStatus, createdAt], map: "photos_event_ai_created_idx")
+  @@map("photos")
+}
+
+model PhotoFace {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  photoId        String   @map("photo_id") @db.Uuid
+  eventId        String   @map("event_id") @db.Uuid
+  embedding      Unsupported("vector(512)")
+  bboxX          Float?   @map("bbox_x")
+  bboxY          Float?   @map("bbox_y")
+  bboxW          Float?   @map("bbox_w")
+  bboxH          Float?   @map("bbox_h")
+  detectionScore Float?   @map("detection_score")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  photo          Photo    @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  event          Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([photoId])
+  @@index([eventId])
+  @@index([eventId, photoId], map: "photo_faces_event_photo_idx")
+  @@map("photo_faces")
+}
+
+model GuestSearch {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eventId         String         @map("event_id") @db.Uuid
+  selfieUrl       String?        @map("selfie_url")
+  selfieDeleted   Boolean        @default(false) @map("selfie_deleted")
+  matchedCount    Int            @default(0) @map("matched_count")
+  searchLatencyMs Int?           @map("search_latency_ms")
+  sessionId       String?        @map("session_id") @db.VarChar(100)
+  lineUserId      String?        @map("line_user_id") @db.VarChar(100)
+  ipAddress       String?        @map("ip_address")
+  userAgent       String?        @map("user_agent")
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  event           Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  results         SearchResult[]
+
+  @@index([eventId])
+  @@index([createdAt])
+  @@map("guest_searches")
+}
+
+model SearchResult {
+  id         String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  searchId   String      @map("search_id") @db.Uuid
+  photoId    String      @map("photo_id") @db.Uuid
+  similarity Float
+  rank       Int
+  search     GuestSearch @relation(fields: [searchId], references: [id], onDelete: Cascade)
+  photo      Photo       @relation(fields: [photoId], references: [id], onDelete: Cascade)
+
+  @@index([searchId])
+  @@map("search_results")
+}
+
+model Download {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  photoId       String   @map("photo_id") @db.Uuid
+  eventId       String   @map("event_id") @db.Uuid
+  watermarkText String?  @map("watermark_text")
+  watermarkLogo String?  @map("watermark_logo")
+  sessionId     String?  @map("session_id") @db.VarChar(100)
+  lineUserId    String?  @map("line_user_id") @db.VarChar(100)
+  ipAddress     String?  @map("ip_address")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  photo         Photo    @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  event         Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@index([photoId])
+  @@index([createdAt])
+  @@map("downloads")
+}
+
+model WatermarkConfig {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  photographerId String       @unique @map("photographer_id") @db.Uuid
+  enabled        Boolean      @default(true)
+  text           String       @default("") @db.VarChar(200)
+  logoUrl        String?      @map("logo_url")
+  position       String       @default("bot-right") @db.VarChar(20)
+  size           String       @default("M") @db.VarChar(5)
+  opacity        Int          @default(70) @db.SmallInt
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  photographer   Photographer @relation(fields: [photographerId], references: [id], onDelete: Cascade)
+
+  @@map("watermark_configs")
+}
+
+model AiJob {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  photoId        String       @map("photo_id") @db.Uuid
+  photographerId String       @map("photographer_id") @db.Uuid
+  queueType      QueueType    @map("queue_type")
+  status         JobStatus    @default(queued)
+  bullJobId      String?      @map("bull_job_id") @db.VarChar(100)
+  workerId       String?      @map("worker_id") @db.VarChar(50)
+  queuedAt       DateTime     @default(now()) @map("queued_at") @db.Timestamptz(6)
+  startedAt      DateTime?    @map("started_at") @db.Timestamptz(6)
+  finishedAt     DateTime?    @map("finished_at") @db.Timestamptz(6)
+  processingMs   Int?         @map("processing_ms")
+  facesDetected  Int?         @map("faces_detected")
+  errorMessage   String?      @map("error_message")
+  retryCount     Int          @default(0) @map("retry_count")
+  photo          Photo        @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  photographer   Photographer @relation(fields: [photographerId], references: [id])
+
+  @@index([photoId])
+  @@index([status])
+  @@index([queuedAt])
+  @@map("ai_jobs")
+}

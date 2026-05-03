@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EventDD – แพลตฟอร์มช่างภาพ Event</title>
+  <script>document.documentElement.setAttribute('data-theme',localStorage.getItem('edd-theme')||'dark');</script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    * { font-family: 'Noto Sans Thai', sans-serif; }
+    /* ─── THEME VARIABLES ─── */
+    :root {
+      --bg:#0d0b1e; --nav-bg:rgba(13,11,30,.92); --surface:rgba(255,255,255,.04); --surface-h:rgba(255,255,255,.07);
+      --border:rgba(139,92,246,.18); --border-s:rgba(139,92,246,.12); --text:#e2e0f0; --subtle:#4a4770;
+      --section-alt:rgba(255,255,255,.015); --modal-bg:#1a1432;
+    }
+    [data-theme="light"] {
+      --bg:#f8f7ff; --nav-bg:rgba(248,247,255,.96); --surface:#ffffff; --surface-h:#f3f1ff;
+      --border:rgba(139,92,246,.18); --border-s:rgba(139,92,246,.1); --text:#1e1540; --subtle:#7b6ea8;
+      --section-alt:rgba(139,92,246,.025); --modal-bg:#ffffff;
+    }
+    body { background:var(--bg); color:var(--text); transition:background .25s,color .25s; }
+    .nav-bg { background:var(--nav-bg); border-bottom:1px solid var(--border-s); backdrop-filter:blur(12px); }
+    .hero-bg { background:radial-gradient(ellipse 90% 60% at 15% 40%,rgba(139,92,246,.22) 0%,transparent 60%),radial-gradient(ellipse 60% 50% at 85% 60%,rgba(139,92,246,.12) 0%,transparent 60%),var(--bg); }
+    .hero-text { background:linear-gradient(100deg,var(--text) 20%,#c4b5fd 60%,#a78bfa); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+    .label-pill { background:rgba(139,92,246,.1); border:1px solid rgba(139,92,246,.3); color:#7c3aed; }
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:16px; transition:all .2s; }
+    .card:hover { background:var(--surface-h); border-color:rgba(139,92,246,.4); }
+    .btn-primary { background:#7c3aed; color:#fff; transition:all .18s; }
+    .btn-primary:hover { background:#6d28d9; box-shadow:0 8px 28px rgba(139,92,246,.4); transform:translateY(-1px); }
+    .btn-ghost { border:1.5px solid rgba(139,92,246,.25); color:#7c3aed; background:transparent; transition:all .18s; }
+    .btn-ghost:hover { background:rgba(139,92,246,.12); border-color:rgba(139,92,246,.5); }
+    .btn-outline { border:1.5px solid rgba(139,92,246,.3); color:#7c3aed; background:transparent; transition:all .18s; }
+    .btn-outline:hover { background:rgba(139,92,246,.1); border-color:#7c3aed; }
+    .step-box { background:rgba(139,92,246,.1); border:1.5px solid rgba(139,92,246,.25); color:#7c3aed; }
+    .pricing-pop { background:linear-gradient(135deg,#4c1d95,#5b21b6); border:2px solid rgba(139,92,246,.4); box-shadow:0 0 40px rgba(139,92,246,.25); }
+    .table-row:hover { background:var(--surface-h); }
+    .pulse-dot { animation:pd 2s infinite; }
+    @keyframes pd { 0%,100%{opacity:1} 50%{opacity:.3} }
+    .float-anim { animation:fa 5s ease-in-out infinite; }
+    @keyframes fa { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-10px)} }
+    .section-alt { background:var(--section-alt); }
+    .divider { border-color:var(--border-s); }
+    /* Light mode Tailwind text overrides */
+    [data-theme="light"] .text-violet-300\/70,[data-theme="light"] .text-violet-300\/60 { color:var(--subtle) !important; }
+    [data-theme="light"] .text-violet-400\/60,[data-theme="light"] .text-violet-400\/50,[data-theme="light"] .text-violet-400\/40 { color:var(--subtle) !important; }
+    [data-theme="light"] .text-violet-200 { color:var(--text) !important; }
+    [data-theme="light"] .text-violet-300 { color:var(--subtle) !important; }
+    [data-theme="light"] .text-violet-400 { color:#7c3aed !important; }
+    /* Theme toggle button */
+    .theme-btn { background:rgba(139,92,246,.1); border:1px solid rgba(139,92,246,.2); color:#7c3aed; border-radius:10px; width:38px; height:38px; display:flex; align-items:center; justify-content:center; cursor:pointer; transition:all .15s; font-size:17px; flex-shrink:0; }
+    .theme-btn:hover { background:rgba(139,92,246,.22); }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="nav-bg fixed top-0 w-full z-50">
+  <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+    <div class="flex items-center gap-2.5">
+      <div class="w-8 h-8 rounded-xl bg-violet-600 flex items-center justify-center font-black text-base" style="color:#fff">E</div>
+      <span class="font-black text-xl tracking-tight">EventDD</span>
+    </div>
+    <div class="hidden md:flex items-center gap-8 text-sm text-violet-300/70 font-medium">
+      <a href="#how" class="hover:text-violet-200 transition-colors">วิธีใช้งาน</a>
+      <a href="#features" class="hover:text-violet-200 transition-colors">ฟีเจอร์</a>
+      <a href="#pricing" class="hover:text-violet-200 transition-colors">ราคา</a>
+    </div>
+    <div class="flex items-center gap-3">
+      <button onclick="toggleTheme()" class="theme-btn" id="themeBtn" title="Toggle theme">☀️</button>
+      <a href="dashboard.html" class="text-sm text-violet-300/70 hover:text-violet-200 font-medium transition-colors">เข้าสู่ระบบ</a>
+      <a href="#pricing" class="btn-primary text-sm px-5 py-2.5 rounded-xl font-semibold">สมัครใช้งาน</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero-bg min-h-screen flex items-center pt-16">
+  <div class="max-w-6xl mx-auto px-6 py-24 w-full">
+    <div class="grid lg:grid-cols-2 gap-16 items-center">
+      <div>
+        <div class="inline-flex items-center gap-2 label-pill rounded-full px-4 py-2 text-sm font-medium mb-8">
+          <span class="w-1.5 h-1.5 bg-violet-400 rounded-full pulse-dot"></span>
+          AI Face Recognition · Event Photography Platform
+        </div>
+        <h1 class="text-5xl lg:text-[3.8rem] font-black leading-[1.1] mb-6">
+          <span class="hero-text">ถ่าย อัปโหลด<br/>แขกหาภาพเจอทันที</span>
+        </h1>
+        <p class="text-violet-300/70 text-lg leading-relaxed mb-10">
+          แพลตฟอร์ม SaaS สำหรับช่างภาพ Event<br/>
+          AI จดจำใบหน้าอัตโนมัติ แขกสแกน QR + Selfie รับภาพทันที
+        </p>
+        <div class="flex flex-wrap gap-4 mb-14">
+          <a href="#pricing" class="btn-primary px-8 py-4 rounded-2xl font-bold text-base">เริ่มใช้งาน →</a>
+          <a href="guest.html" class="btn-ghost px-8 py-4 rounded-2xl font-semibold text-base">ดู Guest View</a>
+        </div>
+        <div class="flex gap-10 border-t divider pt-8">
+          <div><div class="text-3xl font-black ">10M+</div><div class="text-violet-400/60 text-sm mt-0.5">ภาพที่ประมวลผล</div></div>
+          <div><div class="text-3xl font-black ">5K+</div><div class="text-violet-400/60 text-sm mt-0.5">งาน Event</div></div>
+          <div><div class="text-3xl font-black ">99%</div><div class="text-violet-400/60 text-sm mt-0.5">ความแม่นยำ AI</div></div>
+        </div>
+      </div>
+      <!-- Phone mock -->
+      <div class="hidden lg:flex justify-center">
+        <div class="relative float-anim">
+          <div class="rounded-3xl w-72 shadow-2xl overflow-hidden border border-violet-700/40" style="background:#ffffff">
+            <div class="px-4 py-3 flex items-center gap-2 border-b border-violet-800/40" style="background:#130f26">
+              <div class="w-2.5 h-2.5 bg-red-400/60 rounded-full"></div>
+              <div class="w-2.5 h-2.5 bg-amber-400/60 rounded-full"></div>
+              <div class="w-2.5 h-2.5 bg-green-400/60 rounded-full"></div>
+              <div class="flex-1 rounded-lg text-xs text-violet-400/50 px-3 py-1 ml-2 border border-violet-800/30" style="background:#0d0b1e">eventdd.app/e/TOM2025</div>
+            </div>
+            <div class="p-5">
+              <div class="text-center mb-4">
+                <div class="text-sm font-bold ">งานแต่งงาน คุณต้อม & คุณนุ่น</div>
+                <div class="text-xs text-violet-400/50 mt-0.5">25 มกราคม 2568 · 248 ภาพ</div>
+              </div>
+              <div class="rounded-2xl p-4 text-center mb-4" style="background:rgba(139,92,246,.25);border:1px solid rgba(139,92,246,.3)">
+                <div class="text-3xl mb-2">🤳</div>
+                <div class="text-sm font-bold ">ค้นหาภาพของคุณ</div>
+                <div class="text-violet-300/60 text-xs mt-0.5 mb-3">ถ่าย Selfie เพื่อให้ AI หาภาพที่มีคุณ</div>
+                <button class="bg-violet-600 text-xs px-4 py-2 rounded-xl font-bold w-full">เปิดกล้อง</button>
+              </div>
+              <div class="grid grid-cols-3 gap-1.5">
+                <div class="aspect-square rounded-xl flex items-center justify-center text-2xl" style="background:rgba(139,92,246,.15)">👰</div>
+                <div class="aspect-square rounded-xl flex items-center justify-center text-2xl" style="background:rgba(139,92,246,.15)">🤵</div>
+                <div class="aspect-square rounded-xl flex items-center justify-center text-2xl relative" style="background:rgba(139,92,246,.2)">👨‍👩‍👧<div class="absolute top-1 right-1 w-4 h-4 bg-violet-600 rounded-full flex items-center justify-center text-xs font-bold">3</div></div>
+                <div class="aspect-square rounded-xl flex items-center justify-center text-2xl" style="background:rgba(139,92,246,.15)">💐</div>
+                <div class="aspect-square rounded-xl flex items-center justify-center text-2xl" style="background:rgba(139,92,246,.15)">🎂</div>
+                <div class="aspect-square rounded-xl flex items-center justify-center text-xs text-violet-400/50 font-medium" style="background:rgba(139,92,246,.08)">+243</div>
+              </div>
+            </div>
+          </div>
+          <div class="absolute -top-3 -right-8 bg-emerald-500 text-xs font-bold px-3 py-2 rounded-xl shadow-lg">✓ AI Tagging...</div>
+          <div class="absolute -bottom-3 -left-8 text-violet-200 text-xs px-3 py-2 rounded-xl shadow-lg" style="background:#1a1630;border:1px solid rgba(139,92,246,.3)">📷 48/248 ภาพ</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW -->
+<section id="how" class="py-24 section-alt border-y divider">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="text-center mb-16">
+      <div class="text-violet-400 text-xs font-bold uppercase tracking-widest mb-3">วิธีใช้งาน</div>
+      <h2 class="text-4xl font-black mb-3">3 ขั้นตอน เริ่มได้ทันที</h2>
+    </div>
+    <div class="grid md:grid-cols-3 gap-10">
+      <div class="text-center">
+        <div class="step-box w-12 h-12 rounded-2xl flex items-center justify-center text-lg mx-auto mb-5 font-black">01</div>
+        <h3 class="text-lg font-bold mb-2">ถ่ายและอัปโหลด</h3>
+        <p class="text-violet-300/60 text-sm leading-relaxed">Desktop App monitor โฟลเดอร์ ภาพใหม่ sync ขึ้น Cloud ทันที AI เริ่ม tag ใบหน้าอัตโนมัติ</p>
+      </div>
+      <div class="text-center">
+        <div class="step-box w-12 h-12 rounded-2xl flex items-center justify-center text-lg mx-auto mb-5 font-black">02</div>
+        <h3 class="text-lg font-bold mb-2">แขกสแกน QR</h3>
+        <p class="text-violet-300/60 text-sm leading-relaxed">วาง QR Code ในงาน แขกสแกนผ่านมือถือ ไม่ต้องโหลด App เปิดใน Browser ได้เลยทุก OS</p>
+      </div>
+      <div class="text-center">
+        <div class="step-box w-12 h-12 rounded-2xl flex items-center justify-center text-lg mx-auto mb-5 font-black">03</div>
+        <h3 class="text-lg font-bold mb-2">Selfie → รับภาพทันที</h3>
+        <p class="text-violet-300/60 text-sm leading-relaxed">ถ่าย Selfie 1 รูป AI ค้นหาทุกภาพที่มีใบหน้าตัวเอง ดาวน์โหลดได้ฟรีทันที</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features" class="py-24">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="text-center mb-16">
+      <div class="text-violet-400 text-xs font-bold uppercase tracking-widest mb-3">ฟีเจอร์</div>
+      <h2 class="text-4xl font-black mb-3">ครบทุกอย่างที่ต้องการ</h2>
+    </div>
+    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+      <div class="card p-6"><div class="w-11 h-11 rounded-2xl flex items-center justify-center text-2xl mb-4" style="background:rgba(139,92,246,.15)">🤖</div><h3 class="font-bold mb-2">AI Face Recognition</h3><p class="text-violet-300/60 text-sm leading-relaxed">InsightFace (self-hosted) detect และ index ใบหน้าอัตโนมัติ แม่นยำ 99% ข้อมูลไม่ออกนอก server</p></div>
+      <div class="card p-6"><div class="w-11 h-11 rounded-2xl flex items-center justify-center text-2xl mb-4" style="background:rgba(139,92,246,.15)">⚡</div><h3 class="font-bold mb-2">Real-time Sync</h3><p class="text-violet-300/60 text-sm leading-relaxed">Desktop App monitor โฟลเดอร์ ภาพใหม่ขึ้น Gallery ทันที แขกเห็นระหว่างงานยังไม่จบ</p></div>
+      <div class="card p-6"><div class="w-11 h-11 rounded-2xl flex items-center justify-center text-2xl mb-4" style="background:rgba(139,92,246,.15)">📱</div><h3 class="font-bold mb-2">ไม่ต้องโหลด App</h3><p class="text-violet-300/60 text-sm leading-relaxed">แขกเปิดผ่าน Browser ได้เลย QR → Selfie → ดาวน์โหลด ภายใน 30 วินาที ทุก iOS/Android</p></div>
+      <div class="card p-6"><div class="w-11 h-11 rounded-2xl flex items-center justify-center text-2xl mb-4" style="background:rgba(139,92,246,.15)">🏷️</div><h3 class="font-bold mb-2">Watermark อัตโนมัติ</h3><p class="text-violet-300/60 text-sm leading-relaxed">ใส่ลายน้ำโลโก้หรือชื่อช่างภาพลงภาพทุกรูปอัตโนมัติเมื่อดาวน์โหลด ตั้งตำแหน่งและขนาดได้</p></div>
+      <div class="card p-6"><div class="w-11 h-11 rounded-2xl flex items-center justify-center text-2xl mb-4" style="background:rgba(139,92,246,.15)">🎯</div><h3 class="font-bold mb-2">Multi-Event QR</h3><p class="text-violet-300/60 text-sm leading-relaxed">สร้าง QR Code เฉพาะแต่ละงาน จัดการหลาย Event พร้อมกันในบัญชีเดียว</p></div>
+      <div class="card p-6"><div class="w-11 h-11 rounded-2xl flex items-center justify-center text-2xl mb-4" style="background:rgba(139,92,246,.15)">📊</div><h3 class="font-bold mb-2">Analytics</h3><p class="text-violet-300/60 text-sm leading-relaxed">ดูสถิติ views, downloads, Selfie searches และการใช้ Storage แบบ real-time</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- PRICING -->
+<section id="pricing" class="py-24 section-alt border-t divider">
+  <div class="max-w-5xl mx-auto px-6">
+    <div class="text-center mb-16">
+      <div class="text-violet-400 text-xs font-bold uppercase tracking-widest mb-3">ราคา</div>
+      <h2 class="text-4xl font-black mb-3">เลือกแพ็กเกจที่เหมาะกับคุณ</h2>
+      <p class="text-violet-300/50">จ่ายรายเดือน ยกเลิกได้ตลอดเวลา</p>
+    </div>
+    <div class="grid md:grid-cols-3 gap-6 items-start">
+      <!-- Basic -->
+      <div class="card p-7">
+        <div class="text-violet-400/60 text-xs font-bold uppercase tracking-widest mb-3">Basic</div>
+        <div class="text-4xl font-black mb-0.5">฿499<span class="text-violet-400/40 text-base font-normal">/เดือน</span></div>
+        <p class="text-violet-400/40 text-xs mb-7">งานเล็ก ช่างภาพมือใหม่</p>
+        <div class="space-y-3 text-sm mb-7">
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">พื้นที่ <strong class="">5 GB</strong></span></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">AI Face Recognition</span></div>
+          <div class="flex gap-2.5"><span class="text-amber-400 font-bold">~</span><div class="text-violet-200">Tagging <strong class="">Standard</strong><div class="text-violet-400/50 text-xs">1–2 ภาพ/นาที ตลอด</div></div></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">Watermark อัตโนมัติ</span></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">QR Code + Guest Download ฟรี</span></div>
+          <div class="flex gap-2.5"><span class="text-amber-400 font-bold">⏱</span><span class="text-violet-200">จัดเก็บ <strong class="">7 วัน</strong></span></div>
+        </div>
+        <button onclick="location='dashboard.html'" class="btn-outline w-full py-3 rounded-xl font-semibold text-sm">เลือกแพ็กเกจนี้</button>
+      </div>
+      <!-- Standard -->
+      <div class="pricing-pop rounded-2xl p-7 relative" style="color:#fff;transform:scale(1.03)">
+        <div class="absolute -top-4 left-1/2 -translate-x-1/2 bg-violet-600 text-xs font-bold px-4 py-1.5 rounded-full whitespace-nowrap">⭐ ยอดนิยม</div>
+        <div class="text-violet-300 text-xs font-bold uppercase tracking-widest mb-3">Standard</div>
+        <div class="text-4xl font-black mb-0.5">฿799<span class="text-violet-300/50 text-base font-normal">/เดือน</span></div>
+        <p class="text-violet-300/50 text-xs mb-7">ช่างภาพที่รับงานสม่ำเสมอ</p>
+        <div class="space-y-3 text-sm mb-7">
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">พื้นที่ <strong class="">10 GB</strong></span></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">AI Face Recognition</span></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><div class="text-violet-200">Fast Tagging <strong class="">3,000 ภาพ/เดือน</strong><div class="text-violet-300/50 text-xs">10+ ภาพ/นาที</div></div></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">Watermark อัตโนมัติ</span></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">QR Code + Guest Download ฟรี</span></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">จัดเก็บ <strong class="">30 วัน</strong></span></div>
+        </div>
+        <button onclick="location='dashboard.html'" class="w-full bg-white text-violet-500 hover:bg-violet-900/10 py-3 rounded-xl font-black text-sm transition-colors">เลือกแพ็กเกจนี้</button>
+      </div>
+      <!-- Pro -->
+      <div class="card p-7">
+        <div class="text-violet-400/60 text-xs font-bold uppercase tracking-widest mb-3">Pro</div>
+        <div class="text-4xl font-black mb-0.5">฿1,290<span class="text-violet-400/40 text-base font-normal">/เดือน</span></div>
+        <p class="text-violet-400/40 text-xs mb-7">สตูดิโอและมืออาชีพ</p>
+        <div class="space-y-3 text-sm mb-7">
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">พื้นที่ <strong class="">20 GB</strong></span></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">AI Face Recognition</span></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><div class="text-violet-200">Fast Tagging <strong class="">10,000 ภาพ/เดือน</strong><div class="text-violet-400/50 text-xs">10+ ภาพ/นาที</div></div></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">Watermark อัตโนมัติ</span></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">QR Code + Guest Download ฟรี</span></div>
+          <div class="flex gap-2.5"><span class="text-emerald-400 font-bold">✓</span><span class="text-violet-200">จัดเก็บ <strong class="">30 วัน</strong></span></div>
+        </div>
+        <button onclick="location='dashboard.html'" class="btn-outline w-full py-3 rounded-xl font-semibold text-sm">เลือกแพ็กเกจนี้</button>
+      </div>
+    </div>
+    <!-- Table -->
+    <div class="mt-12 card overflow-hidden">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b divider" style="background:rgba(139,92,246,.06)">
+          <th class="text-left p-4 text-violet-400/50 font-medium text-xs">เปรียบเทียบ</th>
+          <th class="p-4 text-violet-300 font-semibold text-center">Basic</th>
+          <th class="p-4 text-violet-200 font-black text-center">Standard</th>
+          <th class="p-4 text-violet-300 font-semibold text-center">Pro</th>
+        </tr></thead>
+        <tbody>
+          <tr class="table-row border-b divider"><td class="p-4 text-violet-400/60">Storage</td><td class="p-4 text-center text-violet-200 font-medium">5 GB</td><td class="p-4 text-center text-violet-200 font-medium">10 GB</td><td class="p-4 text-center text-violet-200 font-medium">20 GB</td></tr>
+          <tr class="table-row border-b divider"><td class="p-4 text-violet-400/60">Fast Tagging</td><td class="p-4 text-center text-violet-400">—</td><td class="p-4 text-center text-violet-200 font-medium">3,000/เดือน</td><td class="p-4 text-center text-violet-200 font-medium">10,000/เดือน</td></tr>
+          <tr class="table-row border-b divider"><td class="p-4 text-violet-400/60">อายุจัดเก็บ</td><td class="p-4 text-center text-violet-200 font-medium">7 วัน</td><td class="p-4 text-center text-violet-200 font-medium">30 วัน</td><td class="p-4 text-center text-violet-200 font-medium">30 วัน</td></tr>
+          <tr class="table-row border-b divider"><td class="p-4 text-violet-400/60">Watermark</td><td class="p-4 text-center text-emerald-400 font-bold">✓</td><td class="p-4 text-center text-emerald-400 font-bold">✓</td><td class="p-4 text-center text-emerald-400 font-bold">✓</td></tr>
+          <tr class="table-row"><td class="p-4 text-violet-400/60">Guest Download</td><td class="p-4 text-center text-emerald-400 font-bold">ฟรี</td><td class="p-4 text-center text-emerald-400 font-bold">ฟรี</td><td class="p-4 text-center text-emerald-400 font-bold">ฟรี</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="py-10 border-t divider">
+  <div class="max-w-6xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-4">
+    <div class="flex items-center gap-2"><div class="w-7 h-7 rounded-xl bg-violet-600 flex items-center justify-center font-black text-xs" style="color:#fff">E</div><span class="font-black ">EventDD</span></div>
+    <div class="text-violet-400/40 text-sm">© 2025 EventDD. สงวนลิขสิทธิ์</div>
+    <div class="flex gap-6 text-sm text-violet-400/50">
+      <a href="dashboard.html" class="hover:text-violet-300 transition-colors">Dashboard</a>
+      <a href="guest.html" class="hover:text-violet-300 transition-colors">Guest View</a>
+      <a href="admin.html" class="hover:text-violet-300 transition-colors">Admin</a>
+    </div>
+  </div>
+</footer>
+<script>
+function toggleTheme(){
+  const h=document.documentElement;
+  const t=h.getAttribute('data-theme')==='dark'?'light':'dark';
+  h.setAttribute('data-theme',t);
+  localStorage.setItem('edd-theme',t);
+  document.querySelectorAll('.theme-btn').forEach(b=>b.textContent=t==='dark'?'☀️':'🌙');
+}
+document.querySelectorAll('.theme-btn').forEach(b=>b.textContent=document.documentElement.getAttribute('data-theme')==='dark'?'☀️':'🌙');
+</script>
+</body>
+</html>

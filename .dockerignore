@@ -1,0 +1,48 @@
+# ============================================================
+#  Root .dockerignore — build context is the whole repo root
+#  Keep this file thin so Docker daemon gets only what's needed
+# ============================================================
+
+# pnpm / npm dependencies at every level
+node_modules
+**/node_modules
+
+# Next.js build output (rebuilt inside Docker)
+frontend/.next
+frontend/out
+
+# NestJS build output (rebuilt inside Docker)
+backend/dist
+
+# Python virtual envs / caches
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.venv
+**/venv
+
+# Local env files (secrets must not enter image layers)
+.env
+.env.*
+!.env.production.example
+backend/.env
+frontend/.env
+worker/.env
+
+# Git
+.git
+.gitignore
+
+# Logs
+*.log
+**/*.log
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea
+.vscode
+*.swp
+
+# Local dev docker-compose
+docker-compose.yml

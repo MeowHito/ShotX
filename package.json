@@ -1,0 +1,14 @@
+{
+  "name": "shotx-eventdd",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --parallel --filter frontend --filter backend dev",
+    "dev:frontend": "pnpm --filter frontend dev",
+    "dev:backend": "pnpm --filter backend dev",
+    "dev:worker": "python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --app-dir worker",
+    "db:generate": "pnpm --filter backend db:generate",
+    "db:migrate": "pnpm --filter backend db:migrate"
+  },
+  "packageManager": "pnpm@9.12.0"
+}

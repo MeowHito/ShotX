@@ -1,0 +1,93 @@
+'use client';
+
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
+import { Shell } from '@/components/Shell';
+import { GoogleButton } from '@/components/GoogleButton';
+import { authFetch, setToken, type Photographer } from '@/lib/auth';
+
+type AuthResponse = { token: string; photographer: Photographer };
+
+export default function RegisterPage() {
+  const router = useRouter();
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      const data = await authFetch<AuthResponse>('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ name, email, password }),
+      });
+      setToken(data.token);
+      router.push('/pricing');
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Shell>
+      <div className="mx-auto max-w-md">
+        <div className="card p-6">
+          <h1 className="text-2xl font-black">สมัครสมาชิกช่างภาพ</h1>
+          <p className="mt-2 text-sm text-violet-100/60">หน้านี้สำหรับช่างภาพ/ตากล้องเท่านั้น เพื่ออัปโหลดรูปและส่ง URL ให้ลูกค้า</p>
+
+          <div className="mt-5">
+            <GoogleButton intent="register" label="สมัครด้วย Google" />
+          </div>
+
+          <div className="my-5 flex items-center gap-3 text-xs text-violet-200/40">
+            <span className="h-px flex-1 bg-violet-500/20" /> หรือ <span className="h-px flex-1 bg-violet-500/20" />
+          </div>
+
+          <form onSubmit={handleSubmit} className="grid gap-3">
+            <input
+              className="rounded-xl border-violet-500/20 bg-white/5"
+              placeholder="ชื่อ - นามสกุล"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              minLength={2}
+            />
+            <input
+              className="rounded-xl border-violet-500/20 bg-white/5"
+              type="email"
+              placeholder="email@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+            <input
+              className="rounded-xl border-violet-500/20 bg-white/5"
+              type="password"
+              placeholder="รหัสผ่าน (อย่างน้อย 8 ตัว)"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={8}
+            />
+            <button className="btn-primary py-3" disabled={loading}>
+              {loading ? 'กำลังสมัคร…' : 'สมัครสมาชิก'}
+            </button>
+          </form>
+
+          {error && <p className="mt-3 text-sm text-rose-300">{error}</p>}
+
+          <p className="mt-5 text-sm text-violet-100/60">
+            มีบัญชีอยู่แล้ว? <Link href="/login" className="text-violet-200 underline">เข้าสู่ระบบ</Link>
+          </p>
+        </div>
+      </div>
+    </Shell>
+  );
+}

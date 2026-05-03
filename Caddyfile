@@ -1,0 +1,23 @@
+# ============================================================
+#  Caddyfile — ShotX production
+#  Replace shotx.yourdomain.com with your actual domain
+# ============================================================
+
+shotx.yourdomain.com {
+    # ── Frontend (Next.js) ───────────────────────────────────
+    handle {
+        reverse_proxy frontend:3000
+    }
+}
+
+api.shotx.yourdomain.com {
+    # ── Backend (NestJS) ─────────────────────────────────────
+    handle {
+        reverse_proxy backend:4000
+    }
+}
+
+# ── Optional: AI worker (internal only, not exposed) ────────
+# worker.shotx.yourdomain.com {
+#     reverse_proxy worker:8000
+# }

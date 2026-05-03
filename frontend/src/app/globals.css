@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: #0d0b1e;
+  color: #e2e0f0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.card {
+  border: 1px solid rgba(139, 92, 246, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 1rem;
+}
+
+.btn-primary {
+  background: #7c3aed;
+  color: white;
+  border-radius: 0.875rem;
+  font-weight: 700;
+}
+
+.btn-outline {
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  color: #c4b5fd;
+  border-radius: 0.875rem;
+}
