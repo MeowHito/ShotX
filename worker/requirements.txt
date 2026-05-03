@@ -5,7 +5,6 @@ pydantic-settings==2.6.1
 numpy==2.1.3
 opencv-python-headless==4.10.0.84
 redis==5.2.0
-boto3==1.35.54
 python-multipart==0.0.17
 # insightface and onnxruntime-gpu are intentionally not pinned here because GPU/CUDA builds vary by machine.
 # Install for your target GPU image, e.g.:

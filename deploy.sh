@@ -14,7 +14,7 @@
 #  ── ใช้งาน ──────────────────────────────────────────────
 #
 #  ครั้งแรก (clone + ตั้งค่า):
-#    export REPO_URL=https://github.com/YOUR_USER/shotx.git
+#    export REPO_URL=https://github.com/MeowHito/ShotX.git
 #    bash deploy.sh
 #
 #  ถ้าใช้ repo แยก ให้เตรียม /opt/shotx ให้มี frontend/ backend/ worker/
@@ -27,8 +27,8 @@
 set -euo pipefail
 
 # ── ตัวแปร ──────────────────────────────────────────────────
-REPO_URL="${REPO_URL:-}"
-BRANCH="${BRANCH:-main}"
+REPO_URL="${REPO_URL:-https://github.com/MeowHito/ShotX.git}"
+BRANCH="${BRANCH:-master}"
 APP_DIR="/opt/shotx"
 ENV_FILE="$APP_DIR/.env.production"
 LOG_FILE="/var/log/shotx-deploy.log"
@@ -99,7 +99,7 @@ else
   else
     # ยังไม่มี → clone ครั้งแรก
     [ -z "$REPO_URL" ] && \
-      err "ยังไม่มีโปรเจค และไม่ได้ตั้ง REPO_URL\nตั้งด้วย: export REPO_URL=https://github.com/YOUR_USER/shotx.git\nหรือ clone repo แยกไว้ที่ $APP_DIR/frontend, $APP_DIR/backend, $APP_DIR/worker"
+      err "ยังไม่มีโปรเจค และไม่ได้ตั้ง REPO_URL\nตั้งด้วย: export REPO_URL=https://github.com/MeowHito/ShotX.git\nหรือ clone repo แยกไว้ที่ $APP_DIR/frontend, $APP_DIR/backend, $APP_DIR/worker"
 
     log "กำลัง clone $REPO_URL → $APP_DIR"
     git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"

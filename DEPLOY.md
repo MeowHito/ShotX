@@ -40,10 +40,10 @@ git init
 git add .
 git commit -m "chore: initial production setup"
 
-# เชื่อมกับ GitHub (แทน YOUR_USER ด้วย username จริง)
-git remote add origin https://github.com/YOUR_USER/shotx.git
-git branch -M main
-git push -u origin main
+# เชื่อมกับ GitHub
+git remote add origin https://github.com/MeowHito/ShotX.git
+git branch -M master
+git push -u origin master
 ```
 
 > ⚠️ **ตรวจก่อน push:** ไฟล์ `.env.production` ต้องไม่อยู่ใน git  
@@ -156,16 +156,28 @@ Docker Compose version v2.x.x
 
 ## ขั้นที่ 5 — Clone โปรเจคและตั้งค่า
 
-### 5.1 Clone repo
+> ใช้ repo เดียวแบบโฟลเดอร์ `ShotX` ปัจจุบันดีที่สุด ไม่ต้องแยก repo เพราะ Docker Compose และ Dockerfile ตอนนี้ออกแบบให้ build จาก root เดียวที่มี `frontend/`, `backend/`, `worker/` อยู่ด้วยกัน
+
+### 5.1 Clone repo เดียวทั้งโปรเจค
 
 ```bash
 # รันบน Droplet
-git clone https://github.com/YOUR_USER/shotx.git /opt/shotx
+git clone https://github.com/MeowHito/ShotX.git /opt/shotx
 cd /opt/shotx
 ```
 
 > ถ้า repo เป็น Private จะถามรหัส → ใส่ GitHub username + Personal Access Token  
 > สร้าง token ได้ที่: GitHub → Settings → Developer settings → Personal access tokens → Generate new token (scope: repo)
+
+หลัง clone แล้วโครงสร้างบน Droplet ต้องเป็นแบบนี้:
+
+```text
+/opt/shotx/
+  frontend/
+  backend/
+  worker/
+  ...
+```
 
 ### 5.2 สร้างและแก้ไข .env.production
 
@@ -187,6 +199,7 @@ POSTGRES_PASSWORD=MyStr0ng!P@ssw0rd2025
 
 # ── JWT Secret (generate ด้วย openssl) ─────────────────────
 # รัน:  openssl rand -hex 64
+# หรือรันบน Windows: node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 # แล้ว copy ผลลัพธ์มาใส่ตรงนี้
 JWT_SECRET=ใส่ผลจาก_openssl_rand_hex_64
 
@@ -201,6 +214,12 @@ STORAGE_PUBLIC_URL=https://api.shotx.yourdomain.com/uploads
 ```bash
 openssl rand -hex 64
 # copy output ไปใส่ใน .env.production
+```
+
+ถ้ารันบน Windows แล้วไม่มี `openssl` ให้ใช้ Node.js แทน:
+
+```powershell
+node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 ```
 
 ### 5.3 แก้ Caddyfile ให้ตรงกับ domain
@@ -258,14 +277,16 @@ cd /opt/shotx
 # ให้ script รันได้
 chmod +x deploy.sh
 
-# Deploy ครั้งแรก (ระบุ REPO_URL ด้วย)
-export REPO_URL=https://github.com/YOUR_USER/shotx.git
+# Deploy หลังจาก clone repo แล้ว
 bash deploy.sh
 ```
 
+> ไม่ต้อง `export REPO_URL` ถ้าคุณ clone repo ไว้ที่ `/opt/shotx` แล้ว  
+> `REPO_URL` ใช้เฉพาะกรณีเรียก `deploy.sh` จากที่อื่นแล้วต้องการให้ script clone โปรเจคให้เอง
+
 Script จะทำให้เองทั้งหมด:
 1. ✓ ตรวจสอบ Docker
-2. ✓ Clone / Pull โค้ด
+2. ✓ Pull โค้ดล่าสุดจาก GitHub
 3. ✓ ตรวจ .env.production
 4. ✓ Build Docker images (~10–15 นาทีครั้งแรก)
 5. ✓ Start ทุก services
@@ -366,6 +387,34 @@ dc logs backend --tail 50
 - `.env.production` ขาดค่า → เช็ค `POSTGRES_PASSWORD`, `JWT_SECRET`
 - Postgres ยังไม่พร้อม → รอสัก 15 วินาทีแล้ว `dc restart backend`
 - Port ชน → `dc ps` ดูว่า postgres ขึ้นหรือเปล่า
+
+### Deploy แล้วขึ้น `fatal: couldn't find remote ref main`
+แปลว่า `deploy.sh` บน Droplet ยังเป็นเวอร์ชันเก่าที่พยายามดึง branch `main` แต่ repo นี้ใช้ branch `master`
+
+```bash
+cd /opt/shotx
+git fetch origin master
+git reset --hard origin/master
+BRANCH=master bash deploy.sh
+```
+
+ตรวจสอบเพิ่มเติมได้ด้วย:
+
+```bash
+git branch -a
+grep -n 'BRANCH=' deploy.sh
+git remote -v
+```
+
+### Worker build แล้วขึ้น `error: command 'g++' failed`
+แปลว่า Docker image ของ worker ยังไม่มี build tools สำหรับ compile `insightface` ให้ pull โค้ดล่าสุดแล้ว build ใหม่:
+
+```bash
+cd /opt/shotx
+git fetch origin master
+git reset --hard origin/master
+BRANCH=master bash deploy.sh
+```
 
 ### Caddy แสดง "certificate not found"
 - DNS ยังไม่ propagate → รอ 5–30 นาที
