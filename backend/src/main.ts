@@ -19,6 +19,7 @@ async function bootstrap() {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  const enableHsts = allowedOrigins.some((origin) => origin.startsWith('https://'));
   app.enableCors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
@@ -34,7 +35,7 @@ async function bootstrap() {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
-    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    if (enableHsts) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     next();
   });
 
