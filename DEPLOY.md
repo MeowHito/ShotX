@@ -222,13 +222,31 @@ openssl rand -hex 64
 node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 ```
 
-### 5.3 แก้ Caddyfile ให้ตรงกับ domain
+### 5.3 ตั้งค่า Caddyfile
 
 ```bash
 nano /opt/shotx/Caddyfile
 ```
 
-เปลี่ยน `shotx.yourdomain.com` เป็น domain จริง:
+ตอนยังไม่มี domain ให้ใช้ IP mode แบบนี้:
+
+```caddyfile
+:80 {
+    handle /api/* {
+        reverse_proxy backend:4000
+    }
+
+    handle /uploads/* {
+        reverse_proxy backend:4000
+    }
+
+    handle {
+        reverse_proxy frontend:3000
+    }
+}
+```
+
+ถ้ามี domain แล้วค่อยเปลี่ยนเป็นแบบนี้:
 
 ```caddyfile
 shotx.yourdomain.com {
@@ -240,21 +258,6 @@ shotx.yourdomain.com {
 api.shotx.yourdomain.com {
     handle {
         reverse_proxy backend:4000
-    }
-}
-```
-
-**กรณียังไม่มี domain — ใช้ IP ตรงๆ:**
-
-```caddyfile
-:80 {
-    # API calls
-    handle /api/* {
-        reverse_proxy backend:4000
-    }
-    # ทุก request อื่น → frontend
-    handle {
-        reverse_proxy frontend:3000
     }
 }
 ```
@@ -308,7 +311,7 @@ docker compose -f /opt/shotx/docker-compose.production.yml logs -f
 
 **Authorized JavaScript origins** เพิ่ม:
 ```
-https://shotx.yourdomain.com
+    https://shotx.yourdomain.com
 ```
 
 **Authorized redirect URIs** เพิ่ม:
@@ -335,6 +338,8 @@ curl -I https://shotx.yourdomain.com
 
 เปิดเบราว์เซอร์ไปที่ `https://shotx.yourdomain.com` — เว็บควรขึ้น 🎉
 
+---
+ถึงนี้ละ ------------------------------------------------------------------------------------------------------------------------------------
 ---
 
 ## คำสั่งที่ใช้บ่อยบน Droplet

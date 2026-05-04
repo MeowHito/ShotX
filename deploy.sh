@@ -167,7 +167,7 @@ log "Step 6/6 · Health check..."
 
 BACKEND_OK=false
 for i in $(seq 1 20); do
-  if curl -sf "http://localhost:4000/api/v1/health" >/dev/null 2>&1; then
+  if $COMPOSE exec -T backend node -e "fetch('http://127.0.0.1:4000/api/v1/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" >/dev/null 2>&1; then
     BACKEND_OK=true
     break
   fi
