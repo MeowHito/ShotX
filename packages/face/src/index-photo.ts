@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { FaceConfig } from '@shotx/shared';
+import {
+  type FaceConfig,
+  INDEX_IMAGE_FULL,
+  type IndexImageKeyParts,
+  type IndexImagePart,
+  indexTilePart,
+  type TilingMode,
+} from '@shotx/shared';
 import { countDistinct, tileBoxToImage, tileRects, touchesInnerEdge } from './geometry';
 import {
   type EncodedImage,
@@ -12,8 +19,8 @@ import { type FaceProvider, IndexFacesOutcomeUnknownError } from './provider';
 import type { TempImageStore } from './temp-store';
 import type { IndexedFace, IndexFacesResult, QualityFilter } from './types';
 
-export const TILING_MODES = ['never', 'signal', 'always'] as const;
-export type TilingMode = (typeof TILING_MODES)[number];
+// Defined once in packages/shared (FACE_INDEX_TILING); re-exported so `@shotx/face` keeps them.
+export { TILING_MODES, type TilingMode } from '@shotx/shared';
 
 /** Rekognition reasons meaning faces were skipped for being small or too many. */
 const TILE_REASONS = new Set(['SMALL_BOUNDING_BOX', 'EXCEEDS_MAX_FACES']);
@@ -24,19 +31,16 @@ export interface SmallFaceDetector {
   faceWidths(image: EncodedImage): Promise<number[]>;
 }
 
-/** Which temporary index image of an attempt: the full image, or tile n. */
-export type IndexTempPart = 'full' | `t${number}`;
+/** Which temporary index image of an attempt: `full`, or `t{n}` for tile n (0-based). */
+export type IndexTempPart = IndexImagePart;
 
 /**
  * Builds the object key of a temporary index image, `tmp/index/{fileId}/{attemptId}/{part}.jpg`.
- * Production passes the shared key builder. Keys must differ for different attempts and parts, so
- * concurrent attempts for one file never overwrite or delete each other's images.
+ * Production passes `indexImageKey` from `@shotx/shared` (ADR 0004). Keys must differ for
+ * different attempts and parts, so concurrent attempts for one file never overwrite or delete
+ * each other's images.
  */
-export type IndexTempKey = (image: {
-  fileId: string;
-  attemptId: string;
-  part: IndexTempPart;
-}) => string;
+export type IndexTempKey = (image: IndexImageKeyParts) => string;
 
 export interface IndexPhotoDeps {
   provider: FaceProvider;
@@ -71,23 +75,29 @@ export interface IndexPhotoOptions {
   encode: EncodeOptions;
 }
 
-/** What a caller decides per photo; everything else comes from FaceConfig. */
+/**
+ * What a caller decides per photo; everything else, tiling included (`FACE_INDEX_TILING`), comes
+ * from FaceConfig. The evaluation harness varies pipeline options by overriding fields of the
+ * returned options, not through the target.
+ */
 export interface IndexPhotoTarget {
   collectionId: string;
   fileId: string;
-  tiling: TilingMode;
   previousFaceIds?: readonly string[] | undefined;
 }
 
 export function indexPhotoOptions(config: FaceConfig, target: IndexPhotoTarget): IndexPhotoOptions {
   const { index } = config;
   return {
-    ...target,
+    collectionId: target.collectionId,
+    fileId: target.fileId,
+    previousFaceIds: target.previousFaceIds,
     longEdge: index.longEdge,
     jpegQuality: index.jpegQuality,
     maxBytes: index.maxBytes,
     maxFaces: index.maxFaces,
     qualityFilter: index.qualityFilter,
+    tiling: index.tiling,
     tileGrid: index.tileGrid,
     tileOverlap: index.tileOverlap,
     tileEdgeEpsilon: index.tileEdgeEpsilon,
@@ -240,7 +250,7 @@ export async function indexPhoto(
       const size = await orientedSize(original);
       for (const [i, rect] of tileRects(size, options.tileGrid, options.tileOverlap).entries()) {
         const tile = await encodeJpeg(original, attempt.jpeg, rect);
-        const result = await attempt.indexImage(tile.bytes, `t${i}`);
+        const result = await attempt.indexImage(tile.bytes, indexTilePart(i));
         indexCalls++;
         for (const face of result.faces) {
           if (touchesInnerEdge(face.bbox, rect, size, options.tileEdgeEpsilon)) {
@@ -303,7 +313,7 @@ class IndexAttempt {
 
   async indexFull(original: Uint8Array) {
     const full = await encodeJpeg(original, this.jpeg);
-    return { full, fullResult: await this.indexImage(full.bytes, 'full') };
+    return { full, fullResult: await this.indexImage(full.bytes, INDEX_IMAGE_FULL) };
   }
 
   /**

@@ -1,13 +1,24 @@
-import type { FaceConfig } from '@shotx/shared';
+import {
+  type FaceConfig,
+  S3_PREFIXES,
+  SCHEDULED_JOB_TYPES,
+  SQS_MAX_VISIBILITY_TIMEOUT_SECONDS,
+} from '@shotx/shared';
 import type { App } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { z } from 'zod';
-import { CONTEXT_KEY, SCHEDULED_JOB_TYPES, SQS_MAX_VISIBILITY_TIMEOUT_SECONDS } from './constants';
+import {
+  CONTEXT_KEY,
+  FACES_MIN_VISIBILITY_TIMEOUT_SECONDS,
+  MIN_VISIBILITY_TIMEOUT_SECONDS,
+} from './constants';
 import {
   type FaceSearchBodyLimits,
   faceSearchBodyLimits,
   facesJobWorstCase,
   type FacesJobWorstCase,
+  heartbeatQueueIssues,
+  minOrphanGraceMs,
   serviceFaceConfig,
 } from './face-limits';
 
@@ -80,8 +91,13 @@ const workerSchema = z.object({
   }),
 });
 
+/**
+ * Every queue is consumed with heartbeats: the worker extends a message's visibility every third
+ * of the timeout until the job ends. The timeout is how long a crashed worker's message stays
+ * hidden, not how long a job may run (see heartbeatQueueIssues in lib/face-limits.ts).
+ */
 const queueSchema = z.object({
-  visibilityTimeoutSeconds: int(0, SQS_MAX_VISIBILITY_TIMEOUT_SECONDS),
+  visibilityTimeoutSeconds: int(MIN_VISIBILITY_TIMEOUT_SECONDS, SQS_MAX_VISIBILITY_TIMEOUT_SECONDS),
   retentionDays: int(1, 14),
   dlqRetentionDays: int(1, 14),
   maxReceiveCount: int(1, 1000),
@@ -95,19 +111,25 @@ const queueSchema = z.object({
 });
 
 /**
- * The faces queue also carries the inputs of its visibility floor (see facesJobWorstCase in
- * lib/face-limits.ts). The rest of the worst case comes from the worker's FACE_* configuration.
+ * The faces queue also carries the inputs of its worst-case job that FaceConfig doesn't have (see
+ * facesJobWorstCase in lib/face-limits.ts). The rest comes from the worker's FACE_* values,
+ * including FACE_REKOGNITION_REQUEST_TIMEOUT_MS.
  */
 const facesQueueSchema = queueSchema.extend({
-  visibilityFloor: z.object({
-    /** Upper bound on one Rekognition request. The worker sets its SDK request timeout to this. */
-    rekognitionCallTimeoutSeconds: int(1, 300),
+  visibilityTimeoutSeconds: int(
+    FACES_MIN_VISIBILITY_TIMEOUT_SECONDS,
+    SQS_MAX_VISIBILITY_TIMEOUT_SECONDS,
+  ),
+  jobBudget: z.object({
     /** Collection calls a faces job may make before indexing (CreateCollection + Describe). */
     collectionCallsPerJob: int(0, 10),
     /** Non-Rekognition work for one photo: decode, tile encodes, S3 temp objects, DB writes. */
     processingSeconds: int(0, 3600),
   }),
 });
+
+/** Redis ACL rules, split into tokens. */
+const aclTokens = (rules: string) => rules.trim().split(/\s+/);
 
 const scheduleSchema = z.object({
   expression: str.pipe(
@@ -179,8 +201,36 @@ export const configSchema = z
           .regex(/^[a-zA-Z][a-zA-Z0-9-]{0,39}$/)
           .refine((u) => u !== 'default', { error: 'the default user is disabled' }),
       ),
-      /** Redis ACL rules for that user, e.g. "on ~* &* +@all". */
-      accessString: str.pipe(z.string().startsWith('on ', { error: 'must start with "on "' })),
+      /**
+       * Redis ACL rules for that user, e.g. "on ~* &* +@all -@dangerous". `-@dangerous` (FLUSHALL,
+       * FLUSHDB, KEYS, CONFIG, DEBUG, INFO, ...) is required, and no rule after it may allow a
+       * command again.
+       */
+      accessString: str.pipe(
+        z
+          .string()
+          .startsWith('on ', { error: 'must start with "on "' })
+          .refine(
+            (rules) => {
+              const tokens = aclTokens(rules);
+              const i = tokens.lastIndexOf('-@dangerous');
+              return (
+                i >= 0 &&
+                tokens.slice(i + 1).every((t) => !t.startsWith('+') && t !== 'allcommands')
+              );
+            },
+            { error: 'must deny -@dangerous, with no +rule or allcommands after it' },
+          ),
+      ),
+      /**
+       * maxmemory-policy is noeviction (ADR 0005): writes fail when memory is full, so this alarm
+       * is the early warning. DatabaseMemoryUsagePercentage, highest node.
+       */
+      alarms: z.object({
+        memoryUsagePercentThreshold: z.coerce.number().gt(0).lt(100),
+        periodSeconds: z.coerce.number().pipe(z.union([60, 300].map((n) => z.literal(n)))),
+        evaluationPeriods: int(1, 60),
+      }),
     }),
 
     storage: z.object({
@@ -247,7 +297,7 @@ export const configSchema = z
         readablePrefixes: z
           .array(str.pipe(z.string().regex(/^[a-z0-9/_-]+\/$/)))
           .min(1)
-          .refine((p) => !p.some((x) => 'tmp/index/'.startsWith(x)), {
+          .refine((p) => !p.some((x) => S3_PREFIXES.tmpIndex.startsWith(x)), {
             error: 'CloudFront must not be able to read tmp/index/ (face-index scratch images)',
           }),
         /**
@@ -263,7 +313,26 @@ export const configSchema = z
               })
               .refine((v) => /(^|;)\s*sandbox\s*(;|$)/.test(v), {
                 error: 'must contain a bare sandbox directive (no allow-* tokens)',
+              })
+              .refine(
+                (v) => !/(^|;)\s*media-src\b/.test(v) || /(^|;)\s*media-src 'self'\s*(;|$)/.test(v),
+                {
+                  error: "media-src may only be 'self' (the media document loading its own URL)",
+                },
+              ),
+          ),
+          /**
+           * Access-Control-Allow-Origin on /media/*. A media file opened in its own tab becomes a
+           * sandboxed document with an opaque origin, and Chromium fetches the video again in
+           * CORS mode from that origin (`Origin: null`), so direct playback needs "*". Never
+           * with credentials: media URLs are signed, no cookies are involved. Empty: no CORS.
+           */
+          corsAllowOrigins: z.array(
+            str.pipe(
+              z.string().regex(/^\*$|^https:\/\/[a-z0-9.-]+(:\d+)?$/, {
+                error: 'must be "*" or an https origin (never "null")',
               }),
+            ),
           ),
           referrerPolicy: z.enum([
             'no-referrer',
@@ -427,6 +496,18 @@ export const configSchema = z
     }
     const headers = c.cdn.media.responseHeaders;
     if (
+      /(^|;)\s*media-src\b/.test(headers.contentSecurityPolicy) &&
+      !headers.corsAllowOrigins.includes('*')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['cdn', 'media', 'responseHeaders', 'corsAllowOrigins'],
+        message:
+          'must include "*" when the CSP allows media-src: the sandboxed media document has an ' +
+          'opaque origin and fetches the video in CORS mode',
+      });
+    }
+    if (
       headers.hstsPreload &&
       !(headers.hstsIncludeSubdomains && headers.hstsMaxAgeSeconds >= 31_536_000)
     ) {
@@ -452,12 +533,28 @@ export const configSchema = z
     };
     const workerFace = faceConfig('worker');
     if (workerFace !== undefined) {
-      const worst = facesJobWorstCase(workerFace, c.queues.faces.visibilityFloor);
-      if (c.queues.faces.visibilityTimeoutSeconds < worst.floorSeconds) {
+      const worst = facesJobWorstCase(workerFace, c.queues.faces.jobBudget);
+      for (const issue of heartbeatQueueIssues(
+        c.queues.faces,
+        worst.seconds,
+        describeFacesWorstCase(worst),
+      )) {
         ctx.addIssue({
           code: 'custom',
-          path: ['queues', 'faces', 'visibilityTimeoutSeconds'],
-          message: `must be >= ${worst.floorSeconds}s: ${describeFacesWorstCase(worst)}`,
+          path: ['queues', 'faces', ...issue.path],
+          message: issue.message,
+        });
+      }
+      const minGrace = minOrphanGraceMs(worst);
+      if (workerFace.index.orphanGraceMs < minGrace) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['services', 'env'],
+          message:
+            `worker: FACE_ORPHAN_GRACE_MS (${workerFace.index.orphanGraceMs}) must be >= ` +
+            `${minGrace}, twice the longest faces attempt (${worst.seconds}s: ` +
+            `${describeFacesWorstCase(worst)}); an attempt must commit its faces within half ` +
+            `the grace or reconciliation may delete them`,
         });
       }
     }
@@ -467,21 +564,21 @@ export const configSchema = z
 
 export type PlatformConfig = z.output<typeof configSchema>;
 
-/** One-line explanation of the faces queue visibility floor, used in validation errors. */
+/** One-line explanation of the faces job worst case, used in validation errors. */
 export function describeFacesWorstCase(w: FacesJobWorstCase): string {
   return (
     `one faces job makes up to ${w.totalCalls} Rekognition calls ` +
     `(${w.collectionCalls} collection + ${w.indexFacesCalls} IndexFaces + ` +
-    `${w.deleteFacesCalls} DeleteFaces), each up to ${w.perCallSeconds}s with retries and ` +
-    `rate-limit waits, plus ${w.processingSeconds}s of processing`
+    `${w.deleteFacesCalls} DeleteFaces), each up to ${w.perCallSeconds}s with retries, ` +
+    `rate-limit waits and request timeouts, plus ${w.processingSeconds}s of processing`
   );
 }
 
-/** The faces queue worst case for this configuration (the worker's FACE_* values). */
+/** The faces job worst case for this configuration (the worker's FACE_* values). */
 export function facesQueueWorstCase(config: PlatformConfig): FacesJobWorstCase {
   return facesJobWorstCase(
     serviceFaceConfig(config.services.env, 'worker'),
-    config.queues.faces.visibilityFloor,
+    config.queues.faces.jobBudget,
   );
 }
 

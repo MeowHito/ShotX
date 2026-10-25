@@ -154,9 +154,8 @@ pnpm face-eval run \
 ## Read the report
 
 - **Recommendation**: the value for `FACE_STRONG`, `FACE_MAYBE` and every pipeline option, next to
-  the value in the config the run used. Tiling has no config key yet (`FACE_INDEX_TILING` was
-  requested from contracts). To adopt the values, change the `FACE_*` defaults or the environment;
-  the defaults live in `packages/shared`.
+  the value in the config the run used (tiling is `FACE_INDEX_TILING`). To adopt the values,
+  change the `FACE_*` defaults or the environment; the defaults live in `packages/shared`.
 - **Strong** counts only the "ใช่คุณ" group (≥ FACE_STRONG). **Strong+maybe** counts both groups
   (≥ FACE_MAYBE).
 - **Micro** sums true positives, false positives and false negatives over all volunteers before

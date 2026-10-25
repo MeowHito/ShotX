@@ -7,7 +7,12 @@ import {
   QUEUE_MESSAGE_SCHEMAS,
   QUEUE_NAMES,
   QUEUE_URL_ENV,
+  QUEUE_VISIBILITY_TIMEOUT_ENV,
   QueueMessageError,
+  parseZipEntries,
+  uniqueZipEntryNames,
+  ZipEntriesError,
+  zipEntryNameKey,
   SCHEDULED_JOB_TYPES,
   serializeQueueMessage,
   type FacesQueueMessage,
@@ -78,11 +83,18 @@ describe('queue names', () => {
       zip: 'ZIP_QUEUE_URL',
       jobs: 'JOBS_QUEUE_URL',
     });
+    expect(QUEUE_VISIBILITY_TIMEOUT_ENV).toEqual({
+      media: 'MEDIA_QUEUE_VISIBILITY_TIMEOUT_SECONDS',
+      faces: 'FACES_QUEUE_VISIBILITY_TIMEOUT_SECONDS',
+      zip: 'ZIP_QUEUE_VISIBILITY_TIMEOUT_SECONDS',
+      jobs: 'JOBS_QUEUE_VISIBILITY_TIMEOUT_SECONDS',
+    });
     expect(SCHEDULED_JOB_TYPES).toEqual([
       'stats.rollup.hourly',
       'subscriptions.transition.daily',
       'trash.purge.daily',
       'faces.expire.daily',
+      'faces.reconcile.daily',
       'quota.reconcile.nightly',
     ]);
   });
@@ -177,6 +189,32 @@ describe('faces queue', () => {
 });
 
 describe('zip queue', () => {
+  it('carries only the job id', () => {
+    const message: ZipQueueMessage = { type: 'zip.create', jobId };
+    const body = serializeQueueMessage('zip', message);
+    expect(JSON.parse(body)).toEqual({ type: 'zip.create', jobId });
+    expect(parseQueueMessage('zip', body)).toEqual(message);
+    expectTypeOf<keyof ZipQueueMessage>().toEqualTypeOf<'type' | 'jobId'>();
+  });
+
+  it('drops entries and other fields of the old message shape', () => {
+    const old = { type: 'zip.create', jobId, shareId, photographerId, entries: [] };
+    expect(parseQueueMessage('zip', JSON.stringify(old))).toEqual({ type: 'zip.create', jobId });
+  });
+
+  it.each([{ type: 'zip.create' }, { type: 'zip.create', jobId: 'job-1' }, { type: 'zip', jobId }])(
+    'rejects %j',
+    (body) => {
+      expect(() => parseQueueMessage('zip', JSON.stringify(body))).toThrow(QueueMessageError);
+    },
+  );
+
+  it('stays small with the largest job id', () => {
+    expect(serializeQueueMessage('zip', { type: 'zip.create', jobId }).length).toBeLessThan(100);
+  });
+});
+
+describe('zip entries', () => {
   const web: ZipEntry = {
     fileId,
     key: derivedKey({ photographerId, fileId }, 'web'),
@@ -189,17 +227,10 @@ describe('zip queue', () => {
     name: 'clip.mov',
     bytes: 3_000_000_000,
   };
-  const valid: ZipQueueMessage = {
-    type: 'zip.create',
-    jobId,
-    shareId,
-    photographerId,
-    entries: [web, mov],
-  };
+  const valid = { photographerId, entries: [web, mov] };
 
-  it('round-trips a valid job', () => {
-    const body = serializeQueueMessage('zip', valid);
-    expect(parseQueueMessage('zip', body)).toEqual(valid);
+  it('accepts originals and derivatives of the photographer', () => {
+    expect(parseZipEntries(valid)).toEqual(valid);
   });
 
   it("rejects keys of another photographer or another entry's file", () => {
@@ -211,25 +242,59 @@ describe('zip queue', () => {
       '../secrets',
     ];
     for (const key of bad) {
-      expect(() =>
-        serializeQueueMessage('zip', { ...valid, entries: [{ ...web, key }, mov] }),
-      ).toThrow(/at entries\[0\]\.key/);
+      expect(() => parseZipEntries({ ...valid, entries: [{ ...web, key }, mov] })).toThrow(
+        /entries\.0\.key/,
+      );
     }
   });
 
-  it('rejects unsafe or duplicate entry names', () => {
-    expect(() =>
-      serializeQueueMessage('zip', { ...valid, entries: [{ ...web, name: '../evil.jpg' }] }),
-    ).toThrow(/at entries\[0\]\.name/);
-    expect(() =>
-      serializeQueueMessage('zip', { ...valid, entries: [web, { ...mov, name: 'img_0001.JPG' }] }),
-    ).toThrow(/at entries\[1\]\.name/);
+  it('rejects unsafe or duplicate entry names without echoing them', () => {
+    expect(() => parseZipEntries({ ...valid, entries: [{ ...web, name: '../evil.jpg' }] })).toThrow(
+      /entries\.0\.name/,
+    );
+    const duplicate = () =>
+      parseZipEntries({ ...valid, entries: [web, { ...mov, name: 'img_0001.JPG' }] });
+    expect(duplicate).toThrow(ZipEntriesError);
+    expect(duplicate).toThrow(/entries\.1\.name: must be unique within the job \(ignoring case\)/);
+    expect(duplicate).not.toThrow(/img_0001/i);
   });
 
-  it('requires at least one entry', () => {
-    expect(() => serializeQueueMessage('zip', { ...valid, entries: [] })).toThrow(
-      QueueMessageError,
-    );
+  it('requires one to ZIP_MAX_FILES_LIMIT entries', () => {
+    expect(() => parseZipEntries({ ...valid, entries: [] })).toThrow(ZipEntriesError);
+    const many = Array.from({ length: 10_001 }, (_, i) => ({ ...web, name: `${i}.jpg` }));
+    expect(() => parseZipEntries({ ...valid, entries: many })).toThrow(/entries/);
+  });
+
+  it('folds names by case', () => {
+    expect(zipEntryNameKey('IMG_0001.JPG')).toBe(zipEntryNameKey('img_0001.jpg'));
+    expect(zipEntryNameKey('ภาพ.jpg')).toBe('ภาพ.jpg');
+  });
+
+  it('numbers names that collide ignoring case', () => {
+    expect(
+      uniqueZipEntryNames(['a.jpg', 'A.JPG', 'a.jpg', 'b', 'B', 'a (2).jpg', 'งาน.jpg']),
+    ).toEqual(['a.jpg', 'A (2).JPG', 'a (3).jpg', 'b', 'B (2)', 'a (2) (2).jpg', 'งาน.jpg']);
+  });
+
+  it('keeps numbered names safe and within 255 bytes', () => {
+    const long = `${'ก'.repeat(83)}.jpg`;
+    const names = uniqueZipEntryNames([long, long, long]);
+    expect(new Set(names.map(zipEntryNameKey)).size).toBe(3);
+    for (const name of names) {
+      expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(255);
+      expect(name.endsWith('.jpg')).toBe(true);
+    }
+    expect(names[1]).toMatch(/ \(2\)\.jpg$/);
+    expect(() =>
+      parseZipEntries({
+        photographerId,
+        entries: names.map((name) => ({ ...web, name })),
+      }),
+    ).not.toThrow();
+  });
+
+  it('refuses unsanitized names', () => {
+    expect(() => uniqueZipEntryNames(['a/b.jpg'])).toThrow(/sanitizeOriginalName/);
   });
 });
 

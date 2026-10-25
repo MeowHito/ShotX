@@ -1,7 +1,14 @@
+import {
+  QUEUE_NAMES,
+  QUEUE_VISIBILITY_TIMEOUT_ENV,
+  SCHEDULED_JOB_TYPES,
+  SQS_MAX_VISIBILITY_TIMEOUT_SECONDS,
+} from '@shotx/shared';
 import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 import { faceSearchLimits, facesQueueWorstCase } from '../lib/config';
-import { EDGE_REGION, PRIMARY_REGION, QUEUE_NAMES, SCHEDULED_JOB_TYPES } from '../lib/constants';
+import { EDGE_REGION, PRIMARY_REGION } from '../lib/constants';
+import { heartbeatQueueIssues } from '../lib/face-limits';
 import { collect, resourcesOfType, synthPlatform } from './helpers';
 
 type Json = Record<string, unknown>;
@@ -277,7 +284,6 @@ describe('/media/* response headers', () => {
     // Nothing that blocks cross-context embedding or rewrites the object's own headers.
     expect(policy.CustomHeadersConfig).toBeUndefined();
     expect(policy.RemoveHeadersConfig).toBeUndefined();
-    expect(policy.CorsConfig).toBeUndefined();
     expect(security.FrameOptions).toBeUndefined();
     expect(JSON.stringify(policy)).not.toMatch(
       /Content-Disposition|Content-Type"|Cross-Origin-(Resource|Embedder)-Policy/i,
@@ -290,6 +296,64 @@ describe('/media/* response headers', () => {
     )[0] as Json;
     expect(JSON.stringify(cachePolicy)).toContain('response-content-disposition');
     expect(media.AllowedMethods).toEqual(['GET', 'HEAD']);
+  });
+
+  it('allows CORS reads from any origin, never with credentials, GET and HEAD only', () => {
+    expect(policy.CorsConfig).toEqual({
+      AccessControlAllowOrigins: { Items: ['*'] },
+      AccessControlAllowMethods: { Items: ['GET', 'HEAD'] },
+      AccessControlAllowHeaders: { Items: ['Range'] },
+      AccessControlAllowCredentials: false,
+      OriginOverride: true,
+    });
+  });
+
+  /**
+   * A media URL opened in its own tab becomes a synthetic media document carrying these headers;
+   * its <video> fetches the same URL again. Verified in Chrome 156 (infra/README.md, "Media
+   * opened in a new tab"): with `default-src 'none'; sandbox` the fetch is blocked by CSP
+   * (media-src falls back to default-src); with `media-src 'self'` but no CORS it fails the CORS
+   * check, because the sandboxed document's origin is opaque. This models those two rules.
+   */
+  describe('media opened in a new tab', () => {
+    const csp = (security.ContentSecurityPolicy as Json).ContentSecurityPolicy as string;
+    const directives = new Map(
+      csp
+        .split(';')
+        .map((d) => d.trim().split(/\s+/))
+        .filter((tokens) => tokens[0] !== '')
+        .map(([name = '', ...values]) => [name.toLowerCase(), values]),
+    );
+    /** CSP3 fallback for fetch directives: media-src, else default-src, else allow. */
+    const effective = (directive: string) =>
+      directives.get(directive) ?? directives.get('default-src');
+    const cors = policy.CorsConfig as
+      | { AccessControlAllowOrigins: { Items: string[] }; AccessControlAllowCredentials: boolean }
+      | undefined;
+
+    it("lets the media document load its own URL (media-src 'self')", () => {
+      expect(effective('media-src')).toEqual(["'self'"]);
+    });
+
+    it('keeps the document sandboxed: no scripts, opaque origin, nothing else loadable', () => {
+      expect(directives.get('sandbox')).toEqual([]);
+      expect(effective('script-src')).toEqual(["'none'"]);
+      for (const d of [
+        'img-src',
+        'style-src',
+        'font-src',
+        'connect-src',
+        'frame-src',
+        'object-src',
+      ]) {
+        expect(effective(d), d).toEqual(["'none'"]);
+      }
+    });
+
+    it("answers the opaque origin's CORS-mode video fetch (Origin: null) without credentials", () => {
+      expect(cors?.AccessControlAllowOrigins.Items).toContain('*');
+      expect(cors?.AccessControlAllowCredentials).toBe(false);
+    });
   });
 
   it('is used by /media/* only; pages keep the managed security headers policy', () => {
@@ -332,15 +396,45 @@ describe('SQS', () => {
     for (const dlq of dlqLogicalIds) expect(alarmedQueues.has(dlq), dlq).toBe(true);
   });
 
-  it('sets the faces visibility timeout from context, at or above the worst-case job', () => {
-    const [faces] = Object.values(
-      app.findResources('AWS::SQS::Queue', { Properties: { QueueName: 'shotx-prod-faces' } }),
+  const queueProps = (name: string) => {
+    const [q] = Object.values(
+      app.findResources('AWS::SQS::Queue', { Properties: { QueueName: `shotx-prod-${name}` } }),
     );
-    const visibility = ((faces as Json).Properties as Json).VisibilityTimeout as number;
-    expect(visibility).toBe(s.config.queues.faces.visibilityTimeoutSeconds);
-    expect(visibility).toBeGreaterThanOrEqual(facesQueueWorstCase(s.config).floorSeconds);
-    expect(visibility).toBeGreaterThanOrEqual(180);
-    expect(visibility).toBeLessThanOrEqual(43_200);
+    return (q as Json).Properties as Json;
+  };
+
+  it('sets every visibility timeout from context and passes it to the worker', () => {
+    const env = containerEnv('worker');
+    for (const q of QUEUE_NAMES) {
+      const visibility = queueProps(q).VisibilityTimeout as number;
+      expect(visibility, q).toBe(s.config.queues[q].visibilityTimeoutSeconds);
+      expect(visibility, q).toBeGreaterThanOrEqual(60);
+      expect(env[QUEUE_VISIBILITY_TIMEOUT_ENV[q]], q).toBe(String(visibility));
+    }
+  });
+
+  it('heartbeats faces jobs: 600-900 s timeout, worst case within 12 h, receives and retention', () => {
+    const faces = queueProps('faces');
+    const visibility = faces.VisibilityTimeout as number;
+    expect(visibility).toBeGreaterThanOrEqual(600);
+    expect(visibility).toBeLessThanOrEqual(900);
+    const worst = facesQueueWorstCase(s.config).seconds;
+    // A job may outlive the timeout (heartbeats), but not SQS's 12 h cap.
+    expect(worst).toBeGreaterThan(visibility);
+    expect(worst).toBeLessThanOrEqual(SQS_MAX_VISIBILITY_TIMEOUT_SECONDS);
+    const maxReceiveCount = (faces.RedrivePolicy as Json).maxReceiveCount as number;
+    expect(maxReceiveCount * visibility).toBeGreaterThanOrEqual(worst);
+    expect(
+      heartbeatQueueIssues(
+        {
+          visibilityTimeoutSeconds: visibility,
+          maxReceiveCount,
+          retentionDays: (faces.MessageRetentionPeriod as number) / 86_400,
+        },
+        worst,
+        'faces',
+      ),
+    ).toEqual([]);
   });
 
   it('lets the worker heartbeat faces jobs with ChangeMessageVisibility', () => {
@@ -402,6 +496,48 @@ describe('data stores', () => {
     });
   });
 
+  describe('Redis memory (ADR 0005)', () => {
+    it('never evicts: a custom redis7 parameter group with maxmemory-policy noeviction', () => {
+      const groups = Object.entries(data.findResources('AWS::ElastiCache::ParameterGroup'));
+      expect(groups).toHaveLength(1);
+      const [groupId, group] = groups[0] as [string, Json];
+      expect(group.Properties).toMatchObject({
+        CacheParameterGroupFamily: `redis${s.config.redis.engineVersion.split('.')[0]}`,
+        Properties: { 'maxmemory-policy': 'noeviction' },
+      });
+      data.hasResourceProperties('AWS::ElastiCache::ReplicationGroup', {
+        CacheParameterGroupName: { Ref: groupId },
+      });
+    });
+
+    it('alarms to the alarm topic when the fullest node passes the memory threshold', () => {
+      const alarms = Object.values(app.findResources('AWS::CloudWatch::Alarm'))
+        .map((a) => a.Properties as Json)
+        .filter((p) => collect(p.Metrics, 'MetricName').includes('DatabaseMemoryUsagePercentage'));
+      expect(alarms).toHaveLength(1);
+      const alarm = alarms[0] as Json;
+      expect(alarm).toMatchObject({
+        Threshold: s.config.redis.alarms.memoryUsagePercentThreshold,
+        EvaluationPeriods: s.config.redis.alarms.evaluationPeriods,
+        ComparisonOperator: 'GreaterThanThreshold',
+      });
+      expect(s.config.redis.alarms.memoryUsagePercentThreshold).toBe(75);
+      expect(JSON.stringify(alarm.AlarmActions)).toMatch(/"Ref":"AlarmTopic/);
+      // One series per node (<id>-001 ...), from the Data stack's replication group.
+      const nodes = (alarm.Metrics as Json[]).filter((m) => m.MetricStat !== undefined);
+      expect(nodes).toHaveLength(s.config.redis.numCacheClusters);
+      nodes.forEach((m, i) => {
+        const dims = JSON.stringify(m);
+        expect(dims).toContain(`"-00${i + 1}"`);
+        expect(dims).toContain(`"StackName":"${platform.data.stackName}"`);
+        expect(dims).toContain('"Namespace":"AWS/ElastiCache"');
+      });
+      expect(JSON.stringify(alarm.Metrics)).toContain(
+        `MAX([${nodes.map((m) => m.Id as string).join(', ')}])`,
+      );
+    });
+  });
+
   describe('Redis authentication (RBAC)', () => {
     const users: (Json & { id: string })[] = Object.entries(
       data.findResources('AWS::ElastiCache::User'),
@@ -434,6 +570,8 @@ describe('data stores', () => {
       const app = users.filter((u) => u.UserName === s.config.redis.username);
       expect(app).toHaveLength(1);
       expect(String(app[0]?.AccessString)).toMatch(/^on\b/);
+      // FLUSHALL, KEYS, CONFIG, ... are denied (redis-acl.integration.test.ts checks the commands).
+      expect(String(app[0]?.AccessString)).toMatch(/ \+@all -@dangerous$/);
       expect((groups[0]?.UserIds as unknown[]).includes(app[0]?.UserId)).toBe(true);
       for (const u of users) {
         expect(u.NoPasswordRequired, u.id).not.toBe(true);
@@ -509,7 +647,9 @@ describe('ECS', () => {
     });
     const queueAlarms = Object.values(app.findResources('AWS::CloudWatch::Alarm'))
       .map((a) => a.Properties as Json)
-      .filter((p) => Array.isArray(p.Metrics));
+      .filter(
+        (p) => Array.isArray(p.Metrics) && collect(p.Metrics, 'Namespace').includes('AWS/SQS'),
+      );
     expect(queueAlarms.length).toBe(2);
     for (const alarm of queueAlarms) {
       const namespaces = collect(alarm.Metrics, 'Namespace');
@@ -613,6 +753,21 @@ describe('scheduled jobs', () => {
       return JSON.parse((p.Target as Json).Input as string) as { type: string };
     });
     expect(inputs.map((i) => i.type).sort()).toEqual([...SCHEDULED_JOB_TYPES].sort());
+  });
+
+  it('runs faces.reconcile.daily at least 2 h after faces.expire.daily, once a day', () => {
+    // Both delete faces (shared DeleteFaces rate limit); reconcile also picks up what a failed
+    // expiry left behind.
+    const minutes = (type: string) => {
+      const m = /^cron\((\d+) (\d+) \* \* \? \*\)$/.exec(
+        s.config.schedules.jobs[type as (typeof SCHEDULED_JOB_TYPES)[number]].expression,
+      );
+      if (m === null) throw new Error(`${type} is not a once-a-day cron`);
+      return Number(m[2]) * 60 + Number(m[1]);
+    };
+    const gap = (minutes('faces.reconcile.daily') - minutes('faces.expire.daily') + 1440) % 1440;
+    expect(gap).toBeGreaterThanOrEqual(120);
+    expect(1440 - gap).toBeGreaterThanOrEqual(120);
   });
 });
 

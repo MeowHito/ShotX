@@ -14,16 +14,10 @@ import {
   SyntheticSmallFaceDetector,
   SyntheticWorld,
 } from '@shotx/face/testing';
-import { loadFaceConfig } from '@shotx/shared';
+import { loadFaceConfig, parseS3Key } from '@shotx/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type Dataset, loadDataset, readSelfies } from './dataset';
-import {
-  evalTempKey,
-  evaluate,
-  type EvaluationResult,
-  indexKey,
-  type IndexOption,
-} from './evaluate';
+import { evaluate, type EvaluationResult, indexKey, type IndexOption } from './evaluate';
 import { synthesize } from './synth';
 
 const config = loadFaceConfig({});
@@ -89,13 +83,12 @@ describe('evaluate', () => {
   });
 
   it('gives every attempt and part its own temporary image and deletes them all', () => {
-    expect(evalTempKey({ fileId: 'p01', attemptId: 'a1', part: 't2' })).toBe(
-      'tmp/index/p01/a1/t2.jpg',
-    );
     expect(tempStore.putKeys).toHaveLength(8 * 5);
     expect(new Set(tempStore.putKeys).size).toBe(tempStore.putKeys.length);
     for (const key of tempStore.putKeys) {
       expect(key).toMatch(/^tmp\/index\/p\d+\/[0-9a-f-]{36}\/(full|t[0-3])\.jpg$/);
+      // Built by the shared key builder, so the worker's parser recognizes every key.
+      expect(parseS3Key(key)).toMatchObject({ kind: 'index' });
     }
     expect(tempStore.keys()).toEqual([]);
   });

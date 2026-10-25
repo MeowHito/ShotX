@@ -1,0 +1,203 @@
+# @shotx/face
+
+Face indexing and face search behind the `FaceProvider` interface (ADR 0001). Production uses
+`RekognitionFaceProvider`; tests and the evaluation harness use `FakeFaceProvider` from
+`@shotx/face/testing`. Every tunable comes from `FaceConfig` (`loadFaceConfig` in
+`@shotx/shared`); only fixed Rekognition API limits are constants here.
+
+Consumers: `apps/api` (face search, interactive profile), `apps/worker` (indexing, purges,
+reconciliation, background profile) and `tools/face-eval`.
+
+## Building the provider
+
+```ts
+const face = loadFaceConfig(process.env);
+const limiters = createRedisRekognitionLimiters(redis, face.rekognition, 'background');
+const provider = RekognitionFaceProvider.create(face.rekognition, 'background', limiters);
+```
+
+The api passes `'interactive'` for both. `create` turns off the SDK's own retries (the provider
+retries behind the rate limiters) and bounds every request by
+`FACE_REKOGNITION_REQUEST_TIMEOUT_MS` in two places:
+
+- the SDK request handler gets it as its connection timeout and as a request timeout that fails
+  the request (`throwOnRequestTimeout`), and
+- the provider aborts each `client.send` after it, which also covers what the handler's timer
+  doesn't: credential resolution and a response body that stops arriving after the headers.
+
+A request that times out fails with `RekognitionRequestTimeoutError` (name `TimeoutError`).
+Calls that are safe to repeat retry it like any other transient error. IndexFaces doesn't: the
+request may have reached Rekognition, so a timeout ends the call with
+`IndexFacesOutcomeUnknownError`.
+
+## Rate limits: what the token bucket guarantees
+
+`RedisTokenBucket` (shared by every api and worker instance) never hands out more than
+`FACE_REKOGNITION_TPS_<OPERATION>` **reserved slots** in any sliding second. It says nothing
+about when requests actually reach AWS: a request starts at its slot plus sleep lateness, plus
+signing and sending, and arrives after network latency that varies per request. Two calls in
+adjacent slots can arrive closer together than their slots, so Rekognition can still see more
+than the configured TPS in some second and throttle one. That is why:
+
+- the provider still retries `ThrottlingException` with jittered backoff (each retry takes a new
+  slot), and IndexFaces retries only throttling;
+- the `FACE_REKOGNITION_TPS_*` values should stay a little under the account's quotas.
+
+`ListFaces` has its own bucket and rate (`FACE_REKOGNITION_TPS_LIST_FACES`).
+
+## Worst-case durations
+
+`rekognitionCallWorstCase(config.rekognition, profile)` and
+`indexPhotoWorstCase(config, { previousFaces })` compute these from the configuration in use.
+
+One provider call (one IndexFaces, or one DeleteFaces batch of up to 4,096 ids) makes up to
+`maxAttempts` attempts. Each attempt waits up to `maxWaitMs` for its rate-limit slot (a longer
+wait fails at once with `RateLimitedError`, which is not retried) and then runs for up to
+`requestTimeoutMs`. Between attempts it backs off for less than
+`min(retryMaxMs, retryBaseMs × 2^(n−1))` after attempt n:
+
+```
+perCallMs = maxAttempts × (maxWaitMs + requestTimeoutMs) + Σ_{n=1}^{maxAttempts−1} min(retryMaxMs, retryBaseMs × 2^(n−1))
+```
+
+One `indexPhoto` attempt makes `1 + FACE_TILE_GRID²` IndexFaces calls and DeleteFaces batches for
+`previousFaceIds` (re-index only), for faces cut off at inner tile edges, and, when anything
+fails, for the rollback of every face the attempt indexed:
+
+```
+attemptMs = (indexFacesCalls + deleteFacesCalls) × perCallMs
+```
+
+At the defaults:
+
+|                                              | Value                                                          |
+| -------------------------------------------- | -------------------------------------------------------------- |
+| One background call                          | 8 × (30,000 + 10,000) + 22,600 = **342,600 ms** (5 min 42.6 s) |
+| One interactive call (api)                   | 3 × (2,000 + 10,000) + 300 = **36,300 ms**                     |
+| First indexing: 5 IndexFaces + 2 DeleteFaces | 7 × 342,600 = **2,398,200 ms** (about 40 min)                  |
+| Re-index: 5 IndexFaces + 3 DeleteFaces       | 8 × 342,600 = **2,740,800 ms** (about 45.7 min)                |
+| Smallest grace for that (2 × attempt)        | 4,796,400 ms first indexing, **5,481,600 ms** re-index         |
+
+Not included, because the provider doesn't bound them: the Redis round trip of each
+reservation, timers firing late, and the work around the calls (temporary image puts and
+deletes in S3, decoding and encoding, the local detector, database writes). Measure those and
+add a margin. CreateCollection/DescribeCollection, if the job makes sure the collection exists,
+are two more calls.
+
+**The default `FACE_ORPHAN_GRACE_MS` (3,600,000 ms, 1 hour) is below the smallest grace for the
+default retry settings.** Orphan cleanup stays safe either way (see the rules below), but an
+attempt that runs into the worst case misses its commit deadline and its work is thrown away.
+Either raise `FACE_ORPHAN_GRACE_MS` (2 hours, 7,200,000 ms, covers the re-index case with room
+for processing) or shorten `FACE_REKOGNITION_MAX_WAIT_MS`, `FACE_REKOGNITION_MAX_ATTEMPTS` or
+`FACE_REKOGNITION_REQUEST_TIMEOUT_MS`.
+
+## Deleting orphaned faces safely (worker)
+
+An orphan is a face in a photographer's collection (`pg-{photographerId}`) that no `faces` row
+tracks. Purges and face-index expiry delete only the face ids they find in rows, so an orphan
+would never expire. Orphans come from failed indexing attempts whose cleanup failed too, from
+IndexFaces calls that indexed faces without returning them (timeouts, 5xx, dropped
+connections), and from workers that die between IndexFaces and the insert.
+
+A face that an attempt has indexed but not committed yet looks exactly like an orphan.
+`reconcileCollection` tells them apart only if the worker keeps every rule below.
+
+### 1. Commit an attempt's rows before its deadline, or never
+
+```ts
+const startedAt = Date.now(); // before indexPhoto, not after
+const result = await indexPhoto(deps, original, indexPhotoOptions(face, target));
+await db.transaction(async (tx) => {
+  // ... replace the file's faces rows, update files.face_count ...
+  if (Date.now() > recordFacesDeadline(startedAt, face.index.orphanGraceMs)) {
+    throw new DeadlineMissed(); // rolls the transaction back
+  }
+});
+```
+
+- Take `startedAt` **before** calling `indexPhoto`: every face of the attempt is indexed after
+  it.
+- Check the deadline inside the transaction, right before the commit. The deadline is half the
+  grace; the other half covers commit latency, replica lag and clock differences between hosts.
+- When the deadline has passed, don't commit. Delete the attempt's faces
+  (`provider.deleteFaces(collectionId, result.faces.map((f) => f.faceId))`) or leave them to
+  reconciliation, and let the job retry with a new attempt.
+
+### 2. Grace of at least 2 × the longest attempt
+
+`FACE_ORPHAN_GRACE_MS` (`config.index.orphanGraceMs`) must be at least twice the longest
+`indexPhoto` attempt, so a slow but healthy attempt still commits before its deadline. Compute
+it from the configuration rather than by hand, for example at worker start-up:
+
+```ts
+const maxFacesPerFile = (1 + face.index.tileGrid ** 2) * face.index.maxFaces;
+const worst = indexPhotoWorstCase(face, { previousFaces: maxFacesPerFile });
+if (face.index.orphanGraceMs < worst.minOrphanGraceMs + 2 * measuredProcessingMs) {
+  logger.error('FACE_ORPHAN_GRACE_MS is shorter than 2 × the longest indexing attempt');
+}
+```
+
+The faces queue's visibility timeout needs the same worst case (once, not twice) plus
+processing: see `facesJobWorstCase` in `infra/lib/face-limits.ts`.
+
+### 3. Read `knownFaceIds` from the primary
+
+`knownFaceIds(faceIds)` answers "which of these ids have a `faces` row" for the scan and again
+right before each delete. Query the **primary** database, never a read replica: a lagging
+replica makes a just-committed face look orphaned, and it would be deleted.
+
+### 4. Handle `IndexPhotoError`
+
+Every `indexPhoto` failure is an `IndexPhotoError`; `cause` says why. It has already tried to
+delete the faces it indexed. What it reports as left behind:
+
+- `orphanFaceIds`: faces still in the collection because that delete failed too. No row tracks
+  them. Retry `provider.deleteFaces(error.collectionId, error.orphanFaceIds)` (ids that are
+  already gone are ignored), or leave them to reconciliation. Never insert rows for them.
+- `untrackedFacesPossible`: an IndexFaces call ended with `IndexFacesOutcomeUnknownError`, so
+  faces may exist whose ids nobody knows. Only `reconcileCollection` finds them; it runs daily
+  anyway, so there is nothing else to do beyond logging it.
+- `cleanupErrors`: every cleanup step that failed after `cause` (DeleteFaces, temporary image
+  deletes), for logs. Log error names and counts only, never image bytes.
+
+After an `IndexPhotoError` the job may retry: the next attempt has a new attempt id and its own
+temporary image keys.
+
+### 5. Pass `previousFaceIds` when re-indexing
+
+When a file already has `faces` rows (re-indexing, or an `index.file` message delivered again
+after a commit), pass their `rekognition_face_id` values as `previousFaceIds`. `indexPhoto`
+deletes them before it indexes anything, so if that delete fails the rows still track every
+face. After success, replace the file's rows in one transaction (rule 1 applies). Rows left
+pointing at already-deleted faces are harmless: searches never return those faces and deleting
+them again is a no-op. Alternatively, skip files that already have rows.
+
+### 6. Run `reconcileCollection` from `faces.reconcile.daily`
+
+The `faces.reconcile.daily` scheduled job reconciles each photographer's collection with
+`graceMs: face.index.orphanGraceMs` and the primary-database `knownFaceIds`. It is safe to rerun:
+deleting a face that is already gone is a no-op, and `OrphanCleanupError` reports how far a
+failed run got.
+
+`reconcileCollection` scans, then **sleeps until the grace after the scan has passed** before
+deleting (only when there are candidates). With a 1-hour grace and the `jobs` queue's 3,600 s
+visibility timeout, that single-job mode outlives the message unless the worker heartbeats with
+ChangeMessageVisibility. The two-job mode avoids the wait:
+
+1. `scanCollection(provider, { collectionId, knownFaceIds })` returns an `OrphanScan`
+   (serializable: collection id, `listedAtMs`, candidate ids). Store it (database or S3, keyed by
+   collection).
+2. In a later run, call `deleteOrphans(provider, scan, { knownFaceIds, graceMs })`. It refuses to
+   run before `listedAtMs + graceMs`, checks every batch against the database again right before
+   deleting it, and deletes only candidates that are still unknown.
+
+With a daily schedule, each run can first delete the candidates stored by the previous run (about
+a day old, more than the grace unless the grace is close to its 24-hour maximum) and then store a
+fresh scan. If `deleteOrphans` refuses because the grace hasn't passed yet, keep the stored scan
+for the next run.
+
+### 7. Grace comes from config
+
+Always pass `config.index.orphanGraceMs` (`FACE_ORPHAN_GRACE_MS`) as `graceMs`, to
+`recordFacesDeadline` and to reconciliation alike. The two must use the same value: a shorter
+reconcile grace than the one the indexing deadline was computed with deletes in-flight faces.

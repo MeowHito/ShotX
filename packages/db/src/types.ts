@@ -13,6 +13,8 @@ import type {
   storageUsage,
   subscriptions,
   users,
+  zipJobEntries,
+  zipJobs,
 } from './schema/index';
 
 // Row types: `X` is what a select returns, `NewX` what an insert accepts.
@@ -44,3 +46,7 @@ export type DailyStats = typeof dailyStats.$inferSelect;
 export type NewDailyStats = typeof dailyStats.$inferInsert;
 export type AuditLogEntry = typeof auditLog.$inferSelect;
 export type NewAuditLogEntry = typeof auditLog.$inferInsert;
+export type ZipJob = typeof zipJobs.$inferSelect;
+export type NewZipJob = typeof zipJobs.$inferInsert;
+export type ZipJobEntry = typeof zipJobEntries.$inferSelect;
+export type NewZipJobEntry = typeof zipJobEntries.$inferInsert;

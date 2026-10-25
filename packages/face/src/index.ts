@@ -11,4 +11,5 @@ export * from './image';
 export * from './geometry';
 export * from './index-photo';
 export * from './reconcile';
+export * from './worst-case';
 export * from './search';

@@ -23,37 +23,11 @@ export const PATHS = {
   nextStatic: '/_next/static',
 } as const;
 
-/** S3 key prefixes (see "Upload and processing pipeline" in the platform spec). */
-export const S3_PREFIXES = {
-  originals: 'originals/',
-  derived: 'derived/',
-  tmp: 'tmp/',
-  tmpIndex: 'tmp/index/',
-  tmpZips: 'tmp/zips/',
-} as const;
-
 /**
  * Origin header CloudFront adds to every request so the ALB can tell the web and admin
  * distributions apart. CloudFront overwrites any viewer-supplied header with the same name.
  */
 export const APP_ROUTING_HEADER = 'X-ShotX-App';
-
-/** SQS queues. Each one gets a dead-letter queue. `jobs` receives EventBridge Scheduler messages. */
-export const QUEUE_NAMES = ['media', 'faces', 'zip', 'jobs'] as const;
-export type QueueName = (typeof QUEUE_NAMES)[number];
-
-/**
- * Scheduled job types sent to the `jobs` queue as `{ "type": ..., "scheduledTime": ... }`.
- * The worker routes on `type`; contracts should mirror these strings in packages/shared.
- */
-export const SCHEDULED_JOB_TYPES = [
-  'stats.rollup.hourly',
-  'subscriptions.transition.daily',
-  'trash.purge.daily',
-  'faces.expire.daily',
-  'quota.reconcile.nightly',
-] as const;
-export type ScheduledJobType = (typeof SCHEDULED_JOB_TYPES)[number];
 
 /** ECS services. web, admin and api sit behind the ALB; worker consumes SQS. */
 export const ALB_SERVICES = ['web', 'admin', 'api'] as const;
@@ -61,22 +35,24 @@ export type AlbServiceName = (typeof ALB_SERVICES)[number];
 export const SERVICE_NAMES = [...ALB_SERVICES, 'worker'] as const;
 export type ServiceName = (typeof SERVICE_NAMES)[number];
 
+/**
+ * Queue names, scheduled job types, S3 prefixes, queue env var names, SQS's 12-hour visibility cap
+ * and Rekognition's inline image limit are contracts owned by packages/shared: import them from
+ * `@shotx/shared`, never copy them here.
+ */
+
+/** Smallest visibility timeout of any queue. The worker heartbeats every third of it. */
+export const MIN_VISIBILITY_TIMEOUT_SECONDS = 60;
+
 /** Hard floor for the faces queue visibility timeout agreed with face-poc. */
 export const FACES_MIN_VISIBILITY_TIMEOUT_SECONDS = 180;
 
-/** SQS caps a message's visibility timeout (and any ChangeMessageVisibility) at 12 hours. */
-export const SQS_MAX_VISIBILITY_TIMEOUT_SECONDS = 43_200;
-
 /**
- * Amazon Rekognition API limits (AWS facts, not tunables). packages/face/src/provider.ts has the
- * same values; infra doesn't import @shotx/face because that pulls in sharp and the AWS SDK.
+ * Most face ids one DeleteFaces call accepts (an AWS limit). packages/face has the same value
+ * (REKOGNITION_DELETE_FACES_BATCH); infra doesn't import @shotx/face because that pulls in sharp
+ * and the AWS SDK.
  */
-export const REKOGNITION_LIMITS = {
-  /** Largest image passed inline as bytes (SearchFacesByImage with a selfie). */
-  inlineImageMaxBytes: 5 * 1024 * 1024,
-  /** Most face ids one DeleteFaces call accepts. */
-  deleteFacesBatch: 4096,
-} as const;
+export const REKOGNITION_DELETE_FACES_BATCH = 4096;
 
 /** Header names the WAF inspects on face-search uploads. */
 export const HTTP_HEADERS = {

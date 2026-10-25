@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { facesQueueWorstCase, parseConfig, resolveRawConfig } from '../lib/config';
 import { CONTEXT_KEY } from '../lib/constants';
+import { facesJobWorstCase, serviceFaceConfig } from '../lib/face-limits';
 import { rawConfig } from './helpers';
 
 type Json = Record<string, unknown>;
@@ -29,6 +30,7 @@ describe('cdk.json config', () => {
   it('rejects a faces visibility timeout below 180 s', () => {
     const c = withEdit((x) => {
       at(x, 'queues', 'faces').visibilityTimeoutSeconds = 170;
+      at(x, 'queues', 'faces').maxReceiveCount = 1000;
     });
     expect(() => parseConfig(c)).toThrow(/visibilityTimeoutSeconds/);
   });
@@ -40,65 +42,142 @@ describe('cdk.json config', () => {
     expect(() => parseConfig(c)).toThrow(/visibilityTimeoutSeconds/);
   });
 
-  it('sets the faces visibility timeout at or above the worst case of one faces job', () => {
+  it('rejects any queue timeout below 60 s (heartbeats every third of it)', () => {
+    for (const q of ['media', 'zip', 'jobs']) {
+      const c = withEdit((x) => {
+        at(x, 'queues', q).visibilityTimeoutSeconds = 59;
+      });
+      expect(() => parseConfig(c), q).toThrow(
+        new RegExp(`queues\\.${q}\\.visibilityTimeoutSeconds`),
+      );
+    }
+  });
+
+  describe('faces job worst case', () => {
     const config = parseConfig(rawConfig());
-    const worst = facesQueueWorstCase(config);
-    // 9 calls x [8 x (30 s wait + 10 s call) + 7 x 10 s backoff] + 60 s processing
-    expect(worst).toMatchObject({
-      perCallSeconds: 390,
-      collectionCalls: 2,
-      indexFacesCalls: 5,
-      deleteFacesCalls: 2,
-      totalCalls: 9,
-      floorSeconds: 3570,
-    });
-    expect(config.queues.faces.visibilityTimeoutSeconds).toBeGreaterThanOrEqual(worst.floorSeconds);
-  });
-
-  it('rejects a faces visibility timeout just below the worst case, and explains it', () => {
-    const floor = facesQueueWorstCase(parseConfig(rawConfig())).floorSeconds;
-    const below = withEdit((x) => {
-      at(x, 'queues', 'faces').visibilityTimeoutSeconds = floor - 1;
-    });
-    expect(() => parseConfig(below)).toThrow(
-      new RegExp(`>= ${floor}s: one faces job makes up to 9 Rekognition calls`),
-    );
-    const exact = withEdit((x) => {
-      at(x, 'queues', 'faces').visibilityTimeoutSeconds = floor;
-    });
-    expect(() => parseConfig(exact)).not.toThrow();
-  });
-
-  it('counts retry attempts and backoff, not just one rate-limit wait per call', () => {
-    const floorWith = (env: Json) =>
-      facesQueueWorstCase(
-        parseConfig(
-          withEdit((x) => {
-            Object.assign(at(x, 'services', 'env', 'worker'), env);
-            at(x, 'queues', 'faces').visibilityTimeoutSeconds = 43_200;
-          }),
+    // The arithmetic only: the worker's FACE_* values with `env` on top, no other validation.
+    const worstWith = (env: Record<string, string>) =>
+      facesJobWorstCase(
+        serviceFaceConfig(
+          { ...config.services.env, worker: { ...config.services.env.worker, ...env } },
+          'worker',
         ),
-      ).floorSeconds;
-    const base = floorWith({});
-    // One attempt fewer: 9 calls x (30 s + 10 s wait and call + 10 s backoff) less.
-    expect(floorWith({ FACE_REKOGNITION_MAX_ATTEMPTS: '7' })).toBe(base - 9 * 50);
-    // Longer backoff cap: 9 calls x 7 retries x 5 s more.
-    expect(floorWith({ FACE_REKOGNITION_RETRY_MAX_MS: '15000' })).toBe(base + 9 * 7 * 5);
-    // A 3x3 grid: 10 IndexFaces instead of 5.
-    expect(floorWith({ FACE_TILE_GRID: '3' })).toBe(base + 5 * 390);
+        config.queues.faces.jobBudget,
+      ).seconds;
+
+    it('is 10 calls of 390 s plus 60 s at the defaults', () => {
+      // per call: 8 x (30 s wait + 10 s request timeout) + 7 x 10 s backoff = 390 s
+      // calls: 2 collection + 5 IndexFaces + 3 DeleteFaces (previous, cut-off, rollback) = 10
+      expect(facesQueueWorstCase(parseConfig(rawConfig()))).toEqual({
+        perCallSeconds: 390,
+        collectionCalls: 2,
+        indexFacesCalls: 5,
+        deleteFacesCalls: 3,
+        totalCalls: 10,
+        processingSeconds: 60,
+        seconds: 3960,
+      });
+    });
+
+    it('counts FACE_REKOGNITION_REQUEST_TIMEOUT_MS once per attempt of every call', () => {
+      // 10 s more per request: 10 calls x 8 attempts x 10 s.
+      expect(worstWith({ FACE_REKOGNITION_REQUEST_TIMEOUT_MS: '20000' })).toBe(3960 + 800);
+    });
+
+    it('counts retry attempts, backoff and tiles', () => {
+      const base = worstWith({});
+      // One attempt fewer: 10 calls x (30 s wait + 10 s request + 10 s backoff).
+      expect(worstWith({ FACE_REKOGNITION_MAX_ATTEMPTS: '7' })).toBe(base - 10 * 50);
+      // Longer backoff cap: 10 calls x 7 retries x 5 s more.
+      expect(worstWith({ FACE_REKOGNITION_RETRY_MAX_MS: '15000' })).toBe(base + 10 * 7 * 5);
+      // A 3x3 grid: 10 IndexFaces instead of 5.
+      expect(worstWith({ FACE_TILE_GRID: '3' })).toBe(base + 5 * 390);
+    });
   });
 
-  it('reads FACE_* the way the worker does: worker group over backend over common', () => {
-    const c = withEdit((x) => {
-      at(x, 'services', 'env', 'common').FACE_REKOGNITION_MAX_WAIT_MS = '1000';
-      at(x, 'services', 'env', 'backend').FACE_REKOGNITION_MAX_WAIT_MS = '60000';
+  describe('faces queue heartbeat rules', () => {
+    it('keeps the faces timeout between 600 and 900 s', () => {
+      const t = parseConfig(rawConfig()).queues.faces.visibilityTimeoutSeconds;
+      expect(t).toBeGreaterThanOrEqual(600);
+      expect(t).toBeLessThanOrEqual(900);
     });
-    expect(() => parseConfig(c)).toThrow(/>= 5730s/);
-    const workerWins = withEdit((x) => {
-      at(x, 'services', 'env', 'backend').FACE_REKOGNITION_MAX_WAIT_MS = '60000';
-      at(x, 'services', 'env', 'worker').FACE_REKOGNITION_MAX_WAIT_MS = '30000';
+
+    it('requires maxReceiveCount x timeout to cover the worst case (5 x 792 s >= 3960 s)', () => {
+      const withTimeout = (t: number) =>
+        withEdit((x) => {
+          at(x, 'queues', 'faces').visibilityTimeoutSeconds = t;
+        });
+      expect(() => parseConfig(withTimeout(792))).not.toThrow();
+      expect(() => parseConfig(withTimeout(791))).toThrow(
+        /maxReceiveCount × visibilityTimeoutSeconds \(5 × 791s = 3955s\) must cover the worst case of 3960s \(one faces job makes up to 10 Rekognition calls/,
+      );
+      // 600 s would need maxReceiveCount 7.
+      expect(() => parseConfig(withTimeout(600))).toThrow(
+        /queues\.faces\.visibilityTimeoutSeconds/,
+      );
     });
-    expect(() => parseConfig(workerWins)).not.toThrow();
+
+    it('rejects a worst case beyond the 12 h cap that heartbeats cannot extend', () => {
+      const c = withEdit((x) => {
+        Object.assign(at(x, 'services', 'env', 'worker'), {
+          FACE_REKOGNITION_MAX_WAIT_MS: '600000',
+          FACE_REKOGNITION_MAX_ATTEMPTS: '20',
+          FACE_ORPHAN_GRACE_MS: '86400000',
+        });
+        at(x, 'queues', 'faces').maxReceiveCount = 1000;
+      });
+      expect(() => parseConfig(c)).toThrow(/exceeds SQS's 12 h visibility cap/);
+    });
+
+    it('rejects a retention period that a failing message can outlive', () => {
+      // 20 x (3960 s + 900 s) = 97,200 s > 1 day.
+      const c = withEdit((x) => {
+        Object.assign(at(x, 'queues', 'faces'), { maxReceiveCount: 20, retentionDays: 1 });
+      });
+      expect(() => parseConfig(c)).toThrow(/queues\.faces\.retentionDays/);
+    });
+
+    it('reads FACE_* the way the worker does: worker group over backend over common', () => {
+      // 60 s waits: 8 x (60 + 10) + 70 = 630 s per call, 6360 s > 5 x 900 s.
+      const c = withEdit((x) => {
+        at(x, 'services', 'env', 'common').FACE_REKOGNITION_MAX_WAIT_MS = '1000';
+        at(x, 'services', 'env', 'backend').FACE_REKOGNITION_MAX_WAIT_MS = '60000';
+      });
+      expect(() => parseConfig(c)).toThrow(/worst case of 6360s/);
+      const workerWins = withEdit((x) => {
+        at(x, 'services', 'env', 'backend').FACE_REKOGNITION_MAX_WAIT_MS = '60000';
+        at(x, 'services', 'env', 'worker').FACE_REKOGNITION_MAX_WAIT_MS = '30000';
+      });
+      expect(() => parseConfig(workerWins)).not.toThrow();
+    });
+  });
+
+  describe('FACE_ORPHAN_GRACE_MS', () => {
+    const withGrace = (grace: string | undefined) =>
+      withEdit((x) => {
+        const backend = at(x, 'services', 'env', 'backend');
+        if (grace === undefined) delete backend.FACE_ORPHAN_GRACE_MS;
+        else backend.FACE_ORPHAN_GRACE_MS = grace;
+      });
+
+    it('must be at least twice the worst-case faces attempt (2 x 3960 s)', () => {
+      expect(() => parseConfig(withGrace('7920000'))).not.toThrow();
+      expect(() => parseConfig(withGrace('7919999'))).toThrow(
+        /FACE_ORPHAN_GRACE_MS \(7919999\) must be >= 7920000, twice the longest faces attempt \(3960s/,
+      );
+    });
+
+    it('accepts the 3 h code default and rejects an explicit 1 h with the default retry budget', () => {
+      expect(() => parseConfig(withGrace(undefined))).not.toThrow();
+      expect(() => parseConfig(withGrace('3600000'))).toThrow(/FACE_ORPHAN_GRACE_MS \(3600000\)/);
+    });
+
+    it('is checked for the worker, which indexes and reconciles', () => {
+      const c = withEdit((x) => {
+        at(x, 'services', 'env', 'worker').FACE_ORPHAN_GRACE_MS = '3600000';
+      });
+      expect(() => parseConfig(c)).toThrow(/worker: FACE_ORPHAN_GRACE_MS/);
+    });
   });
 
   it('rejects FACE_* values that loadFaceConfig rejects', () => {
@@ -118,6 +197,68 @@ describe('cdk.json config', () => {
         at(x, 'cdn', 'media', 'responseHeaders').contentSecurityPolicy = csp;
       });
       expect(() => parseConfig(c), csp).toThrow(/contentSecurityPolicy/);
+    }
+  });
+
+  it('requires the media CSP to allow only its own media, with CORS for the opaque origin', () => {
+    const headers = (edit: (h: Json) => void) =>
+      withEdit((x) => edit(at(x, 'cdn', 'media', 'responseHeaders')));
+    expect(() =>
+      parseConfig(
+        headers((h) => {
+          h.contentSecurityPolicy = "default-src 'none'; media-src *; sandbox";
+        }),
+      ),
+    ).toThrow(/media-src may only be 'self'/);
+    expect(() =>
+      parseConfig(
+        headers((h) => {
+          h.corsAllowOrigins = [];
+        }),
+      ),
+    ).toThrow(/corsAllowOrigins/);
+    expect(() =>
+      parseConfig(
+        headers((h) => {
+          h.corsAllowOrigins = ['null'];
+        }),
+      ),
+    ).toThrow(/never "null"/);
+    // Without media-src there is nothing to fetch, and CORS may be off.
+    expect(() =>
+      parseConfig(
+        headers((h) => {
+          h.contentSecurityPolicy = "default-src 'none'; sandbox";
+          h.corsAllowOrigins = [];
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('requires the Redis app user to deny @dangerous, with nothing allowed after it', () => {
+    for (const rules of [
+      'on ~* &* +@all',
+      'on ~* &* -@dangerous +@all',
+      'on ~* &* +@all -@dangerous +flushall',
+      'on ~* &* +@all -@dangerous allcommands',
+    ]) {
+      const c = withEdit((x) => {
+        at(x, 'redis').accessString = rules;
+      });
+      expect(() => parseConfig(c), rules).toThrow(/-@dangerous/);
+    }
+    const narrower = withEdit((x) => {
+      at(x, 'redis').accessString = 'on ~* &* +@all -@dangerous -@pubsub';
+    });
+    expect(() => parseConfig(narrower)).not.toThrow();
+  });
+
+  it('keeps the Redis memory alarm threshold strictly between 0 and 100 %', () => {
+    for (const threshold of [0, 100]) {
+      const c = withEdit((x) => {
+        at(x, 'redis', 'alarms').memoryUsagePercentThreshold = threshold;
+      });
+      expect(() => parseConfig(c), String(threshold)).toThrow(/memoryUsagePercentThreshold/);
     }
   });
 

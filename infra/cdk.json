@@ -67,7 +67,12 @@
         "port": 6379,
         "snapshotRetentionDays": 1,
         "username": "shotx-app",
-        "accessString": "on ~* &* +@all"
+        "accessString": "on ~* &* +@all -@dangerous",
+        "alarms": {
+          "memoryUsagePercentThreshold": 75,
+          "periodSeconds": 60,
+          "evaluationPeriods": 5
+        }
       },
       "storage": {
         "abortIncompleteMultipartUploadDays": 2,
@@ -78,7 +83,7 @@
       },
       "queues": {
         "media": {
-          "visibilityTimeoutSeconds": 900,
+          "visibilityTimeoutSeconds": 300,
           "retentionDays": 4,
           "dlqRetentionDays": 14,
           "maxReceiveCount": 5,
@@ -90,7 +95,7 @@
           }
         },
         "faces": {
-          "visibilityTimeoutSeconds": 3600,
+          "visibilityTimeoutSeconds": 900,
           "retentionDays": 4,
           "dlqRetentionDays": 14,
           "maxReceiveCount": 5,
@@ -100,14 +105,13 @@
             "oldestMessageAgeSeconds": 1800,
             "oldestMessageAgeEvaluationPeriods": 5
           },
-          "visibilityFloor": {
-            "rekognitionCallTimeoutSeconds": 10,
+          "jobBudget": {
             "collectionCallsPerJob": 2,
             "processingSeconds": 60
           }
         },
         "zip": {
-          "visibilityTimeoutSeconds": 900,
+          "visibilityTimeoutSeconds": 300,
           "retentionDays": 1,
           "dlqRetentionDays": 14,
           "maxReceiveCount": 3,
@@ -119,7 +123,7 @@
           }
         },
         "jobs": {
-          "visibilityTimeoutSeconds": 3600,
+          "visibilityTimeoutSeconds": 900,
           "retentionDays": 1,
           "dlqRetentionDays": 14,
           "maxReceiveCount": 3,
@@ -205,6 +209,7 @@
             "FACE_REKOGNITION_TPS_SEARCH_FACES_BY_IMAGE": "5",
             "FACE_REKOGNITION_TPS_SEARCH_FACES": "5",
             "FACE_REKOGNITION_TPS_DELETE_FACES": "5",
+            "FACE_REKOGNITION_TPS_LIST_FACES": "5",
             "FACE_REKOGNITION_TPS_COLLECTION": "5",
             "NODE_EXTRA_CA_CERTS": "/etc/ssl/certs/rds-global-bundle.pem"
           },
@@ -227,7 +232,8 @@
           "cacheQueryStrings": ["response-content-disposition"],
           "readablePrefixes": ["originals/", "derived/", "tmp/zips/"],
           "responseHeaders": {
-            "contentSecurityPolicy": "default-src 'none'; sandbox",
+            "contentSecurityPolicy": "default-src 'none'; media-src 'self'; sandbox",
+            "corsAllowOrigins": ["*"],
             "referrerPolicy": "no-referrer",
             "hstsMaxAgeSeconds": 31536000,
             "hstsIncludeSubdomains": false,
@@ -313,6 +319,10 @@
           },
           "faces.expire.daily": {
             "expression": "cron(0 2 * * ? *)",
+            "enabled": true
+          },
+          "faces.reconcile.daily": {
+            "expression": "cron(30 4 * * ? *)",
             "enabled": true
           },
           "quota.reconcile.nightly": {

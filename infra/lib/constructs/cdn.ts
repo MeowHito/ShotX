@@ -30,7 +30,7 @@ export interface CdnProps {
  * main (flat-rate plan, see PricingPlanStack)
  *   /api/*            -> ALB (api), no caching, all viewer headers/cookies/query forwarded
  *   /media/*          -> S3 via OAC, signed URLs (key group), long cache, /media prefix stripped,
- *                        nosniff + sandboxing CSP + HSTS + referrer policy
+ *                        nosniff + sandboxing CSP + HSTS + referrer policy + CORS (no credentials)
  *   /_next/static/*   -> ALB (web), cached
  *   default           -> ALB (web), no caching
  *
@@ -111,9 +111,17 @@ export class Cdn extends Construct {
     });
     // Uploads are served from the main origin, so an object stored with an HTML or SVG content type
     // must never run as a page there: nosniff stops type sniffing, and the CSP (default-src 'none'
-    // plus a bare sandbox) gives any document an opaque origin with no scripts, no subresources and
-    // no access to the site's cookies. CSP only governs documents, so <img>, <video>, PhotoSwipe
-    // and `response-content-disposition` downloads are unaffected.
+    // plus a bare sandbox) gives any document an opaque origin with no scripts, no subresources
+    // other than its own media, and no access to the site's cookies. CSP only governs documents,
+    // so <img>/<video> in the app's pages, PhotoSwipe and `response-content-disposition`
+    // downloads are unaffected.
+    //
+    // A media file opened in its own tab is a document too: the browser wraps it in a synthetic
+    // media document whose <video> fetches the same URL again. That fetch needs media-src 'self'
+    // (default-src 'none' would block it), and because the sandboxed document has an opaque
+    // origin Chromium makes it in CORS mode with `Origin: null`, so it also needs
+    // Access-Control-Allow-Origin: * (no credentials). Verified in Chrome; see infra/README.md
+    // "Media opened in a new tab".
     const headers = cdn.media.responseHeaders;
     const mediaResponseHeaders = new cloudfront.ResponseHeadersPolicy(
       this,
@@ -121,6 +129,17 @@ export class Cdn extends Construct {
       {
         responseHeadersPolicyName: `${prefix}-media`,
         comment: 'Media from S3: never an active document on the main origin',
+        corsBehavior:
+          headers.corsAllowOrigins.length === 0
+            ? undefined
+            : {
+                accessControlAllowOrigins: headers.corsAllowOrigins,
+                accessControlAllowMethods: ['GET', 'HEAD'],
+                accessControlAllowHeaders: ['Range'],
+                // Signed URLs, never cookies: a credentialed request must not be readable.
+                accessControlAllowCredentials: false,
+                originOverride: true,
+              },
         securityHeadersBehavior: {
           contentTypeOptions: { override: true },
           contentSecurityPolicy: {

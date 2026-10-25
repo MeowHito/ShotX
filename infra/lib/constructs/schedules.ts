@@ -1,9 +1,9 @@
+import { SCHEDULED_JOB_TYPES } from '@shotx/shared';
 import { Duration, TimeZone } from 'aws-cdk-lib';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import * as schedulerTargets from 'aws-cdk-lib/aws-scheduler-targets';
 import { Construct } from 'constructs';
 import type { PlatformConfig } from '../config';
-import { SCHEDULED_JOB_TYPES } from '../constants';
 import type { JobQueue } from './job-queues';
 
 export interface SchedulesProps {

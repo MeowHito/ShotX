@@ -15,6 +15,7 @@ const config = loadFaceConfig({
   FACE_REKOGNITION_TPS_SEARCH_FACES_BY_IMAGE: '20',
   FACE_REKOGNITION_TPS_SEARCH_FACES: '10',
   FACE_REKOGNITION_TPS_DELETE_FACES: '4',
+  FACE_REKOGNITION_TPS_LIST_FACES: '3',
   FACE_REKOGNITION_TPS_COLLECTION: '1',
   FACE_REKOGNITION_RATE_LIMIT_PREFIX: 'prod-123',
 }).rekognition;
@@ -28,11 +29,19 @@ describe('operationTps', () => {
       ['SearchFacesByImage', 20],
       ['SearchFaces', 10],
       ['DeleteFaces', 4],
-      ['ListFaces', 1],
+      ['ListFaces', 3],
       ['CreateCollection', 1],
       ['DescribeCollection', 1],
       ['DeleteCollection', 1],
     ]);
+  });
+
+  it('takes ListFaces from its own key, not the collection rate', () => {
+    expect(operationTps(config, 'ListFaces')).toBe(config.rateLimit.tps.listFaces);
+    expect(operationTps(loadFaceConfig({}).rekognition, 'ListFaces')).toBe(5);
+    const limiters = createRedisRekognitionLimiters(redis, config, 'background');
+    expect((limiters.ListFaces as RedisTokenBucket).params.limit).toBe(3);
+    expect((limiters.CreateCollection as RedisTokenBucket).params.limit).toBe(1);
   });
 });
 

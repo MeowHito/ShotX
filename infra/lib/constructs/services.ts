@@ -1,3 +1,11 @@
+import {
+  COGNITO_ENV,
+  QUEUE_NAMES,
+  QUEUE_URL_ENV,
+  QUEUE_VISIBILITY_TIMEOUT_ENV,
+  type QueueName,
+  S3_PREFIXES,
+} from '@shotx/shared';
 import { Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import * as appscaling from 'aws-cdk-lib/aws-applicationautoscaling';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
@@ -16,10 +24,7 @@ import {
   APP_ROUTING_HEADER,
   PATHS,
   PRIMARY_REGION,
-  QUEUE_NAMES,
-  S3_PREFIXES,
   type AlbServiceName,
-  type QueueName,
   type ServiceName,
 } from '../constants';
 import type { JobQueue } from './job-queues';
@@ -128,7 +133,7 @@ export class Services extends Construct {
     const mainUrl = `https://${domain.main}`;
     const adminUrl = `https://${domain.admin}`;
     const queueUrls = Object.fromEntries(
-      QUEUE_NAMES.map((q) => [`${q.toUpperCase()}_QUEUE_URL`, queues[q].queue.queueUrl]),
+      QUEUE_NAMES.map((q) => [QUEUE_URL_ENV[q], queues[q].queue.queueUrl]),
     );
     const base: Record<string, string> = {
       NODE_ENV: 'production',
@@ -161,10 +166,11 @@ export class Services extends Construct {
       FACE_SEARCH_MAX_SELFIE_BYTES: String(faceSearch.selfieMaxBytes),
       FACE_SEARCH_MAX_BODY_BYTES: String(faceSearch.maxBodyBytes),
     };
-    // The worker heartbeats long jobs with ChangeMessageVisibility and needs each queue's timeout.
+    // The worker heartbeats every job with ChangeMessageVisibility every third of its queue's
+    // timeout (README "Queue visibility and heartbeats"), so it needs each queue's timeout.
     const workerDerived = Object.fromEntries(
       QUEUE_NAMES.map((q) => [
-        `${q.toUpperCase()}_QUEUE_VISIBILITY_TIMEOUT_SECONDS`,
+        QUEUE_VISIBILITY_TIMEOUT_ENV[q],
         String(config.queues[q].visibilityTimeoutSeconds),
       ]),
     );
@@ -174,14 +180,14 @@ export class Services extends Construct {
       config.secrets.cloudFrontSigningPrivateKeyName,
     );
     const userPoolEnv = {
-      COGNITO_USER_POOL_ID: cognito.userPoolId,
-      COGNITO_WEB_CLIENT_ID: cognito.webClientId,
-      COGNITO_DOMAIN: cognito.domain,
+      [COGNITO_ENV.users.userPoolId]: cognito.userPoolId,
+      [COGNITO_ENV.users.clientId]: cognito.webClientId,
+      [COGNITO_ENV.users.domain]: cognito.domain,
     };
     const adminPoolEnv = {
-      COGNITO_ADMIN_USER_POOL_ID: cognito.adminUserPoolId,
-      COGNITO_ADMIN_CLIENT_ID: cognito.adminClientId,
-      COGNITO_ADMIN_DOMAIN: cognito.adminDomain,
+      [COGNITO_ENV.admins.userPoolId]: cognito.adminUserPoolId,
+      [COGNITO_ENV.admins.clientId]: cognito.adminClientId,
+      [COGNITO_ENV.admins.domain]: cognito.adminDomain,
     };
     const extra = svc.env;
 
@@ -468,7 +474,7 @@ export class Services extends Construct {
         resources: [collections],
       }),
     );
-    // Includes sqs:ChangeMessageVisibility, which the worker uses to heartbeat long jobs.
+    // Includes sqs:ChangeMessageVisibility, which the worker uses to heartbeat every job.
     for (const q of QUEUE_NAMES) queues[q].queue.grantConsumeMessages(taskRoles.worker);
     queues.faces.queue.grantSendMessages(taskRoles.worker);
 

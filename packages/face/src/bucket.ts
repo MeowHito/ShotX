@@ -12,11 +12,24 @@
  * A grant's slot is the earliest time that keeps every window within its limit. Callers reserve
  * their slot and sleep until then, so waiters never poll. Slots never go backwards, so the stored
  * grants stay sorted.
+ *
+ * The guarantee is about **reserved slots**, not about when requests reach AWS. A request starts
+ * at its slot plus sleep lateness (timers fire late under load), plus the time to sign and send
+ * it, and arrives after network latency that varies per request. Two calls in adjacent slots can
+ * therefore arrive closer together than their slots, so AWS may still see more than `limit` calls
+ * in some second and throttle one. That is why the provider still retries ThrottlingException
+ * with jittered backoff (each retry takes a new slot), and why the TPS settings should stay a
+ * little under the account quota.
  */
 
 const US_PER_MS = 1000;
 const US_PER_SECOND = 1_000_000;
 
+/**
+ * FaceConfig only produces whole rates from 1 to 1000 and `burstSeconds` in (0, 1]
+ * (`FACE_REKOGNITION_TPS_*`, `FACE_REKOGNITION_BURST_SECONDS`). The bucket accepts wider inputs
+ * and handles them as documented below.
+ */
 export interface BucketOptions {
   /**
    * Calls per second. A sliding 1-second window never holds more than floor(rate) calls, so a

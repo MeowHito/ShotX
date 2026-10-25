@@ -11,12 +11,15 @@ import {
   indexTilePart,
   isSafeKeySegment,
   isSafeOriginalName,
+  isValidOriginalNameInput,
   ORIGINAL_NAME_MAX_BYTES,
+  originalNameSchema,
   originalKey,
   originalsPrefix,
   parseS3Key,
   S3_PREFIXES,
   sanitizeOriginalName,
+  utf8ByteLength,
   zipKey,
 } from './s3-keys';
 
@@ -190,6 +193,31 @@ describe('original names', () => {
     expect(sanitizeOriginalName('b'.repeat(400))).toBe('b'.repeat(255));
   });
 
+  it('never returns more than 255 UTF-8 bytes, however long the extension', () => {
+    const cases = [
+      // An "extension" longer than 255 bytes on its own.
+      `a.${'x'.repeat(300)}`,
+      `${'a'.repeat(10)}.${'ก'.repeat(120)}`,
+      `.${'x'.repeat(400)}`,
+      `photo.${'😀'.repeat(80)}`,
+      // Longest extension fileExtension accepts, with a long stem.
+      `${'a'.repeat(300)}.${'b'.repeat(16)}`,
+      `${'ก'.repeat(300)}.${'b'.repeat(16)}`,
+      `${'a. '.repeat(200)}.jpg`,
+    ];
+    for (const raw of cases) {
+      const name = sanitizeOriginalName(raw);
+      expect(utf8ByteLength(name), raw.slice(0, 20)).toBeLessThanOrEqual(ORIGINAL_NAME_MAX_BYTES);
+      expect(isSafeOriginalName(name)).toBe(true);
+      expect(sanitizeOriginalName(name)).toBe(name);
+      expect(() => originalKey({ ...ids, originalName: name })).not.toThrow();
+    }
+    expect(sanitizeOriginalName(`a.${'x'.repeat(300)}`)).toBe(`a.${'x'.repeat(253)}`);
+    expect(sanitizeOriginalName(`${'a'.repeat(300)}.${'b'.repeat(16)}`)).toBe(
+      `${'a'.repeat(238)}.${'b'.repeat(16)}`,
+    );
+  });
+
   it('is idempotent on arbitrary input', () => {
     // Deterministic pseudo-random strings drawn from tricky code points.
     const pool = [
@@ -241,6 +269,47 @@ describe('original names', () => {
       expect(isSafeOriginalName(bad)).toBe(false);
       expect(() => originalKey({ ...ids, originalName: bad })).toThrow(/sanitizeOriginalName/);
     }
+  });
+});
+
+describe('original name input validation', () => {
+  it('accepts names of 1 to 255 UTF-8 bytes', () => {
+    for (const name of [
+      'a',
+      'IMG_0001.JPG',
+      'a'.repeat(255),
+      `${'ก'.repeat(84)}.jp`, // 252 + 3 = 255 bytes
+      `${'😀'.repeat(63)}.j`, // 252 + 2 = 254 bytes
+      '../not/sanitized/yet.jpg',
+    ]) {
+      expect(isValidOriginalNameInput(name), name).toBe(true);
+      expect(originalNameSchema.safeParse(name).success).toBe(true);
+    }
+    expect(utf8ByteLength(`${'ก'.repeat(84)}.jp`)).toBe(255);
+  });
+
+  it('rejects empty names, names over 255 bytes and lone surrogates', () => {
+    for (const name of [
+      '',
+      'a'.repeat(256),
+      `${'ก'.repeat(85)}.jpg`,
+      `${'😀'.repeat(64)}`,
+      `a.${'x'.repeat(300)}`,
+      'lone\uD800.jpg',
+    ]) {
+      expect(isValidOriginalNameInput(name), name.slice(0, 20)).toBe(false);
+      expect(originalNameSchema.safeParse(name).success).toBe(false);
+    }
+    expect(originalNameSchema.safeParse('a'.repeat(256)).error?.issues[0]?.message).toBe(
+      'must be at most 255 UTF-8 bytes',
+    );
+  });
+
+  it('counts bytes, not UTF-16 code units', () => {
+    expect(utf8ByteLength('ก')).toBe(3);
+    expect(utf8ByteLength('😀')).toBe(4);
+    expect('😀'.length).toBe(2);
+    expect(utf8ByteLength('é')).toBe(2);
   });
 });
 

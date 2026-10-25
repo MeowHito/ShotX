@@ -21,8 +21,41 @@ const statements = (sql: string) =>
     .filter((s) => s !== '');
 
 describe('migrations', () => {
-  it('starts with migration 0000_init', () => {
-    expect(journal.entries[0]?.tag).toBe('0000_init');
+  it('starts with migration 0000_init and then 0001_share_targets_zip_jobs', () => {
+    expect(journal.entries.slice(0, 2).map((e) => [e.idx, e.tag])).toEqual([
+      [0, '0000_init'],
+      [1, '0001_share_targets_zip_jobs'],
+    ]);
+  });
+
+  it('never edits a committed migration: each snapshot chains to the previous one', () => {
+    const snapshots = journal.entries.map(
+      (e) =>
+        JSON.parse(
+          readFileSync(
+            join(MIGRATIONS_FOLDER, 'meta', `${String(e.idx).padStart(4, '0')}_snapshot.json`),
+            'utf8',
+          ),
+        ) as { id: string; prevId: string },
+    );
+    snapshots.forEach((snapshot, i) => {
+      expect(snapshot.prevId).toBe(
+        i === 0 ? '00000000-0000-0000-0000-000000000000' : snapshots[i - 1]?.id,
+      );
+    });
+  });
+
+  it('backfills share targets before dropping target_id, and adds the owner key first', () => {
+    const list = statements(sqlOf('0001_share_targets_zip_jobs'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    expect(at('SET "target_file_id" = "target_id"')).toBeGreaterThan(
+      at('ADD COLUMN "target_file_id"'),
+    );
+    expect(at('SET "target_folder_id" = "target_id"')).toBeGreaterThan(
+      at('ADD COLUMN "target_folder_id"'),
+    );
+    expect(at('DROP COLUMN "target_id"')).toBeGreaterThan(at('SET "target_folder_id"'));
+    expect(at('"zip_jobs_share_same_owner_fk"')).toBeGreaterThan(at('"shares_id_owner_unique"'));
   });
 
   // drizzle-kit's snapshot types are written against zod 3 and don't resolve with zod 4, so the

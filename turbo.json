@@ -13,16 +13,15 @@
     },
     "test": {
       "dependsOn": ["^test"],
-      "passThroughEnv": [
+      "env": [
         "REDIS_URL",
         "DATABASE_URL",
         "TEST_DATABASE_URL",
         "AWS_REGION",
         "AWS_ENDPOINT_URL",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
         "S3_FORCE_PATH_STYLE"
-      ]
+      ],
+      "passThroughEnv": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
     },
     "synth": {
       "cache": false,

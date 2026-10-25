@@ -1,4 +1,4 @@
-import { type Env, loadFaceConfig } from '@shotx/shared';
+import { type Env, indexImageKey, loadFaceConfig, parseS3Key } from '@shotx/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   indexPhoto,
@@ -8,6 +8,7 @@ import {
   type IndexPhotoTarget,
   type IndexTempKey,
   TempImageCleanupError,
+  TILING_MODES,
   type TilingMode,
 } from './index-photo';
 import { IndexFacesOutcomeUnknownError } from './provider';
@@ -39,9 +40,8 @@ const scene: Scene = {
   ],
 };
 
-/** The key format contracts is adding to packages/shared. */
-const tempKey: IndexTempKey = ({ fileId, attemptId, part }) =>
-  `tmp/index/${fileId}/${attemptId}/${part}.jpg`;
+/** The production key builder (ADR 0004). */
+const tempKey: IndexTempKey = indexImageKey;
 
 let photo: Buffer;
 beforeAll(async () => {
@@ -61,8 +61,12 @@ async function setup() {
   return { fake, tempStore, deps };
 }
 
-function options(target: Partial<IndexPhotoTarget> & { tiling: TilingMode }, env: Env = {}) {
-  return indexPhotoOptions(loadFaceConfig(env), {
+/** Options as the worker builds them, with the tiling mode set through FACE_INDEX_TILING. */
+function options(
+  { tiling, ...target }: Partial<IndexPhotoTarget> & { tiling: TilingMode },
+  env: Env = {},
+) {
+  return indexPhotoOptions(loadFaceConfig({ ...env, FACE_INDEX_TILING: tiling }), {
     collectionId: 'pg-test',
     fileId: 'file-1',
     ...target,
@@ -131,7 +135,7 @@ describe('indexPhoto', () => {
   it('takes the index settings from FaceConfig', () => {
     const indexOptions = indexPhotoOptions(
       loadFaceConfig({ FACE_INDEX_LONG_EDGE: '2400', FACE_INDEX_QUALITY_FILTER: 'MEDIUM' }),
-      { collectionId: 'pg-1', fileId: 'f', tiling: 'signal' },
+      { collectionId: 'pg-1', fileId: 'f' },
     );
     expect(indexOptions).toMatchObject({
       longEdge: 2400,
@@ -139,6 +143,45 @@ describe('indexPhoto', () => {
       tileEdgeEpsilon: 0.01,
       encode: { qualityStep: 5, minQuality: 60, shrinkFactor: 0.85, minLongEdge: 320 },
     });
+  });
+});
+
+describe('indexPhotoOptions tiling', () => {
+  it('takes the tiling mode from FACE_INDEX_TILING, signal by default', () => {
+    const target = { collectionId: 'pg-1', fileId: 'f' };
+    expect(indexPhotoOptions(loadFaceConfig({}), target).tiling).toBe('signal');
+    for (const mode of TILING_MODES) {
+      const config = loadFaceConfig({ FACE_INDEX_TILING: mode });
+      expect(indexPhotoOptions(config, target).tiling).toBe(mode);
+    }
+  });
+
+  it('has no per-photo tiling override', () => {
+    const built = indexPhotoOptions(loadFaceConfig({ FACE_INDEX_TILING: 'never' }), {
+      collectionId: 'pg-1',
+      fileId: 'f',
+      // @ts-expect-error tiling is not part of IndexPhotoTarget: it comes from FaceConfig.
+      tiling: 'always',
+    });
+    expect(built.tiling).toBe('never');
+  });
+
+  it('tiles according to the configured mode', async () => {
+    for (const [mode, tiled] of [
+      ['never', false],
+      ['signal', true],
+      ['always', true],
+    ] as const) {
+      const { deps } = await setup();
+      const config = loadFaceConfig({ FACE_INDEX_TILING: mode });
+      const result = await indexPhoto(
+        deps,
+        photo,
+        indexPhotoOptions(config, { collectionId: 'pg-test', fileId: 'file-1' }),
+      );
+      expect(result.tiled).toBe(tiled);
+      expect(result.indexCalls).toBe(tiled ? 5 : 1);
+    }
   });
 });
 
@@ -159,6 +202,15 @@ describe('indexPhoto temporary images', () => {
       'tmp/index/file-1/attempt-a/t3.jpg',
       'tmp/index/file-1/attempt-b/full.jpg',
     ]);
+    // Tile parts are 0-based, the same index as PhotoFace.tile.
+    expect(tempStore.putKeys.slice(0, 5).map((key) => parseS3Key(key))).toEqual(
+      ['full', 't0', 't1', 't2', 't3'].map((part) => ({
+        kind: 'index',
+        fileId: 'file-1',
+        attemptId: 'attempt-a',
+        part,
+      })),
+    );
     expect(tempStore.keys()).toEqual([]);
   });
 

@@ -10,6 +10,7 @@ import {
   type IndexFacesCommandOutput,
   ListFacesCommand,
   RekognitionClient,
+  type RekognitionClientConfig,
   SearchFacesByImageCommand,
   SearchFacesCommand,
 } from '@aws-sdk/client-rekognition';
@@ -32,6 +33,21 @@ import type {
 } from './rekognition-limits';
 import { RateLimitedError, type RetryOptions, withRetry } from './throttling';
 import type { BoundingBox, FaceMatch, ImageInput, IndexFacesResult } from './types';
+
+/**
+ * One Rekognition request took longer than `requestTimeoutMs` and was aborted. The request may
+ * have reached the service, so for IndexFaces the outcome is unknown. Named `TimeoutError` like
+ * the SDK's own timeouts, so both are handled the same way.
+ */
+export class RekognitionRequestTimeoutError extends Error {
+  constructor(
+    readonly operation: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`Rekognition ${operation} request did not finish within ${timeoutMs} ms`);
+    this.name = 'TimeoutError';
+  }
+}
 
 /** Rekognition rejected the call for exceeding a rate: nothing was done, so a retry is safe. */
 const THROTTLING_NAMES = new Set(['ThrottlingException', 'ProvisionedThroughputExceededException']);
@@ -109,11 +125,39 @@ export function rekognitionRetryOptions(
   return { maxAttempts, baseDelayMs: retryBaseMs, maxDelayMs: retryMaxMs };
 }
 
+/**
+ * SDK client settings for the provider. Retries happen in the provider (behind the limiters), so
+ * the SDK's own retries are off. The request handler gets `requestTimeoutMs` as its connection
+ * timeout and as a request timeout that fails the request (not just a warning); the provider also
+ * aborts every request at `requestTimeoutMs` (see `RekognitionProviderOptions.requestTimeoutMs`),
+ * which covers what the handler doesn't: credential resolution and a response body that stalls.
+ */
+export function rekognitionClientConfig(
+  config: FaceConfig['rekognition'],
+): RekognitionClientConfig {
+  return {
+    region: config.region,
+    maxAttempts: 1,
+    requestHandler: {
+      connectionTimeout: config.requestTimeoutMs,
+      requestTimeout: config.requestTimeoutMs,
+      throwOnRequestTimeout: true,
+    },
+  };
+}
+
 export interface RekognitionProviderOptions {
   client: RekognitionClient;
   /** Every call takes a token from its operation's limiter, keeping under the per-operation TPS. */
   limiters: RekognitionLimiters;
   retry: RetryOptions;
+  /**
+   * Longest one request (one `client.send`, i.e. one attempt) may take, from sending to the parsed
+   * response. The request is then aborted and fails with RekognitionRequestTimeoutError, so a hung
+   * socket can't hold a call. Rate-limit waits and retry backoff come on top: see
+   * `rekognitionCallWorstCaseMs`.
+   */
+  requestTimeoutMs: number;
 }
 
 export class RekognitionFaceProvider implements FaceProvider {
@@ -122,7 +166,7 @@ export class RekognitionFaceProvider implements FaceProvider {
   /**
    * Builds the provider for one process. Pass limiters from `createRedisRekognitionLimiters` with
    * the same profile in production. Retries happen here (behind the limiters), so the SDK's own
-   * retries are turned off.
+   * retries are turned off; every request is bounded by `config.requestTimeoutMs`.
    */
   static create(
     config: FaceConfig['rekognition'],
@@ -130,23 +174,24 @@ export class RekognitionFaceProvider implements FaceProvider {
     limiters: RekognitionLimiters,
   ): RekognitionFaceProvider {
     return new RekognitionFaceProvider({
-      client: new RekognitionClient({ region: config.region, maxAttempts: 1 }),
+      client: new RekognitionClient(rekognitionClientConfig(config)),
       limiters,
       retry: rekognitionRetryOptions(config, profile),
+      requestTimeoutMs: config.requestTimeoutMs,
     });
   }
 
   async createCollection(collectionId: string): Promise<{ faceModelVersion?: string }> {
     const { client } = this.options;
     try {
-      const out = await this.call('CreateCollection', () =>
-        client.send(new CreateCollectionCommand({ CollectionId: collectionId })),
+      const out = await this.call('CreateCollection', (http) =>
+        client.send(new CreateCollectionCommand({ CollectionId: collectionId }), http),
       );
       return { faceModelVersion: out.FaceModelVersion };
     } catch (error) {
       if (!isAwsError(error, 'ResourceAlreadyExistsException')) throw error;
-      const out = await this.call('DescribeCollection', () =>
-        client.send(new DescribeCollectionCommand({ CollectionId: collectionId })),
+      const out = await this.call('DescribeCollection', (http) =>
+        client.send(new DescribeCollectionCommand({ CollectionId: collectionId }), http),
       );
       return { faceModelVersion: out.FaceModelVersion };
     }
@@ -154,8 +199,8 @@ export class RekognitionFaceProvider implements FaceProvider {
 
   async deleteCollection(collectionId: string): Promise<void> {
     try {
-      await this.call('DeleteCollection', () =>
-        this.options.client.send(new DeleteCollectionCommand({ CollectionId: collectionId })),
+      await this.call('DeleteCollection', (http) =>
+        this.options.client.send(new DeleteCollectionCommand({ CollectionId: collectionId }), http),
       );
     } catch (error) {
       if (!isAwsError(error, 'ResourceNotFoundException')) throw error;
@@ -164,15 +209,16 @@ export class RekognitionFaceProvider implements FaceProvider {
 
   /**
    * IndexFaces is not idempotent, so only throttling is retried: a throttled request was
-   * rejected. After a 5xx, a timeout or a dropped connection the faces may already be indexed, and
-   * a retry would index them twice, so the call fails with IndexFacesOutcomeUnknownError instead.
+   * rejected. After a 5xx, a timeout (`requestTimeoutMs` included) or a dropped connection the
+   * faces may already be indexed, and a retry would index them twice, so the call fails with
+   * IndexFacesOutcomeUnknownError instead.
    */
   async indexFaces(request: IndexFacesRequest): Promise<IndexFacesResult> {
     let out: IndexFacesCommandOutput;
     try {
       out = await this.call(
         'IndexFaces',
-        () =>
+        (http) =>
           this.options.client.send(
             new IndexFacesCommand({
               CollectionId: request.collectionId,
@@ -181,6 +227,7 @@ export class RekognitionFaceProvider implements FaceProvider {
               MaxFaces: request.maxFaces,
               QualityFilter: request.qualityFilter,
             }),
+            http,
           ),
         isThrottlingError,
       );
@@ -209,7 +256,7 @@ export class RekognitionFaceProvider implements FaceProvider {
 
   async searchFacesByImage(request: SearchByImageRequest): Promise<FaceMatch[]> {
     try {
-      const out = await this.call('SearchFacesByImage', () =>
+      const out = await this.call('SearchFacesByImage', (http) =>
         this.options.client.send(
           new SearchFacesByImageCommand({
             CollectionId: request.collectionId,
@@ -218,6 +265,7 @@ export class RekognitionFaceProvider implements FaceProvider {
             MaxFaces: request.maxFaces,
             QualityFilter: request.qualityFilter,
           }),
+          http,
         ),
       );
       return toMatches(out.FaceMatches);
@@ -228,7 +276,7 @@ export class RekognitionFaceProvider implements FaceProvider {
   }
 
   async searchFaces(request: SearchByFaceRequest): Promise<FaceMatch[]> {
-    const out = await this.call('SearchFaces', () =>
+    const out = await this.call('SearchFaces', (http) =>
       this.options.client.send(
         new SearchFacesCommand({
           CollectionId: request.collectionId,
@@ -236,6 +284,7 @@ export class RekognitionFaceProvider implements FaceProvider {
           FaceMatchThreshold: request.threshold,
           MaxFaces: request.maxFaces,
         }),
+        http,
       ),
     );
     return toMatches(out.FaceMatches);
@@ -244,22 +293,24 @@ export class RekognitionFaceProvider implements FaceProvider {
   async deleteFaces(collectionId: string, faceIds: readonly string[]): Promise<void> {
     for (let start = 0; start < faceIds.length; start += REKOGNITION_DELETE_FACES_BATCH) {
       const batch = faceIds.slice(start, start + REKOGNITION_DELETE_FACES_BATCH);
-      await this.call('DeleteFaces', () =>
+      await this.call('DeleteFaces', (http) =>
         this.options.client.send(
           new DeleteFacesCommand({ CollectionId: collectionId, FaceIds: batch }),
+          http,
         ),
       );
     }
   }
 
   async listFaces(request: ListFacesRequest): Promise<ListFacesPage> {
-    const out = await this.call('ListFaces', () =>
+    const out = await this.call('ListFaces', (http) =>
       this.options.client.send(
         new ListFacesCommand({
           CollectionId: request.collectionId,
           MaxResults: request.maxResults,
           NextToken: request.nextToken,
         }),
+        http,
       ),
     );
     return {
@@ -270,21 +321,52 @@ export class RekognitionFaceProvider implements FaceProvider {
     };
   }
 
-  /** Each attempt, retries included, is a real call and takes its own token. */
+  /**
+   * Each attempt, retries included, is a real call and takes its own token. The request timeout
+   * starts after the token: waiting for a slot is bounded by the limiter's `maxWaitMs`.
+   */
   private call<T>(
     operation: RekognitionOperation,
-    send: () => Promise<T>,
+    send: (options: { abortSignal: AbortSignal }) => Promise<T>,
     isRetryable: (error: unknown) => boolean = isRetryableAwsError,
   ): Promise<T> {
     const limiter = this.options.limiters[operation];
     return withRetry(
       async () => {
         await limiter.acquire();
-        return send();
+        return withRequestTimeout(operation, this.options.requestTimeoutMs, send);
       },
       isRetryable,
       this.options.retry,
     );
+  }
+}
+
+/**
+ * Runs one request with an abort signal and fails it with RekognitionRequestTimeoutError after
+ * `timeoutMs`, whether or not the request reacts to the abort.
+ */
+async function withRequestTimeout<T>(
+  operation: string,
+  timeoutMs: number,
+  send: (options: { abortSignal: AbortSignal }) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new RekognitionRequestTimeoutError(operation, timeoutMs);
+      reject(error);
+      controller.abort(error);
+    }, timeoutMs);
+  });
+  try {
+    const request = send({ abortSignal: controller.signal });
+    // After a timeout the aborted request rejects too; that rejection is expected.
+    request.catch(() => undefined);
+    return await Promise.race([request, timedOut]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

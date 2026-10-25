@@ -1,6 +1,15 @@
 import { z } from 'zod';
+import { DEFAULT_AWS_REGION } from './aws';
 import { type Env, parseEnv } from './env';
-import { int, SECONDS_PER_DAY, SECONDS_PER_MINUTE } from './fields';
+import {
+  int,
+  MiB,
+  MS_PER_DAY,
+  MS_PER_HOUR,
+  MS_PER_MINUTE,
+  SECONDS_PER_DAY,
+  SECONDS_PER_MINUTE,
+} from './fields';
 
 export const QUALITY_FILTERS = ['NONE', 'AUTO', 'LOW', 'MEDIUM', 'HIGH'] as const;
 export type QualityFilter = (typeof QUALITY_FILTERS)[number];
@@ -17,7 +26,8 @@ export type TilingMode = (typeof TILING_MODES)[number];
 
 const percent = z.coerce.number().min(0).max(100);
 const ratio = z.coerce.number().min(0).max(1);
-const tps = z.coerce.number().positive().max(1000);
+/** Calls per second for one Rekognition operation: a whole number from 1 to 1000. */
+const tps = int(1, 1000);
 const requests = int(1, 1_000_000);
 const windowSeconds = int(1, SECONDS_PER_DAY);
 
@@ -34,7 +44,7 @@ const faceEnvSchema = z
     FACE_SELFIE_JPEG_QUALITY: int(50, 100).default(90),
     FACE_INDEX_LONG_EDGE: int(640, 8192).default(3500),
     FACE_INDEX_JPEG_QUALITY: int(50, 100).default(90),
-    FACE_INDEX_MAX_BYTES: int(1, 15 * 1024 * 1024).default(15 * 1024 * 1024),
+    FACE_INDEX_MAX_BYTES: int(1, 15 * MiB).default(15 * MiB),
     FACE_INDEX_MAX_FACES: int(1, 100).default(100),
     FACE_INDEX_QUALITY_FILTER: z.enum(QUALITY_FILTERS).default('LOW'),
     FACE_INDEX_TILING: z.enum(TILING_MODES).default('signal'),
@@ -42,6 +52,7 @@ const faceEnvSchema = z
     FACE_TILE_OVERLAP: z.coerce.number().min(0).max(0.5).default(0.15),
     FACE_TILE_EDGE_EPSILON: z.coerce.number().min(0).max(0.1).default(0.01),
     FACE_SMALL_FACE_RATIO: ratio.default(0.02),
+    FACE_ORPHAN_GRACE_MS: int(MS_PER_MINUTE, MS_PER_DAY).default(3 * MS_PER_HOUR),
     FACE_DEDUPE_IOU: ratio.default(0.5),
     FACE_ENCODE_QUALITY_STEP: int(1, 25).default(5),
     FACE_ENCODE_MIN_QUALITY: int(30, 100).default(60),
@@ -51,8 +62,10 @@ const faceEnvSchema = z
     FACE_REKOGNITION_TPS_SEARCH_FACES_BY_IMAGE: tps.default(5),
     FACE_REKOGNITION_TPS_SEARCH_FACES: tps.default(5),
     FACE_REKOGNITION_TPS_DELETE_FACES: tps.default(5),
+    FACE_REKOGNITION_TPS_LIST_FACES: tps.default(5),
     FACE_REKOGNITION_TPS_COLLECTION: tps.default(5),
-    FACE_REKOGNITION_BURST_SECONDS: z.coerce.number().positive().max(10).default(1),
+    FACE_REKOGNITION_BURST_SECONDS: z.coerce.number().positive().max(1).default(1),
+    FACE_REKOGNITION_REQUEST_TIMEOUT_MS: int(1000, 120_000).default(10_000),
     FACE_REKOGNITION_RATE_LIMIT_PREFIX: z
       .string()
       .min(1)
@@ -76,7 +89,7 @@ const faceEnvSchema = z
     FACE_SEARCH_RATE_PER_SHARE_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
     FACE_SEARCH_RATE_PER_VIEWER: requests.default(10),
     FACE_SEARCH_RATE_PER_VIEWER_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
-    AWS_REGION: z.string().min(1).default('ap-southeast-1'),
+    AWS_REGION: z.string().min(1).default(DEFAULT_AWS_REGION),
   })
   .refine((env) => env.FACE_STRONG >= env.FACE_MAYBE, {
     error: 'FACE_STRONG must be greater than or equal to FACE_MAYBE',
@@ -146,6 +159,16 @@ export interface FaceConfig {
     tileEdgeEpsilon: number;
     smallFaceRatio: number;
     dedupeIou: number;
+    /**
+     * Orphan reconciliation (`faces.reconcile.daily`) deletes a face that is in the collection
+     * but has no `faces` row only once it has stayed unknown for this long. An indexing attempt
+     * must commit its rows within half of it (packages/face `recordFacesDeadline`), so set it to
+     * at least 2 × the longest indexPhoto attempt (every IndexFaces and DeleteFaces call with all
+     * retries, rate-limit waits and request timeouts, plus processing). 1 minute to 24 hours;
+     * default 3 hours: infra's worst case for one faces job is 3960 s, so 2× that (7,920,000 ms,
+     * which infra's synth enforces) rounded up.
+     */
+    orphanGraceMs: number;
   };
   /** Re-encoding of index images and selfies that are over their byte limit. */
   encode: {
@@ -164,18 +187,32 @@ export interface FaceConfig {
     rateLimit: {
       /** Prefix of the Redis keys that hold the buckets. */
       keyPrefix: string;
-      /** Each bucket holds max(1, tps × burstSeconds) tokens. */
+      /**
+       * In (0, 1]. An idle bucket lets max(1, floor(tps × min(burstSeconds, 1))) calls start at
+       * once; no 1-second window holds more than floor(tps) calls. 1 (the default) allows the
+       * whole second's quota at once.
+       */
       burstSeconds: number;
-      /** Calls per second for each operation. Keep each at or under the account's quota. */
+      /**
+       * Calls per second for each operation, whole numbers from 1 to 1000. Keep each at or under
+       * the account's quota for that operation in the region.
+       */
       tps: {
         indexFaces: number;
         searchFacesByImage: number;
         searchFaces: number;
         deleteFaces: number;
+        /** ListFaces, used only by orphan reconciliation. It has its own quota. */
+        listFaces: number;
         /** CreateCollection, DescribeCollection and DeleteCollection. */
         collection: number;
       };
     };
+    /**
+     * Upper bound on one Rekognition HTTP request (the SDK client's request timeout), in ms. Both
+     * profiles use it; infra's faces queue visibility floor counts it once per attempt.
+     */
+    requestTimeoutMs: number;
     /**
      * Worker profile (indexing, purges). Retries back off from `retryBaseMs` up to `retryMaxMs`;
      * `maxWaitMs` is the longest one call waits for a rate-limit token.
@@ -228,6 +265,7 @@ export function loadFaceConfig(env: Env): FaceConfig {
       tileEdgeEpsilon: e.FACE_TILE_EDGE_EPSILON,
       smallFaceRatio: e.FACE_SMALL_FACE_RATIO,
       dedupeIou: e.FACE_DEDUPE_IOU,
+      orphanGraceMs: e.FACE_ORPHAN_GRACE_MS,
     },
     encode: {
       qualityStep: e.FACE_ENCODE_QUALITY_STEP,
@@ -245,9 +283,11 @@ export function loadFaceConfig(env: Env): FaceConfig {
           searchFacesByImage: e.FACE_REKOGNITION_TPS_SEARCH_FACES_BY_IMAGE,
           searchFaces: e.FACE_REKOGNITION_TPS_SEARCH_FACES,
           deleteFaces: e.FACE_REKOGNITION_TPS_DELETE_FACES,
+          listFaces: e.FACE_REKOGNITION_TPS_LIST_FACES,
           collection: e.FACE_REKOGNITION_TPS_COLLECTION,
         },
       },
+      requestTimeoutMs: e.FACE_REKOGNITION_REQUEST_TIMEOUT_MS,
       background: {
         maxAttempts: e.FACE_REKOGNITION_MAX_ATTEMPTS,
         retryBaseMs: e.FACE_REKOGNITION_RETRY_BASE_MS,
@@ -261,5 +301,45 @@ export function loadFaceConfig(env: Env): FaceConfig {
         maxWaitMs: e.FACE_REKOGNITION_INTERACTIVE_MAX_WAIT_MS,
       },
     },
+  };
+}
+
+/** Rekognition's limit on an image passed as bytes (SearchFacesByImage with a selfie). */
+export const REKOGNITION_INLINE_IMAGE_MAX_BYTES = 5 * MiB;
+
+const faceSearchUploadEnvSchema = z
+  .object({
+    FACE_SEARCH_MAX_SELFIE_BYTES: int(1, REKOGNITION_INLINE_IMAGE_MAX_BYTES),
+    FACE_SEARCH_MAX_BODY_BYTES: int(1, 100 * MiB),
+  })
+  .refine((e) => e.FACE_SEARCH_MAX_SELFIE_BYTES <= e.FACE_SEARCH_MAX_BODY_BYTES, {
+    error: 'FACE_SEARCH_MAX_SELFIE_BYTES must be less than or equal to FACE_SEARCH_MAX_BODY_BYTES',
+  });
+
+/** Size limits of `POST /s/:token/face-search`, enforced by the API while it reads the body. */
+export interface FaceSearchUploadConfig {
+  /** Largest selfie part accepted. At most Rekognition's 5 MiB inline image limit. */
+  maxSelfieBytes: number;
+  /** Largest request body (every selfie plus multipart overhead). The WAF enforces the same. */
+  maxBodyBytes: number;
+}
+
+/**
+ * Reads FACE_SEARCH_MAX_SELFIE_BYTES and FACE_SEARCH_MAX_BODY_BYTES (api only). Both are
+ * required: infra derives them from the FACE_* settings (infra/lib/face-limits.ts) and the WAF
+ * body rule uses the same numbers, so a default here could silently disagree with the WAF. The
+ * body must fit FACE_MAX_SELFIES selfies of the maximum size.
+ */
+export function loadFaceSearchUploadConfig(env: Env): FaceSearchUploadConfig {
+  const e = parseEnv(faceSearchUploadEnvSchema, env, 'face search upload');
+  const { maxSelfies } = loadFaceConfig(env).search;
+  if (e.FACE_SEARCH_MAX_BODY_BYTES < maxSelfies * e.FACE_SEARCH_MAX_SELFIE_BYTES) {
+    throw new Error(
+      'Invalid face search upload configuration: FACE_SEARCH_MAX_BODY_BYTES must fit FACE_MAX_SELFIES × FACE_SEARCH_MAX_SELFIE_BYTES',
+    );
+  }
+  return {
+    maxSelfieBytes: e.FACE_SEARCH_MAX_SELFIE_BYTES,
+    maxBodyBytes: e.FACE_SEARCH_MAX_BODY_BYTES,
   };
 }

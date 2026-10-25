@@ -47,7 +47,7 @@ const combos: ComboResult[] = (['never', 'always'] as const).map((tiling) => ({
   ],
 }));
 
-function input(synthetic: boolean): ReportInput {
+function input(synthetic: boolean, env: Record<string, string> = {}): ReportInput {
   const stats = {
     photos: 2,
     failedPhotos: 0,
@@ -82,7 +82,7 @@ function input(synthetic: boolean): ReportInput {
       appearances: 1,
       selfies: 1,
     },
-    config: loadFaceConfig({}),
+    config: loadFaceConfig(env),
     grids: { strong: [90, 95], maybe: [85, 90] },
     targets,
     assumptions,
@@ -115,6 +115,15 @@ describe('renderReport', () => {
     }
     expect(report).toContain('Rekognition calls per 1,000 photos');
     expect(report).toContain('## Go / no-go');
+  });
+
+  it('shows the FACE_INDEX_TILING value of the run next to the recommendation', () => {
+    const row = (report: string) =>
+      report.split('\n').find((line) => line.includes('`FACE_INDEX_TILING`'));
+    expect(row(renderReport(input(false)))).toMatch(/\| (never|always) \| signal \|$/);
+    expect(row(renderReport(input(false, { FACE_INDEX_TILING: 'always' })))).toMatch(
+      /\| always \|$/,
+    );
   });
 
   it('contains aggregate numbers only: no person ids, photo names or dataset paths', () => {

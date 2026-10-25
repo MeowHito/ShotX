@@ -1,8 +1,8 @@
+import { S3_PREFIXES } from '@shotx/shared';
 import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import type { PlatformConfig } from '../config';
-import { S3_PREFIXES } from '../constants';
 
 export interface MediaStorageProps {
   readonly config: PlatformConfig;

@@ -27,6 +27,10 @@ export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 export const FILE_STATUSES = ['uploading', 'processing', 'ready', 'failed'] as const;
 export type FileStatus = (typeof FILE_STATUSES)[number];
 
+/**
+ * What a share points at. Exactly one of `shares.target_file_id` and `shares.target_folder_id` is
+ * set, the one matching the type.
+ */
 export const SHARE_TARGET_TYPES = ['file', 'folder'] as const;
 export type ShareTargetType = (typeof SHARE_TARGET_TYPES)[number];
 
@@ -42,3 +46,10 @@ export type FaceFeedbackVerdict = (typeof FACE_FEEDBACK_VERDICTS)[number];
 
 export const ACTIVITY_TYPES = ['view', 'scan', 'download', 'zip'] as const;
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
+
+/**
+ * Zip download jobs (`zip_jobs.status`): `queued` until a worker claims it, `running` while it
+ * streams, then `ready` (the archive is in tmp/zips/) or `failed`.
+ */
+export const ZIP_JOB_STATUSES = ['queued', 'running', 'ready', 'failed'] as const;
+export type ZipJobStatus = (typeof ZIP_JOB_STATUSES)[number];

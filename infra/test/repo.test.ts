@@ -1,7 +1,13 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import {
+  loadFaceConfig,
+  QUEUE_NAMES,
+  QUEUE_VISIBILITY_TIMEOUT_ENV,
+  SCHEDULED_JOB_TYPES,
+} from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
-import { faceSearchLimits, parseConfig } from '../lib/config';
-import { QUEUE_NAMES } from '../lib/constants';
+import { describeFacesWorstCase, faceSearchLimits, parseConfig } from '../lib/config';
+import { facesJobWorstCase, minOrphanGraceMs } from '../lib/face-limits';
 import { rawConfig } from './helpers';
 
 /** Repository wiring infra owns outside infra/: CI services and Turborepo env pass-through. */
@@ -46,18 +52,93 @@ describe('.env.example', () => {
     expect(env.FACE_SEARCH_MAX_SELFIE_BYTES).toBe(String(limits.selfieMaxBytes));
     expect(env.FACE_SEARCH_MAX_BODY_BYTES).toBe(String(limits.maxBodyBytes));
     for (const q of QUEUE_NAMES) {
-      expect(env[`${q.toUpperCase()}_QUEUE_VISIBILITY_TIMEOUT_SECONDS`], q).toBe(
+      expect(env[QUEUE_VISIBILITY_TIMEOUT_ENV[q]], q).toBe(
         String(config.queues[q].visibilityTimeoutSeconds),
       );
     }
   });
+
+  const faceEnv = Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith('FACE_')));
+
+  it('lists every FACE_* setting the shared face config reads', () => {
+    // Keys of the zod schemas in packages/shared/src/config/face.ts.
+    const source = read('packages/shared/src/config/face.ts');
+    const keys = [...source.matchAll(/^\s+(FACE_[A-Z0-9_]+): /gm)].map((m) => m[1]);
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        'FACE_ORPHAN_GRACE_MS',
+        'FACE_REKOGNITION_REQUEST_TIMEOUT_MS',
+        'FACE_REKOGNITION_TPS_LIST_FACES',
+      ]),
+    );
+    for (const key of keys) expect(faceEnv, key).toHaveProperty(key as string);
+  });
+
+  it('uses the code defaults, with an orphan grace long enough for its own retry budget', () => {
+    const face = loadFaceConfig(faceEnv);
+    expect(face).toEqual(loadFaceConfig({}));
+    // Same check as synth (lib/config.ts), with these values and the faces job budget.
+    const worst = facesJobWorstCase(face, config.queues.faces.jobBudget);
+    expect(face.index.orphanGraceMs, describeFacesWorstCase(worst)).toBeGreaterThanOrEqual(
+      minOrphanGraceMs(worst),
+    );
+  });
+
+  it('documents that the burst window is in (0, 1]', () => {
+    const lines = read('.env.example').split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FACE_REKOGNITION_BURST_SECONDS='));
+    expect(lines.slice(Math.max(0, i - 3), i).join('\n')).toContain('(0, 1]');
+    expect(() => loadFaceConfig({ FACE_REKOGNITION_BURST_SECONDS: '1.5' })).toThrow();
+  });
 });
 
 describe('Turborepo', () => {
-  it('passes TEST_DATABASE_URL through to test tasks', () => {
-    const turbo = JSON.parse(read('turbo.json')) as {
-      tasks: { test: { passThroughEnv: string[] } };
-    };
-    expect(turbo.tasks.test.passThroughEnv).toContain('TEST_DATABASE_URL');
+  const turbo = JSON.parse(read('turbo.json')) as {
+    tasks: { test: { env?: string[]; passThroughEnv?: string[] } };
+  };
+
+  it('hashes the env vars that decide which tests run, so cached results never replay a skip', () => {
+    // REDIS_URL, TEST_DATABASE_URL and AWS_ENDPOINT_URL switch integration tests on or off.
+    const hashed = turbo.tasks.test.env ?? [];
+    for (const name of [
+      'REDIS_URL',
+      'DATABASE_URL',
+      'TEST_DATABASE_URL',
+      'AWS_REGION',
+      'AWS_ENDPOINT_URL',
+      'S3_FORCE_PATH_STYLE',
+    ]) {
+      expect(hashed, name).toContain(name);
+      expect(turbo.tasks.test.passThroughEnv ?? [], name).not.toContain(name);
+    }
+  });
+
+  it('passes AWS credentials through without hashing them', () => {
+    expect(turbo.tasks.test.passThroughEnv).toEqual(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY']);
+  });
+});
+
+describe('contracts from @shotx/shared', () => {
+  const libFiles = (dir: string): string[] =>
+    readdirSync(new URL(`../${dir}/`, import.meta.url), { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory()
+        ? libFiles(`${dir}/${e.name}`)
+        : e.name.endsWith('.ts')
+          ? [`${dir}/${e.name}`]
+          : [],
+    );
+  const sources = libFiles('lib').map((f) => [f, read(`infra/${f}`)] as const);
+
+  it('are imported, never copied into infra/lib', () => {
+    for (const [file, source] of sources) {
+      expect(source, file).not.toMatch(
+        /export const (QUEUE_NAMES|SCHEDULED_JOB_TYPES|S3_PREFIXES|SQS_MAX_VISIBILITY_TIMEOUT_SECONDS|QUEUE_URL_ENV|QUEUE_VISIBILITY_TIMEOUT_ENV|COGNITO_ENV|REKOGNITION_LIMITS)\b/,
+      );
+      // Job types, prefixes and queue env names appear only through the imports.
+      for (const type of SCHEDULED_JOB_TYPES) expect(source, file).not.toContain(`'${type}'`);
+      expect(source, file).not.toMatch(/'(originals|derived|tmp|tmp\/index|tmp\/zips)\/'/);
+      expect(source, file).not.toMatch(/_QUEUE_(URL|VISIBILITY_TIMEOUT_SECONDS)`/);
+      expect(source, file).not.toMatch(/'COGNITO_[A-Z_]+'|\bCOGNITO_[A-Z_]+: /);
+    }
   });
 });

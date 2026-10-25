@@ -1,3 +1,4 @@
+import { QUEUE_NAMES, QUEUE_URL_ENV, S3_PREFIXES } from '@shotx/shared';
 import { Stack, type StackProps, CfnOutput } from 'aws-cdk-lib';
 import type * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
@@ -9,10 +10,11 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import type { Construct } from 'constructs';
 import type { PlatformConfig } from '../config';
-import { PATHS, QUEUE_NAMES, S3_PREFIXES, type ServiceName } from '../constants';
+import { PATHS, type ServiceName } from '../constants';
 import { Cdn } from '../constructs/cdn';
 import { JobQueues } from '../constructs/job-queues';
 import { MediaStorage } from '../constructs/media-storage';
+import { RedisAlarms } from '../constructs/redis-alarms';
 import { Schedules } from '../constructs/schedules';
 import { Services } from '../constructs/services';
 import type { AuthStack } from './auth-stack';
@@ -52,6 +54,12 @@ export class AppStack extends Stack {
 
     const storage = new MediaStorage(this, 'Storage', { config });
     const queues = new JobQueues(this, 'Queues', { config, alarmTopic });
+    // Redis lives in the Data stack; its alarm sits here, next to the alarm topic.
+    new RedisAlarms(this, 'RedisAlarms', {
+      config,
+      replicationGroupId: data.redisReplicationGroupId,
+      alarmTopic,
+    });
 
     // Completed uploads (CompleteMultipartUpload) under originals/ start the media pipeline.
     // The worker writes derived/ and tmp/, which must not trigger it.
@@ -126,7 +134,7 @@ export class AppStack extends Stack {
       );
     out('MEDIA_BUCKET', storage.bucket.bucketName);
     for (const q of QUEUE_NAMES) {
-      out(`${q.toUpperCase()}_QUEUE_URL`, queues.queues[q].queue.queueUrl);
+      out(QUEUE_URL_ENV[q], queues.queues[q].queue.queueUrl);
       out(`${q.toUpperCase()}_DLQ_URL`, queues.queues[q].deadLetterQueue.queueUrl);
     }
     out('CLOUDFRONT_KEY_PAIR_ID', signingKey.publicKeyId);

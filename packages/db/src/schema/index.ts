@@ -3,5 +3,6 @@ export * from './enums';
 export * from './accounts';
 export * from './drive';
 export * from './sharing';
+export * from './downloads';
 export * from './analytics';
 export { ltree } from './columns';

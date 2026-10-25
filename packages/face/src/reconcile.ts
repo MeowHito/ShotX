@@ -35,7 +35,7 @@ import type { ListedFace } from './types';
 export type KnownFaceIds = (faceIds: readonly string[]) => Promise<Iterable<string>>;
 
 /** Share of the grace period an indexing attempt may take before it commits its rows. */
-const RECORD_SHARE_OF_GRACE = 0.5;
+export const RECORD_FACES_SHARE_OF_GRACE = 0.5;
 
 /**
  * The last moment (ms, same clock as `startedAtMs`) at which an indexing attempt that started at
@@ -44,7 +44,7 @@ const RECORD_SHARE_OF_GRACE = 0.5;
  * transaction, right before the commit.
  */
 export function recordFacesDeadline(startedAtMs: number, graceMs: number): number {
-  return startedAtMs + graceMs * RECORD_SHARE_OF_GRACE;
+  return startedAtMs + graceMs * RECORD_FACES_SHARE_OF_GRACE;
 }
 
 /** Every face in a collection, one ListFaces page at a time. */

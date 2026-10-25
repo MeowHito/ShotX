@@ -3,3 +3,5 @@ pnpm-lock.yaml
 data/
 runs/
 cdk.out/
+# No Prettier parser for dotenv files; listing it explicitly would fail --check.
+.env.example

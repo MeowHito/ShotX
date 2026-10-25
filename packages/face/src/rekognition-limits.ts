@@ -38,9 +38,9 @@ export function operationTps(config: RekognitionConfig, operation: RekognitionOp
       return tps.searchFaces;
     case 'DeleteFaces':
       return tps.deleteFaces;
-    // ListFaces has its own quota and bucket. It shares the collection rate until FaceConfig has
-    // a key of its own; only orphan reconciliation calls it.
+    // Only orphan reconciliation calls ListFaces.
     case 'ListFaces':
+      return tps.listFaces;
     case 'CreateCollection':
     case 'DescribeCollection':
     case 'DeleteCollection':

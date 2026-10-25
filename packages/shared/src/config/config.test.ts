@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { loadCostConfig } from './cost';
-import { loadFaceConfig, TILING_MODES } from './face';
+import * as shared from '../index';
+import { loadFaceConfig, loadFaceSearchUploadConfig, TILING_MODES, type TilingMode } from './face';
 
 describe('loadFaceConfig', () => {
   it('uses the spec defaults', () => {
@@ -33,9 +34,11 @@ describe('loadFaceConfig', () => {
           searchFacesByImage: 5,
           searchFaces: 5,
           deleteFaces: 5,
+          listFaces: 5,
           collection: 5,
         },
       },
+      requestTimeoutMs: 10_000,
       background: { maxAttempts: 8, retryBaseMs: 200, retryMaxMs: 10_000, maxWaitMs: 30_000 },
       interactive: { maxAttempts: 3, retryBaseMs: 100, retryMaxMs: 1000, maxWaitMs: 2000 },
     });
@@ -50,8 +53,10 @@ describe('loadFaceConfig', () => {
   it('reads the rate limit, call profile, tiling and encode keys from the environment', () => {
     const config = loadFaceConfig({
       FACE_REKOGNITION_TPS_SEARCH_FACES_BY_IMAGE: '50',
-      FACE_REKOGNITION_TPS_COLLECTION: '0.5',
-      FACE_REKOGNITION_BURST_SECONDS: '2.5',
+      FACE_REKOGNITION_TPS_COLLECTION: '1',
+      FACE_REKOGNITION_TPS_LIST_FACES: '2',
+      FACE_REKOGNITION_BURST_SECONDS: '0.25',
+      FACE_REKOGNITION_REQUEST_TIMEOUT_MS: '15000',
       FACE_REKOGNITION_RATE_LIMIT_PREFIX: 'shotx-staging:rekognition.v2',
       FACE_REKOGNITION_INTERACTIVE_MAX_WAIT_MS: '500',
       FACE_REKOGNITION_INTERACTIVE_MAX_ATTEMPTS: '2',
@@ -61,15 +66,17 @@ describe('loadFaceConfig', () => {
     });
     expect(config.rekognition.rateLimit).toEqual({
       keyPrefix: 'shotx-staging:rekognition.v2',
-      burstSeconds: 2.5,
+      burstSeconds: 0.25,
       tps: {
         indexFaces: 5,
         searchFacesByImage: 50,
         searchFaces: 5,
         deleteFaces: 5,
-        collection: 0.5,
+        listFaces: 2,
+        collection: 1,
       },
     });
+    expect(config.rekognition.requestTimeoutMs).toBe(15_000);
     expect(config.rekognition.interactive).toMatchObject({ maxWaitMs: 500, maxAttempts: 2 });
     expect(config.index.tileEdgeEpsilon).toBe(0.02);
     expect(config.encode).toMatchObject({ shrinkFactor: 0.7, minLongEdge: 640 });
@@ -94,7 +101,7 @@ describe('loadFaceConfig', () => {
   it('no longer has a single rekognition.tps', () => {
     const { rekognition } = loadFaceConfig({ FACE_REKOGNITION_TPS: '50' });
     expect(rekognition).not.toHaveProperty('tps');
-    expect(Object.values(rekognition.rateLimit.tps)).toEqual([5, 5, 5, 5, 5]);
+    expect(Object.values(rekognition.rateLimit.tps)).toEqual([5, 5, 5, 5, 5, 5]);
     expectTypeOf(rekognition).not.toHaveProperty('tps');
   });
 
@@ -104,9 +111,53 @@ describe('loadFaceConfig', () => {
       expect(loadFaceConfig({ FACE_INDEX_TILING: mode }).index.tiling).toBe(mode);
     }
     expect(TILING_MODES).toEqual(['never', 'signal', 'always']);
+    // The only definition: packages/face re-exports it from the package root.
+    expect(shared.TILING_MODES).toBe(TILING_MODES);
+    expectTypeOf<shared.TilingMode>().toEqualTypeOf<TilingMode>();
+    expectTypeOf<TilingMode>().toEqualTypeOf<'never' | 'signal' | 'always'>();
     expect(() => loadFaceConfig({ FACE_INDEX_TILING: 'sometimes' })).toThrow(
       /at FACE_INDEX_TILING\b/,
     );
+  });
+
+  it('accepts every TPS from 1 to 1000 and a burst in (0, 1]', () => {
+    const keys = [
+      'FACE_REKOGNITION_TPS_INDEX_FACES',
+      'FACE_REKOGNITION_TPS_SEARCH_FACES_BY_IMAGE',
+      'FACE_REKOGNITION_TPS_SEARCH_FACES',
+      'FACE_REKOGNITION_TPS_DELETE_FACES',
+      'FACE_REKOGNITION_TPS_LIST_FACES',
+      'FACE_REKOGNITION_TPS_COLLECTION',
+    ];
+    for (const value of ['1', '1000']) {
+      const { tps } = loadFaceConfig(Object.fromEntries(keys.map((k) => [k, value]))).rekognition
+        .rateLimit;
+      expect(Object.values(tps)).toEqual(Array(keys.length).fill(Number(value)));
+    }
+    for (const burst of ['0.001', '0.5', '1']) {
+      expect(
+        loadFaceConfig({ FACE_REKOGNITION_BURST_SECONDS: burst }).rekognition.rateLimit
+          .burstSeconds,
+      ).toBe(Number(burst));
+    }
+  });
+
+  it('defaults the orphan grace period to 3 hours and accepts 1 minute to 24 hours', () => {
+    expect(loadFaceConfig({}).index.orphanGraceMs).toBe(10_800_000);
+    // At least 2 × infra's 3960 s worst-case faces job.
+    expect(loadFaceConfig({}).index.orphanGraceMs).toBeGreaterThanOrEqual(2 * 3960 * 1000);
+    for (const ms of ['60000', '86400000']) {
+      expect(loadFaceConfig({ FACE_ORPHAN_GRACE_MS: ms }).index.orphanGraceMs).toBe(Number(ms));
+    }
+  });
+
+  it('defaults the Rekognition request timeout to 10 s', () => {
+    expect(loadFaceConfig({}).rekognition.requestTimeoutMs).toBe(10_000);
+    for (const ms of ['1000', '120000']) {
+      expect(
+        loadFaceConfig({ FACE_REKOGNITION_REQUEST_TIMEOUT_MS: ms }).rekognition.requestTimeoutMs,
+      ).toBe(Number(ms));
+    }
   });
 
   it('defaults the face-search request limits to 10 per IP per 10 minutes', () => {
@@ -188,7 +239,20 @@ describe('loadFaceConfig', () => {
     ['FACE_TILE_EDGE_EPSILON', '0.2'],
     ['FACE_REKOGNITION_TPS_INDEX_FACES', '0'],
     ['FACE_REKOGNITION_TPS_SEARCH_FACES', '1001'],
-    ['FACE_REKOGNITION_BURST_SECONDS', '11'],
+    ['FACE_REKOGNITION_TPS_COLLECTION', '0.5'],
+    ['FACE_REKOGNITION_TPS_DELETE_FACES', '2.5'],
+    ['FACE_REKOGNITION_TPS_LIST_FACES', '0'],
+    ['FACE_REKOGNITION_TPS_LIST_FACES', '1001'],
+    ['FACE_REKOGNITION_TPS_SEARCH_FACES_BY_IMAGE', '-5'],
+    ['FACE_REKOGNITION_BURST_SECONDS', '0'],
+    ['FACE_REKOGNITION_BURST_SECONDS', '1.01'],
+    ['FACE_REKOGNITION_BURST_SECONDS', '2.5'],
+    ['FACE_REKOGNITION_REQUEST_TIMEOUT_MS', '999'],
+    ['FACE_REKOGNITION_REQUEST_TIMEOUT_MS', '120001'],
+    ['FACE_REKOGNITION_REQUEST_TIMEOUT_MS', '1500.5'],
+    ['FACE_ORPHAN_GRACE_MS', '59999'],
+    ['FACE_ORPHAN_GRACE_MS', '86400001'],
+    ['FACE_ORPHAN_GRACE_MS', '3600000.5'],
     ['FACE_REKOGNITION_MAX_WAIT_MS', '-1'],
     ['FACE_REKOGNITION_INTERACTIVE_MAX_WAIT_MS', '30001'],
     ['FACE_REKOGNITION_INTERACTIVE_MAX_ATTEMPTS', '11'],
@@ -202,6 +266,49 @@ describe('loadFaceConfig', () => {
     ['FACE_SEARCH_RATE_PER_IP_WINDOW_SECONDS', '86401'],
   ])('rejects %s=%s', (key, value) => {
     expect(() => loadFaceConfig({ [key]: value })).toThrow(new RegExp(`at ${key}\\b`));
+  });
+});
+
+describe('loadFaceSearchUploadConfig', () => {
+  // infra's defaults: min(5 MiB, 1280² × 3) per selfie; 3 selfies + 64 KiB.
+  const env = { FACE_SEARCH_MAX_SELFIE_BYTES: '4915200', FACE_SEARCH_MAX_BODY_BYTES: '14811136' };
+
+  it('reads both limits', () => {
+    expect(loadFaceSearchUploadConfig(env)).toEqual({
+      maxSelfieBytes: 4_915_200,
+      maxBodyBytes: 14_811_136,
+    });
+  });
+
+  it('requires both limits: infra derives them, so there is no default', () => {
+    expect(() => loadFaceSearchUploadConfig({})).toThrow(/at FACE_SEARCH_MAX_SELFIE_BYTES\b/);
+    expect(() => loadFaceSearchUploadConfig({ FACE_SEARCH_MAX_SELFIE_BYTES: '4915200' })).toThrow(
+      /at FACE_SEARCH_MAX_BODY_BYTES\b/,
+    );
+  });
+
+  it("caps a selfie at Rekognition's 5 MiB inline image limit", () => {
+    expect(
+      loadFaceSearchUploadConfig({
+        FACE_SEARCH_MAX_SELFIE_BYTES: String(5 * 1024 * 1024),
+        FACE_SEARCH_MAX_BODY_BYTES: String(16 * 1024 * 1024),
+      }).maxSelfieBytes,
+    ).toBe(5 * 1024 * 1024);
+    expect(() =>
+      loadFaceSearchUploadConfig({
+        ...env,
+        FACE_SEARCH_MAX_SELFIE_BYTES: String(5 * 1024 * 1024 + 1),
+      }),
+    ).toThrow(/at FACE_SEARCH_MAX_SELFIE_BYTES\b/);
+  });
+
+  it('requires the body to fit FACE_MAX_SELFIES selfies', () => {
+    expect(() => loadFaceSearchUploadConfig({ ...env, FACE_MAX_SELFIES: '4' })).toThrow(
+      /FACE_SEARCH_MAX_BODY_BYTES must fit FACE_MAX_SELFIES/,
+    );
+    expect(() =>
+      loadFaceSearchUploadConfig({ ...env, FACE_SEARCH_MAX_BODY_BYTES: '1000' }),
+    ).toThrow(/FACE_SEARCH_MAX_SELFIE_BYTES must be less than or equal to/);
   });
 });
 

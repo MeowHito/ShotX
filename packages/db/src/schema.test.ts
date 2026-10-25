@@ -11,6 +11,7 @@ import {
   SHARE_TARGET_TYPES,
   SUBSCRIPTION_STATUSES,
   USER_ROLES,
+  ZIP_JOB_STATUSES,
 } from '@shotx/shared';
 import { getTableName, is } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
@@ -49,6 +50,8 @@ describe('schema', () => {
         'activity_events',
         'daily_stats',
         'audit_log',
+        'zip_jobs',
+        'zip_job_entries',
       ].sort(),
     );
   });
@@ -120,7 +123,8 @@ describe('schema', () => {
         'id',
         'owner_id',
         'target_type',
-        'target_id',
+        'target_file_id',
+        'target_folder_id',
         'token',
         'mode',
         'allow_download',
@@ -163,6 +167,26 @@ describe('schema', () => {
         'bytes_out',
       ],
       audit_log: ['id', 'actor_id', 'action', 'target_type', 'target_id', 'meta', 'created_at'],
+      zip_jobs: [
+        'id',
+        'photographer_id',
+        'share_id',
+        'viewer_id',
+        'anon_id',
+        'download_size',
+        'status',
+        'file_count',
+        'total_bytes',
+        'idempotency_key',
+        'result_key',
+        'error_code',
+        'error_message',
+        'created_at',
+        'started_at',
+        'completed_at',
+        'expires_at',
+      ],
+      zip_job_entries: ['job_id', 'photographer_id', 'position', 'file_id', 'name'],
     };
     for (const [table, columns] of Object.entries(expected)) {
       const actual = config(table).columns.map((c) => c.name);
@@ -183,6 +207,7 @@ describe('schema', () => {
     expect(schema.downloadSize.enumValues).toEqual([...DOWNLOAD_SIZES]);
     expect(schema.faceFeedbackVerdict.enumValues).toEqual([...FACE_FEEDBACK_VERDICTS]);
     expect(schema.activityType.enumValues).toEqual([...ACTIVITY_TYPES]);
+    expect(schema.zipJobStatus.enumValues).toEqual([...ZIP_JOB_STATUSES]);
   });
 
   it('uses bigint for byte counts and integer satang for money', () => {
@@ -272,6 +297,45 @@ describe('schema', () => {
       foreignTable: 'files',
       foreignColumns: ['id', 'owner_id'],
     });
+    expect(fks('shares')).toEqual(
+      expect.arrayContaining([
+        {
+          name: 'shares_target_file_same_owner_fk',
+          columns: ['target_file_id', 'owner_id'],
+          foreignTable: 'files',
+          foreignColumns: ['id', 'owner_id'],
+        },
+        {
+          name: 'shares_target_folder_same_owner_fk',
+          columns: ['target_folder_id', 'owner_id'],
+          foreignTable: 'folders',
+          foreignColumns: ['id', 'owner_id'],
+        },
+      ]),
+    );
+    expect(config('shares').columns.map((c) => c.name)).not.toContain('target_id');
+    expect(fks('zip_jobs')).toContainEqual({
+      name: 'zip_jobs_share_same_owner_fk',
+      columns: ['share_id', 'photographer_id'],
+      foreignTable: 'shares',
+      foreignColumns: ['id', 'owner_id'],
+    });
+    expect(fks('zip_job_entries')).toEqual(
+      expect.arrayContaining([
+        {
+          name: 'zip_job_entries_job_same_photographer_fk',
+          columns: ['job_id', 'photographer_id'],
+          foreignTable: 'zip_jobs',
+          foreignColumns: ['id', 'photographer_id'],
+        },
+        {
+          name: 'zip_job_entries_file_same_photographer_fk',
+          columns: ['file_id', 'photographer_id'],
+          foreignTable: 'files',
+          foreignColumns: ['id', 'owner_id'],
+        },
+      ]),
+    );
     const facesFk = config('faces').foreignKeys.find(
       (fk) => fk.getName() === 'faces_file_same_owner_fk',
     );

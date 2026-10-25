@@ -5,6 +5,12 @@ export const ErrorCode = {
   CONSENT_REQUIRED: 'CONSENT_REQUIRED',
   NO_FACE_DETECTED: 'NO_FACE_DETECTED',
   RATE_LIMITED: 'RATE_LIMITED',
+  /** The request body is over its limit (413). The WAF returns it for face search too. */
+  PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
+  /** The extension or declared MIME type is not on the upload allowlist, or bytes don't match. */
+  UNSUPPORTED_FILE_TYPE: 'UNSUPPORTED_FILE_TYPE',
+  /** The file is over the per-file size limit for its media kind. */
+  FILE_TOO_LARGE: 'FILE_TOO_LARGE',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

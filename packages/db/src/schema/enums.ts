@@ -11,6 +11,7 @@ import {
   SHARE_TARGET_TYPES,
   SUBSCRIPTION_STATUSES,
   USER_ROLES,
+  ZIP_JOB_STATUSES,
 } from '@shotx/shared';
 import { pgEnum } from 'drizzle-orm/pg-core';
 
@@ -28,3 +29,4 @@ export const shareMode = pgEnum('share_mode', SHARE_MODES);
 export const downloadSize = pgEnum('download_size', DOWNLOAD_SIZES);
 export const faceFeedbackVerdict = pgEnum('face_feedback_verdict', FACE_FEEDBACK_VERDICTS);
 export const activityType = pgEnum('activity_type', ACTIVITY_TYPES);
+export const zipJobStatus = pgEnum('zip_job_status', ZIP_JOB_STATUSES);

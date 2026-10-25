@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git worktree *)",
+      "Bash(git merge *)",
+      "Bash(git stash *)",
+      "Edit(/**)"
+    ],
+    "deny": [
+      "Bash(git push)",
+      "Bash(git push *)",
+      "Bash(git reset --hard)",
+      "Bash(git reset --hard *)",
+      "Bash(rm -rf *)",
+      "Bash(rm -fr *)",
+      "Bash(cdk deploy *)",
+      "Bash(npx cdk deploy *)",
+      "Bash(pnpm cdk deploy *)",
+      "Bash(pnpm exec cdk deploy *)",
+      "Bash(pnpm dlx cdk deploy *)",
+      "Bash(* cdk deploy *)",
+      "Bash(aws *)",
+      "Bash(sam *)",
+      "Bash(copilot *)"
+    ]
+  }
+}

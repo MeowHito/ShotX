@@ -1,4 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { ltree } from '@electric-sql/pglite/contrib/ltree';
 import { eq, type SQL, sql } from 'drizzle-orm';
@@ -11,9 +14,10 @@ import { createDb, createPool } from './client';
 import { loadDatabaseConfig, pgPoolConfig } from './config';
 import { folderPath } from './ltree';
 import { MIGRATIONS_FOLDER, migrateDatabase } from './migrate';
+import { zipKey } from '@shotx/shared';
 import * as schema from './schema/index';
 import { SEED_PLANS, seedPlans } from './seed';
-import type { NewDriveFile, NewUser } from './types';
+import type { NewDriveFile, NewShare, NewUser, NewZipJob } from './types';
 
 // Migrations and seed against a real PostgreSQL. Two backends run the same tests:
 // - PGlite: PostgreSQL 18 compiled to WASM, in process, with the ltree extension. Always runs.
@@ -100,6 +104,13 @@ const CHECK = '23514';
 const FOREIGN_KEY = '23503';
 /** ON DELETE RESTRICT reports restrict_violation, not foreign_key_violation. */
 const RESTRICT = '23001';
+
+const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+/** A random 22-character base62 share token. */
+function newToken(): string {
+  return Array.from(randomBytes(22), (b) => BASE62[b % 62]).join('');
+}
 
 function utcMonthPartition(date: Date, offset = 0): string {
   const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + offset, 1));
@@ -456,7 +467,7 @@ for (const backend of backends) {
       const share = {
         ownerId: owner.id,
         targetType: 'folder' as const,
-        targetId: randomUUID(),
+        targetFolderId: (await newFolder(owner.id, null)).id,
         token: '7Hq2LwZ0aXy9KcVb3NmRt1',
       };
       await db().insert(schema.shares).values(share);
@@ -473,6 +484,289 @@ for (const backend of backends) {
       ).toEqual({ code: CHECK, constraint: 'shares_token_base62' });
     });
 
+    it("ties a share's target to its owner and to target_type", async () => {
+      const owner = await newUser();
+      const stranger = await newUser();
+      const file = await newFile(owner.id);
+      const folder = await newFolder(owner.id, null);
+      const strangersFile = await newFile(stranger.id);
+      const strangersFolder = await newFolder(stranger.id, null);
+      const insert = (values: Partial<NewShare>) =>
+        db()
+          .insert(schema.shares)
+          .values({ ownerId: owner.id, targetType: 'file', token: newToken(), ...values })
+          .returning();
+
+      const fileShare = one(await insert({ targetType: 'file', targetFileId: file.id }));
+      expect(fileShare).toMatchObject({ targetFileId: file.id, targetFolderId: null });
+      const folderShare = one(await insert({ targetType: 'folder', targetFolderId: folder.id }));
+      expect(folderShare).toMatchObject({ targetFileId: null, targetFolderId: folder.id });
+
+      // Another photographer's file or folder, even with a valid id.
+      expect(await pgError(insert({ targetType: 'file', targetFileId: strangersFile.id }))).toEqual(
+        {
+          code: FOREIGN_KEY,
+          constraint: 'shares_target_file_same_owner_fk',
+        },
+      );
+      expect(
+        await pgError(insert({ targetType: 'folder', targetFolderId: strangersFolder.id })),
+      ).toEqual({ code: FOREIGN_KEY, constraint: 'shares_target_folder_same_owner_fk' });
+      // A target that doesn't exist.
+      expect(await pgError(insert({ targetType: 'file', targetFileId: randomUUID() }))).toEqual({
+        code: FOREIGN_KEY,
+        constraint: 'shares_target_file_same_owner_fk',
+      });
+      // Moving a share to another owner is rejected too.
+      expect(
+        await pgError(
+          db()
+            .update(schema.shares)
+            .set({ ownerId: stranger.id })
+            .where(eq(schema.shares.id, fileShare.id)),
+        ),
+      ).toEqual({ code: FOREIGN_KEY, constraint: 'shares_target_file_same_owner_fk' });
+
+      // Exactly one target.
+      expect(await pgError(insert({ targetType: 'file' }))).toEqual({
+        code: CHECK,
+        constraint: 'shares_one_target',
+      });
+      expect(
+        await pgError(
+          insert({ targetType: 'file', targetFileId: file.id, targetFolderId: folder.id }),
+        ),
+      ).toEqual({ code: CHECK, constraint: 'shares_one_target' });
+      // The one that matches target_type.
+      expect(await pgError(insert({ targetType: 'file', targetFolderId: folder.id }))).toEqual({
+        code: CHECK,
+        constraint: 'shares_target_matches_type',
+      });
+      expect(await pgError(insert({ targetType: 'folder', targetFileId: file.id }))).toEqual({
+        code: CHECK,
+        constraint: 'shares_target_matches_type',
+      });
+
+      // Purge must remove a target's shares first.
+      expect(await pgError(db().delete(schema.files).where(eq(schema.files.id, file.id)))).toEqual({
+        code: RESTRICT,
+        constraint: 'shares_target_file_same_owner_fk',
+      });
+      expect(
+        await pgError(db().delete(schema.folders).where(eq(schema.folders.id, folder.id))),
+      ).toEqual({ code: RESTRICT, constraint: 'shares_target_folder_same_owner_fk' });
+    });
+
+    describe('zip jobs', () => {
+      const setup = async () => {
+        const owner = await newUser();
+        const viewer = await newUser({ role: 'user' });
+        const folder = await newFolder(owner.id, null);
+        const share = one(
+          await db()
+            .insert(schema.shares)
+            .values({
+              ownerId: owner.id,
+              targetType: 'folder',
+              targetFolderId: folder.id,
+              token: newToken(),
+            })
+            .returning(),
+        );
+        const files = [
+          await newFile(owner.id, { folderId: folder.id }),
+          await newFile(owner.id, { folderId: folder.id }),
+        ];
+        return { owner, viewer, share, files };
+      };
+      const job = (values: NewZipJob) => db().insert(schema.zipJobs).values(values).returning();
+
+      it('stores a job with its entries and finishes it', async () => {
+        const { owner, viewer, share, files } = await setup();
+        const created = one(
+          await job({
+            photographerId: owner.id,
+            shareId: share.id,
+            viewerId: viewer.id,
+            downloadSize: 'web',
+            fileCount: 2,
+            totalBytes: 5 * 1024 ** 3,
+            idempotencyKey: 'f3a1c2d4-7a1e-4bd2-9c55-0b8a3e1f2d6c',
+          }),
+        );
+        expect(created).toMatchObject({ status: 'queued', attempts: 0, resultKey: null });
+        await db()
+          .insert(schema.zipJobEntries)
+          .values(
+            files.map((file, position) => ({
+              jobId: created.id,
+              photographerId: owner.id,
+              position,
+              fileId: file.id,
+              name: position === 0 ? 'IMG_0001.jpg' : 'งานวิ่ง 2026.jpg',
+            })),
+          );
+
+        const finish = (values: Partial<NewZipJob>) =>
+          db().update(schema.zipJobs).set(values).where(eq(schema.zipJobs.id, created.id));
+        expect(await pgError(finish({ status: 'running' }))).toEqual({
+          code: CHECK,
+          constraint: 'zip_jobs_started_when_claimed',
+        });
+        await finish({ status: 'running', startedAt: new Date(), attempts: 1 });
+        expect(
+          await pgError(
+            finish({
+              status: 'ready',
+              resultKey: 'tmp/zips/other.zip',
+              resultBytes: 1,
+              completedAt: new Date(),
+              expiresAt: new Date(),
+            }),
+          ),
+        ).toEqual({ code: CHECK, constraint: 'zip_jobs_result_key_is_zip_key' });
+        expect(await pgError(finish({ status: 'ready', completedAt: new Date() }))).toEqual({
+          code: CHECK,
+          constraint: 'zip_jobs_ready_has_result',
+        });
+        await finish({
+          status: 'ready',
+          resultKey: zipKey(created.id),
+          resultBytes: 5 * 1024 ** 3 + 4096,
+          completedAt: new Date(),
+          expiresAt: new Date(Date.now() + 86_400_000),
+        });
+
+        const entries = await db()
+          .select({ position: schema.zipJobEntries.position, name: schema.zipJobEntries.name })
+          .from(schema.zipJobEntries)
+          .where(eq(schema.zipJobEntries.jobId, created.id))
+          .orderBy(schema.zipJobEntries.position);
+        expect(entries).toEqual([
+          { position: 0, name: 'IMG_0001.jpg' },
+          { position: 1, name: 'งานวิ่ง 2026.jpg' },
+        ]);
+
+        // Deleting the job deletes its entries.
+        await db().delete(schema.zipJobs).where(eq(schema.zipJobs.id, created.id));
+        expect(
+          await db()
+            .select()
+            .from(schema.zipJobEntries)
+            .where(eq(schema.zipJobEntries.jobId, created.id)),
+        ).toEqual([]);
+      });
+
+      it("never mixes photographers: the share and every file must be the job's", async () => {
+        const { owner, viewer, share, files } = await setup();
+        const other = await setup();
+        const base = {
+          shareId: share.id,
+          anonId: randomUUID(),
+          downloadSize: 'original' as const,
+          fileCount: 1,
+          totalBytes: 0,
+        };
+        expect(await pgError(job({ ...base, photographerId: other.owner.id }))).toEqual({
+          code: FOREIGN_KEY,
+          constraint: 'zip_jobs_share_same_owner_fk',
+        });
+        const created = one(await job({ ...base, photographerId: owner.id }));
+        const entry = {
+          jobId: created.id,
+          photographerId: owner.id,
+          position: 0,
+          fileId: files[0]?.id ?? '',
+          name: 'a.jpg',
+        };
+        expect(
+          await pgError(
+            db()
+              .insert(schema.zipJobEntries)
+              .values({ ...entry, fileId: other.files[0]?.id ?? '' }),
+          ),
+        ).toEqual({ code: FOREIGN_KEY, constraint: 'zip_job_entries_file_same_photographer_fk' });
+        expect(
+          await pgError(
+            db()
+              .insert(schema.zipJobEntries)
+              .values({
+                ...entry,
+                photographerId: other.owner.id,
+                fileId: other.files[0]?.id ?? '',
+              }),
+          ),
+        ).toEqual({ code: FOREIGN_KEY, constraint: 'zip_job_entries_job_same_photographer_fk' });
+
+        await db().insert(schema.zipJobEntries).values(entry);
+        for (const [values, constraint] of [
+          [{ position: 1 }, 'zip_job_entries_file_unique'],
+          [{ position: 1, fileId: files[1]?.id ?? '' }, 'zip_job_entries_name_unique'],
+        ] as const) {
+          expect(
+            await pgError(
+              db()
+                .insert(schema.zipJobEntries)
+                .values({ ...entry, ...values }),
+            ),
+          ).toEqual({ code: UNIQUE, constraint });
+        }
+        expect(
+          await pgError(
+            db()
+              .insert(schema.zipJobEntries)
+              .values({ ...entry, position: 1, fileId: files[1]?.id ?? '', name: 'x'.repeat(256) }),
+          ),
+        ).toEqual({ code: CHECK, constraint: 'zip_job_entries_name_valid' });
+
+        // A requester is required, and Idempotency-Key is unique per share.
+        expect(
+          await pgError(job({ ...base, photographerId: owner.id, anonId: undefined })),
+        ).toEqual({ code: CHECK, constraint: 'zip_jobs_viewer_or_anon' });
+        const keyed = {
+          ...base,
+          photographerId: owner.id,
+          viewerId: viewer.id,
+          idempotencyKey: 'k-1',
+        };
+        await job(keyed);
+        expect(await pgError(job(keyed))).toEqual({
+          code: UNIQUE,
+          constraint: 'zip_jobs_idempotency_unique',
+        });
+      });
+
+      it('drops the entries of a purged file so the worker can see the job shrank', async () => {
+        const { owner, share, files } = await setup();
+        const created = one(
+          await job({
+            photographerId: owner.id,
+            shareId: share.id,
+            anonId: randomUUID(),
+            downloadSize: 'web',
+            fileCount: 1,
+            totalBytes: 1,
+          }),
+        );
+        const file = files[0];
+        if (file === undefined) throw new Error('no file');
+        await db().insert(schema.zipJobEntries).values({
+          jobId: created.id,
+          photographerId: owner.id,
+          position: 0,
+          fileId: file.id,
+          name: 'a.jpg',
+        });
+        await db().delete(schema.files).where(eq(schema.files.id, file.id));
+        expect(
+          await db()
+            .select()
+            .from(schema.zipJobEntries)
+            .where(eq(schema.zipJobEntries.jobId, created.id)),
+        ).toEqual([]);
+      });
+    });
+
     it('requires a viewer or an anonymous session for consent', async () => {
       const owner = await newUser();
       const share = one(
@@ -481,7 +775,7 @@ for (const backend of backends) {
           .values({
             ownerId: owner.id,
             targetType: 'file',
-            targetId: randomUUID(),
+            targetFileId: (await newFile(owner.id)).id,
             token: 'Ab3dEf6hIj9kLm2oPq5sTu',
           })
           .returning(),
@@ -567,3 +861,103 @@ for (const backend of backends) {
     });
   });
 }
+
+describe('migration 0001 on a database with 0000 and existing shares (PGlite)', () => {
+  /** A migrations folder with only the first `count` migrations of the journal. */
+  function migrationsUpTo(count: number): string {
+    const dir = mkdtempSync(join(tmpdir(), 'shotx-migrations-'));
+    mkdirSync(join(dir, 'meta'));
+    const journal = JSON.parse(
+      readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8'),
+    ) as { entries: { tag: string }[] };
+    const entries = journal.entries.slice(0, count);
+    writeFileSync(join(dir, 'meta', '_journal.json'), JSON.stringify({ ...journal, entries }));
+    for (const { tag } of entries) {
+      copyFileSync(join(MIGRATIONS_FOLDER, `${tag}.sql`), join(dir, `${tag}.sql`));
+    }
+    return dir;
+  }
+
+  async function at0000() {
+    const client = await PGlite.create({ extensions: { ltree } });
+    const db = drizzlePglite({ client, schema });
+    const folder = migrationsUpTo(1);
+    await migratePglite(db, { migrationsFolder: folder });
+    rmSync(folder, { recursive: true });
+    const exec = (query: SQL) => db.execute(query);
+    const user = async () => {
+      const id = randomUUID();
+      await exec(
+        sql`INSERT INTO users (id, cognito_pool, cognito_sub, role) VALUES (${id}, 'users', ${id}, 'photographer')`,
+      );
+      return id;
+    };
+    const folderOf = async (ownerId: string) => {
+      const id = randomUUID();
+      await exec(
+        sql`INSERT INTO folders (id, owner_id, name, path) VALUES (${id}, ${ownerId}, 'f', ${folderPath(null, id)}::ltree)`,
+      );
+      return id;
+    };
+    const fileOf = async (ownerId: string) => {
+      const id = randomUUID();
+      await exec(
+        sql`INSERT INTO files (id, owner_id, name, mime, size_bytes, s3_key) VALUES (${id}, ${ownerId}, 'a.jpg', 'image/jpeg', 1, ${`originals/${ownerId}/${id}/a.jpg`})`,
+      );
+      return id;
+    };
+    const legacyShare = (ownerId: string, type: 'file' | 'folder', targetId: string) =>
+      exec(
+        sql`INSERT INTO shares (owner_id, target_type, target_id, token) VALUES (${ownerId}, ${type}::share_target_type, ${targetId}, ${newToken()})`,
+      );
+    const migrateAll = () => migratePglite(db, { migrationsFolder: MIGRATIONS_FOLDER });
+    return { client, db, user, folderOf, fileOf, legacyShare, migrateAll };
+  }
+
+  it('moves target_id into target_file_id or target_folder_id', async () => {
+    const t = await at0000();
+    try {
+      const owner = await t.user();
+      const file = await t.fileOf(owner);
+      const folder = await t.folderOf(owner);
+      await t.legacyShare(owner, 'file', file);
+      await t.legacyShare(owner, 'folder', folder);
+      await t.migrateAll();
+      const stored = await t.db
+        .select({
+          targetType: schema.shares.targetType,
+          targetFileId: schema.shares.targetFileId,
+          targetFolderId: schema.shares.targetFolderId,
+        })
+        .from(schema.shares)
+        .orderBy(schema.shares.targetType);
+      expect(stored).toEqual([
+        { targetType: 'file', targetFileId: file, targetFolderId: null },
+        { targetType: 'folder', targetFileId: null, targetFolderId: folder },
+      ]);
+    } finally {
+      await t.client.close();
+    }
+  }, 60_000);
+
+  it("fails instead of keeping a share that points at another owner's folder", async () => {
+    const t = await at0000();
+    try {
+      const owner = await t.user();
+      const stranger = await t.user();
+      await t.legacyShare(owner, 'folder', await t.folderOf(stranger));
+      expect(await pgError(t.migrateAll())).toEqual({
+        code: FOREIGN_KEY,
+        constraint: 'shares_target_folder_same_owner_fk',
+      });
+      // Nothing of 0001 was applied (one transaction).
+      const columns = await rows<{ column_name: string }>(
+        t.db,
+        sql`SELECT column_name FROM information_schema.columns WHERE table_name = 'shares' AND column_name LIKE 'target%' ORDER BY column_name`,
+      );
+      expect(columns.map((c) => c.column_name)).toEqual(['target_id', 'target_type']);
+    } finally {
+      await t.client.close();
+    }
+  }, 60_000);
+});

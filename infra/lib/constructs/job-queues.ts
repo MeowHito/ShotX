@@ -1,3 +1,4 @@
+import { QUEUE_NAMES, type QueueName } from '@shotx/shared';
 import { Duration } from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
@@ -5,7 +6,6 @@ import type * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import type { PlatformConfig } from '../config';
-import { QUEUE_NAMES, type QueueName } from '../constants';
 
 export interface JobQueuesProps {
   readonly config: PlatformConfig;

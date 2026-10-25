@@ -90,6 +90,17 @@ export interface RetryOptions {
   random?: () => number;
 }
 
+/**
+ * Upper bound of the backoff after failed attempt `attempt` (1-based): the sleep is a uniformly
+ * random whole number of milliseconds below it (full jitter).
+ */
+export function retryBackoffCapMs(
+  attempt: number,
+  options: Pick<RetryOptions, 'baseDelayMs' | 'maxDelayMs'>,
+): number {
+  return Math.min(options.maxDelayMs, options.baseDelayMs * 2 ** (attempt - 1));
+}
+
 /** Calls `fn`, retrying retryable errors with full-jitter exponential backoff. */
 export async function withRetry<T>(
   fn: () => Promise<T>,
@@ -103,8 +114,7 @@ export async function withRetry<T>(
       return await fn();
     } catch (error) {
       if (attempt >= options.maxAttempts || !isRetryable(error)) throw error;
-      const cap = Math.min(options.maxDelayMs, options.baseDelayMs * 2 ** (attempt - 1));
-      await sleep(Math.floor(random() * cap));
+      await sleep(Math.floor(random() * retryBackoffCapMs(attempt, options)));
     }
   }
 }

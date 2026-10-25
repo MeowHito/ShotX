@@ -68,8 +68,41 @@ function simulate(options: BucketOptions, seed: number) {
   return { params: bucket.params, arrivals, slots, coldStart };
 }
 
-const RATES = [0.5, 1, 2.5, 5, 7, 50, 1000];
-const BURST_SECONDS = [0.05, 0.3, 1, 2.5, 10];
+/** Values FaceConfig can produce: whole TPS from 1 to 1000, burst seconds in (0, 1]. */
+const CONFIG_TPS = ['1', '5', '7', '50', '1000'];
+const CONFIG_BURST_SECONDS = ['0.05', '0.3', '1'];
+/** The bucket API accepts more: fractional rates and bursts above 1 s. */
+const API_ONLY_RATES = [0.5, 2.5];
+const API_ONLY_BURST_SECONDS = [2.5, 10];
+
+/** Checks the sliding-window guarantee on a simulated schedule. */
+function expectGuarantee(options: BucketOptions) {
+  const { ratePerSecond, burstSeconds } = options;
+  const seed = Math.round(ratePerSecond * 1000 + burstSeconds * 100);
+  const { params, arrivals, slots, coldStart } = simulate(options, seed);
+  expect(slots.length).toBeGreaterThan(coldStart);
+
+  // The guarantee: every sliding second holds at most floor(rate) grants (one for rates below
+  // 1/s), and every window of the bucket holds at most its limit.
+  const sorted = [...slots].sort((a, b) => a - b);
+  expect(maxInWindow(sorted, SECOND_US)).toBeLessThanOrEqual(
+    Math.max(1, Math.floor(ratePerSecond)),
+  );
+  expect(maxInWindow(sorted, params.windowUs)).toBeLessThanOrEqual(params.limit);
+  expect(maxInWindow(sorted, params.burstWindowUs)).toBeLessThanOrEqual(params.burst);
+
+  // Slots stay in arrival order and never come before the arrival.
+  for (let i = 0; i < slots.length; i++) {
+    expect(slots[i]).toBeGreaterThanOrEqual(arrivals[i]!);
+    if (i > 0) expect(slots[i]).toBeGreaterThanOrEqual(slots[i - 1]!);
+  }
+
+  // And the bucket is not slower than it has to be: an idle bucket lets a burst through at once,
+  // and three windows' quota is through within three windows plus one burst window.
+  expect(slots.slice(0, params.burst)).toEqual(new Array<number>(params.burst).fill(0));
+  expect(slots[params.burst]).toBeGreaterThan(0);
+  expect(slots[coldStart - 1]).toBeLessThan(3 * params.windowUs + params.burstWindowUs);
+}
 
 describe('bucketParams', () => {
   it('allows one second of quota per sliding second, in whole microseconds', () => {
@@ -92,6 +125,7 @@ describe('bucketParams', () => {
     });
   });
 
+  // FaceConfig rejects both inputs; the bucket API accepts them.
   it('rounds fractional rates down and caps the burst at one second', () => {
     expect(bucketParams({ ratePerSecond: 2.5, burstSeconds: 10, maxWaitMs: 0 })).toMatchObject({
       limit: 2,
@@ -100,6 +134,7 @@ describe('bucketParams', () => {
     });
   });
 
+  // Bucket API only: FaceConfig's lowest rate is 1/s.
   it('allows one call per 1/rate seconds below one call per second', () => {
     expect(bucketParams({ ratePerSecond: 0.3, burstSeconds: 1, maxWaitMs: 0 })).toMatchObject({
       limit: 1,
@@ -160,36 +195,35 @@ describe('sliding-window guarantee', () => {
     expect(maxInWindow(slots, SECOND_US)).toBe(rateLimit.tps.indexFaces);
   });
 
-  for (const ratePerSecond of RATES) {
-    for (const burstSeconds of BURST_SECONDS) {
-      it(`never exceeds ${ratePerSecond}/s in any 1-second window with a ${burstSeconds} s burst`, () => {
-        const options = { ratePerSecond, burstSeconds, maxWaitMs: Number.POSITIVE_INFINITY };
-        const seed = Math.round(ratePerSecond * 1000 + burstSeconds * 100);
-        const { params, arrivals, slots, coldStart } = simulate(options, seed);
-        expect(slots.length).toBeGreaterThan(coldStart);
-
-        // The guarantee: every sliding second holds at most floor(rate) grants (one for rates
-        // below 1/s), and every window of the bucket holds at most its limit.
-        const sorted = [...slots].sort((a, b) => a - b);
-        expect(maxInWindow(sorted, SECOND_US)).toBeLessThanOrEqual(
-          Math.max(1, Math.floor(ratePerSecond)),
-        );
-        expect(maxInWindow(sorted, params.windowUs)).toBeLessThanOrEqual(params.limit);
-        expect(maxInWindow(sorted, params.burstWindowUs)).toBeLessThanOrEqual(params.burst);
-
-        // Slots stay in arrival order and never come before the arrival.
-        for (let i = 0; i < slots.length; i++) {
-          expect(slots[i]).toBeGreaterThanOrEqual(arrivals[i]!);
-          if (i > 0) expect(slots[i]).toBeGreaterThanOrEqual(slots[i - 1]!);
-        }
-
-        // And the bucket is not slower than it has to be: an idle bucket lets a burst through at
-        // once, and three windows' quota is through within three windows plus one burst window.
-        expect(slots.slice(0, params.burst)).toEqual(new Array<number>(params.burst).fill(0));
-        expect(slots[params.burst]).toBeGreaterThan(0);
-        expect(slots[coldStart - 1]).toBeLessThan(3 * params.windowUs + params.burstWindowUs);
+  // Every combination of config-producible values, read through loadFaceConfig like production.
+  for (const tps of CONFIG_TPS) {
+    for (const burst of CONFIG_BURST_SECONDS) {
+      it(`never exceeds FACE_REKOGNITION_TPS_INDEX_FACES=${tps} in any second with burst ${burst} s`, () => {
+        const { rateLimit } = loadFaceConfig({
+          FACE_REKOGNITION_TPS_INDEX_FACES: tps,
+          FACE_REKOGNITION_BURST_SECONDS: burst,
+        }).rekognition;
+        expectGuarantee({
+          ratePerSecond: rateLimit.tps.indexFaces,
+          burstSeconds: rateLimit.burstSeconds,
+          maxWaitMs: Number.POSITIVE_INFINITY,
+        });
       });
     }
+  }
+
+  // Inputs only direct users of the bucket API can pass: a fractional rate or a burst above 1 s.
+  const allBursts = [...CONFIG_BURST_SECONDS.map(Number), ...API_ONLY_BURST_SECONDS];
+  const apiOnly = [
+    ...API_ONLY_RATES.flatMap((rate) => allBursts.map((burst) => [rate, burst] as const)),
+    ...CONFIG_TPS.map(Number).flatMap((rate) =>
+      API_ONLY_BURST_SECONDS.map((burst) => [rate, burst] as const),
+    ),
+  ];
+  for (const [ratePerSecond, burstSeconds] of apiOnly) {
+    it(`never exceeds ${ratePerSecond}/s in any 1-second window with a ${burstSeconds} s burst`, () => {
+      expectGuarantee({ ratePerSecond, burstSeconds, maxWaitMs: Number.POSITIVE_INFINITY });
+    });
   }
 });
 

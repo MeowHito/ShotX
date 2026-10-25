@@ -1,14 +1,29 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, index, pgTable, real, text, unique, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  check,
+  foreignKey,
+  index,
+  pgTable,
+  real,
+  text,
+  unique,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { users } from './accounts';
 import { createdAt, id, timestamptz } from './columns';
-import { files } from './drive';
+import { files, folders } from './drive';
 import { downloadSize, faceFeedbackVerdict, shareMode, shareTargetType } from './enums';
 
 /**
- * Share links, `/s/{token}`. The token is 128 random bits in base62 (~22 characters). The target
- * is a file or a folder of the owner; the API checks both, since a polymorphic target can't have
- * a foreign key.
+ * Share links, `/s/{token}`. The token is 128 random bits in base62 (~22 characters).
+ *
+ * The target is a file (`target_file_id`) or a folder (`target_folder_id`) of the share's owner:
+ * each has a foreign key on (target, owner_id), so a share can never point at another
+ * photographer's file or folder. Exactly one is set, and `target_type` says which (it is kept,
+ * although derivable, because the data model and API use it; the CHECKs keep the three columns
+ * consistent). Files and folders with shares can't be deleted (ON DELETE RESTRICT): purge removes
+ * their shares (and the shares' consents) first.
  */
 export const shares = pgTable(
   'shares',
@@ -18,7 +33,10 @@ export const shares = pgTable(
       .notNull()
       .references(() => users.id),
     targetType: shareTargetType('target_type').notNull(),
-    targetId: uuid('target_id').notNull(),
+    /** Set exactly when `target_type` is `file`. */
+    targetFileId: uuid('target_file_id'),
+    /** Set exactly when `target_type` is `folder`. */
+    targetFolderId: uuid('target_folder_id'),
     token: text('token').notNull(),
     mode: shareMode('mode').notNull().default('gallery'),
     allowDownload: boolean('allow_download').notNull().default(true),
@@ -32,8 +50,29 @@ export const shares = pgTable(
   },
   (t) => [
     unique('shares_token_unique').on(t.token),
+    unique('shares_id_owner_unique').on(t.id, t.ownerId),
+    foreignKey({
+      name: 'shares_target_file_same_owner_fk',
+      columns: [t.targetFileId, t.ownerId],
+      foreignColumns: [files.id, files.ownerId],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'shares_target_folder_same_owner_fk',
+      columns: [t.targetFolderId, t.ownerId],
+      foreignColumns: [folders.id, folders.ownerId],
+    }).onDelete('restrict'),
     index('shares_owner_idx').on(t.ownerId),
-    index('shares_target_idx').on(t.targetType, t.targetId),
+    index('shares_target_file_idx')
+      .on(t.targetFileId, t.ownerId)
+      .where(sql`${t.targetFileId} IS NOT NULL`),
+    index('shares_target_folder_idx')
+      .on(t.targetFolderId, t.ownerId)
+      .where(sql`${t.targetFolderId} IS NOT NULL`),
+    check('shares_one_target', sql`num_nonnulls(${t.targetFileId}, ${t.targetFolderId}) = 1`),
+    check(
+      'shares_target_matches_type',
+      sql`(${t.targetType} = 'file') = (${t.targetFileId} IS NOT NULL) AND (${t.targetType} = 'folder') = (${t.targetFolderId} IS NOT NULL)`,
+    ),
     check('shares_token_base62', sql`${t.token} ~ '^[0-9A-Za-z]{16,64}$'`),
   ],
 );

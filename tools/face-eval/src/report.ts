@@ -116,7 +116,7 @@ function recommendationTable(input: ReportInput): string {
         rec.index.qualityFilter,
         config.index.qualityFilter,
       ],
-      ['Tiling', 'none yet (requested: `FACE_INDEX_TILING`)', rec.index.tiling, '–'],
+      ['Tiling', '`FACE_INDEX_TILING`', rec.index.tiling, config.index.tiling],
       [
         'Expansion seeds (0 = off)',
         '`FACE_EXPANSION_SEEDS`',

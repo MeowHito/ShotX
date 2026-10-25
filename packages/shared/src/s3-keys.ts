@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { fileExtension } from './media-types';
 
 /**
@@ -68,21 +69,42 @@ const INVISIBLE = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu;
 const RESERVED = /[/\\?#%{}^~`[\]"<>|]/g;
 const utf8 = new TextEncoder();
 
-function truncateUtf8(name: string, maxBytes: number): string {
-  if (utf8.encode(name).length <= maxBytes) return name;
-  const ext = fileExtension(name);
-  const suffix = ext === null ? '' : name.slice(name.lastIndexOf('.'));
-  const budget = maxBytes - utf8.encode(suffix).length;
-  let stem = '';
+/** Length of `value` in UTF-8 bytes (a lone surrogate counts as the 3 bytes of U+FFFD). */
+export function utf8ByteLength(value: string): number {
+  return utf8.encode(value).length;
+}
+
+/** The longest prefix of `value` of at most `maxBytes` UTF-8 bytes. Never splits a code point. */
+function utf8Prefix(value: string, maxBytes: number): string {
+  let prefix = '';
   let used = 0;
-  // Iterates code points, so surrogate pairs are never split.
-  for (const ch of name.slice(0, name.length - suffix.length)) {
-    used += utf8.encode(ch).length;
-    if (used > budget) break;
-    stem += ch;
+  for (const ch of value) {
+    used += utf8ByteLength(ch);
+    if (used > maxBytes) break;
+    prefix += ch;
   }
-  stem = stem.replace(/[.\s]+$/u, '');
-  return (stem === '' ? 'file' : stem) + suffix;
+  return prefix;
+}
+
+/** Fallback stem when nothing is left of a name. */
+const EMPTY_NAME = 'file';
+
+/**
+ * Truncates `name` to at most `maxBytes` UTF-8 bytes. The extension is kept when it fits with at
+ * least one byte of stem; otherwise the whole name is truncated as if it had none, so the result
+ * is never longer than `maxBytes`, however long the extension.
+ */
+function truncateUtf8(name: string, maxBytes: number): string {
+  if (utf8ByteLength(name) <= maxBytes) return name;
+  const suffix = fileExtension(name) === null ? '' : name.slice(name.lastIndexOf('.'));
+  const keepSuffix = suffix !== '' && utf8ByteLength(suffix) + EMPTY_NAME.length <= maxBytes;
+  const ext = keepSuffix ? suffix : '';
+  const stem = utf8Prefix(name.slice(0, name.length - ext.length), maxBytes - utf8ByteLength(ext))
+    // Trailing dots and spaces are not allowed (see sanitizeOriginalName).
+    .replace(/[.\s]+$/u, '');
+  const result = (stem === '' ? EMPTY_NAME : stem) + ext;
+  // Unreachable with maxBytes >= 4; kept so the byte limit holds by construction.
+  return utf8ByteLength(result) <= maxBytes ? result : utf8Prefix(result, maxBytes);
 }
 
 /**
@@ -106,13 +128,40 @@ export function sanitizeOriginalName(raw: string): string {
     .replace(/\.{2,}/g, '.')
     .replace(/^[.\s]+/u, '')
     .replace(/[.\s]+$/u, '');
-  return name === '' ? 'file' : truncateUtf8(name, ORIGINAL_NAME_MAX_BYTES);
+  return name === '' ? EMPTY_NAME : truncateUtf8(name, ORIGINAL_NAME_MAX_BYTES);
 }
 
 /** True when `name` is already in the form {@link sanitizeOriginalName} produces. */
 export function isSafeOriginalName(name: string): boolean {
   return name !== '' && sanitizeOriginalName(name) === name;
 }
+
+// A lone surrogate can't be stored as UTF-8 (PostgreSQL rejects it).
+const LONE_SURROGATE = /\p{Cs}/u;
+
+/**
+ * True when a client-supplied file name is acceptable as input: 1 to
+ * {@link ORIGINAL_NAME_MAX_BYTES} UTF-8 bytes and well-formed UTF-16 (no lone surrogates). It is
+ * stored as the display name (`files.name`); the key segment is still built with
+ * {@link sanitizeOriginalName}. API input validation uses {@link originalNameSchema}.
+ */
+export function isValidOriginalNameInput(name: string): boolean {
+  return (
+    name !== '' && !LONE_SURROGATE.test(name) && utf8ByteLength(name) <= ORIGINAL_NAME_MAX_BYTES
+  );
+}
+
+/**
+ * zod schema for a file name sent by a client (e.g. `POST /uploads/init`, rename): rejects empty
+ * names, names over 255 UTF-8 bytes and lone surrogates.
+ */
+export const originalNameSchema = z
+  .string()
+  .min(1, { error: 'must not be empty' })
+  .refine((name) => !LONE_SURROGATE.test(name), { error: 'must be well-formed Unicode' })
+  .refine((name) => utf8ByteLength(name) <= ORIGINAL_NAME_MAX_BYTES, {
+    error: `must be at most ${ORIGINAL_NAME_MAX_BYTES} UTF-8 bytes`,
+  });
 
 export interface FileKeyParts {
   photographerId: string;

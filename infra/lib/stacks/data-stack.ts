@@ -15,6 +15,20 @@ export interface DataStackProps extends StackProps {
 export const REDIS_DISABLED_ACCESS_STRING = 'off -@all';
 
 /**
+ * Redis parameters that are decisions, not tunables (ADR 0005): never evict. Rate-limit windows,
+ * the Rekognition token buckets and face_only grants must not silently disappear; with
+ * noeviction a full Redis rejects writes instead, and the memory alarm warns before that.
+ */
+export const REDIS_PARAMETERS = { 'maxmemory-policy': 'noeviction' } as const;
+
+/** ElastiCache parameter group family for an engine and version, e.g. redis + 7.1 -> redis7. */
+export function redisParameterGroupFamily(engine: string, engineVersion: string): string {
+  const major = /^(\d+)(\.|$)/.exec(engineVersion)?.[1];
+  if (major === undefined) throw new Error(`Unsupported Redis engine version ${engineVersion}`);
+  return `${engine}${major}`;
+}
+
+/**
  * PostgreSQL on RDS (Multi-AZ, encrypted, TLS enforced) and ElastiCache Redis (Multi-AZ with
  * automatic failover, TLS in transit, encrypted at rest), both in the isolated data subnets.
  * Ingress is opened per service in the App stack.
@@ -24,7 +38,10 @@ export const REDIS_DISABLED_ACCESS_STRING = 'off -@all';
  * that is switched off, so connections that skip AUTH can't run any command. RBAC rather than a
  * single AUTH token because the token is a shared superuser credential that can't be scoped or
  * rotated per client, and RBAC is what ElastiCache supports going forward (it requires TLS,
- * which is on). Passwords reach the template only as Secrets Manager dynamic references.
+ * which is on). Passwords reach the template only as Secrets Manager dynamic references. The app
+ * user's access string denies @dangerous (FLUSHALL, KEYS, CONFIG, ...), and a custom parameter
+ * group sets maxmemory-policy noeviction (ADR 0005); the memory alarm lives in the App stack,
+ * next to the alarm topic.
  *
  * The `ltree` extension is created by the database migrations (packages/db), not here.
  */
@@ -40,6 +57,8 @@ export class DataStack extends Stack {
   readonly redisPort: number;
   /** JSON `{ username, password }` of the Redis user api and worker authenticate as. */
   readonly redisSecret: secretsmanager.ISecret;
+  /** Replication group id; its nodes are `<id>-001` ... `<id>-00<numCacheClusters>`. */
+  readonly redisReplicationGroupId: string;
 
   constructor(scope: Construct, id: string, props: DataStackProps) {
     super(scope, id, props);
@@ -172,6 +191,12 @@ export class DataStack extends Stack {
     });
     userGroup.node.addDependency(defaultUser, appUser);
 
+    const parameterGroup = new elasticache.CfnParameterGroup(this, 'RedisParams', {
+      cacheParameterGroupFamily: redisParameterGroupFamily(redis.engine, redis.engineVersion),
+      description: `${prefix} Redis: noeviction (ADR 0005)`,
+      properties: { ...REDIS_PARAMETERS },
+    });
+
     const replicationGroup = new elasticache.CfnReplicationGroup(this, 'Redis', {
       replicationGroupDescription: `${prefix} cache, rate limits and short-lived grants`,
       engine: redis.engine,
@@ -184,6 +209,7 @@ export class DataStack extends Stack {
       atRestEncryptionEnabled: true,
       userGroupIds: [userGroup.userGroupId],
       port: redis.port,
+      cacheParameterGroupName: parameterGroup.ref,
       cacheSubnetGroupName: subnetGroup.ref,
       securityGroupIds: [this.redisSecurityGroup.securityGroupId],
       snapshotRetentionLimit: redis.snapshotRetentionDays,
@@ -194,6 +220,7 @@ export class DataStack extends Stack {
     this.redisHost = replicationGroup.attrPrimaryEndPointAddress;
     this.redisPort = redis.port;
     this.redisSecret = appSecret;
+    this.redisReplicationGroupId = replicationGroup.ref;
 
     new CfnOutput(this, 'DatabaseHost', { value: this.databaseHost });
     new CfnOutput(this, 'DatabaseSecretArn', { value: this.databaseSecret.secretArn });

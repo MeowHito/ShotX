@@ -2,15 +2,15 @@
 
 Everything runs in `ap-southeast-1`, except what CloudFront requires in `us-east-1`.
 
-| Stack                       | Region         | Contents                                                                                                                                                                                             |
-| --------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ShotX-<stage>-Edge`        | us-east-1      | CloudFront-scoped WAF web ACLs (main, admin) with logging; ACM certificates for both domains                                                                                                         |
-| `ShotX-<stage>-Network`     | ap-southeast-1 | VPC: public (NAT), app (ECS), data (RDS, Redis) subnets; S3 gateway endpoint; optional interface endpoints                                                                                           |
-| `ShotX-<stage>-Registry`    | ap-southeast-1 | ECR repositories `shotx-<stage>/{web,admin,api,worker}` (immutable tags, scan on push)                                                                                                               |
-| `ShotX-<stage>-Data`        | ap-southeast-1 | RDS PostgreSQL Multi-AZ (TLS forced); ElastiCache Redis Multi-AZ (TLS, RBAC auth with the default user off, encrypted)                                                                               |
-| `ShotX-<stage>-Auth`        | ap-southeast-1 | Cognito users pool (email, Google, LINE OIDC, optional TOTP) and admins pool (TOTP MFA required)                                                                                                     |
-| `ShotX-<stage>-App`         | ap-southeast-1 | Private media bucket, CloudFront log bucket, SQS media/faces/zip/jobs (+ DLQs, alarms), ECS Fargate web/admin/api/worker, internal ALB, CloudFront main + admin distributions, EventBridge Scheduler |
-| `ShotX-<stage>-PricingPlan` | us-east-1      | `AWS::PricingPlanManager::Subscription`: CloudFront flat-rate plan for the main distribution                                                                                                         |
+| Stack                       | Region         | Contents                                                                                                                                                                                                                 |
+| --------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ShotX-<stage>-Edge`        | us-east-1      | CloudFront-scoped WAF web ACLs (main, admin) with logging; ACM certificates for both domains                                                                                                                             |
+| `ShotX-<stage>-Network`     | ap-southeast-1 | VPC: public (NAT), app (ECS), data (RDS, Redis) subnets; S3 gateway endpoint; optional interface endpoints                                                                                                               |
+| `ShotX-<stage>-Registry`    | ap-southeast-1 | ECR repositories `shotx-<stage>/{web,admin,api,worker}` (immutable tags, scan on push)                                                                                                                                   |
+| `ShotX-<stage>-Data`        | ap-southeast-1 | RDS PostgreSQL Multi-AZ (TLS forced); ElastiCache Redis Multi-AZ (TLS, RBAC auth with the default user off and `-@dangerous`, `noeviction`, encrypted)                                                                   |
+| `ShotX-<stage>-Auth`        | ap-southeast-1 | Cognito users pool (email, Google, LINE OIDC, optional TOTP) and admins pool (TOTP MFA required)                                                                                                                         |
+| `ShotX-<stage>-App`         | ap-southeast-1 | Private media bucket, CloudFront log bucket, SQS media/faces/zip/jobs (+ DLQs, alarms), Redis memory alarm, ECS Fargate web/admin/api/worker, internal ALB, CloudFront main + admin distributions, EventBridge Scheduler |
+| `ShotX-<stage>-PricingPlan` | us-east-1      | `AWS::PricingPlanManager::Subscription`: CloudFront flat-rate plan for the main distribution                                                                                                                             |
 
 Cross-stack references use `Fn::GetStackOutput` (CDK's recommended "weak" references), including
 the cross-region ones. CDK still orders deployments by dependency.
@@ -27,7 +27,10 @@ Deployment is not automated yet. Never deploy from a laptop with placeholder val
 ## Configuration
 
 Every tunable is in the `shotx` object in `cdk.json` (validated by `lib/config.ts`). Fixed platform
-facts (regions, path contracts, S3 prefixes, job types) are in `lib/constants.ts`.
+facts (regions, path contracts) are in `lib/constants.ts`. Contracts shared with the apps (queue
+names, scheduled job types, S3 prefixes, queue env var names, SQS's 12 h visibility cap,
+Rekognition's inline image limit) are imported from `@shotx/shared`, never copied;
+`test/repo.test.ts` fails if a copy appears in `lib/`.
 
 Override any value from the CLI with `-c shotx:<dotted.path>=<value>`. JSON arrays and objects are
 accepted:
@@ -61,6 +64,12 @@ Placeholders to replace before the first deploy: `account`, `domain.*`, `cdn.sig
 
 Extra variables go in `services.env.{common,backend,web,admin,api,worker}`. Derived variables
 (the last row, and the queue visibility timeouts) are set after them and can't be overridden.
+`services.env.backend` sets the `FACE_REKOGNITION_TPS_*` placeholders; `FACE_ORPHAN_GRACE_MS`
+keeps its 3 h code default, which synth checks (see "Queue visibility and heartbeats").
+
+`test/env-contract.test.ts` checks every variable above (and every one in `.env.example`) against
+the `@shotx/shared` loaders: each must be read by a loader (or by node-postgres, Node or the AWS
+SDK), and each service's loaders must accept what the service gets.
 
 Redis clients build their connection from three variables, for example with ioredis:
 `new Redis(REDIS_URL, { username: REDIS_USERNAME, password: REDIS_PASSWORD })`. `rediss://`
@@ -88,11 +97,67 @@ else gets a 404. The API therefore serves all routes under `/api` (for example
 `/api/health` (api).
 
 `/media/*` responses carry their own headers policy (`cdn.media.responseHeaders`):
-`X-Content-Type-Options: nosniff`, HSTS, `Content-Security-Policy: default-src 'none'; sandbox`
-and `Referrer-Policy: no-referrer`. Uploads are served from the main origin, so an object with an
-HTML or SVG content type must never run as a page there. CSP applies to documents only, so
-`<img>`, `<video>`, the PhotoSwipe lightbox and `response-content-disposition` downloads work as
-before.
+`X-Content-Type-Options: nosniff`, HSTS,
+`Content-Security-Policy: default-src 'none'; media-src 'self'; sandbox`,
+`Referrer-Policy: no-referrer`, and `Access-Control-Allow-Origin: *` (GET/HEAD, never with
+credentials). Uploads are served from the main origin, so an object with an HTML or SVG content
+type must never run as a page there. CSP doesn't apply to `<img>`/`<video>` in the app's own
+pages, the PhotoSwipe lightbox or `response-content-disposition` downloads; it does apply when a
+media URL is opened in its own tab (next section).
+
+### Media opened in a new tab
+
+Opening a media URL directly (long-press "open in new tab", a plain link to a `preview.mp4`)
+makes the browser wrap it in a synthetic media document that carries the response's CSP.
+
+Verified offline in **Google Chrome 156** (headless, macOS, driven over the DevTools protocol
+against a local server sending the `/media/*` headers; Chromium-based browsers, including
+Android's LINE in-app browser, use the same engine):
+
+| `/media/*` policy                                                     | MP4 opened in a tab                                                                                 | JPEG  | HTML/SVG upload                                             |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ----- | ----------------------------------------------------------- |
+| `default-src 'none'; sandbox` (previous)                              | **broken**: the `<video>` re-fetches the URL and CSP blocks it (`media-src` falls back to `'none'`) | shows | scripts blocked                                             |
+| `default-src 'none'; media-src 'self'; sandbox`, no CORS              | **broken**: the sandboxed document's origin is opaque and the fetch fails CORS (`Origin: null`)     | shows | scripts blocked                                             |
+| `default-src 'none'; media-src 'self'; sandbox` + `ACAO: *` (current) | plays after a tap (the sandbox flag blocks autoplay)                                                | shows | scripts blocked                                             |
+| `... sandbox allow-same-origin`, no CORS (rejected)                   | plays after a tap                                                                                   | shows | scripts blocked, but the document gets the real main origin |
+
+JPEGs always show, because the image document draws the response it already has and makes no
+second fetch. The inline styles Chrome uses to center the image are blocked, so it sits unstyled
+in the top-left corner. That is cosmetic; `style-src 'unsafe-inline'` would fix it but lets
+uploaded HTML style itself, so it is left out.
+
+Why the current policy: it keeps every protection of the previous one. A bare `sandbox` means no
+scripts, no forms, no popups and an opaque origin with no cookies. `default-src 'none'` still
+blocks every other subresource. The policy adds the minimum the media document needs: it may load
+its own media (`'self'` matches the response URL, even in a sandboxed document), and S3 objects
+may be read cross-origin without credentials. `Access-Control-Allow-Origin: *` exposes nothing
+new: media URLs are bearer URLs (CloudFront signatures in the query string, no cookies), so any
+page that knows one can already download it. A per-content-type policy (sandbox only for
+non-media types) is not possible in a response headers policy. It would need a viewer-response
+CloudFront Function on every media request, which costs more and adds a code path for a case
+that this policy already covers.
+
+**Not verified offline**, because neither browser could be automated on the build machine
+(Safari's remote automation is off, Firefox isn't installed):
+
+- **Safari / iOS / LINE on iOS (WebKit)**: WebKit's media document also re-fetches the URL from a
+  `<video>`, so the previous policy very likely broke playback there too. Whether WebKit matches
+  `'self'` in a sandboxed document the way Chrome does is unverified.
+- **Firefox**: its video document plays the response it already has, so playback probably worked
+  even with the previous policy, and works with this one. Autoplay is blocked by the sandbox flag.
+
+How to check a real browser (staging, or locally with any server that sends the `/media/*`
+headers):
+
+1. Get a signed URL of a `derived/.../preview.mp4` and a `web.jpg` from the API.
+2. `curl -sI "<url>" -H 'Origin: null'` must show the CSP above,
+   `access-control-allow-origin: *`, and no `access-control-allow-credentials`.
+3. Open each URL in a new tab in Safari (macOS and iOS), Firefox, Chrome and the LINE in-app
+   browser. Expected: the video shows its duration and plays when tapped, the image shows, and the
+   console (Safari: Develop menu, Web Inspector) has no CSP or CORS errors for the media URL.
+4. XSS side, locally only (never upload HTML to the bucket): serve an HTML file containing
+   `<script>document.title='ran'</script>` with the same headers. The title must stay unchanged,
+   and the console reports the script blocked by the sandbox.
 
 ## WAF
 
@@ -127,6 +192,92 @@ before.
 - **Admin distribution.** It forwards `/api/*` to the same API, so its web ACL blocks the public
   share paths (`/s/*`, `/api/s/*`); otherwise face search would be reachable there without the
   main domain's face-search limits.
+
+## Queue visibility and heartbeats
+
+The worker consumes every queue the same way. When it receives a message it starts a heartbeat:
+every third of the queue's visibility timeout (`<QUEUE>_QUEUE_VISIBILITY_TIMEOUT_SECONDS`) it
+calls `ChangeMessageVisibility` to push the message's visibility out by one full timeout again,
+until the job ends. So the timeout no longer has to cover the longest job. It only decides how
+soon a crashed worker's message comes back, and one failed heartbeat never exposes a running job.
+
+| queue   | timeout | heartbeat | max receives | retention | why this timeout                                                                                                                                  |
+| ------- | ------: | --------: | -----------: | --------: | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `media` |   300 s |     100 s |            5 |    4 days | Image derivatives take seconds. A crash delays "ready" by at most 5 min. Video transcodes run longer and rely on the heartbeat (was 900 s).       |
+| `faces` |   900 s |     300 s |            5 |    4 days | 5 × 900 s covers the 3960 s worst case with 540 s to spare (600 s would need 7 receives). A crash re-queues the photo within 15 min (was 3600 s). |
+| `zip`   |   300 s |     100 s |            3 |     1 day | Someone is polling for the zip. A store-only zip of ≤ 2 GiB streams in about a minute, and a crash retries within 5 min (was 900 s).              |
+| `jobs`  |   900 s |     300 s |            3 |     1 day | Batch jobs heartbeat. A crashed hourly rollup reruns within 15 min, well before the next run (was 3600 s).                                        |
+
+Every timeout must be at least 60 s (faces: 180 s), so heartbeats are at least 20 s apart.
+
+**The faces job worst case** is computed by `lib/face-limits.ts` from the worker's `FACE_*`
+values with `loadFaceConfig`, plus `queues.faces.jobBudget`. At the defaults:
+
+```text
+per call = MAX_ATTEMPTS × (MAX_WAIT_MS + REQUEST_TIMEOUT_MS) + (MAX_ATTEMPTS − 1) × RETRY_MAX_MS
+         = 8 × (30 s + 10 s) + 7 × 10 s                                      = 390 s
+calls    = collectionCallsPerJob (2) + (1 + FACE_TILE_GRID²) IndexFaces (5)
+           + 3 DeleteFaces (previous faces on re-index, cut-off tile faces, rollback)  = 10
+worst    = 10 × 390 s + processingSeconds (60 s)                             = 3960 s (66 min)
+```
+
+Synth fails unless:
+
+1. **worst ≤ 12 h** (43,200 s). SQS caps a message's total invisibility at 12 h from the
+   receive, and `ChangeMessageVisibility` can't extend past it.
+2. **maxReceiveCount × timeout ≥ worst** (5 × 900 s = 4500 s ≥ 3960 s). Even if heartbeats
+   stop, a job that is merely slow is not moved to the DLQ by redeliveries alone. Each
+   redelivery starts a duplicate attempt; attempts are idempotent (ADR 0004).
+3. **maxReceiveCount × (worst + timeout) ≤ retention** (5 × 4860 s = 6.75 h ≤ 4 days). A message
+   that fails every attempt reaches the DLQ before SQS deletes it.
+4. **FACE_ORPHAN_GRACE_MS ≥ 2 × worst** (7,920,000 ms). An indexing attempt must commit its
+   `faces` rows within half the grace (packages/face `recordFacesDeadline`), or
+   `faces.reconcile.daily` could delete faces that are about to be recorded. The code default is
+   3 h (10,800,000 ms); an explicit 1 h would fail synth with the default retry budget.
+
+The worker must:
+
+- set its Rekognition SDK request timeout to `FACE_REKOGNITION_REQUEST_TIMEOUT_MS` (10 s) with
+  SDK retries off (`maxAttempts: 1`, `withRetry` does the retrying), or bound 1 doesn't hold;
+- heartbeat **every** message it has received and not yet finished, including messages from a
+  batch receive that are still waiting their turn, with
+  `VisibilityTimeout = min(timeout, 43200 − seconds since receive)` (SQS rejects longer
+  extensions);
+- stop the job when a heartbeat fails with an invalid receipt handle: the message has been
+  redelivered and another attempt owns it;
+- on SIGTERM (deploys, scale-in) finish within ECS's stop timeout or set the visibility of
+  unfinished messages to 0 so they're retried at once;
+- for media, zip and jobs, whose worst case has no bound in config (video length, zip size, batch
+  size), keep each message under 12 h by splitting work into batches;
+- for `faces.reconcile.daily`, not hold the jobs message through the grace period: persist the
+  `OrphanScan` and delete its orphans in a later run, at least `FACE_ORPHAN_GRACE_MS` after the
+  listing (the daily cadence gives 24 h).
+
+The worker role has `sqs:ChangeMessageVisibility` on every queue it consumes.
+
+## Redis
+
+ElastiCache Redis 7.1, Multi-AZ, TLS, RBAC. The default user is off. api and worker connect as
+`redis.username` with the access string `on ~* &* +@all -@dangerous`:
+
+- **Allowed:** every command outside `@dangerous`. That covers the read, write, keyspace, string,
+  list, hash, set, sorted-set, bitmap, HyperLogLog, geo and stream commands, plus pub/sub,
+  transactions, scripting and connection commands. Among them are EVAL/EVALSHA/SCRIPT LOAD (TIME
+  inside scripts), LINDEX/LPUSH/LTRIM/PEXPIRE for the rate limiters, GET/SET/EXPIRE/DEL for
+  grants, PING and CLIENT SETNAME.
+- **Denied (`@dangerous`):** FLUSHALL, FLUSHDB, KEYS, CONFIG, DEBUG, SHUTDOWN, MONITOR, INFO,
+  SWAPDB, MIGRATE, RESTORE, REPLICAOF, ACL SETUSER, CLIENT KILL/LIST, SAVE, BGSAVE and the like,
+  also when called from a script. Use SCAN, not KEYS. INFO is denied, so ioredis's ready check
+  logs a NOPERM warning and is skipped; set `enableReadyCheck: false`.
+- `test/redis-acl.integration.test.ts` checks both lists against a real Redis 7 (`REDIS_URL`; CI
+  runs it, locally `docker compose up redis`). It uses `ACL DRYRUN` for destructive commands and
+  runs the rate limiter's script as the restricted user.
+
+A custom parameter group (family `redis7`) sets `maxmemory-policy noeviction` (ADR 0005): when
+memory is full, writes fail instead of rate-limit windows or face_only grants disappearing. The
+alarm `shotx-<stage>-redis-memory` fires when the fullest node's `DatabaseMemoryUsagePercentage`
+(used_memory / maxmemory) stays above `redis.alarms.memoryUsagePercentThreshold` (75%) for
+`redis.alarms.evaluationPeriods` minutes. It notifies the alarm topic. Every key must have a TTL.
 
 ## Before the first deploy
 
@@ -164,33 +315,11 @@ before.
 ## Before launch
 
 - **Rekognition quotas.** Read each operation's TPS quota (IndexFaces, SearchFacesByImage,
-  SearchFaces, DeleteFaces, collection operations) in Service Quotas for ap-southeast-1, request
-  increases, and set `FACE_REKOGNITION_TPS_*` in `services.env.backend` to ~80% of each quota.
+  SearchFaces, DeleteFaces, ListFaces, collection operations) in Service Quotas for
+  ap-southeast-1, request increases, and set `FACE_REKOGNITION_TPS_*` in `services.env.backend` to
+  ~80% of each quota.
   Then load-test face search for the post-event spike. Keep `services.worker.maxCapacity` in line
   with the IndexFaces quota: extra workers only wait for rate-limit tokens.
-- **faces queue visibility.** `queues.faces.visibilityTimeoutSeconds` (3600 s) must cover the
-  worst case of one faces job (one photo). `lib/face-limits.ts` computes it from the worker's
-  FACE\_\* values with `loadFaceConfig`, and synth fails if the timeout is shorter. The inputs
-  that FaceConfig doesn't have are in `queues.faces.visibilityFloor`. At the defaults:
-
-  ```text
-  per call = MAX_ATTEMPTS × (MAX_WAIT_MS + rekognitionCallTimeoutSeconds)
-             + (MAX_ATTEMPTS − 1) × RETRY_MAX_MS
-           = 8 × (30 s + 10 s) + 7 × 10 s                              = 390 s
-  calls    = collectionCallsPerJob + (1 + FACE_TILE_GRID²) IndexFaces
-             + 2 DeleteFaces (cut-off tile faces, then the rollback)
-           = 2 + 5 + 2                                                 = 9
-  floor    = 9 × 390 s + processingSeconds (60 s)                      = 3570 s
-  ```
-
-  The worker must:
-  - set its Rekognition SDK request timeout to `rekognitionCallTimeoutSeconds` (10 s), or the
-    bound doesn't hold;
-  - heartbeat long jobs with `ChangeMessageVisibility` (for example every third of
-    `FACES_QUEUE_VISIBILITY_TIMEOUT_SECONDS`, extending to the full timeout) and stop when the
-    job ends. SQS caps a message at 12 h of total invisibility. The worker role already has
-    `sqs:ChangeMessageVisibility` on every queue it consumes.
-
 - **Alarms.** Set `alarms.email` or subscribe the `AlarmTopicArn` topic to your paging tool.
 - **WAF thresholds.** Venues share IPs (carrier NAT, venue Wi-Fi). Tune `waf.*RateLimit` with
   real traffic; the CAPTCHA tiers trigger before the block tiers.

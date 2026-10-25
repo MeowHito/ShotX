@@ -1,5 +1,12 @@
-import { type FaceConfig, loadFaceConfig } from '@shotx/shared';
-import { FACES_MIN_VISIBILITY_TIMEOUT_SECONDS, REKOGNITION_LIMITS } from './constants';
+import {
+  type FaceConfig,
+  loadFaceConfig,
+  REKOGNITION_INLINE_IMAGE_MAX_BYTES,
+  SQS_MAX_VISIBILITY_TIMEOUT_SECONDS,
+} from '@shotx/shared';
+import { REKOGNITION_DELETE_FACES_BATCH } from './constants';
+
+const SECONDS_PER_DAY = 86_400;
 
 /**
  * Limits that infra derives from the face configuration in packages/shared. They're computed
@@ -31,10 +38,8 @@ export function serviceFaceConfig(env: ServiceEnvGroups, service: 'api' | 'worke
 
 // --- faces queue -------------------------------------------------------------------------------
 
-/** Inputs to the faces job budget that FaceConfig doesn't cover (`queues.faces.visibilityFloor`). */
+/** Inputs to the faces job worst case that FaceConfig doesn't cover (`queues.faces.jobBudget`). */
 export interface FacesJobBudget {
-  /** Upper bound on one Rekognition request; the worker must set its SDK request timeout to it. */
-  readonly rekognitionCallTimeoutSeconds: number;
   /** CreateCollection, then DescribeCollection when the collection already exists. */
   readonly collectionCallsPerJob: number;
   /** Decode, tile encodes, tmp/index/ puts and deletes, local detector and DB writes. */
@@ -47,12 +52,12 @@ export interface FacesJobWorstCase {
   readonly collectionCalls: number;
   /** The full image plus FACE_TILE_GRID² tiles. */
   readonly indexFacesCalls: number;
-  /** Cut-off tile faces, then (if that fails) the rollback of every face this attempt indexed. */
+  /** Previous faces (re-index), cut-off tile faces, then the rollback if the attempt fails. */
   readonly deleteFacesCalls: number;
   readonly totalCalls: number;
   readonly processingSeconds: number;
-  /** Minimum visibility timeout for the faces queue. */
-  readonly floorSeconds: number;
+  /** Longest one faces message (one photo, one attempt) can keep a worker busy. */
+  readonly seconds: number;
 }
 
 /**
@@ -60,26 +65,26 @@ export interface FacesJobWorstCase {
  *
  * - Every Rekognition call goes through `withRetry` with the background profile. Each of the
  *   FACE_REKOGNITION_MAX_ATTEMPTS attempts waits up to FACE_REKOGNITION_MAX_WAIT_MS for a
- *   rate-limit token and then makes the request (up to `rekognitionCallTimeoutSeconds`). Between
- *   attempts it backs off up to FACE_REKOGNITION_RETRY_MAX_MS.
- * - `indexPhoto` makes 1 + FACE_TILE_GRID² IndexFaces calls, one DeleteFaces call for faces cut
- *   off at tile edges, and on failure one more DeleteFaces call to roll back. Each delete covers at
- *   most (1 + FACE_TILE_GRID²) × FACE_INDEX_MAX_FACES ids, in batches of 4096.
+ *   rate-limit token and then makes the request, which the SDK aborts after
+ *   FACE_REKOGNITION_REQUEST_TIMEOUT_MS. Between attempts it backs off up to
+ *   FACE_REKOGNITION_RETRY_MAX_MS.
+ * - `indexPhoto` makes 1 + FACE_TILE_GRID² IndexFaces calls and up to three DeleteFaces calls:
+ *   the file's previous faces when it is re-indexed, the faces cut off at tile edges, and the
+ *   rollback of every face the attempt indexed when it fails. Each covers at most
+ *   (1 + FACE_TILE_GRID²) × FACE_INDEX_MAX_FACES ids, in batches of 4096.
  * - The job may first make sure the collection exists (`collectionCallsPerJob`).
  */
 export function facesJobWorstCase(face: FaceConfig, budget: FacesJobBudget): FacesJobWorstCase {
   const { maxAttempts, maxWaitMs, retryMaxMs } = face.rekognition.background;
   const perCallMs =
-    maxAttempts * (maxWaitMs + budget.rekognitionCallTimeoutSeconds * 1000) +
-    (maxAttempts - 1) * retryMaxMs;
+    maxAttempts * (maxWaitMs + face.rekognition.requestTimeoutMs) + (maxAttempts - 1) * retryMaxMs;
   const grid = face.index.tileGrid;
   const indexFacesCalls = 1 + grid * grid;
   const deleteBatches = Math.ceil(
-    (indexFacesCalls * face.index.maxFaces) / REKOGNITION_LIMITS.deleteFacesBatch,
+    (indexFacesCalls * face.index.maxFaces) / REKOGNITION_DELETE_FACES_BATCH,
   );
-  const deleteFacesCalls = 2 * deleteBatches;
+  const deleteFacesCalls = 3 * deleteBatches;
   const totalCalls = budget.collectionCallsPerJob + indexFacesCalls + deleteFacesCalls;
-  const seconds = Math.ceil((totalCalls * perCallMs) / 1000 + budget.processingSeconds);
   return {
     perCallSeconds: perCallMs / 1000,
     collectionCalls: budget.collectionCallsPerJob,
@@ -87,8 +92,77 @@ export function facesJobWorstCase(face: FaceConfig, budget: FacesJobBudget): Fac
     deleteFacesCalls,
     totalCalls,
     processingSeconds: budget.processingSeconds,
-    floorSeconds: Math.max(FACES_MIN_VISIBILITY_TIMEOUT_SECONDS, seconds),
+    seconds: Math.ceil((totalCalls * perCallMs) / 1000 + budget.processingSeconds),
   };
+}
+
+/** One problem with a queue's visibility settings, as a validation message. */
+export interface QueueTimingIssue {
+  readonly path: (string | number)[];
+  readonly message: string;
+}
+
+export interface HeartbeatQueueSettings {
+  readonly visibilityTimeoutSeconds: number;
+  readonly maxReceiveCount: number;
+  readonly retentionDays: number;
+}
+
+/**
+ * Checks a queue whose worst-case job is longer than its visibility timeout. The worker keeps the
+ * message invisible with ChangeMessageVisibility every third of the timeout, so the timeout only
+ * decides how fast a crashed worker's message comes back. The job itself must still fit:
+ *
+ * 1. SQS caps a message's total invisibility at 12 hours from the receive; heartbeats can't
+ *    extend past it.
+ * 2. maxReceiveCount × timeout covers the worst case, so a job that is merely slow is never moved
+ *    to the dead-letter queue by redeliveries alone, even if heartbeats stop.
+ * 3. maxReceiveCount attempts that each run the worst case and then crash, each followed by the
+ *    timeout, end before the retention period does, so a failing message reaches the DLQ
+ *    instead of expiring unseen.
+ */
+export function heartbeatQueueIssues(
+  queue: HeartbeatQueueSettings,
+  worstCaseSeconds: number,
+  describe: string,
+): QueueTimingIssue[] {
+  const issues: QueueTimingIssue[] = [];
+  const { visibilityTimeoutSeconds: t, maxReceiveCount: r } = queue;
+  if (worstCaseSeconds > SQS_MAX_VISIBILITY_TIMEOUT_SECONDS) {
+    issues.push({
+      path: [],
+      message:
+        `the worst case (${worstCaseSeconds}s: ${describe}) exceeds SQS's 12 h visibility cap ` +
+        `(${SQS_MAX_VISIBILITY_TIMEOUT_SECONDS}s), which heartbeats can't extend`,
+    });
+  }
+  if (r * t < worstCaseSeconds) {
+    issues.push({
+      path: ['visibilityTimeoutSeconds'],
+      message:
+        `maxReceiveCount × visibilityTimeoutSeconds (${r} × ${t}s = ${r * t}s) must cover the ` +
+        `worst case of ${worstCaseSeconds}s (${describe}); raise one of them`,
+    });
+  }
+  const exhaustSeconds = r * (worstCaseSeconds + t);
+  if (exhaustSeconds > queue.retentionDays * SECONDS_PER_DAY) {
+    issues.push({
+      path: ['retentionDays'],
+      message:
+        `maxReceiveCount × (worst case + visibilityTimeoutSeconds) = ${exhaustSeconds}s must fit ` +
+        `in the retention period, or a failing message expires before it reaches the DLQ`,
+    });
+  }
+  return issues;
+}
+
+/**
+ * Orphan reconciliation deletes a face without a `faces` row only after FACE_ORPHAN_GRACE_MS, and
+ * an indexing attempt must commit its rows within half of it (packages/face
+ * `recordFacesDeadline`). The grace must therefore be at least twice the longest attempt.
+ */
+export function minOrphanGraceMs(worst: FacesJobWorstCase): number {
+  return 2 * worst.seconds * 1000;
 }
 
 // --- face search request body ------------------------------------------------------------------
@@ -115,7 +189,7 @@ export function faceSearchBodyLimits(
 ): FaceSearchBodyLimits {
   const edge = face.selfie.longEdge;
   const selfieMaxBytes = Math.min(
-    REKOGNITION_LIMITS.inlineImageMaxBytes,
+    REKOGNITION_INLINE_IMAGE_MAX_BYTES,
     Math.ceil(edge * edge * budget.jpegBytesPerPixel),
   );
   return {

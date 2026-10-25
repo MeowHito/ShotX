@@ -30,6 +30,7 @@ import {
 } from './rekognition-provider';
 import { RateLimitedError } from './throttling';
 
+const config = loadFaceConfig({}).rekognition;
 const meta = { $metadata: { httpStatusCode: 400 } };
 const noFace = () =>
   new InvalidParameterException({
@@ -64,6 +65,7 @@ function setup(responses: Array<unknown>) {
     client: { send } as unknown as RekognitionClient,
     limiters,
     retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 1, sleep: () => Promise.resolve() },
+    requestTimeoutMs: config.requestTimeoutMs,
   });
   return { provider, send, acquired };
 }
@@ -160,6 +162,7 @@ describe('throttling and retries', () => {
       client: { send } as unknown as RekognitionClient,
       limiters,
       retry: { maxAttempts: 5, baseDelayMs: 1, maxDelayMs: 1, sleep: () => Promise.resolve() },
+      requestTimeoutMs: config.requestTimeoutMs,
     });
     await expect(strict.searchFacesByImage(search)).rejects.toBe(limited);
     expect(send).not.toHaveBeenCalled();
@@ -302,6 +305,7 @@ describe('IndexFaces retries', () => {
       client: { send } as unknown as RekognitionClient,
       limiters,
       retry: { maxAttempts: 5, baseDelayMs: 1, maxDelayMs: 1, sleep: () => Promise.resolve() },
+      requestTimeoutMs: config.requestTimeoutMs,
     });
     await expect(provider.indexFaces(request)).rejects.toBe(limited);
     expect(send).not.toHaveBeenCalled();
@@ -364,7 +368,6 @@ describe('listFaces', () => {
 
 describe('rekognitionRetryOptions', () => {
   it('uses the profile from FaceConfig', () => {
-    const config = loadFaceConfig({}).rekognition;
     expect(rekognitionRetryOptions(config, 'interactive')).toEqual({
       maxAttempts: 3,
       baseDelayMs: 100,

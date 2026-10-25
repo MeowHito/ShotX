@@ -1,8 +1,7 @@
-import { loadFaceConfig } from '@shotx/shared';
+import { loadFaceConfig, REKOGNITION_INLINE_IMAGE_MAX_BYTES } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
 import { faceSearchLimits } from '../lib/config';
 import { decimalGreaterThanRegex } from '../lib/constructs/waf-rules';
-import { REKOGNITION_LIMITS } from '../lib/constants';
 import { faceSearchBodyLimits } from '../lib/face-limits';
 import { synthPlatform, type Synthesized } from './helpers';
 import { matches, ruleApplies, scopeDown, type WafRequest } from './waf-eval';
@@ -184,7 +183,7 @@ describe('WAF and face-search uploads', () => {
   it('sizes the body limit for FACE_MAX_SELFIES selfies of FACE_SELFIE_LONG_EDGE px', () => {
     const face = loadFaceConfig({});
     const perSelfie = Math.min(
-      REKOGNITION_LIMITS.inlineImageMaxBytes,
+      REKOGNITION_INLINE_IMAGE_MAX_BYTES,
       face.selfie.longEdge ** 2 * s.config.waf.faceSearchBody.jpegBytesPerPixel,
     );
     expect(limits.maxSelfies).toBe(face.search.maxSelfies);
@@ -197,7 +196,7 @@ describe('WAF and face-search uploads', () => {
   it('never allows a selfie above Rekognition’s 5 MB inline limit', () => {
     const big = loadFaceConfig({ FACE_SELFIE_LONG_EDGE: '4096' });
     const l = faceSearchBodyLimits(big, s.config.waf.faceSearchBody);
-    expect(l.selfieMaxBytes).toBe(REKOGNITION_LIMITS.inlineImageMaxBytes);
+    expect(l.selfieMaxBytes).toBe(REKOGNITION_INLINE_IMAGE_MAX_BYTES);
   });
 
   for (const name of bodyRuleGroups) {
