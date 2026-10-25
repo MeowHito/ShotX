@@ -8,6 +8,7 @@ import {
   real,
   text,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { users } from './accounts';
@@ -61,7 +62,8 @@ export const shares = pgTable(
       columns: [t.targetFolderId, t.ownerId],
       foreignColumns: [folders.id, folders.ownerId],
     }).onDelete('restrict'),
-    index('shares_owner_idx').on(t.ownerId),
+    // GET /shares: the owner's shares, newest first (ids are uuidv7).
+    index('shares_owner_list_idx').on(t.ownerId, t.id),
     index('shares_target_file_idx')
       .on(t.targetFileId, t.ownerId)
       .where(sql`${t.targetFileId} IS NOT NULL`),
@@ -80,7 +82,13 @@ export const shares = pgTable(
 /**
  * Face-search consent per share and viewer (logged in) or anonymous session (`anon_id` cookie),
  * for one policy version. A scan needs a row for the current version that is not withdrawn.
- * `ip_hash` is a keyed hash, never the address.
+ * `ip_hash` is a keyed hash, never the address (`v1:` + HMAC, see IP_HASH_VERSION).
+ *
+ * Exactly one of `viewer_id` and `anon_id` is set (viewerColumns in @shotx/shared). At most one
+ * current (not withdrawn) consent exists per share, viewer or session, and version, so giving
+ * consent is an idempotent upsert: `INSERT ... ON CONFLICT DO NOTHING` on the partial unique
+ * index, then select. Withdrawal sets `withdrawn_at` on every current row of the viewer or session
+ * for the share; a later consent inserts a new row, so the history stays.
  */
 export const consents = pgTable(
   'consents',
@@ -99,12 +107,25 @@ export const consents = pgTable(
   (t) => [
     index('consents_share_viewer_idx').on(t.shareId, t.viewerId),
     index('consents_share_anon_idx').on(t.shareId, t.anonId),
-    check('consents_viewer_or_anon', sql`${t.viewerId} IS NOT NULL OR ${t.anonId} IS NOT NULL`),
+    uniqueIndex('consents_current_viewer_unique')
+      .on(t.shareId, t.viewerId, t.policyVersion)
+      .where(sql`${t.withdrawnAt} IS NULL AND ${t.viewerId} IS NOT NULL`),
+    uniqueIndex('consents_current_anon_unique')
+      .on(t.shareId, t.anonId, t.policyVersion)
+      .where(sql`${t.withdrawnAt} IS NULL AND ${t.anonId} IS NOT NULL`),
+    check('consents_viewer_or_anon', sql`num_nonnulls(${t.viewerId}, ${t.anonId}) = 1`),
+    check(
+      'consents_withdrawn_after_accepted',
+      sql`${t.withdrawnAt} IS NULL OR ${t.withdrawnAt} >= ${t.acceptedAt}`,
+    ),
     check('consents_policy_version_not_empty', sql`length(${t.policyVersion}) > 0`),
   ],
 );
 
-/** "ไม่ใช่ฉัน" feedback for threshold tuning. No biometrics and no viewer identity. */
+/**
+ * "ไม่ใช่ฉัน" feedback for threshold tuning. No biometrics and no viewer identity. `similarity` is
+ * the score the API stored in the viewer's face-search result (never sent by the client).
+ */
 export const faceFeedback = pgTable(
   'face_feedback',
   {
@@ -122,6 +143,8 @@ export const faceFeedback = pgTable(
   (t) => [
     index('face_feedback_share_idx').on(t.shareId),
     index('face_feedback_file_idx').on(t.fileId),
+    // Tuning exports and the "ไม่ใช่ฉัน" rate read by time.
+    index('face_feedback_created_idx').on(t.createdAt),
     check('face_feedback_similarity_range', sql`${t.similarity} BETWEEN 0 AND 100`),
   ],
 );

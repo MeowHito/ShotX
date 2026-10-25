@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CURSOR_MAX_LENGTH, decodeOpaqueCursor, encodeOpaqueCursor } from '../cursor-codec';
 
 /**
  * Keyset pagination of drive listings. Cursors are opaque to clients: the web app passes
@@ -39,42 +40,14 @@ export const driveCursorSchema = z.object({
 export type DriveCursor = z.output<typeof driveCursorSchema>;
 
 /** Largest encoded cursor accepted in a query string. */
-export const DRIVE_CURSOR_MAX_LENGTH = 2048;
-
-function toBase64Url(bytes: Uint8Array): string {
-  let binary = '';
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function fromBase64Url(text: string): Uint8Array {
-  const base64 = text.replace(/-/g, '+').replace(/_/g, '/');
-  const binary = atob(base64 + '='.repeat((4 - (base64.length % 4)) % 4));
-  return Uint8Array.from(binary, (c) => c.charCodeAt(0));
-}
+export const DRIVE_CURSOR_MAX_LENGTH = CURSOR_MAX_LENGTH;
 
 /** base64url(JSON) of a validated cursor. */
 export function encodeDriveCursor(cursor: DriveCursor): string {
-  const valid = driveCursorSchema.parse(cursor);
-  return toBase64Url(new TextEncoder().encode(JSON.stringify(valid)));
+  return encodeOpaqueCursor(driveCursorSchema, cursor);
 }
 
 /** The cursor, or null when `text` is not a cursor this module made. Never throws. */
 export function decodeDriveCursor(text: string): DriveCursor | null {
-  if (
-    text.length === 0 ||
-    text.length > DRIVE_CURSOR_MAX_LENGTH ||
-    !/^[A-Za-z0-9_-]+$/.test(text)
-  ) {
-    return null;
-  }
-  try {
-    const json: unknown = JSON.parse(
-      new TextDecoder('utf-8', { fatal: true }).decode(fromBase64Url(text)),
-    );
-    const result = driveCursorSchema.safeParse(json);
-    return result.success ? result.data : null;
-  } catch {
-    return null;
-  }
+  return decodeOpaqueCursor(driveCursorSchema, text);
 }

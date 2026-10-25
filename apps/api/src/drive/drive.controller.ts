@@ -102,6 +102,33 @@ export class DriveController {
     return respond(R.emptyTrash.response, await this.drive.emptyTrash(me.id));
   }
 
+  @Patch(R.updateFaceIndex.path)
+  @HttpCode(R.updateFaceIndex.status)
+  async updateFaceIndex(
+    @CurrentPhotographer() me: Photographer,
+    @Param(new ZodPipe(R.updateFaceIndex.params, 'params'))
+    params: Out<typeof R.updateFaceIndex.params>,
+    @Body(new ZodPipe(R.updateFaceIndex.body, 'body')) body: Out<typeof R.updateFaceIndex.body>,
+  ) {
+    return respond(
+      R.updateFaceIndex.response,
+      await this.drive.updateFaceIndex(me.id, params.id, body),
+    );
+  }
+
+  @Get(R.downloadFile.path)
+  @HttpCode(R.downloadFile.status)
+  async downloadFile(
+    @CurrentPhotographer() me: Photographer,
+    @Param(new ZodPipe(R.downloadFile.params, 'params')) params: Out<typeof R.downloadFile.params>,
+    @Query(new ZodPipe(R.downloadFile.query, 'query')) query: Out<typeof R.downloadFile.query>,
+  ) {
+    return respond(
+      R.downloadFile.response,
+      await this.drive.downloadFile(me.id, params.id, query.size),
+    );
+  }
+
   @Get(R.usage.path)
   @HttpCode(R.usage.status)
   async usage(@CurrentPhotographer() me: Photographer) {

@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import type { Readable } from 'node:stream';
-import { Transform } from 'node:stream';
+import { type Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import {
   AbortMultipartUploadCommand,
@@ -13,6 +12,7 @@ import {
   PutObjectCommand,
   type S3Client,
 } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 
 export interface ObjectHead {
   size: number;
@@ -22,6 +22,19 @@ export interface ListedObject {
   key: string;
   size: number;
 }
+
+export interface UploadStreamOptions {
+  contentType: string;
+  /** Size of every part except the last (5 MiB to 5 GiB; see multipartPlan in @shotx/shared). */
+  partBytes: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * Parts a streaming upload sends at once. Memory per upload is about (this + 1) × partBytes, so it
+ * stays small: the worker runs few zips per task and each one is bound by S3 throughput anyway.
+ */
+export const UPLOAD_STREAM_QUEUE_SIZE = 2;
 
 /** Objects most DeleteObjects calls may name (S3's limit). */
 export const DELETE_OBJECTS_BATCH = 1000;
@@ -33,6 +46,18 @@ export const DELETE_OBJECTS_BATCH = 1000;
 export interface ObjectStore {
   /** Null when the object doesn't exist. */
   head(key: string): Promise<ObjectHead | null>;
+  /** The whole object (for small objects only); null when it doesn't exist. */
+  get(key: string): Promise<Uint8Array | null>;
+  /**
+   * The object as a stream, read from S3 as it is consumed (never buffered whole). Rejects with
+   * an error named `NoSuchKey` when the object doesn't exist.
+   */
+  getStream(key: string, signal?: AbortSignal): Promise<Readable>;
+  /**
+   * Streams `body` into `key` with a multipart upload of `partBytes` parts, holding at most a few
+   * parts in memory. Aborting `signal` aborts the upload (no object is created).
+   */
+  uploadStream(key: string, body: Readable, options: UploadStreamOptions): Promise<void>;
   /** Bytes `start` to `end` inclusive (fewer when the object is shorter). */
   getRange(key: string, start: number, end: number): Promise<Uint8Array>;
   /** Streams the object into `path` and returns its size and SHA-256 (lowercase hex). */
@@ -83,6 +108,44 @@ export class S3ObjectStore implements ObjectStore {
     } catch (error) {
       if (isNotFound(error)) return null;
       throw error;
+    }
+  }
+
+  async get(key: string): Promise<Uint8Array | null> {
+    try {
+      const response = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+      if (response.Body === undefined) return new Uint8Array();
+      return await response.Body.transformToByteArray();
+    } catch (error) {
+      if (isNotFound(error)) return null;
+      throw error;
+    }
+  }
+
+  async getStream(key: string, signal?: AbortSignal): Promise<Readable> {
+    const response = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }), {
+      abortSignal: signal,
+    });
+    if (response.Body === undefined) throw new ObjectStoreError('GetObject returned no body');
+    return response.Body as Readable;
+  }
+
+  async uploadStream(key: string, body: Readable, options: UploadStreamOptions): Promise<void> {
+    const upload = new Upload({
+      client: this.s3,
+      params: { Bucket: this.bucket, Key: key, Body: body, ContentType: options.contentType },
+      partSize: options.partBytes,
+      queueSize: UPLOAD_STREAM_QUEUE_SIZE,
+      // A failed upload is aborted, so no parts linger (the lifecycle rule is only a backstop).
+      leavePartsOnError: false,
+    });
+    const abort = () => void upload.abort().catch(() => undefined);
+    options.signal?.addEventListener('abort', abort, { once: true });
+    try {
+      options.signal?.throwIfAborted();
+      await upload.done();
+    } finally {
+      options.signal?.removeEventListener('abort', abort);
     }
   }
 

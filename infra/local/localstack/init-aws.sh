@@ -37,8 +37,14 @@ storage = json.load(open(sys.argv[1]))["context"]["shotx"]["storage"]
 print(json.dumps({"Rules": [
     {"ID": "abort-incomplete-multipart-uploads", "Status": "Enabled", "Filter": {"Prefix": ""},
      "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": storage["abortIncompleteMultipartUploadDays"]}},
-    {"ID": "expire-tmp", "Status": "Enabled", "Filter": {"Prefix": "tmp/"},
-     "Expiration": {"Days": storage["tmpExpirationDays"]}},
+    {"ID": "expire-tmp-index", "Status": "Enabled", "Filter": {"Prefix": "tmp/index/"},
+     "Expiration": {"Days": storage["tmpIndexExpirationDays"]}},
+    {"ID": "expire-tmp-zips", "Status": "Enabled", "Filter": {"Prefix": "tmp/zips/"},
+     "Expiration": {"Days": storage["tmpZipsExpirationDays"]}},
+    {"ID": "expire-tmp-reconcile", "Status": "Enabled", "Filter": {"Prefix": "tmp/reconcile/"},
+     "Expiration": {"Days": storage["tmpReconcileExpirationDays"]}},
+    {"ID": "expire-tmp-other", "Status": "Enabled", "Filter": {"Prefix": "tmp/"},
+     "Expiration": {"Days": storage["tmpOtherExpirationDays"]}},
     {"ID": "originals-intelligent-tiering", "Status": "Enabled", "Filter": {"Prefix": "originals/"},
      "Transitions": [{"Days": storage["originalsIntelligentTieringAfterDays"], "StorageClass": "INTELLIGENT_TIERING"}]},
 ]}))

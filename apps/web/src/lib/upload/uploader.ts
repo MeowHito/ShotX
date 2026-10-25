@@ -33,6 +33,13 @@ export interface DriveUploadMeta extends Record<string, unknown> {
   drivePath: string | null;
   /** MIME type declared to the API. */
   mime: string;
+  /**
+   * Idempotency key of `POST /uploads/init` (uploadInitBodySchema.clientUploadId): one random
+   * UUID per file, sent again on every retry so a lost init response never reserves quota twice.
+   * Set by createDriveUploader when the file is added; rotated when the API says the old one can't
+   * be reused (CONFLICT: that upload completed, failed or expired).
+   */
+  clientUploadId?: string;
 }
 
 export type DriveUploadBody = Record<string, never>;
@@ -63,6 +70,10 @@ export interface DriveUploader {
   destroy(): void;
 }
 
+function newClientUploadId(): string {
+  return crypto.randomUUID();
+}
+
 interface CachedPart {
   url: string;
   expiresAt: number;
@@ -76,6 +87,13 @@ export function createDriveUploader(options: DriveUploaderOptions): DriveUploade
   const now = options.now ?? Date.now;
   const uppy: DriveUppy = new Uppy<DriveUploadMeta, DriveUploadBody>({
     autoProceed: options.autoProceed ?? true,
+    // Every queued file gets its own idempotency key for upload init.
+    onBeforeFileAdded: (file) => {
+      if (file.meta.clientUploadId === undefined) {
+        file.meta = { ...file.meta, clientUploadId: newClientUploadId() };
+      }
+      return file;
+    },
   });
 
   const partUrls = new Map<string, Map<number, CachedPart>>();
@@ -152,15 +170,27 @@ export function createDriveUploader(options: DriveUploaderOptions): DriveUploade
     createMultipartUpload: (file) =>
       step(file, async () => {
         const size = file.size ?? 0;
-        const res = await api.call(UPLOAD_ROUTES.init, {
-          body: {
-            name: file.name ?? 'file',
-            size,
-            mime: file.meta.mime,
-            folderId: file.meta.folderId,
-            ...(file.meta.drivePath ? { relativePath: file.meta.drivePath } : {}),
-          },
-        });
+        const clientUploadId = uppy.getFile(file.id)?.meta.clientUploadId ?? newClientUploadId();
+        let res;
+        try {
+          res = await api.call(UPLOAD_ROUTES.init, {
+            body: {
+              name: file.name ?? 'file',
+              size,
+              mime: file.meta.mime,
+              folderId: file.meta.folderId,
+              ...(file.meta.drivePath ? { relativePath: file.meta.drivePath } : {}),
+              clientUploadId,
+            },
+          });
+        } catch (error) {
+          if (isApiError(error, ErrorCode.CONFLICT) && uppy.getFile(file.id) !== undefined) {
+            // The key belongs to an upload that is over; the user's retry starts a new one.
+            const current = uppy.getFile(file.id);
+            uppy.setFileMeta(file.id, { ...current.meta, clientUploadId: newClientUploadId() });
+          }
+          throw error;
+        }
         const expected = multipartPlan(size, options.partBytes);
         if (res.partSize !== expected.partSize || res.partCount !== expected.partCount) {
           // Uppy would cut parts the API rejects at complete; give the reservation back now.

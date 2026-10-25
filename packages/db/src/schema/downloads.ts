@@ -64,8 +64,17 @@ export const zipJobs = pgTable(
     createdAt: createdAt(),
     startedAt: timestamptz('started_at'),
     completedAt: timestamptz('completed_at'),
-    /** When the tmp/zips/ object is lifecycle-expired; the API stops issuing URLs after it. */
+    /**
+     * When the API stops issuing URLs for the archive: `completed_at + ZIP_RESULT_TTL_SECONDS`
+     * (the tmp/ lifecycle rule deletes the object some time after).
+     */
     expiresAt: timestamptz('expires_at'),
+    /**
+     * When `GET /zip-jobs/:id` first issued the archive's URL (migration 0003). Setting it
+     * (`WHERE url_issued_at IS NULL`) decides which request writes the job's one `zip` activity
+     * event.
+     */
+    urlIssuedAt: timestamptz('url_issued_at'),
   },
   (t) => [
     unique('zip_jobs_id_photographer_unique').on(t.id, t.photographerId),
@@ -108,6 +117,7 @@ export const zipJobs = pgTable(
       'zip_jobs_completed_iff_finished',
       sql`(${t.status} IN ('ready', 'failed')) = (${t.completedAt} IS NOT NULL)`,
     ),
+    check('zip_jobs_url_issued_when_ready', sql`${t.urlIssuedAt} IS NULL OR ${t.status} = 'ready'`),
     check(
       'zip_jobs_started_when_claimed',
       sql`${t.status} NOT IN ('running', 'ready') OR ${t.startedAt} IS NOT NULL`,

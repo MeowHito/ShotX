@@ -1,3 +1,4 @@
+import { VIEWER_SESSION_COOKIE } from '@shotx/shared';
 import { expireCookie, parseCookies, serializeCookie } from './cookies';
 import { createPkcePair, randomToken } from './pkce';
 import { type AuthProvider, IDENTITY_PROVIDERS, type IdentityProviderName } from './provider';
@@ -162,6 +163,19 @@ export function isSameOrigin(request: Request, publicBaseUrl: string): boolean {
   return request.headers.get('sec-fetch-site') === 'same-origin';
 }
 
+/**
+ * Expires the API's viewer-session cookie (`shotx_vs`, Path=/api). The browser never sends it to
+ * /auth/logout, so the logout button first calls `DELETE /api/me/viewer-session` (which also ends
+ * the session in Redis); this is the fallback that at least removes the cookie.
+ */
+export function expireViewerSessionCookie(deps: Pick<AuthDeps, 'secureCookies'>): string {
+  return serializeCookie(VIEWER_SESSION_COOKIE, '', {
+    maxAgeSeconds: 0,
+    secure: deps.secureCookies,
+    path: '/api',
+  });
+}
+
 /** POST /auth/logout: revoke the refresh token, clear cookies, end the Hosted UI session. */
 export async function handleLogout(request: Request, deps: AuthDeps): Promise<Response> {
   if (!isSameOrigin(request, deps.publicBaseUrl)) {
@@ -170,10 +184,10 @@ export async function handleLogout(request: Request, deps: AuthDeps): Promise<Re
   const names = cookieNames(deps.secureCookies);
   const refreshToken = parseCookies(request.headers.get('cookie')).get(names.refresh);
   if (refreshToken) await deps.provider.revoke(refreshToken);
-  return redirect(
-    deps.provider.logoutUrl(`${deps.publicBaseUrl}${AUTH_PATHS.afterLogout}`),
-    clearSessionCookies(deps),
-  );
+  return redirect(deps.provider.logoutUrl(`${deps.publicBaseUrl}${AUTH_PATHS.afterLogout}`), [
+    ...clearSessionCookies(deps),
+    expireViewerSessionCookie(deps),
+  ]);
 }
 
 export interface ResolvedSession {

@@ -146,12 +146,17 @@ export class S3ObjectStorage implements ObjectStorage {
     }
   }
 
+  /**
+   * HeadObject. The API's role has no s3:ListBucket, so S3 answers a missing key with 403, not
+   * 404: both mean "no such object" here.
+   */
   async headObject(key: string): Promise<{ size: number } | null> {
     try {
       const out = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
       return { size: out.ContentLength ?? 0 };
     } catch (error) {
-      if (errorName(error) === 'NotFound' || httpStatus(error) === 404) return null;
+      const status = httpStatus(error);
+      if (errorName(error) === 'NotFound' || status === 404 || status === 403) return null;
       throw error;
     }
   }

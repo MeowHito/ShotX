@@ -1,18 +1,27 @@
 import { parseQueueMessage, type ScheduledJobType } from '@shotx/shared';
 import type { ObjectStore } from '../aws/object-store';
 import type { Db } from '../db';
-import type { FaceDeleter } from '../faces';
+import type { FaceProvider } from '@shotx/face';
 import { errorFields, type LogFields } from '../logger';
 import type { MessageHandler } from '../sqs/consumer';
 import type { JobContext } from './context';
+import { runFacesExpire } from './faces-expire';
+import { runFacesReconcile } from './faces-reconcile';
 import type { JobRunLedger } from './ledger';
+import type { OrphanScanStore } from './orphan-scans';
 import { runQuotaReconcile } from './quota-reconcile';
+import { runStatsRollup } from './stats-rollup';
 import { runTrashPurge } from './trash-purge';
 
 export interface JobsHandlerDeps {
   db: Db;
   store: ObjectStore;
-  faces: FaceDeleter;
+  /** DeleteFaces for purge and expiry, ListFaces for reconciliation. */
+  faces: FaceProvider;
+  /** Where faces.reconcile.daily keeps scans between runs. */
+  orphanScans: OrphanScanStore;
+  /** FACE_ORPHAN_GRACE_MS. */
+  orphanGraceMs: number;
   ledger: JobRunLedger;
   trashRetentionDays: number;
   batchSize: number;
@@ -22,12 +31,17 @@ export interface JobsHandlerDeps {
 }
 
 /**
- * Job types this phase implements. The others (stats rollup, subscription transitions, face
- * expiry and reconciliation) arrive from their schedules already, and are acknowledged with a
- * warning: sending them to the DLQ would only page someone every day for work that doesn't exist
- * yet, and the schedules keep firing, so nothing is lost by dropping a run.
+ * Job types this phase implements. Subscription transitions (Phase 4) arrive from their schedule
+ * already and are acknowledged with a warning: sending them to the DLQ would only page someone
+ * every day for work that doesn't exist yet, and the schedule keeps firing, so nothing is lost.
  */
-const IMPLEMENTED = new Set<ScheduledJobType>(['trash.purge.daily', 'quota.reconcile.nightly']);
+const IMPLEMENTED = new Set<ScheduledJobType>([
+  'trash.purge.daily',
+  'quota.reconcile.nightly',
+  'faces.expire.daily',
+  'faces.reconcile.daily',
+  'stats.rollup.hourly',
+]);
 
 /** Consumer of the `jobs` queue (EventBridge Scheduler), deduped on (type, scheduledTime). */
 export function createJobsHandler(deps: JobsHandlerDeps): MessageHandler {
@@ -37,7 +51,7 @@ export function createJobsHandler(deps: JobsHandlerDeps): MessageHandler {
     const log = context.log.child({ jobType: job.type, scheduledTime: job.scheduledTime });
 
     if (!IMPLEMENTED.has(job.type)) {
-      log.warn('scheduled job not implemented in Phase 2; acknowledged without running');
+      log.warn('scheduled job not implemented before Phase 4; acknowledged without running');
       return;
     }
 
@@ -69,6 +83,21 @@ export function createJobsHandler(deps: JobsHandlerDeps): MessageHandler {
         break;
       case 'quota.reconcile.nightly':
         result = { ...(await runQuotaReconcile(ctx)) };
+        break;
+      case 'faces.expire.daily':
+        result = { ...(await runFacesExpire(ctx)) };
+        break;
+      case 'faces.reconcile.daily':
+        result = {
+          ...(await runFacesReconcile(ctx, {
+            provider: deps.faces,
+            scans: deps.orphanScans,
+            graceMs: deps.orphanGraceMs,
+          })),
+        };
+        break;
+      case 'stats.rollup.hourly':
+        result = { ...(await runStatsRollup(ctx)) };
         break;
       default:
         return;

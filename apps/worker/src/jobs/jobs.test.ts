@@ -29,6 +29,7 @@ import { MemoryObjectStore } from '../testing/memory-aws';
 import type { JobContext } from './context';
 import { createJobsHandler } from './handler';
 import { MemoryJobRunLedger } from './ledger';
+import { S3OrphanScanStore } from './orphan-scans';
 import { runQuotaReconcile } from './quota-reconcile';
 import { runTrashPurge } from './trash-purge';
 
@@ -291,6 +292,31 @@ describe('scheduled jobs', () => {
       expect(await fileById(db, withFaces.id)).toBeUndefined();
     });
 
+    it('purges files with faces when the collection no longer exists (nothing left to delete)', async () => {
+      const store = new MemoryObjectStore();
+      const provider = newProvider(); // no collection for this photographer
+      const ownerId = await createPhotographer(db);
+      const file = await createFileRow(db, ownerId, {
+        status: 'ready',
+        verifiedAt: daysAgo(9),
+        deletedAt: daysAgo(2),
+        purgeRequestedAt: daysAgo(1),
+        originalName: 'gone.jpg',
+      });
+      await db.insert(faces).values({
+        fileId: file.id,
+        ownerId,
+        rekognitionFaceId: `face-${file.id}`,
+        bbox: { left: 0, top: 0, width: 0.1, height: 0.1 },
+        confidence: 99,
+      });
+      seedObjects(store, ownerId, file, 10);
+      const result = await runTrashPurge(jobContext(db, store, provider), 30);
+      expect(result).toMatchObject({ filesSkipped: 0 });
+      expect(await fileById(db, file.id)).toBeUndefined();
+      expect(await db.select().from(faces).where(eq(faces.fileId, file.id))).toEqual([]);
+    });
+
     it('releases reserved bytes for unverified trashed files and aborts their multipart upload', async () => {
       const store = new MemoryObjectStore();
       const ownerId = await createPhotographer(db, { reservedBytes: 70 });
@@ -471,6 +497,8 @@ describe('scheduled jobs', () => {
         store,
         faces: newProvider(),
         ledger,
+        orphanScans: new S3OrphanScanStore(store),
+        orphanGraceMs: 3_600_000,
         trashRetentionDays: 30,
         batchSize: 100,
         maxRuntimeMs: 3_600_000,
@@ -524,6 +552,8 @@ describe('scheduled jobs', () => {
         store: new MemoryObjectStore(),
         faces: newProvider(),
         ledger: failing,
+        orphanScans: new S3OrphanScanStore(new MemoryObjectStore()),
+        orphanGraceMs: 3_600_000,
         trashRetentionDays: 30,
         batchSize: 100,
         maxRuntimeMs: 3_600_000,
@@ -554,16 +584,13 @@ describe('scheduled jobs', () => {
         store: new MemoryObjectStore(),
         faces: newProvider(),
         ledger: new MemoryJobRunLedger(),
+        orphanScans: new S3OrphanScanStore(new MemoryObjectStore()),
+        orphanGraceMs: 3_600_000,
         trashRetentionDays: 30,
         batchSize: 100,
         maxRuntimeMs: 3_600_000,
       });
-      for (const type of [
-        'stats.rollup.hourly',
-        'subscriptions.transition.daily',
-        'faces.expire.daily',
-        'faces.reconcile.daily',
-      ]) {
+      for (const type of ['subscriptions.transition.daily']) {
         const log = memoryLogger();
         await handler(
           JSON.stringify({ type, scheduledTime: '2026-10-25T18:30:00Z' }),
@@ -572,7 +599,7 @@ describe('scheduled jobs', () => {
         expect(log.entries).toEqual([
           expect.objectContaining({
             level: 'warn',
-            msg: expect.stringMatching(/not implemented in Phase 2/) as unknown,
+            msg: expect.stringMatching(/not implemented before Phase 4/) as unknown,
           }),
         ]);
       }

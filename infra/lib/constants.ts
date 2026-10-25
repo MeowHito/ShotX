@@ -1,3 +1,5 @@
+import { S3_PREFIXES } from '@shotx/shared';
+
 /**
  * Fixed platform facts. These are decisions from the platform spec, not tunables: changing one
  * means changing application code too. Everything tunable lives in the `shotx` CDK context
@@ -62,3 +64,24 @@ export const HTTP_HEADERS = {
 
 /** Face search posts selfies as multipart form data (never JSON or base64). */
 export const FACE_SEARCH_CONTENT_TYPE = 'multipart/form-data';
+
+/** Fargate's largest container stopTimeout (seconds between SIGTERM and SIGKILL). */
+export const ECS_MAX_STOP_TIMEOUT_SECONDS = 120;
+
+/**
+ * Scan files of the reconciliation jobs (worker only). packages/shared has no constant for this
+ * prefix yet, so it is built from S3_PREFIXES.tmp here; the worker must write under exactly this
+ * prefix, the only part of tmp/ it may read back and delete besides tmp/index/.
+ */
+export const TMP_RECONCILE_PREFIX = `${S3_PREFIXES.tmp}reconcile/`;
+
+/**
+ * Environment variables infra sets from typed context values, stack resources or secrets.
+ * `services.env` must not set them, so each has exactly one source.
+ */
+export const INFRA_OWNED_ENV = [
+  'FACE_SEARCH_ENABLED',
+  'CONSENT_POLICY_VERSION',
+  'IP_HASH_SECRET',
+  'MEDIA_BUCKET',
+] as const;

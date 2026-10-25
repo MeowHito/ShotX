@@ -120,19 +120,33 @@ export interface HeartbeatQueueSettings {
  * 3. maxReceiveCount attempts that each run the worst case and then crash, each followed by the
  *    timeout, end before the retention period does, so a failing message reaches the DLQ
  *    instead of expiring unseen.
+ *
+ * `maxProcessingSeconds` is the worker's per-message cap (WORKER_<QUEUE>_MAX_PROCESSING_SECONDS),
+ * after which it abandons the attempt. It bounds how long heartbeats can hold a message, so rules
+ * 1 and 3 use it (or the worst case, if larger); rule 2 is about healthy jobs and uses the worst
+ * case. A worst case of 0 means the queue has no modelled worst case: only rules 1 and 3 apply.
  */
 export function heartbeatQueueIssues(
   queue: HeartbeatQueueSettings,
   worstCaseSeconds: number,
   describe: string,
+  maxProcessingSeconds = worstCaseSeconds,
 ): QueueTimingIssue[] {
   const issues: QueueTimingIssue[] = [];
   const { visibilityTimeoutSeconds: t, maxReceiveCount: r } = queue;
+  const held = Math.max(worstCaseSeconds, maxProcessingSeconds);
   if (worstCaseSeconds > SQS_MAX_VISIBILITY_TIMEOUT_SECONDS) {
     issues.push({
       path: [],
       message:
         `the worst case (${worstCaseSeconds}s: ${describe}) exceeds SQS's 12 h visibility cap ` +
+        `(${SQS_MAX_VISIBILITY_TIMEOUT_SECONDS}s), which heartbeats can't extend`,
+    });
+  } else if (held > SQS_MAX_VISIBILITY_TIMEOUT_SECONDS) {
+    issues.push({
+      path: [],
+      message:
+        `the processing cap (${held}s) exceeds SQS's 12 h visibility cap ` +
         `(${SQS_MAX_VISIBILITY_TIMEOUT_SECONDS}s), which heartbeats can't extend`,
     });
   }
@@ -144,13 +158,14 @@ export function heartbeatQueueIssues(
         `worst case of ${worstCaseSeconds}s (${describe}); raise one of them`,
     });
   }
-  const exhaustSeconds = r * (worstCaseSeconds + t);
+  const exhaustSeconds = r * (held + t);
   if (exhaustSeconds > queue.retentionDays * SECONDS_PER_DAY) {
     issues.push({
       path: ['retentionDays'],
       message:
-        `maxReceiveCount × (worst case + visibilityTimeoutSeconds) = ${exhaustSeconds}s must fit ` +
-        `in the retention period, or a failing message expires before it reaches the DLQ`,
+        `maxReceiveCount × (processing cap ${held}s + visibilityTimeoutSeconds) = ` +
+        `${exhaustSeconds}s must fit in the retention period, or a failing message expires ` +
+        `before it reaches the DLQ`,
     });
   }
   return issues;

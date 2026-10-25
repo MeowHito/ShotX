@@ -1,4 +1,5 @@
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
+import { TRIAL_PLAN_CODE } from '@shotx/shared';
 import { plans } from './schema/index';
 
 /** Quotas use binary units: 1 GB here is 1024³ bytes, as operating systems display it. */
@@ -7,8 +8,8 @@ const GB = 1024 ** 3;
 /** THB to satang. */
 const thb = (baht: number) => baht * 100;
 
-/** Code of the trial plan; the only plan with `trial_days`. */
-export const TRIAL_PLAN_CODE = 'trial';
+/** Code of the trial plan; the only plan with `trial_days`. Defined in @shotx/shared. */
+export { TRIAL_PLAN_CODE };
 
 export interface PlanSeed {
   code: string;

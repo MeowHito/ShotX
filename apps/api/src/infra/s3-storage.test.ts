@@ -90,6 +90,20 @@ describe('S3ObjectStorage', () => {
       .on(HeadObjectCommand)
       .rejects(new NotFound({ message: 'nf', $metadata: { httpStatusCode: 404 } }));
     expect(await storage().headObject(key)).toBeNull();
+    // Without s3:ListBucket, S3 answers a missing key with 403.
+    const forbidden = Object.assign(new Error('Forbidden'), {
+      name: 'Forbidden',
+      $metadata: { httpStatusCode: 403 },
+    });
+    s3Mock.on(HeadObjectCommand).rejects(forbidden);
+    expect(await storage().headObject(key)).toBeNull();
+    s3Mock.on(HeadObjectCommand).rejects(
+      Object.assign(new Error('Slow Down'), {
+        name: 'SlowDown',
+        $metadata: { httpStatusCode: 503 },
+      }),
+    );
+    await expect(storage().headObject(key)).rejects.toThrow('Slow Down');
     s3Mock.on(HeadObjectCommand).resolves({ ContentLength: 42 });
     expect(await storage().headObject(key)).toEqual({ size: 42 });
   });

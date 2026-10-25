@@ -278,6 +278,10 @@ describe('sessions', () => {
       `https://auth.example.com/logout?logout_uri=${encodeURIComponent(`${BASE}/`)}`,
     );
     expect(parseCookies(null).size).toBe(0);
-    expect([...setCookies(response).values()]).toEqual(['', '']);
+    expect([...setCookies(response).values()]).toEqual(['', '', '']);
+    // The API's viewer-session cookie is scoped to /api; it is expired with the same path.
+    expect(response.headers.getSetCookie()).toContain(
+      'shotx_vs=; Path=/api; Max-Age=0; HttpOnly; Secure; SameSite=Lax',
+    );
   });
 });

@@ -1,20 +1,75 @@
 import { randomUUID } from 'node:crypto';
-import type { INestApplication } from '@nestjs/common';
-import { plans, storageUsage, subscriptions, users } from '@shotx/db';
+import type { INestApplication, LoggerService } from '@nestjs/common';
+import {
+  type DriveFile,
+  files,
+  folderPath,
+  folders,
+  plans,
+  seedPlans,
+  shares,
+  storageUsage,
+  subscriptions,
+  users,
+} from '@shotx/db';
+import type { FaceProvider } from '@shotx/face';
+import { FakeFaceProvider } from '@shotx/face/testing';
 import type { Env, SubscriptionStatus } from '@shotx/shared';
+import { generateShareToken } from '@shotx/shared';
 import { eq } from 'drizzle-orm';
 import { createApiApp } from '../app';
+import { hashPassword } from '../auth/password';
 import type { ApiConfig, ApiLimits } from '../config';
 import type { Db } from '../db/db';
+import { newId } from '../drive/folders';
 import { CloudFrontMediaUrlSigner } from '../infra/cloudfront-signer';
-import { MemoryRateLimiter } from '../infra/redis';
+import { MemoryKeyValueStore, MemoryRateLimiter } from '../infra/redis';
+import { MemoryQueueSender } from '../infra/sqs-queue';
 import type { RateLimiter } from '../tokens';
+import { testWorld } from './faces';
 import { FakeObjectStorage, TestAuth, TestClock, testConfig } from './fakes';
+import { insertReadyFile } from './seed';
 
 export interface TestResponse<T = unknown> {
   status: number;
   body: T;
   headers: Headers;
+}
+
+export interface RequestOptions {
+  token?: string;
+  body?: unknown;
+  rawBody?: string;
+  form?: FormData;
+  headers?: Record<string, string>;
+}
+
+/** Captures everything the app logs. */
+export class CapturingLogger implements LoggerService {
+  readonly lines: string[] = [];
+  private push(level: string, args: unknown[]) {
+    this.lines.push(
+      `${level} ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}`,
+    );
+  }
+  log(...args: unknown[]) {
+    this.push('log', args);
+  }
+  error(...args: unknown[]) {
+    this.push('error', args);
+  }
+  warn(...args: unknown[]) {
+    this.push('warn', args);
+  }
+  debug(...args: unknown[]) {
+    this.push('debug', args);
+  }
+  verbose(...args: unknown[]) {
+    this.push('verbose', args);
+  }
+  text(): string {
+    return this.lines.join('\n');
+  }
 }
 
 /** A running API on a random port over a test database, with fakes for AWS and Redis. */
@@ -27,28 +82,60 @@ export class TestApi {
     readonly auth: TestAuth,
     readonly storage: FakeObjectStorage,
     readonly clock: TestClock,
+    readonly store: MemoryKeyValueStore,
+    readonly queue: MemoryQueueSender,
+    readonly faceProvider: FaceProvider,
+    readonly logger: CapturingLogger,
   ) {}
 
   static async start(
     db: Db,
-    options: { env?: Env; limits?: Partial<ApiLimits>; rateLimiter?: RateLimiter } = {},
+    options: {
+      env?: Env;
+      limits?: Partial<ApiLimits>;
+      rateLimiter?: RateLimiter;
+      faceProvider?: FaceProvider;
+    } = {},
   ): Promise<TestApi> {
     const config = testConfig(options.env, options.limits);
     const auth = await TestAuth.create(config);
     const storage = new FakeObjectStorage();
     const clock = new TestClock();
-    const app = await createApiApp({
-      config,
-      db,
-      storage,
-      signer: new CloudFrontMediaUrlSigner(config.cloudFront),
-      rateLimiter: options.rateLimiter ?? new MemoryRateLimiter(),
-      tokenVerifier: auth.verifier,
-      clock,
-    });
+    const store = new MemoryKeyValueStore(() => clock.now().getTime());
+    const queue = new MemoryQueueSender();
+    const faceProvider = options.faceProvider ?? new FakeFaceProvider(testWorld());
+    const logger = new CapturingLogger();
+    await seedPlans(db);
+    const app = await createApiApp(
+      {
+        config,
+        db,
+        storage,
+        signer: new CloudFrontMediaUrlSigner(config.cloudFront),
+        rateLimiter: options.rateLimiter ?? new MemoryRateLimiter(() => clock.now().getTime()),
+        tokenVerifier: auth.verifier,
+        clock,
+        store,
+        queue,
+        faceProvider,
+      },
+      logger,
+    );
     await app.listen(0, '127.0.0.1');
     const baseUrl = (await app.getUrl()).replace('[::1]', '127.0.0.1');
-    return new TestApi(app, baseUrl, db, config, auth, storage, clock);
+    return new TestApi(
+      app,
+      baseUrl,
+      db,
+      config,
+      auth,
+      storage,
+      clock,
+      store,
+      queue,
+      faceProvider,
+      logger,
+    );
   }
 
   close(): Promise<void> {
@@ -58,17 +145,14 @@ export class TestApi {
   async request<T = unknown>(
     method: string,
     path: string,
-    options: {
-      token?: string;
-      body?: unknown;
-      rawBody?: string;
-      headers?: Record<string, string>;
-    } = {},
+    options: RequestOptions = {},
   ): Promise<TestResponse<T>> {
     const headers: Record<string, string> = { ...options.headers };
     if (options.token !== undefined) headers.authorization = `Bearer ${options.token}`;
-    let body: string | undefined;
-    if (options.rawBody !== undefined) {
+    let body: string | FormData | undefined;
+    if (options.form !== undefined) {
+      body = options.form;
+    } else if (options.rawBody !== undefined) {
       body = options.rawBody;
       headers['content-type'] ??= 'application/json';
     } else if (options.body !== undefined) {
@@ -84,18 +168,29 @@ export class TestApi {
     };
   }
 
+  /** A browser with a cookie jar, for the public routes. */
+  browser(): Browser {
+    return new Browser(this);
+  }
+
   /** A users-pool photographer with a live subscription; returns its id and a token. */
   async photographer(
     options: {
       quotaBytes?: number;
       status?: SubscriptionStatus;
       role?: 'photographer' | 'user';
+      name?: string;
     } = {},
   ): Promise<{ id: string; sub: string; token: string }> {
     const sub = randomUUID();
     const [user] = await this.db
       .insert(users)
-      .values({ cognitoPool: 'users', cognitoSub: sub, role: options.role ?? 'photographer' })
+      .values({
+        cognitoPool: 'users',
+        cognitoSub: sub,
+        role: options.role ?? 'photographer',
+        name: options.name ?? null,
+      })
       .returning({ id: users.id });
     if (user === undefined) throw new Error('no user');
     const code = `p${randomUUID().replace(/-/g, '').slice(0, 20)}`;
@@ -119,11 +214,171 @@ export class TestApi {
     return { id: user.id, sub, token: await this.auth.token('users', sub) };
   }
 
+  /** A users-pool viewer (role user); the row is created like the guard would. */
+  async viewer(): Promise<{ id: string; sub: string; token: string }> {
+    const sub = randomUUID();
+    const [user] = await this.db
+      .insert(users)
+      .values({ cognitoPool: 'users', cognitoSub: sub, role: 'user' })
+      .returning({ id: users.id });
+    if (user === undefined) throw new Error('no user');
+    return { id: user.id, sub, token: await this.auth.token('users', sub) };
+  }
+
   async usage(photographerId: string) {
     const [row] = await this.db
       .select()
       .from(storageUsage)
       .where(eq(storageUsage.photographerId, photographerId));
     return row ?? { photographerId, usedBytes: 0, reservedBytes: 0 };
+  }
+
+  /** A live folder of `ownerId` (direct insert), optionally with an active face index. */
+  async folder(
+    ownerId: string,
+    options: {
+      name?: string;
+      parent?: { id: string; path: string } | null;
+      faceIndex?: boolean;
+    } = {},
+  ): Promise<{ id: string; path: string }> {
+    const id = await newId(this.db);
+    const now = this.clock.now();
+    const [row] = await this.db
+      .insert(folders)
+      .values({
+        id,
+        ownerId,
+        parentId: options.parent?.id ?? null,
+        name: options.name ?? `folder-${id.slice(-6)}`,
+        path: folderPath(options.parent?.path ?? null, id),
+        ...(options.faceIndex === true
+          ? {
+              faceIndexEnabled: true,
+              faceIndexInformedAt: now,
+              faceIndexExpiresAt: new Date(now.getTime() + 30 * 24 * 3600 * 1000),
+            }
+          : {}),
+      })
+      .returning({ id: folders.id, path: folders.path });
+    if (row === undefined) throw new Error('no folder');
+    return row;
+  }
+
+  /** A ready image in `folderId`. */
+  file(
+    ownerId: string,
+    folderId: string | null,
+    name = `IMG_${randomUUID().slice(0, 8)}.jpg`,
+  ): Promise<DriveFile> {
+    return insertReadyFile(this.db, ownerId, { name, folderId, webSizeBytes: 500 });
+  }
+
+  /** A share row (direct insert, for public-route tests). */
+  async share(
+    ownerId: string,
+    target: { fileId: string } | { folderId: string },
+    options: Partial<{
+      mode: 'gallery' | 'face_only';
+      allowDownload: boolean;
+      downloadSize: 'web' | 'original';
+      requireLogin: boolean;
+      password: string;
+      expiresAt: Date;
+      isActive: boolean;
+    }> = {},
+  ): Promise<{ id: string; token: string }> {
+    const token = generateShareToken();
+    const [row] = await this.db
+      .insert(shares)
+      .values({
+        ownerId,
+        ...('fileId' in target
+          ? { targetType: 'file' as const, targetFileId: target.fileId }
+          : { targetType: 'folder' as const, targetFolderId: target.folderId }),
+        token,
+        mode: options.mode ?? 'gallery',
+        allowDownload: options.allowDownload ?? true,
+        downloadSize: options.downloadSize ?? 'web',
+        requireLogin: options.requireLogin ?? false,
+        passwordHash: options.password === undefined ? null : await hashPassword(options.password),
+        expiresAt: options.expiresAt ?? null,
+        isActive: options.isActive ?? true,
+      })
+      .returning({ id: shares.id, token: shares.token });
+    if (row === undefined) throw new Error('no share');
+    return row;
+  }
+
+  /** Marks files as trashed (for scope tests). */
+  async trashFile(fileId: string): Promise<void> {
+    await this.db.update(files).set({ deletedAt: new Date() }).where(eq(files.id, fileId));
+  }
+}
+
+/**
+ * A browser for the public routes: keeps the cookies the API sets (by name and path) and sends the
+ * ones whose path matches, like a real browser.
+ */
+export class Browser {
+  private readonly cookies = new Map<string, { path: string; value: string }>();
+  /** Bearer token to send (server-side callers), if any. */
+  token: string | undefined;
+  /** Headers sent with every request (e.g. CloudFront-Viewer-Address). */
+  headers: Record<string, string> = {};
+
+  constructor(private readonly api: TestApi) {}
+
+  cookie(name: string, path?: string): string | undefined {
+    for (const [key, c] of this.cookies) {
+      if (key.startsWith(`${name}|`) && (path === undefined || c.path === path)) return c.value;
+    }
+    return undefined;
+  }
+
+  /** The Cookie header this browser would send to `path`. */
+  cookieHeader(path: string): string {
+    return [...this.cookies.entries()]
+      .filter(
+        ([, c]) => path === c.path || path.startsWith(c.path.endsWith('/') ? c.path : `${c.path}/`),
+      )
+      .map(([key, c]) => `${key.split('|')[0]}=${c.value}`)
+      .join('; ');
+  }
+
+  setCookie(name: string, value: string, path = '/'): void {
+    this.cookies.set(`${name}|${path}`, { path, value });
+  }
+
+  async request<T = unknown>(
+    method: string,
+    path: string,
+    options: RequestOptions = {},
+  ): Promise<TestResponse<T>> {
+    const pathname = path.split('?')[0] ?? path;
+    const sent = [...this.cookies.entries()]
+      .filter(
+        ([, c]) =>
+          pathname === c.path || pathname.startsWith(c.path.endsWith('/') ? c.path : `${c.path}/`),
+      )
+      .sort((a, b) => b[1].path.length - a[1].path.length)
+      .map(([key, c]) => `${key.split('|')[0]}=${c.value}`);
+    const headers: Record<string, string> = { ...this.headers, ...options.headers };
+    if (sent.length > 0) headers.cookie = sent.join('; ');
+    const res = await this.api.request<T>(method, path, {
+      ...options,
+      headers,
+      ...(this.token === undefined || options.token !== undefined ? {} : { token: this.token }),
+    });
+    for (const line of res.headers.getSetCookie()) {
+      const [pair, ...attrs] = line.split(';').map((s) => s.trim());
+      const [name, value] = (pair ?? '').split('=');
+      const cookiePath = attrs.find((a) => a.startsWith('Path='))?.slice(5) ?? '/';
+      const maxAge = attrs.find((a) => a.startsWith('Max-Age='))?.slice(8);
+      if (name === undefined) continue;
+      if (maxAge === '0') this.cookies.delete(`${name}|${cookiePath}`);
+      else this.cookies.set(`${name}|${cookiePath}`, { path: cookiePath, value: value ?? '' });
+    }
+    return res;
   }
 }

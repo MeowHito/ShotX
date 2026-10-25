@@ -1,6 +1,17 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { FILE_STATUSES, SUBSCRIPTION_STATUSES } from '@shotx/shared';
+import {
+  CONSENT_POLICY_VERSIONS,
+  DOWNLOAD_SIZES,
+  FILE_STATUSES,
+  LATEST_CONSENT_POLICY_VERSION,
+  SHARE_MODES,
+  SHARE_STATUSES,
+  SHARE_UNAVAILABLE_REASONS,
+  SUBSCRIPTION_STATUSES,
+  ZIP_JOB_VIEW_STATUSES,
+} from '@shotx/shared';
+import { SELFIE_ANGLES, SELFIE_ISSUES } from '../lib/face/quality-gate';
 import { createTranslator } from 'next-intl';
 import { describe, expect, it } from 'vitest';
 import { th } from './th';
@@ -60,6 +71,37 @@ describe('Thai messages', () => {
       'QUOTA_EXCEEDED',
       'SUBSCRIPTION_INACTIVE',
     ]);
+    const same = (record: object, values: readonly string[]) =>
+      expect(Object.keys(record).sort()).toEqual([...values].sort());
+    same(th.shares.status, SHARE_STATUSES);
+    same(th.shareForm.modes, SHARE_MODES);
+    same(th.shareForm.downloadSizes, DOWNLOAD_SIZES);
+    same(th.downloads.zipStatus, ZIP_JOB_VIEW_STATUSES);
+    same(th.share.unavailable.reasons, SHARE_UNAVAILABLE_REASONS);
+    same(th.capture.issues, SELFIE_ISSUES);
+    same(th.capture.angles, SELFIE_ANGLES);
+  });
+
+  it('have consent text for every consent policy version, in Thai', () => {
+    expect(Object.keys(th.consent.policies).sort()).toEqual([...CONSENT_POLICY_VERSIONS].sort());
+    for (const version of CONSENT_POLICY_VERSIONS) {
+      for (const [key, text] of leaves(th.consent.policies[version])) {
+        expect(text, `${version}.${key}`).toMatch(/[฀-๿]/);
+      }
+    }
+    // The current version names PDPA's sensitive-data section and the no-storage promise.
+    const latest = th.consent.policies[LATEST_CONSENT_POLICY_VERSION];
+    expect(latest.intro).toContain('มาตรา 26');
+    expect(latest.points.noStorage).toContain('ไม่มีการบันทึกภาพเซลฟี');
+  });
+
+  it('have the scan UI wording the spec requires', () => {
+    expect(th.results.strong).toBe('ใช่คุณ');
+    expect(th.results.maybe).toBe('อาจจะเป็นคุณ');
+    expect(th.results.notMe).toBe('ไม่ใช่ฉัน');
+    expect(th.share.deleteMyFace).toBe('ขอลบใบหน้าของฉัน');
+    expect(th.share.unavailable.title).toBe('ลิงก์นี้หมดอายุ');
+    expect(th.capture.guidance).toBe('หันหน้าตรง ถอดแว่นดำ/แมสก์ อยู่ในที่สว่าง');
   });
 
   it('every literal t() key in components and pages exists', () => {

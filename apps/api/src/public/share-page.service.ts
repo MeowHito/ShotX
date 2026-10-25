@@ -1,0 +1,357 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { consents, files, shareFaceSearchAvailableSql } from '@shotx/db';
+import {
+  type ConsentResponse,
+  decodeOpaqueCursor,
+  encodeOpaqueCursor,
+  faceScanResultKey,
+  generateOpaqueToken,
+  type ShareItemsResponse,
+  shareItemsCursorSchema,
+  type ShareMetaResponse,
+  shareUnlockKey,
+  type Viewer,
+  viewerColumns,
+} from '@shotx/shared';
+import { and, asc, eq, inArray, isNull, like, type SQL, sql } from 'drizzle-orm';
+import { recordActivity, shareEventSource } from '../activity/activity';
+import { verifyPassword } from '../auth/password';
+import type { PublicContext } from '../auth/public.guard';
+import type { ApiConfig } from '../config';
+import { type Db, rows } from '../db/db';
+import { ApiError } from '../http/api-error';
+import { sha256Hex } from '../http/client';
+import { validationError } from '../http/zod';
+import { SignedUrls } from '../media/signed-urls';
+import { type LoadedShare, passwordFingerprint, ShareAccess } from '../share/share-access';
+import {
+  API_CONFIG,
+  CLOCK,
+  type Clock,
+  DATABASE,
+  KEY_VALUE_STORE,
+  type KeyValueStore,
+  RATE_LIMITER,
+  type RateLimiter,
+} from '../tokens';
+import { type ShareItemRow, shareItemColumns, shareItemsScope, toShareItem } from './share-items';
+
+export const faceSearchDisabled = () =>
+  new ApiError('FEATURE_DISABLED', 'Face search is not available', { feature: 'face_search' });
+
+/** Sort key of share items, as PostgreSQL text (full microseconds; see shareItemsCursorSchema). */
+const ITEM_KEY = sql<string>`coalesce(${files.takenAt}, ${files.createdAt})`;
+
+/** RATE_LIMITED with Retry-After. */
+export async function enforceRate(
+  limiter: RateLimiter,
+  key: string,
+  rule: { limit: number; windowSeconds: number },
+): Promise<void> {
+  const result = await limiter.hit(key, rule.limit, rule.windowSeconds);
+  if (!result.allowed) {
+    throw new ApiError('RATE_LIMITED', 'Too many requests; try again later', undefined, {
+      'Retry-After': String(result.retryAfterSeconds),
+    });
+  }
+}
+
+/** Both identities of a browser: the resolved viewer and, when signed in, its anon session. */
+export function browserViewers(ctx: PublicContext): Viewer[] {
+  return ctx.viewer.kind === 'user'
+    ? [ctx.viewer, { kind: 'anon', anonId: ctx.anonId }]
+    : [ctx.viewer];
+}
+
+/** `consents` condition: the viewer's or session's rows of a share. */
+export function consentOf(shareId: string, viewer: Viewer): SQL {
+  const { viewerId, anonId } = viewerColumns(viewer);
+  return and(
+    eq(consents.shareId, shareId),
+    viewerId !== null ? eq(consents.viewerId, viewerId) : eq(consents.anonId, anonId ?? ''),
+  ) as SQL;
+}
+
+/**
+ * GET /s/:token, GET /s/:token/items, POST /s/:token/unlock and the consent routes. Gates come
+ * from ShareAccess; scope from fileInShareScopeSql plus the face_only grant.
+ */
+@Injectable()
+export class SharePageService {
+  constructor(
+    @Inject(DATABASE) private readonly db: Db,
+    @Inject(API_CONFIG) private readonly config: ApiConfig,
+    @Inject(CLOCK) private readonly clock: Clock,
+    @Inject(KEY_VALUE_STORE) private readonly store: KeyValueStore,
+    @Inject(RATE_LIMITER) private readonly limiter: RateLimiter,
+    @Inject(ShareAccess) private readonly access: ShareAccess,
+    @Inject(SignedUrls) private readonly urls: SignedUrls,
+  ) {}
+
+  /** FACE_SEARCH_ENABLED and a folder share with an active face index at, above or below it. */
+  async faceSearchAvailable(share: LoadedShare): Promise<boolean> {
+    if (!this.config.features.faceSearch) return false;
+    if (share.targetType !== 'folder' || share.targetFolderId === null) return false;
+    const [row] = await rows<{ ok: boolean }>(
+      this.db,
+      sql`SELECT ${shareFaceSearchAvailableSql(
+        { ownerId: share.ownerId, targetFolderId: share.targetFolderId },
+        this.clock.now(),
+      )} AS ok`,
+    );
+    return row?.ok === true;
+  }
+
+  /** A current (not withdrawn) consent of this viewer for the share and the current version. */
+  async hasConsent(share: { id: string }, viewer: Viewer): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: consents.id })
+      .from(consents)
+      .where(
+        and(
+          consentOf(share.id, viewer),
+          eq(consents.policyVersion, this.config.consent.policyVersion),
+          isNull(consents.withdrawnAt),
+        ),
+      )
+      .limit(1);
+    return row !== undefined;
+  }
+
+  // --- GET /s/:token -------------------------------------------------------------------------------
+
+  async meta(token: string, ctx: PublicContext): Promise<ShareMetaResponse> {
+    const share = await this.access.byToken(token);
+    this.access.assertAvailable(share);
+    const loginRequired = share.requireLogin && ctx.viewer.kind !== 'user';
+    const locked = !(await this.access.isUnlocked(share, ctx));
+    const open = !loginRequired && !locked;
+
+    let details: ShareMetaResponse['details'] = null;
+    if (open) {
+      const gallery = share.mode === 'gallery';
+      let itemCount: number | null = null;
+      let cover: NonNullable<ShareMetaResponse['details']>['cover'] = null;
+      if (gallery) {
+        const [count] = await this.db
+          .select({ n: sql<number>`count(*)`.mapWith(Number) })
+          .from(files)
+          .where(shareItemsScope(share));
+        itemCount = count?.n ?? 0;
+        const [first] = await this.db
+          .select({ previewKey: files.previewKey, width: files.width, height: files.height })
+          .from(files)
+          .where(and(shareItemsScope(share), like(files.mime, 'image/%')))
+          .orderBy(asc(ITEM_KEY), asc(files.id))
+          .limit(1);
+        if (first?.previewKey != null) {
+          // The cover is an issued view URL: one `view` event.
+          await recordActivity(this.db, {
+            type: 'view',
+            ...shareEventSource(share, ctx.viewer),
+            fileId: null,
+            bytes: 0,
+            meta: { items: 1 },
+          });
+          cover = {
+            previewUrl: this.urls.view(first.previewKey, this.urls.viewExpiry()),
+            width: first.width,
+            height: first.height,
+          };
+        }
+      }
+      details = { title: share.targetName, photographerName: share.ownerName, itemCount, cover };
+    }
+
+    const available = await this.faceSearchAvailable(share);
+    return {
+      token: share.token,
+      targetType: share.targetType,
+      mode: share.mode,
+      allowDownload: share.allowDownload,
+      downloadSize: share.downloadSize,
+      requireLogin: share.requireLogin,
+      passwordProtected: share.passwordHash !== null,
+      expiresAt: share.expiresAt === null ? null : share.expiresAt.toISOString(),
+      access: { loginRequired, locked },
+      details,
+      faceSearch: {
+        available,
+        policyVersion: available ? this.config.consent.policyVersion : null,
+        consented: available && (await this.hasConsent(share, ctx.viewer)),
+      },
+    };
+  }
+
+  // --- GET /s/:token/items -------------------------------------------------------------------------
+
+  /**
+   * One page of ready, live files in scope, by (coalesce(taken_at, created_at), id). In face_only
+   * mode only files of the viewer's face-search result (an empty page without one). One `view`
+   * activity event per page.
+   */
+  async items(
+    token: string,
+    ctx: PublicContext,
+    query: { cursor?: string | undefined; limit?: number | undefined },
+  ): Promise<ShareItemsResponse> {
+    const share = await this.access.open(token, ctx);
+    const limit = query.limit ?? this.config.share.pageSize;
+    let after: { key: string; id: string } | null = null;
+    if (query.cursor !== undefined) {
+      const cursor = decodeOpaqueCursor(shareItemsCursorSchema, query.cursor);
+      if (cursor === null || cursor.shareId !== share.id) {
+        throw validationError(['query', 'cursor'], 'is not a valid cursor for this share');
+      }
+      after = cursor;
+    }
+    const grant = await this.access.grant(share, ctx.viewer);
+    let found: (ShareItemRow & { key: string })[] = [];
+    if (share.mode === 'gallery' || grant !== null) {
+      found = await this.pageRows(share, grant, after, limit);
+    }
+    const shown = found.slice(0, limit);
+    const last = shown.at(-1);
+    await recordActivity(this.db, {
+      type: 'view',
+      ...shareEventSource(share, ctx.viewer),
+      fileId: null,
+      bytes: 0,
+      meta: { items: shown.length },
+    });
+    const expiresAt = this.urls.viewExpiry();
+    return {
+      items: shown.map((row) => toShareItem(row, this.urls, expiresAt)),
+      nextCursor:
+        found.length > limit && last !== undefined
+          ? encodeOpaqueCursor(shareItemsCursorSchema, {
+              v: 1,
+              shareId: share.id,
+              key: last.key,
+              id: last.id,
+            })
+          : null,
+    };
+  }
+
+  private pageRows(
+    share: LoadedShare,
+    grant: ReadonlySet<string> | null,
+    after: { key: string; id: string } | null,
+    limit: number,
+  ) {
+    return this.db
+      .select({ ...shareItemColumns, key: sql<string>`${ITEM_KEY}::text` })
+      .from(files)
+      .where(
+        and(
+          shareItemsScope(share),
+          share.mode === 'face_only' ? inArray(files.id, [...(grant ?? [])]) : undefined,
+          after === null
+            ? undefined
+            : sql`(${ITEM_KEY}, ${files.id}) > (${after.key}::timestamptz, ${after.id}::uuid)`,
+        ),
+      )
+      .orderBy(asc(ITEM_KEY), asc(files.id))
+      .limit(limit + 1);
+  }
+
+  // --- POST /s/:token/unlock -----------------------------------------------------------------------
+
+  /**
+   * Checks the password (argon2id) and sets the share's unlock cookie: an opaque token whose
+   * SHA-256 maps, in Redis, to the password fingerprint (TTL SHARE_UNLOCK_TTL_SECONDS). Rate-limited
+   * per IP and share before the password is checked. Returns the cookie value, or null on a share
+   * without a password (no-op).
+   */
+  async unlock(token: string, ctx: PublicContext, password: string): Promise<string | null> {
+    const share = await this.access.byToken(token);
+    this.access.assertAvailable(share);
+    if (share.requireLogin && ctx.viewer.kind !== 'user') {
+      throw new ApiError('LOGIN_REQUIRED', 'Sign in to open this share');
+    }
+    await enforceRate(
+      this.limiter,
+      `share-unlock:${share.id}:${ctx.ipHash}`,
+      this.config.share.rateLimits.unlockPerIp,
+    );
+    if (share.passwordHash === null) return null;
+    if (!(await verifyPassword(password, share.passwordHash))) {
+      throw new ApiError('PASSWORD_INCORRECT', 'Wrong password');
+    }
+    const cookie = generateOpaqueToken();
+    await this.store.setWithTtl(
+      shareUnlockKey(share.id, sha256Hex(cookie)),
+      passwordFingerprint(share.passwordHash),
+      this.config.share.unlockTtlSeconds,
+    );
+    return cookie;
+  }
+
+  // --- POST /s/:token/consent ----------------------------------------------------------------------
+
+  /**
+   * Records consent to the current policy version for this viewer or session (idempotent: INSERT
+   * ON CONFLICT DO NOTHING on the partial unique index, then SELECT). Stores ip_hash, never the
+   * address.
+   */
+  async giveConsent(
+    token: string,
+    ctx: PublicContext,
+    policyVersion: string,
+  ): Promise<ConsentResponse> {
+    const share = await this.access.open(token, ctx);
+    if (!this.config.features.faceSearch) throw faceSearchDisabled();
+    const current = this.config.consent.policyVersion;
+    if (policyVersion !== current) {
+      throw new ApiError('CONSENT_VERSION_MISMATCH', 'The consent text has a newer version', {
+        policyVersion: current,
+      });
+    }
+    await this.db
+      .insert(consents)
+      .values({
+        shareId: share.id,
+        ...viewerColumns(ctx.viewer),
+        policyVersion: current,
+        ipHash: ctx.ipHash,
+        acceptedAt: this.clock.now(),
+      })
+      .onConflictDoNothing();
+    const [row] = await this.db
+      .select({ acceptedAt: consents.acceptedAt })
+      .from(consents)
+      .where(
+        and(
+          consentOf(share.id, ctx.viewer),
+          eq(consents.policyVersion, current),
+          isNull(consents.withdrawnAt),
+        ),
+      )
+      .limit(1);
+    if (row === undefined) throw new Error('Consent vanished after insert');
+    return { policyVersion: current, acceptedAt: row.acceptedAt.toISOString() };
+  }
+
+  // --- DELETE /s/:token/consent --------------------------------------------------------------------
+
+  /**
+   * Withdraws every current consent of this browser (the viewer and, when signed in, its anon
+   * session) for the share and deletes their face-search results (the face_only grant). Works on
+   * revoked or expired shares and while face search is disabled; only the token must exist.
+   */
+  async withdrawConsent(token: string, ctx: PublicContext): Promise<void> {
+    const share = await this.access.byToken(token);
+    const viewers = browserViewers(ctx);
+    const now = this.clock.now();
+    for (const viewer of viewers) {
+      await this.db
+        .update(consents)
+        .set({
+          withdrawnAt: sql`greatest(${now.toISOString()}::timestamptz, ${consents.acceptedAt})`,
+        })
+        .where(and(consentOf(share.id, viewer), isNull(consents.withdrawnAt)));
+    }
+    await this.store.del(...viewers.map((viewer) => faceScanResultKey(share.id, viewer)));
+  }
+}

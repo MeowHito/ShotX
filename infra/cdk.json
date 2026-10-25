@@ -76,7 +76,10 @@
       },
       "storage": {
         "abortIncompleteMultipartUploadDays": 2,
-        "tmpExpirationDays": 1,
+        "tmpIndexExpirationDays": 1,
+        "tmpZipsExpirationDays": 2,
+        "tmpReconcileExpirationDays": 7,
+        "tmpOtherExpirationDays": 7,
         "originalsIntelligentTieringAfterDays": 0,
         "uploadCorsMaxAgeSeconds": 3000,
         "cloudFrontLogExpirationDays": 400
@@ -120,6 +123,10 @@
             "dlqVisibleMessagesThreshold": 1,
             "oldestMessageAgeSeconds": 600,
             "oldestMessageAgeEvaluationPeriods": 5
+          },
+          "jobBudget": {
+            "minThroughputBytesPerSecond": 10485760,
+            "processingSeconds": 60
           }
         },
         "jobs": {
@@ -179,6 +186,7 @@
           "minCapacity": 1,
           "maxCapacity": 10,
           "ephemeralStorageGiB": 50,
+          "stopTimeoutMarginSeconds": 10,
           "queueDepthScaling": {
             "periodSeconds": 60,
             "cooldownSeconds": 120,
@@ -253,10 +261,15 @@
         "shareCaptchaRateLimit": 1000,
         "faceSearchBlockRateLimit": 100,
         "faceSearchCaptchaRateLimit": 30,
+        "unlockBlockRateLimit": 100,
+        "downloadsBlockRateLimit": 1000,
         "captchaImmunitySeconds": 1800,
         "sharePathPrefixes": ["/s/", "/api/s/"],
-        "faceSearchPathPrefix": "/api/s/",
+        "shareApiPathPrefix": "/api/s/",
         "faceSearchPathSuffix": "/face-search",
+        "faceDeletionPathSuffix": "/face-deletion",
+        "unlockPathSuffix": "/unlock",
+        "downloadsPathSuffix": "/downloads",
         "bodyInspectionLimit": "KB_16",
         "faceSearchBody": {
           "jpegBytesPerPixel": 3,
@@ -295,7 +308,14 @@
         }
       },
       "secrets": {
-        "cloudFrontSigningPrivateKeyName": "shotx/prod/cloudfront-signing-private-key"
+        "cloudFrontSigningPrivateKeyName": "shotx/prod/cloudfront-signing-private-key",
+        "ipHashSecretLength": 64
+      },
+      "features": {
+        "faceSearchEnabled": false
+      },
+      "consent": {
+        "policyVersion": "2026-10-25"
       },
       "rekognition": {
         "collectionPrefix": "pg-"

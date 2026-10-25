@@ -7,7 +7,12 @@ import {
   QueueConsumer,
   retryDelaySeconds,
 } from './consumer';
-import { Heartbeat, heartbeatIntervalMs, heartbeatVisibilitySeconds } from './heartbeat';
+import {
+  Heartbeat,
+  heartbeatIntervalMs,
+  heartbeatRetryDelayMs,
+  heartbeatVisibilitySeconds,
+} from './heartbeat';
 
 const URL = 'http://sqs.local/queue/media';
 const TIMEOUT = 300;
@@ -125,7 +130,55 @@ describe('QueueConsumer', () => {
     expect(log.entries.some((e) => e.level === 'error' && /12 h/.test(e.msg))).toBe(true);
   });
 
-  it('keeps beating after a transient heartbeat error', async () => {
+  it('retries a failed heartbeat within seconds, with jitter and backoff, then beats normally', async () => {
+    const client = new MemoryQueueClient(() => Date.now(), TIMEOUT);
+    client.enqueue(URL, 'x');
+    const [message] = await client.receive(URL, { maxMessages: 1, waitTimeSeconds: 0 });
+    const start = Date.now();
+    const original = client.changeVisibility.bind(client);
+    const attempts: number[] = [];
+    let failures = 3;
+    client.changeVisibility = (url, handle, seconds) => {
+      attempts.push(Date.now() - start);
+      return failures-- > 0
+        ? Promise.reject(new Error('throttled'))
+        : original(url, handle, seconds);
+    };
+    const log = memoryLogger();
+    const heartbeat = new Heartbeat({
+      client,
+      queueUrl: URL,
+      receiptHandle: message!.receiptHandle,
+      visibilityTimeoutSeconds: TIMEOUT,
+      receivedAt: start,
+      now: () => Date.now(),
+      log,
+      onLost: () => undefined,
+      random: () => 0.5,
+    });
+    heartbeat.start();
+    await vi.advanceTimersByTimeAsync(110_000);
+    // Tick at 100 s fails; retries after 1.5 s, 3 s, 6 s (¾ of 2 s, 4 s, 8 s); the 4th succeeds.
+    expect(attempts).toEqual([100_000, 101_500, 104_500, 110_500].filter((t) => t <= 110_000));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(attempts).toEqual([100_000, 101_500, 104_500, 110_500]);
+    expect(client.visibilityCalls.map((v) => v.seconds)).toEqual([300]);
+    // Back on the normal interval after the success.
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(attempts.at(-1)).toBe(210_500);
+    expect(log.entries.filter((e) => /retrying soon/.test(e.msg))).toHaveLength(3);
+    heartbeat.stop();
+  });
+
+  it('caps heartbeat retry delays at the interval and jitters them between half and all of it', () => {
+    expect(heartbeatRetryDelayMs(1, 100_000, 2000, () => 0)).toBe(1000);
+    expect(heartbeatRetryDelayMs(1, 100_000, 2000, () => 0.999_999)).toBe(1999);
+    expect(heartbeatRetryDelayMs(3, 100_000, 2000, () => 0)).toBe(4000);
+    expect(heartbeatRetryDelayMs(30, 100_000, 2000, () => 0)).toBe(50_000);
+    expect(heartbeatRetryDelayMs(30, 1000, 2000, () => 0.5)).toBe(750);
+  });
+
+  it('keeps the message after transient heartbeat errors', async () => {
     const client = new MemoryQueueClient(() => Date.now(), TIMEOUT);
     client.enqueue(URL, 'x');
     const { handler, calls } = controllableHandler();
@@ -134,8 +187,9 @@ describe('QueueConsumer', () => {
     client.changeVisibility = (url, handle, seconds) =>
       failures-- > 0 ? Promise.reject(new Error('throttled')) : original(url, handle, seconds);
     const poll = consumer(client, handler).pollOnce();
-    await vi.advanceTimersByTimeAsync(200_000);
-    expect(client.visibilityCalls).toHaveLength(1); // the first failed before being recorded
+    await vi.advanceTimersByTimeAsync(105_000);
+    // The tick at 100 s failed (not recorded); the retry a few seconds later went through.
+    expect(client.visibilityCalls).toHaveLength(1);
     calls[0]!.resolve();
     await poll;
     expect(client.deleted).toEqual(['m-1']);

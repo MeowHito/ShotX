@@ -49,6 +49,17 @@ export const uploadInitBodySchema = z.object({
    * `name (2).ext`, … and returns the final name; `fail` answers NAME_TAKEN.
    */
   onNameConflict: z.enum(UPLOAD_NAME_CONFLICT_MODES).default('rename'),
+  /**
+   * Idempotency: a random UUID the client generates once per file it wants to upload and sends
+   * again on every retry of this init (lost response, reconnect). Unique per photographer
+   * (`files_client_upload_id_unique`). A retry while that upload is still open (`uploading`,
+   * session not expired) answers 201 with the same `fileId` and file, fresh part URLs, and
+   * reserves nothing again; a retry that declares something else (name, size, mime, folder,
+   * relativePath) is IDEMPOTENCY_KEY_REUSED; a retry after the upload was completed, failed or
+   * expired is CONFLICT. After an abort the id is free again. Optional for older clients; web
+   * always sends it.
+   */
+  clientUploadId: idSchema.optional(),
 });
 export type UploadInitBody = z.input<typeof uploadInitBodySchema>;
 

@@ -52,6 +52,8 @@ describe('schema', () => {
         'audit_log',
         'zip_jobs',
         'zip_job_entries',
+        'face_deletions',
+        'share_daily_stats',
       ].sort(),
     );
   });

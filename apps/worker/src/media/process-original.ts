@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -246,6 +246,7 @@ async function renderImage(
       previewKey: keys.preview,
       webKey: keys.web,
       posterKey: null,
+      webSizeBytes: out.web.length,
     },
     uploads: [
       { key: keys.thumb, body: out.thumb, contentType: 'image/webp' },
@@ -281,6 +282,7 @@ async function renderVideo(
       previewKey: keys.preview,
       webKey: null,
       posterKey: keys.poster,
+      webSizeBytes: (await stat(preview)).size,
     },
     uploads: [
       { key: keys.thumb, body: poster.thumb, contentType: 'image/webp' },
@@ -300,7 +302,7 @@ async function enqueueFacesIfNeeded(row: FileRow, deps: MediaDeps, log: Logger):
   if (mediaKind(row.mime) !== 'image' || row.deletedAt !== null || row.faceCount !== null) return;
   if (row.folderId === null) return;
   const now = new Date((deps.now ?? Date.now)());
-  if (!(await folderIndexesFaces(deps.db, row.folderId, now))) return;
+  if (!(await folderIndexesFaces(deps.db, row.ownerId, row.folderId, now))) return;
   await deps.queues.sendMessage(
     deps.facesQueueUrl,
     serializeQueueMessage('faces', { type: 'index.file', fileId: row.id }),

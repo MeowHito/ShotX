@@ -1,6 +1,6 @@
 import type { RedisConfig } from '@shotx/shared';
 import { Redis } from 'ioredis';
-import type { RateLimiter, RateLimitResult } from '../tokens';
+import type { KeyValueStore, RateLimiter, RateLimitResult } from '../tokens';
 
 /**
  * The API's Redis client. `enableReadyCheck: false` because the app user's ACL denies
@@ -70,5 +70,146 @@ export class MemoryRateLimiter implements RateLimiter {
       allowed: w.count <= limit,
       retryAfterSeconds: Math.max(1, Math.ceil((w.resetAt - now) / 1000)),
     });
+  }
+}
+
+/** HGET + HDEL of one field in one step (feedback must not count a hit twice). */
+const HASH_TAKE_SCRIPT = `
+local value = redis.call('HGET', KEYS[1], ARGV[1])
+if value then redis.call('HDEL', KEYS[1], ARGV[1]) end
+return value
+`;
+
+type RedisStoreClient = Pick<Redis, 'get' | 'set' | 'del' | 'hgetall' | 'multi' | 'eval'>;
+
+/**
+ * KeyValueStore on Redis. Every key gets the service prefix, every write a TTL (ADR 0005), and
+ * every error propagates so the caller denies the request (fails closed).
+ */
+export class RedisKeyValueStore implements KeyValueStore {
+  constructor(
+    private readonly redis: RedisStoreClient,
+    private readonly prefix: string,
+  ) {}
+
+  private k(key: string): string {
+    return `${this.prefix}${key}`;
+  }
+
+  async get(key: string): Promise<string | null> {
+    return this.redis.get(this.k(key));
+  }
+
+  async setWithTtl(key: string, value: string, ttlSeconds: number): Promise<void> {
+    await this.redis.set(this.k(key), value, 'EX', ttlSeconds);
+  }
+
+  async del(...keys: string[]): Promise<void> {
+    if (keys.length > 0) await this.redis.del(...keys.map((key) => this.k(key)));
+  }
+
+  async hashGetAll(key: string): Promise<Record<string, string>> {
+    return this.redis.hgetall(this.k(key));
+  }
+
+  async hashSetWithTtl(
+    key: string,
+    fields: Record<string, string>,
+    ttlSeconds: number,
+  ): Promise<void> {
+    const multi = this.redis.multi();
+    if (Object.keys(fields).length > 0) multi.hset(this.k(key), fields);
+    multi.expire(this.k(key), ttlSeconds);
+    const results = await multi.exec();
+    // exec() resolves null when the transaction was discarded; each entry carries its own error.
+    if (results === null) throw new Error('Redis transaction was discarded');
+    for (const [error] of results) if (error) throw error;
+  }
+
+  async hashTake(key: string, field: string): Promise<string | null> {
+    const value = (await this.redis.eval(HASH_TAKE_SCRIPT, 1, this.k(key), field)) as string | null;
+    return value ?? null;
+  }
+}
+
+type MemoryEntry = { value: string | Map<string, string>; expiresAt: number };
+
+/** In-process KeyValueStore for tests and local runs, with TTLs on the given clock. */
+export class MemoryKeyValueStore implements KeyValueStore {
+  private readonly data = new Map<string, MemoryEntry>();
+  /** Make every call fail (Redis down), to test that callers fail closed. */
+  failing = false;
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  private live(key: string): MemoryEntry | undefined {
+    const entry = this.data.get(key);
+    if (entry === undefined) return undefined;
+    if (entry.expiresAt <= this.now()) {
+      this.data.delete(key);
+      return undefined;
+    }
+    return entry;
+  }
+
+  private check(): Promise<void> {
+    return this.failing ? Promise.reject(new Error('Redis unavailable')) : Promise.resolve();
+  }
+
+  /** Seconds a key has left, or null when it doesn't exist (for assertions). */
+  ttlSeconds(key: string): number | null {
+    const entry = this.live(key);
+    return entry === undefined ? null : Math.ceil((entry.expiresAt - this.now()) / 1000);
+  }
+
+  /** Live keys (for assertions). */
+  keys(): string[] {
+    return [...this.data.keys()].filter((key) => this.live(key) !== undefined);
+  }
+
+  async get(key: string): Promise<string | null> {
+    await this.check();
+    const value = this.live(key)?.value;
+    return typeof value === 'string' ? value : null;
+  }
+
+  async setWithTtl(key: string, value: string, ttlSeconds: number): Promise<void> {
+    await this.check();
+    this.data.set(key, { value, expiresAt: this.now() + ttlSeconds * 1000 });
+  }
+
+  async del(...keys: string[]): Promise<void> {
+    await this.check();
+    for (const key of keys) this.data.delete(key);
+  }
+
+  async hashGetAll(key: string): Promise<Record<string, string>> {
+    await this.check();
+    const value = this.live(key)?.value;
+    return value instanceof Map ? Object.fromEntries(value) : {};
+  }
+
+  async hashSetWithTtl(
+    key: string,
+    fields: Record<string, string>,
+    ttlSeconds: number,
+  ): Promise<void> {
+    await this.check();
+    const current = this.live(key)?.value;
+    const hash = current instanceof Map ? current : new Map<string, string>();
+    for (const [field, value] of Object.entries(fields)) hash.set(field, value);
+    if (hash.size > 0) {
+      this.data.set(key, { value: hash, expiresAt: this.now() + ttlSeconds * 1000 });
+    }
+  }
+
+  async hashTake(key: string, field: string): Promise<string | null> {
+    await this.check();
+    const value = this.live(key)?.value;
+    if (!(value instanceof Map)) return null;
+    const taken = value.get(field) ?? null;
+    value.delete(field);
+    if (value.size === 0) this.data.delete(key);
+    return taken;
   }
 }

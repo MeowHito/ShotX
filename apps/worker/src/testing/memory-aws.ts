@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
-import type { ListedObject, ObjectHead, ObjectStore } from '../aws/object-store';
+import { Readable } from 'node:stream';
+import type {
+  ListedObject,
+  ObjectHead,
+  ObjectStore,
+  UploadStreamOptions,
+} from '../aws/object-store';
 import {
   type QueueClient,
   type ReceivedMessage,
@@ -13,8 +19,22 @@ export class MemoryObjectStore implements ObjectStore {
   readonly objects = new Map<string, { body: Buffer; contentType: string }>();
   /** Open multipart uploads by upload id. */
   readonly uploads = new Map<string, string>();
-  readonly calls = { put: 0, deleted: [] as string[], aborted: [] as string[] };
+  readonly calls = {
+    put: 0,
+    deleted: [] as string[],
+    aborted: [] as string[],
+    /** Streams opened by getStream, and how many were open at most at the same time. */
+    streamsOpened: 0,
+    maxOpenStreams: 0,
+    /** Every uploadStream call: its key, part size and the largest chunk it received. */
+    uploads: [] as Array<{ key: string; partBytes: number; bytes: number; maxChunk: number }>,
+  };
   failDeletes = false;
+  /** Chunk size getStream emits objects in, so streaming is observable. */
+  streamChunkBytes = 64 * 1024;
+  /** Keys whose stream fails after the first chunk. */
+  readonly failStreams = new Set<string>();
+  private openStreams = 0;
 
   seed(key: string, body: Uint8Array, contentType = 'application/octet-stream'): void {
     this.objects.set(key, { body: Buffer.from(body), contentType });
@@ -23,6 +43,60 @@ export class MemoryObjectStore implements ObjectStore {
   head(key: string): Promise<ObjectHead | null> {
     const object = this.objects.get(key);
     return Promise.resolve(object === undefined ? null : { size: object.body.length });
+  }
+
+  get(key: string): Promise<Uint8Array | null> {
+    const object = this.objects.get(key);
+    return Promise.resolve(object === undefined ? null : new Uint8Array(object.body));
+  }
+
+  getStream(key: string): Promise<Readable> {
+    const object = this.objects.get(key);
+    if (object === undefined)
+      return Promise.reject(Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' }));
+    this.calls.streamsOpened++;
+    this.openStreams++;
+    this.calls.maxOpenStreams = Math.max(this.calls.maxOpenStreams, this.openStreams);
+    const { body } = object;
+    const size = this.streamChunkBytes;
+    const fail = this.failStreams.has(key);
+    let offset = 0;
+    let closed = false;
+    const close = () => {
+      if (!closed) this.openStreams--;
+      closed = true;
+    };
+    const stream = new Readable({
+      read() {
+        if (fail && offset > 0) {
+          this.destroy(new Error('stream reset'));
+          return;
+        }
+        if (offset >= body.length) {
+          this.push(null);
+          return;
+        }
+        this.push(body.subarray(offset, offset + size));
+        offset += size;
+      },
+    });
+    stream.once('close', close);
+    return Promise.resolve(stream);
+  }
+
+  async uploadStream(key: string, body: Readable, options: UploadStreamOptions): Promise<void> {
+    const chunks: Buffer[] = [];
+    let maxChunk = 0;
+    for await (const chunk of body) {
+      options.signal?.throwIfAborted();
+      const buffer = Buffer.from(chunk as Uint8Array);
+      maxChunk = Math.max(maxChunk, buffer.length);
+      chunks.push(buffer);
+    }
+    options.signal?.throwIfAborted();
+    const data = Buffer.concat(chunks);
+    this.calls.uploads.push({ key, partBytes: options.partBytes, bytes: data.length, maxChunk });
+    this.objects.set(key, { body: data, contentType: options.contentType });
   }
 
   getRange(key: string, start: number, end: number): Promise<Uint8Array> {
@@ -158,6 +232,11 @@ export class MemoryQueueClient implements QueueClient {
 
   sendMessage(queueUrl: string, body: string): Promise<void> {
     this.sent.push({ queueUrl, body });
+    return Promise.resolve();
+  }
+
+  sendMessages(queueUrl: string, bodies: readonly string[]): Promise<void> {
+    for (const body of bodies) this.sent.push({ queueUrl, body });
     return Promise.resolve();
   }
 

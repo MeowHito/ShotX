@@ -3,12 +3,14 @@ import type {
   auditLog,
   consents,
   dailyStats,
+  faceDeletions,
   faceFeedback,
   faces,
   files,
   folders,
   payments,
   plans,
+  shareDailyStats,
   shares,
   storageUsage,
   subscriptions,
@@ -50,3 +52,7 @@ export type ZipJob = typeof zipJobs.$inferSelect;
 export type NewZipJob = typeof zipJobs.$inferInsert;
 export type ZipJobEntry = typeof zipJobEntries.$inferSelect;
 export type NewZipJobEntry = typeof zipJobEntries.$inferInsert;
+export type FaceDeletion = typeof faceDeletions.$inferSelect;
+export type NewFaceDeletion = typeof faceDeletions.$inferInsert;
+export type ShareDailyStats = typeof shareDailyStats.$inferSelect;
+export type NewShareDailyStats = typeof shareDailyStats.$inferInsert;

@@ -143,6 +143,8 @@ describe('media consumer', () => {
     expect(store.objects.has(s3Key)).toBe(true);
     const web = store.objects.get(row!.webKey!);
     expect(web?.contentType).toBe('image/jpeg');
+    // web_size_bytes: the size of the web download variant, for download bytes and zip totals.
+    expect(row?.webSizeBytes).toBe(web!.body.length);
     expect((await sharp(web!.body).metadata()).exif).toBeUndefined();
     expect(queues.sent).toEqual([]); // root file: no folder, no face indexing
   });
@@ -262,6 +264,28 @@ describe('media consumer', () => {
     expect(queues.sent).toHaveLength(2);
   });
 
+  it('queues face indexing for photos in a subfolder of a face-indexed folder', async () => {
+    const ownerId = await createPhotographer(db, { reservedBytes: jpeg.length });
+    const parent = await createFolder(db, ownerId, { faceIndexEnabled: true });
+    const child = await createFolder(db, ownerId, { parent });
+    const { id, body } = await upload(jpeg, { ownerId, folderId: child.id });
+    await handle(body, context());
+    expect(queues.sent).toEqual([
+      { queueUrl: FACES_URL, body: JSON.stringify({ type: 'index.file', fileId: id }) },
+    ]);
+  });
+
+  it("does not queue face indexing when the folder's index expired", async () => {
+    const ownerId = await createPhotographer(db, { reservedBytes: jpeg.length });
+    const folder = await createFolder(db, ownerId, {
+      faceIndexEnabled: true,
+      faceIndexExpiresAt: new Date(Date.now() - 1000),
+    });
+    const { body } = await upload(jpeg, { ownerId, folderId: folder.id });
+    await handle(body, context());
+    expect(queues.sent).toEqual([]);
+  });
+
   it('does not queue face indexing when the folder has it off', async () => {
     const ownerId = await createPhotographer(db, { reservedBytes: jpeg.length });
     const folder = await createFolder(db, ownerId);
@@ -313,6 +337,7 @@ describe('media consumer', () => {
         previewKey: derivedKey({ photographerId: ownerId, fileId: id }, 'videoPreview'),
       });
       expect(store.objects.get(row!.previewKey!)?.contentType).toBe('video/mp4');
+      expect(row?.webSizeBytes).toBe(store.objects.get(row!.previewKey!)!.body.length);
       expect(store.objects.get(row!.posterKey!)?.contentType).toBe('image/jpeg');
       expect(queues.sent).toEqual([]);
       expect(await usageOf(db, ownerId)).toEqual({ usedBytes: video.length, reservedBytes: 0 });

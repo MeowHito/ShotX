@@ -13,7 +13,9 @@ import {
 import { NestFactory } from '@nestjs/core';
 import { ExpressAdapter } from '@nestjs/platform-express';
 import express from 'express';
-import { PhotographerGuard } from './auth/photographer.guard';
+import type { FaceProvider } from '@shotx/face';
+import { PhotographerGuard, UserGuard } from './auth/photographer.guard';
+import { OriginGuard, PublicGuard } from './auth/public.guard';
 import type { ApiConfig } from './config';
 import type { Db } from './db/db';
 import { DriveController } from './drive/drive.controller';
@@ -22,15 +24,30 @@ import { DriveFileMapper } from './drive/media-urls';
 import { ApiError } from './http/api-error';
 import { ApiExceptionFilter, errorResponse } from './http/exception.filter';
 import { jsonBodyMiddleware } from './http/json-body';
+import { MeController } from './me/me.controller';
+import { MeService } from './me/me.service';
+import { SignedUrls } from './media/signed-urls';
+import { DownloadsService } from './public/downloads.service';
+import { FaceService } from './public/face.service';
+import { PublicShareController } from './public/public-share.controller';
+import { SharePageService } from './public/share-page.service';
+import { ShareAccess } from './share/share-access';
+import { SharesController } from './share/shares.controller';
+import { SharesService } from './share/shares.service';
 import {
   API_CONFIG,
   CLOCK,
   type Clock,
   DATABASE,
+  FACE_PROVIDER,
+  KEY_VALUE_STORE,
+  type KeyValueStore,
   MEDIA_URL_SIGNER,
   type MediaUrlSigner,
   OBJECT_STORAGE,
   type ObjectStorage,
+  QUEUE_SENDER,
+  type QueueSender,
   RATE_LIMITER,
   type RateLimiter,
   TOKEN_VERIFIER,
@@ -48,6 +65,11 @@ export interface ApiDeps {
   rateLimiter: RateLimiter;
   tokenVerifier: TokenVerifier;
   clock: Clock;
+  /** Redis in production: face-scan results, unlock proofs, viewer sessions. */
+  store: KeyValueStore;
+  queue: QueueSender;
+  /** Rekognition (interactive profile) in production; FakeFaceProvider in tests. */
+  faceProvider: FaceProvider;
   /** Closes pools and clients when the app shuts down. */
   onShutdown?: () => Promise<void>;
 }
@@ -77,7 +99,14 @@ export class AppModule {
   static forRoot(deps: ApiDeps): DynamicModule {
     return {
       module: AppModule,
-      controllers: [HealthController, DriveController, UploadController],
+      controllers: [
+        HealthController,
+        DriveController,
+        UploadController,
+        MeController,
+        SharesController,
+        PublicShareController,
+      ],
       providers: [
         { provide: API_CONFIG, useValue: deps.config },
         { provide: DATABASE, useValue: deps.db },
@@ -86,12 +115,25 @@ export class AppModule {
         { provide: RATE_LIMITER, useValue: deps.rateLimiter },
         { provide: TOKEN_VERIFIER, useValue: deps.tokenVerifier },
         { provide: CLOCK, useValue: deps.clock },
+        { provide: KEY_VALUE_STORE, useValue: deps.store },
+        { provide: QUEUE_SENDER, useValue: deps.queue },
+        { provide: FACE_PROVIDER, useValue: deps.faceProvider },
         { provide: SHUTDOWN, useValue: deps.onShutdown ?? (() => Promise.resolve()) },
         ShutdownHook,
         PhotographerGuard,
+        UserGuard,
+        PublicGuard,
+        OriginGuard,
+        SignedUrls,
         DriveFileMapper,
         DriveService,
         UploadService,
+        MeService,
+        SharesService,
+        ShareAccess,
+        SharePageService,
+        FaceService,
+        DownloadsService,
       ],
     };
   }

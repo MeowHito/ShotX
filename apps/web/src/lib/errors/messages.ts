@@ -1,11 +1,15 @@
 import {
   ErrorCode,
+  faceSearchUnavailableDetailsSchema,
   fileTooLargeDetailsSchema,
   folderDepthExceededDetailsSchema,
   nameTakenDetailsSchema,
+  noFaceDetectedDetailsSchema,
   quotaExceededDetailsSchema,
+  shareExpiredDetailsSchema,
   subscriptionInactiveDetailsSchema,
   unsupportedFileTypeDetailsSchema,
+  zipTooLargeDetailsSchema,
 } from '@shotx/shared';
 import type { Messages } from '../../messages/th';
 import { ApiError, ContractError, NetworkError } from '../api/errors';
@@ -106,6 +110,53 @@ export function messageForCode(
               key: 'details.subscriptionStatus',
               values: { status: labels.subscriptionStatus(d.data.status) },
             };
+      }
+      break;
+    }
+    case ErrorCode.SHARE_EXPIRED: {
+      // Every reason reads "this link has expired"; the reason adds why.
+      const d = shareExpiredDetailsSchema.safeParse(details);
+      if (d.success) {
+        const keys = {
+          revoked: 'details.shareRevoked',
+          expired: 'details.shareExpired',
+          unavailable: 'details.shareUnavailable',
+        } as const;
+        return { key: keys[d.data.reason] };
+      }
+      break;
+    }
+    case ErrorCode.ZIP_TOO_LARGE: {
+      const d = zipTooLargeDetailsSchema.safeParse(details);
+      if (d.success) {
+        return {
+          key: 'details.zipTooLarge',
+          values: {
+            maxFiles: d.data.maxFiles,
+            maxBytes: formatBytes(d.data.maxBytes),
+            files: d.data.files,
+            bytes: formatBytes(d.data.bytes),
+          },
+        };
+      }
+      break;
+    }
+    case ErrorCode.NO_FACE_DETECTED: {
+      const d = noFaceDetectedDetailsSchema.safeParse(details);
+      if (d.success) {
+        return { key: 'details.noFaceDetected', values: { count: d.data.selfiesWithoutFace } };
+      }
+      break;
+    }
+    case ErrorCode.FACE_SEARCH_UNAVAILABLE: {
+      const d = faceSearchUnavailableDetailsSchema.safeParse(details);
+      if (d.success) {
+        return {
+          key:
+            d.data.reason === 'not_folder_share'
+              ? 'details.faceSearchNotFolder'
+              : 'details.faceSearchNotIndexed',
+        };
       }
       break;
     }

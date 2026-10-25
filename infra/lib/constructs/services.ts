@@ -18,15 +18,17 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import type * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
-import { faceSearchLimits, type PlatformConfig } from '../config';
+import { faceSearchLimits, type PlatformConfig, workerSettings } from '../config';
 import {
   ALB_SERVICES,
   APP_ROUTING_HEADER,
   PATHS,
   PRIMARY_REGION,
+  TMP_RECONCILE_PREFIX,
   type AlbServiceName,
   type ServiceName,
 } from '../constants';
+import { workerStopTimeoutSeconds } from '../worker-limits';
 import type { JobQueue } from './job-queues';
 
 export interface ServicesProps {
@@ -80,6 +82,8 @@ export class Services extends Construct {
   readonly loadBalancer: elbv2.ApplicationLoadBalancer;
   readonly services: Record<ServiceName, ecs.FargateService>;
   readonly taskRoles: Record<ServiceName, iam.IRole>;
+  /** IP_HASH_SECRET (api): HMAC key of consents.ip_hash. */
+  readonly ipHashSecret: secretsmanager.Secret;
 
   constructor(scope: Construct, id: string, props: ServicesProps) {
     super(scope, id);
@@ -189,6 +193,21 @@ export class Services extends Construct {
       [COGNITO_ENV.admins.clientId]: cognito.adminClientId,
       [COGNITO_ENV.admins.domain]: cognito.adminDomain,
     };
+    // HMAC key for consents.ip_hash. Generated, never in the template or in cdk.json. Retained:
+    // a new key only means new rows can't be linked to old ones, but nothing needs that.
+    this.ipHashSecret = new secretsmanager.Secret(this, 'IpHashSecret', {
+      secretName: `${prefix}/ip-hash-secret`,
+      description: 'IP_HASH_SECRET: HMAC-SHA256 key of consents.ip_hash (api)',
+      removalPolicy: RemovalPolicy.RETAIN,
+      generateSecretString: {
+        passwordLength: config.secrets.ipHashSecretLength,
+        excludePunctuation: true,
+        includeSpace: false,
+      },
+    });
+    // Typed context values; services.env can't set these (config validation).
+    const features = { FACE_SEARCH_ENABLED: String(config.features.faceSearchEnabled) };
+    const consent = { CONSENT_POLICY_VERSION: config.consent.policyVersion };
     const extra = svc.env;
 
     const environment: Record<ServiceName, Record<string, string>> = {
@@ -197,6 +216,8 @@ export class Services extends Construct {
         ...userPoolEnv,
         PORT: String(svc.web.containerPort),
         API_INTERNAL_URL: apiInternalUrl,
+        // CSP connect-src: the one bucket origin the browser PUTs upload parts to.
+        MEDIA_BUCKET: bucket.bucketName,
         ...extra.common,
         ...extra.web,
       },
@@ -220,6 +241,8 @@ export class Services extends Construct {
         ...extra.backend,
         ...extra.api,
         ...apiDerived,
+        ...features,
+        ...consent,
       },
       worker: {
         ...base,
@@ -228,12 +251,17 @@ export class Services extends Construct {
         ...extra.backend,
         ...extra.worker,
         ...workerDerived,
+        ...features,
       },
     };
     const secrets: Record<ServiceName, Record<string, ecs.Secret>> = {
       web: {},
       admin: {},
-      api: { ...backendSecrets, CLOUDFRONT_PRIVATE_KEY: ecs.Secret.fromSecretsManager(signingKey) },
+      api: {
+        ...backendSecrets,
+        CLOUDFRONT_PRIVATE_KEY: ecs.Secret.fromSecretsManager(signingKey),
+        IP_HASH_SECRET: ecs.Secret.fromSecretsManager(this.ipHashSecret),
+      },
       worker: backendSecrets,
     };
 
@@ -268,6 +296,16 @@ export class Services extends Construct {
         environment: environment[name],
         secrets: secrets[name],
         portMappings: port === undefined ? [] : [{ containerPort: port, name: 'http' }],
+        // The worker resets the visibility of unfinished messages after its shutdown grace.
+        stopTimeout:
+          name === 'worker'
+            ? Duration.seconds(
+                workerStopTimeoutSeconds(
+                  workerSettings(config),
+                  svc.worker.stopTimeoutMarginSeconds,
+                ),
+              )
+            : undefined,
       });
       const securityGroup = new ec2.SecurityGroup(this, `${name}Sg`, {
         vpc,
@@ -412,7 +450,8 @@ export class Services extends Construct {
     });
     const objects = (...prefixes: string[]) => prefixes.map((p) => bucket.arnForObjects(`${p}*`));
 
-    // api: presigned multipart uploads into originals/, face search, "delete my face".
+    // api: presigned multipart uploads into originals/, face search, "delete my face" (search
+    // only: the deletion itself is a delete.faces job in the worker), faces and zip jobs.
     taskRoles.api.addToPrincipalPolicy(
       new iam.PolicyStatement({
         sid: 'PresignedMultipartUpload',
@@ -427,27 +466,60 @@ export class Services extends Construct {
     );
     taskRoles.api.addToPrincipalPolicy(
       new iam.PolicyStatement({
+        // HeadObject is authorised by s3:GetObject (sizes of derivatives before signing URLs).
+        sid: 'DerivedHead',
+        actions: ['s3:GetObject'],
+        resources: objects(S3_PREFIXES.derived),
+      }),
+    );
+    taskRoles.api.addToPrincipalPolicy(
+      new iam.PolicyStatement({
         sid: 'FaceSearch',
         actions: [
           'rekognition:SearchFacesByImage',
           'rekognition:SearchFaces',
-          'rekognition:DeleteFaces',
           'rekognition:DescribeCollection',
         ],
         resources: [collections],
       }),
     );
-    queues.zip.queue.grantSendMessages(taskRoles.api);
+    // faces: index.folder, unindex.folder, delete.faces. zip: zip jobs.
     queues.faces.queue.grantSendMessages(taskRoles.api);
+    queues.zip.queue.grantSendMessages(taskRoles.api);
 
-    // worker: media processing, face indexing, zips, purge, quota reconciliation.
+    // worker: media processing, face indexing, zips, purge, reconciliation. One statement per
+    // prefix, each with only what that prefix needs.
     taskRoles.worker.addToPrincipalPolicy(
       new iam.PolicyStatement({
         sid: 'MediaObjects',
-        // Includes tmp/index/*: Rekognition reads the IndexFaces image with the caller's
-        // credentials, so the worker must be able to read what it wrote there.
+        // Derivatives, magic-byte rejects, zip sources, purge, aborting expired upload sessions.
         actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload'],
-        resources: objects(S3_PREFIXES.originals, S3_PREFIXES.derived, S3_PREFIXES.tmp),
+        resources: objects(S3_PREFIXES.originals, S3_PREFIXES.derived),
+      }),
+    );
+    taskRoles.worker.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'FaceIndexScratch',
+        // Rekognition reads the IndexFaces image with the caller's credentials, so the worker
+        // must be able to read what it wrote here.
+        actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+        resources: objects(S3_PREFIXES.tmpIndex),
+      }),
+    );
+    taskRoles.worker.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        // Multipart upload of the archive (Create/UploadPart/Complete are s3:PutObject). The
+        // lifecycle rule deletes it; CloudFront serves it.
+        sid: 'ZipOutput',
+        actions: ['s3:PutObject', 's3:AbortMultipartUpload'],
+        resources: objects(S3_PREFIXES.tmpZips),
+      }),
+    );
+    taskRoles.worker.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'ReconcileScratch',
+        actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+        resources: objects(TMP_RECONCILE_PREFIX),
       }),
     );
     taskRoles.worker.addToPrincipalPolicy(
@@ -460,6 +532,7 @@ export class Services extends Construct {
     taskRoles.worker.addToPrincipalPolicy(
       new iam.PolicyStatement({
         sid: 'FaceIndex',
+        // No SearchFacesByImage: the worker never handles selfies.
         actions: [
           'rekognition:CreateCollection',
           'rekognition:DeleteCollection',
@@ -469,7 +542,6 @@ export class Services extends Construct {
           // Reconciliation: find faces in a collection that have no `faces` row, and delete them.
           'rekognition:ListFaces',
           'rekognition:SearchFaces',
-          'rekognition:SearchFacesByImage',
         ],
         resources: [collections],
       }),

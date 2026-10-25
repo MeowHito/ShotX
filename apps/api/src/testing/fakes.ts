@@ -9,7 +9,7 @@ import {
   SignJWT,
 } from 'jose';
 import { CognitoTokenVerifier } from '../auth/cognito-verifier';
-import { type ApiConfig, type ApiLimits, DEFAULT_API_LIMITS, loadApiConfig } from '../config';
+import { type ApiConfig, type ApiLimits, loadApiConfig } from '../config';
 import type { Clock, ObjectStorage, UploadedPart } from '../tokens';
 
 /** A test RSA private key in PKCS#8 PEM (CloudFront signing). */
@@ -50,13 +50,18 @@ export function testEnv(overrides: Env = {}): Env {
     UPLOAD_INIT_PRESIGNED_PARTS: '2',
     DRIVE_PAGE_SIZE: '3',
     DRIVE_MAX_FOLDER_DEPTH: '4',
+    IP_HASH_SECRET: 'test-ip-hash-secret-0123456789abcdef',
+    FACE_SEARCH_MAX_SELFIE_BYTES: String(1024 * 1024),
+    FACE_SEARCH_MAX_BODY_BYTES: String(3 * 1024 * 1024 + 64 * 1024),
+    FACES_QUEUE_URL: 'https://sqs.ap-southeast-1.amazonaws.com/000000000000/shotx-test-faces',
+    ZIP_QUEUE_URL: 'https://sqs.ap-southeast-1.amazonaws.com/000000000000/shotx-test-zip',
     ...overrides,
   };
 }
 
 export function testConfig(overrides: Env = {}, limits: Partial<ApiLimits> = {}): ApiConfig {
   const config = loadApiConfig(testEnv(overrides));
-  return { ...config, limits: { ...DEFAULT_API_LIMITS, ...limits } };
+  return { ...config, limits: { ...config.limits, ...limits } };
 }
 
 export class TestClock implements Clock {

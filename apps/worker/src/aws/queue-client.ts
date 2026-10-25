@@ -2,6 +2,7 @@ import {
   ChangeMessageVisibilityCommand,
   DeleteMessageCommand,
   ReceiveMessageCommand,
+  SendMessageBatchCommand,
   SendMessageCommand,
   type SQSClient,
 } from '@aws-sdk/client-sqs';
@@ -27,6 +28,15 @@ export interface QueueClient {
   /** Throws ReceiptHandleInvalidError when the message is no longer ours. */
   changeVisibility(queueUrl: string, receiptHandle: string, seconds: number): Promise<void>;
   sendMessage(queueUrl: string, body: string): Promise<void>;
+  /** Sends the bodies in SendMessageBatch calls of up to 10. Throws if any message failed. */
+  sendMessages(queueUrl: string, bodies: readonly string[]): Promise<void>;
+}
+
+/** SendMessageBatch's limit. */
+export const SEND_MESSAGE_BATCH = 10;
+
+export class QueueSendError extends Error {
+  override readonly name = 'QueueSendError';
 }
 
 /**
@@ -110,5 +120,24 @@ export class SqsQueueClient implements QueueClient {
 
   async sendMessage(queueUrl: string, body: string): Promise<void> {
     await this.sqs.send(new SendMessageCommand({ QueueUrl: queueUrl, MessageBody: body }));
+  }
+
+  async sendMessages(queueUrl: string, bodies: readonly string[]): Promise<void> {
+    for (let i = 0; i < bodies.length; i += SEND_MESSAGE_BATCH) {
+      const batch = bodies.slice(i, i + SEND_MESSAGE_BATCH);
+      const response = await this.sqs.send(
+        new SendMessageBatchCommand({
+          QueueUrl: queueUrl,
+          Entries: batch.map((body, n) => ({ Id: String(n), MessageBody: body })),
+        }),
+      );
+      const failed = response.Failed ?? [];
+      if (failed.length > 0) {
+        const codes = [...new Set(failed.map((f) => f.Code ?? 'Unknown'))].join(', ');
+        throw new QueueSendError(
+          `SendMessageBatch failed for ${failed.length} messages (${codes})`,
+        );
+      }
+    }
   }
 }

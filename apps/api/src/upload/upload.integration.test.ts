@@ -362,5 +362,107 @@ for (const backend of DATABASE_BACKENDS) {
         }
       },
     );
+
+    describe('upload_part_bytes', () => {
+      it('is stored with upload_id, used by signParts and complete, and cleared on complete', async () => {
+        const me = await api.photographer({ quotaBytes: 100 * MiB });
+        const res = (await init(me, {})).body;
+        expect(await row(res.fileId)).toMatchObject({ uploadPartBytes: PART });
+        // The setting changes after init: the stored plan still decides.
+        const changed = await TestApi.start(database.db, {
+          env: { UPLOAD_PART_BYTES: String(8 * MiB) },
+        });
+        try {
+          const signed = await changed.request<SignPartsResponse>(
+            'POST',
+            apiPath(U.signParts, { id: res.fileId }),
+            { token: await changed.auth.token('users', me.sub), body: { partNumbers: [3] } },
+          );
+          // With 8 MiB parts there would be only 2 parts.
+          expect(signed.status).toBe(200);
+        } finally {
+          await changed.close();
+        }
+        const done = await complete(me, res.fileId, uploadParts(res, 12 * MiB));
+        expect(done.status).toBe(200);
+        expect(await row(res.fileId)).toMatchObject({ uploadId: null, uploadPartBytes: null });
+      });
+    });
+
+    describe('clientUploadId', () => {
+      const clientUploadId = '6b3f0a52-9a43-4c8e-9a4e-3d1e7f4b2c10';
+      const nextWindow = () => api.clock.advance(61_000);
+
+      it('replays an open upload: same file, fresh part URLs, no second reservation', async () => {
+        nextWindow();
+        const me = await api.photographer({ quotaBytes: 100 * MiB });
+        const first = await init(me, { clientUploadId, relativePath: 'Day 1' });
+        expect(first.status).toBe(201);
+        expect(first.body.createdFolders).toHaveLength(1);
+        api.clock.advance(1000);
+        const again = await init(me, { clientUploadId, relativePath: 'Day 1' });
+        expect(again.status).toBe(201);
+        expect(again.body).toMatchObject({
+          fileId: first.body.fileId,
+          uploadId: first.body.uploadId,
+          partSize: first.body.partSize,
+          partCount: first.body.partCount,
+          expiresAt: first.body.expiresAt,
+          createdFolders: [],
+        });
+        expect(again.body.parts.map((p) => p.partNumber)).toEqual([1, 2]);
+        expect(await api.usage(me.id)).toMatchObject({ reservedBytes: 12 * MiB });
+        expect(
+          api.storage.calls.filter((c) => c.startsWith('create ') && c.includes(me.id)),
+        ).toHaveLength(1);
+      });
+
+      it('answers IDEMPOTENCY_KEY_REUSED for another declaration', async () => {
+        nextWindow();
+        const me = await api.photographer({ quotaBytes: 100 * MiB });
+        expect((await init(me, { clientUploadId })).status).toBe(201);
+        for (const changed of [{ size: 13 * MiB }, { name: 'other.jpg' }, { relativePath: 'x' }]) {
+          nextWindow();
+          const res = await init(me, { clientUploadId, ...changed });
+          expect(res.status, JSON.stringify(changed)).toBe(422);
+          expect(res.body).toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
+        }
+      });
+
+      it('answers CONFLICT once completed or expired, and frees the id after an abort', async () => {
+        nextWindow();
+        const me = await api.photographer({ quotaBytes: 100 * MiB });
+        const res = (await init(me, { clientUploadId })).body;
+        expect((await complete(me, res.fileId, uploadParts(res, 12 * MiB))).status).toBe(200);
+        expect(await init(me, { clientUploadId })).toMatchObject({
+          status: 409,
+          body: { code: 'CONFLICT' },
+        });
+
+        const other = '0b2f8a6e-4c1d-4e5f-8a9b-0c1d2e3f4a5b';
+        const open = (await init(me, { clientUploadId: other, name: 'b.jpg' })).body;
+        nextWindow();
+        expect((await abort(me, open.fileId)).status).toBe(204);
+        const fresh = await init(me, { clientUploadId: other, name: 'b.jpg' });
+        expect(fresh.status).toBe(201);
+        expect(fresh.body.fileId).not.toBe(open.fileId);
+
+        api.clock.advance(25 * 3600 * 1000);
+        expect(await init(me, { clientUploadId: other, name: 'b.jpg' })).toMatchObject({
+          status: 409,
+          body: { code: 'CONFLICT' },
+        });
+      });
+
+      it('is scoped per photographer', async () => {
+        nextWindow();
+        const a = await api.photographer({ quotaBytes: 100 * MiB });
+        const b = await api.photographer({ quotaBytes: 100 * MiB });
+        const ra = await init(a, { clientUploadId });
+        const rb = await init(b, { clientUploadId });
+        expect([ra.status, rb.status]).toEqual([201, 201]);
+        expect(ra.body.fileId).not.toBe(rb.body.fileId);
+      });
+    });
   });
 }

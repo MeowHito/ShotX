@@ -4,28 +4,38 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "node build.mjs",
+    "start": "node --enable-source-maps dist/main.js",
+    "dev": "tsx src/main.ts",
     "lint": "eslint .",
     "typecheck": "tsc",
-    "test": "vitest run",
-    "start": "tsx src/main.ts"
+    "test": "vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-rekognition": "^3.1152.0",
     "@aws-sdk/client-s3": "^3.1152.0",
     "@aws-sdk/client-sqs": "^3.1152.0",
+    "@aws-sdk/lib-storage": "^3.1152.0",
     "@shotx/db": "workspace:*",
     "@shotx/face": "workspace:*",
     "@shotx/shared": "workspace:*",
+    "archiver": "^8.0.0",
     "drizzle-orm": "^0.45.4",
     "exif-reader": "^2.0.3",
     "ioredis": "^6.0.0",
     "pg": "^8.23.1",
     "sharp": "^0.35.5",
-    "tsx": "^4.23.15",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.10",
+    "@types/archiver": "^8.0.0",
     "@types/pg": "^8.23.1",
-    "prettier": "^3.9.10"
+    "@types/yauzl": "^3.4.0",
+    "aws-sdk-client-mock": "^4.1.0",
+    "esbuild": "^0.28.2",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15",
+    "yauzl": "^3.4.0"
   }
 }

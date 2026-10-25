@@ -21,6 +21,8 @@ export function proxy(request: NextRequest) {
     publicBaseUrl,
     uploadOrigins: uploadOrigins(env),
     cognitoDomain: env.COGNITO_DOMAIN || undefined,
+    // Only the share page runs the face detector.
+    allowWasm: request.nextUrl.pathname.startsWith('/s/'),
   });
   const headers = securityHeaders(csp, https);
 

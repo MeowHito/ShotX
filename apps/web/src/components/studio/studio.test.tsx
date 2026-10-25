@@ -1,0 +1,242 @@
+import { DRIVE_ROOT, DRIVE_ROUTES, ME_ROUTES, SHARE_ROUTES } from '@shotx/shared';
+import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+import { FakeApi } from '../../../test/fake-api';
+import { apiClientFor, renderWithProviders } from '../../../test/render';
+import { DriveBrowser } from '@/components/drive/drive-browser';
+import { ShareDetails } from '@/components/shares/share-details';
+import { SharesList } from '@/components/shares/shares-list';
+import { createPublicApiClient } from '@/lib/api/client';
+import { th } from '@/messages/th';
+import { LogoutButton } from './logout-button';
+import { StudioGate } from './studio-gate';
+
+async function openMenu(name: string) {
+  await userEvent.click(await screen.findByRole('button', { name: `ตัวเลือกของ ${name}` }));
+}
+
+describe('onboarding', () => {
+  it('asks GET /me and shows onboarding to a viewer, then the studio after POST /me/photographer', async () => {
+    const fake = new FakeApi({ role: 'user' });
+    renderWithProviders(
+      <StudioGate>
+        <p>studio content</p>
+      </StudioGate>,
+      { api: apiClientFor(fake.fetch) },
+    );
+    expect(await screen.findByRole('heading', { name: th.onboarding.title })).toBeInTheDocument();
+    expect(screen.queryByText('studio content')).not.toBeInTheDocument();
+    expect(fake.callsTo(ME_ROUTES.get)[0]?.prefix).toBe('/bff');
+
+    const name = screen.getByLabelText(th.onboarding.nameLabel);
+    await userEvent.clear(name);
+    await userEvent.type(name, 'สมชาย ถ่ายภาพ');
+    await userEvent.click(screen.getByRole('button', { name: th.onboarding.start }));
+    expect(await screen.findByText('studio content')).toBeInTheDocument();
+    expect(fake.callsTo(ME_ROUTES.becomePhotographer)[0]?.body).toEqual({ name: 'สมชาย ถ่ายภาพ' });
+    expect(fake.me).toMatchObject({ role: 'photographer', subscription: { status: 'trial' } });
+  });
+
+  it('goes straight to the studio for photographers', async () => {
+    const fake = new FakeApi();
+    renderWithProviders(
+      <StudioGate>
+        <p>studio content</p>
+      </StudioGate>,
+      { api: apiClientFor(fake.fetch) },
+    );
+    expect(await screen.findByText('studio content')).toBeInTheDocument();
+    expect(fake.callsTo(ME_ROUTES.becomePhotographer)).toHaveLength(0);
+  });
+});
+
+describe('logout', () => {
+  it('deletes the viewer session at /api (with credentials) before posting the logout form', async () => {
+    const fake = new FakeApi();
+    fake.viewerSession = true;
+    const submitted = vi.fn((form: HTMLFormElement) => form.getAttribute('action'));
+    renderWithProviders(
+      <LogoutButton
+        publicApi={createPublicApiClient({ fetch: fake.fetch })}
+        onSubmitForm={submitted}
+      />,
+      { api: apiClientFor(fake.fetch) },
+    );
+    await userEvent.click(screen.getByRole('button', { name: th.studio.logout }));
+    await waitFor(() => expect(submitted).toHaveBeenCalledTimes(1));
+    expect(submitted.mock.results[0]?.value).toBe('/auth/logout');
+    const deleted = fake.callsTo(ME_ROUTES.deleteViewerSession);
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]).toMatchObject({ prefix: '/api', credentials: 'include' });
+    expect(fake.viewerSession).toBe(false);
+  });
+});
+
+describe('share management', () => {
+  it('creates a folder share with password and expiry, lists it, copies and revokes it', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const fake = new FakeApi();
+    const folder = fake.addFolder('งานวิ่ง 2569');
+    renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} />, { api: apiClientFor(fake.fetch) });
+    await openMenu(folder.name);
+    await userEvent.click(await screen.findByRole('menuitem', { name: th.drive.share }));
+    const dialog = await screen.findByRole('dialog', { name: `แชร์ “${folder.name}”` });
+    expect(within(dialog).getByText(th.shareDialog.none)).toBeInTheDocument();
+    // Face search is off: no face_only option.
+    expect(within(dialog).queryByRole('radio', { name: th.shareForm.modes.face_only })).toBeNull();
+
+    await userEvent.click(within(dialog).getByRole('checkbox', { name: th.shareForm.usePassword }));
+    await userEvent.type(within(dialog).getByLabelText(th.shareForm.password), 'ab');
+    await userEvent.click(within(dialog).getByRole('button', { name: th.shareForm.create }));
+    expect(await within(dialog).findByText(/รหัสผ่านต้องยาว 4–128 ตัวอักษร/)).toBeInTheDocument();
+    expect(fake.callsTo(SHARE_ROUTES.create)).toHaveLength(0);
+
+    await userEvent.type(within(dialog).getByLabelText(th.shareForm.password), 'cd');
+    await userEvent.click(within(dialog).getByRole('checkbox', { name: th.shareForm.useExpiry }));
+    await userEvent.type(within(dialog).getByLabelText(th.shareForm.expiry), '2099-12-31');
+    await userEvent.selectOptions(
+      within(dialog).getByLabelText(th.shareForm.downloadSize),
+      th.shareForm.downloadSizes.original,
+    );
+    await userEvent.click(within(dialog).getByRole('button', { name: th.shareForm.create }));
+    expect(await within(dialog).findByText(th.shareDialog.created)).toBeInTheDocument();
+    expect(fake.callsTo(SHARE_ROUTES.create)[0]?.body).toEqual({
+      target: { type: 'folder', folderId: folder.id },
+      mode: 'gallery',
+      allowDownload: true,
+      downloadSize: 'original',
+      requireLogin: false,
+      password: 'abcd',
+      expiresAt: '2099-12-31T16:59:59.999Z',
+    });
+
+    // The new link is listed with its flags; copy puts the URL on the clipboard.
+    const share = [...fake.ownerShares.values()][0]?.share;
+    expect(await within(dialog).findByText(share?.url ?? '')).toBeInTheDocument();
+    expect(within(dialog).getByText(/มีรหัสผ่าน/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: th.shares.copy }));
+    expect(writeText).toHaveBeenCalledWith(share?.url);
+    expect(await within(dialog).findByText(th.shares.copied)).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: th.shares.revoke }));
+    const confirm = await screen.findByRole('dialog', { name: th.shares.revokeTitle });
+    await userEvent.click(within(confirm).getByRole('button', { name: th.shares.revoke }));
+    await waitFor(() => expect(fake.callsTo(SHARE_ROUTES.revoke)).toHaveLength(1));
+    expect(await within(dialog).findByText(th.shares.status.revoked)).toBeInTheDocument();
+  });
+
+  it('offers face_only for folders only when me.features.faceSearch is on', async () => {
+    const fake = new FakeApi({ faceSearch: true });
+    const folder = fake.addFolder('Event');
+    const file = fake.addFile('a.jpg');
+    renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} />, { api: apiClientFor(fake.fetch) });
+    await openMenu(folder.name);
+    await userEvent.click(await screen.findByRole('menuitem', { name: th.drive.share }));
+    let dialog = await screen.findByRole('dialog');
+    await userEvent.click(
+      within(dialog).getByRole('radio', { name: th.shareForm.modes.face_only }),
+    );
+    await userEvent.click(within(dialog).getByRole('button', { name: th.shareForm.create }));
+    await within(dialog).findByText(th.shareDialog.created);
+    expect(fake.callsTo(SHARE_ROUTES.create)[0]?.body).toMatchObject({ mode: 'face_only' });
+    await userEvent.keyboard('{Escape}');
+
+    await openMenu(file.name);
+    await userEvent.click(await screen.findByRole('menuitem', { name: th.drive.share }));
+    dialog = await screen.findByRole('dialog', { name: `แชร์ “${file.name}”` });
+    expect(within(dialog).queryByRole('radio', { name: th.shareForm.modes.face_only })).toBeNull();
+    expect(within(dialog).getByText(th.shareForm.faceOnlyFolderOnly)).toBeInTheDocument();
+  });
+
+  it('lists all shares and shows per-share stats and edits settings', async () => {
+    const fake = new FakeApi();
+    const folder = fake.addFolder('Event');
+    const api = apiClientFor(fake.fetch);
+    const created = await api.call(SHARE_ROUTES.create, {
+      body: { target: { type: 'folder', folderId: folder.id }, password: 'secret' },
+    });
+    const list = renderWithProviders(<SharesList />, { api });
+    const items = await screen.findByRole('list', { name: th.shares.listLabel });
+    expect(within(items).getByText(created.url)).toBeInTheDocument();
+    expect(within(items).getByRole('link', { name: th.shares.stats })).toHaveAttribute(
+      'href',
+      `/studio/shares/${created.id}`,
+    );
+    list.unmount();
+
+    renderWithProviders(<ShareDetails shareId={created.id} />, { api });
+    const totals = await screen.findAllByText(th.shareStats.visitors);
+    // One card in the totals and one column in the per-day table.
+    expect(totals).toHaveLength(2);
+    expect(totals[0]?.nextElementSibling).toHaveTextContent('30');
+    expect(screen.getByText('2026-10-24')).toBeInTheDocument();
+    expect(screen.getByText(/อัปเดตล่าสุด/)).toBeInTheDocument();
+    expect(fake.callsTo(SHARE_ROUTES.stats)).toHaveLength(1);
+
+    // Edit: turn downloads off; the password stays unless retyped.
+    await userEvent.click(screen.getByRole('checkbox', { name: th.shareForm.allowDownload }));
+    await userEvent.click(screen.getByRole('button', { name: th.shareForm.save }));
+    expect(await screen.findByText(th.shareForm.saved)).toBeInTheDocument();
+    const patch = fake.callsTo(SHARE_ROUTES.update)[0]?.body as Record<string, unknown>;
+    expect(patch).toMatchObject({ allowDownload: false, expiresAt: null });
+    expect('password' in patch).toBe(false);
+  });
+});
+
+describe('face index and owner download', () => {
+  it('requires the attendees-informed confirmation before enabling', async () => {
+    const fake = new FakeApi({ faceSearch: true });
+    const folder = fake.addFolder('Event');
+    renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} />, { api: apiClientFor(fake.fetch) });
+    await openMenu(folder.name);
+    await userEvent.click(await screen.findByRole('menuitem', { name: th.drive.faceIndex }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(th.faceIndex.statusOff)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: th.faceIndex.enable }));
+    expect(within(dialog).getByText(th.faceIndex.informedRequired)).toBeInTheDocument();
+    expect(fake.callsTo(DRIVE_ROUTES.updateFaceIndex)).toHaveLength(0);
+
+    await userEvent.click(within(dialog).getByRole('checkbox', { name: th.faceIndex.informed }));
+    await userEvent.click(within(dialog).getByRole('button', { name: th.faceIndex.enable }));
+    expect(await screen.findByText(th.faceIndex.enabled)).toBeInTheDocument();
+    expect(fake.callsTo(DRIVE_ROUTES.updateFaceIndex)[0]?.body).toEqual({
+      enabled: true,
+      attendeesInformedConfirmed: true,
+    });
+    expect(await screen.findByText(th.faceIndex.badge)).toBeInTheDocument();
+
+    await openMenu(folder.name);
+    await userEvent.click(await screen.findByRole('menuitem', { name: th.drive.faceIndex }));
+    await userEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: th.faceIndex.disable }),
+    );
+    expect(await screen.findByText(th.faceIndex.disabled)).toBeInTheDocument();
+    expect(fake.callsTo(DRIVE_ROUTES.updateFaceIndex)[1]?.body).toEqual({ enabled: false });
+  });
+
+  it('flag off: no face-index entry in the studio', async () => {
+    const fake = new FakeApi({ faceSearch: false });
+    const folder = fake.addFolder('Event');
+    renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} />, { api: apiClientFor(fake.fetch) });
+    await openMenu(folder.name);
+    expect(await screen.findByRole('menuitem', { name: th.drive.share })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: th.drive.faceIndex })).not.toBeInTheDocument();
+  });
+
+  it('downloads the owner original through GET /drive/files/:id/download', async () => {
+    const fake = new FakeApi();
+    const file = fake.addFile('IMG_0001.jpg');
+    const startDownload = vi.fn();
+    renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} startDownload={startDownload} />, {
+      api: apiClientFor(fake.fetch),
+    });
+    await openMenu(file.name);
+    await userEvent.click(await screen.findByRole('menuitem', { name: th.drive.download }));
+    await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(1));
+    expect(startDownload).toHaveBeenCalledWith(expect.stringContaining(file.id), file.name);
+    const call = fake.callsTo(DRIVE_ROUTES.downloadFile)[0];
+    expect(call).toMatchObject({ prefix: '/bff', path: `/drive/files/${file.id}/download` });
+  });
+});

@@ -1,6 +1,6 @@
-import { files, folders } from '@shotx/db';
+import { coveredByFaceIndexSql, files, folders } from '@shotx/db';
 import { and, eq, isNotNull, isNull, ne, sql } from 'drizzle-orm';
-import type { Db } from '../db';
+import { type Db, rows } from '../db';
 import type { Logger } from '../logger';
 import { applyQuotaMove } from '../quota';
 
@@ -106,6 +106,8 @@ export interface ReadyFields {
   previewKey: string;
   webKey: string | null;
   posterKey: string | null;
+  /** Size of the `web` download variant: web.jpg (images) or preview.mp4 (videos). */
+  webSizeBytes: number;
 }
 
 /**
@@ -139,16 +141,20 @@ export async function markFailedAfterVerify(db: Db, id: string): Promise<void> {
     .where(and(eq(files.id, id), ne(files.status, 'failed'), isNull(files.purgeRequestedAt)));
 }
 
-/** True when the folder indexes faces now: enabled, not trashed, not expired. */
-export async function folderIndexesFaces(db: Db, folderId: string, now: Date): Promise<boolean> {
-  const [folder] = await db
-    .select({
-      enabled: folders.faceIndexEnabled,
-      expiresAt: folders.faceIndexExpiresAt,
-      deletedAt: folders.deletedAt,
-    })
-    .from(folders)
-    .where(eq(folders.id, folderId));
-  if (folder === undefined || !folder.enabled || folder.deletedAt !== null) return false;
-  return folder.expiresAt === null || folder.expiresAt.getTime() > now.getTime();
+/**
+ * True when an active face index covers the folder now: the folder or an ancestor has face
+ * indexing enabled, is live and not expired (isCoveredByFaceIndex in @shotx/shared).
+ */
+export async function folderIndexesFaces(
+  db: Db,
+  ownerId: string,
+  folderId: string,
+  now: Date,
+): Promise<boolean> {
+  const [row] = await rows<{ covered: boolean }>(
+    db,
+    sql`SELECT ${coveredByFaceIndexSql(sql`"fo"."path"`, ownerId, now)} AS "covered"
+      FROM ${folders} AS "fo" WHERE "fo"."id" = ${folderId} AND "fo"."owner_id" = ${ownerId}`,
+  );
+  return row?.covered === true;
 }

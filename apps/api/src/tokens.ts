@@ -1,4 +1,6 @@
-import type { AuthPool } from '@shotx/shared';
+import type { AuthPool, QUEUE_MESSAGE_SCHEMAS } from '@shotx/shared';
+import type { z } from 'zod';
+import type { ApiQueue } from './config';
 
 // Injection tokens and the interfaces behind them. Production wires real clients in main.ts;
 // tests pass fakes to createApiApp. Constructor parameters always use @Inject(TOKEN).
@@ -10,7 +12,9 @@ export const MEDIA_URL_SIGNER = Symbol('MEDIA_URL_SIGNER');
 export const RATE_LIMITER = Symbol('RATE_LIMITER');
 export const TOKEN_VERIFIER = Symbol('TOKEN_VERIFIER');
 export const CLOCK = Symbol('CLOCK');
-export const REDIS = Symbol('REDIS');
+export const KEY_VALUE_STORE = Symbol('KEY_VALUE_STORE');
+export const QUEUE_SENDER = Symbol('QUEUE_SENDER');
+export const FACE_PROVIDER = Symbol('FACE_PROVIDER');
 
 export interface Clock {
   now(): Date;
@@ -55,7 +59,11 @@ export interface ObjectStorage {
 
 /** CloudFront signed URLs for media keys. Never S3 URLs. */
 export interface MediaUrlSigner {
-  sign(key: string, expiresAt: Date): string;
+  /**
+   * A signed URL of `key` that expires at `expiresAt`. `contentDisposition` is added as the
+   * `response-content-disposition` query parameter before signing (downloads).
+   */
+  sign(key: string, expiresAt: Date, options?: { contentDisposition?: string }): string;
 }
 
 export interface RateLimitResult {
@@ -74,9 +82,39 @@ export interface VerifiedIdentity {
   pool: AuthPool;
   sub: string;
   tokenUse: 'id' | 'access';
+  /** From a verified ID token with `email_verified`; null otherwise (access tokens carry none). */
+  email: string | null;
+  /** From an ID token's `name` claim; null otherwise. */
+  name: string | null;
 }
 
 export interface TokenVerifier {
   /** Rejects with ApiError UNAUTHENTICATED for anything that isn't a valid token of a pool. */
   verify(token: string): Promise<VerifiedIdentity>;
+}
+
+/**
+ * The Redis operations of the share routes (face-scan results, unlock proofs, viewer sessions).
+ * Keys are the builders' keys from @shotx/shared; implementations add the service prefix. Every
+ * write sets a TTL (ADR 0005), and every error propagates, so callers fail closed.
+ */
+export interface KeyValueStore {
+  get(key: string): Promise<string | null>;
+  /** SET with EX. */
+  setWithTtl(key: string, value: string, ttlSeconds: number): Promise<void>;
+  del(...keys: string[]): Promise<void>;
+  /** HGETALL; `{}` when the key doesn't exist. */
+  hashGetAll(key: string): Promise<Record<string, string>>;
+  /** HSET the fields (if any) and EXPIRE the key, atomically (MULTI). */
+  hashSetWithTtl(key: string, fields: Record<string, string>, ttlSeconds: number): Promise<void>;
+  /** HGET and HDEL one field atomically; null when the field (or key) doesn't exist. */
+  hashTake(key: string, field: string): Promise<string | null>;
+}
+
+/** A message body as serializeQueueMessage accepts it. */
+export type QueueMessageInput<Q extends ApiQueue> = z.input<(typeof QUEUE_MESSAGE_SCHEMAS)[Q]>;
+
+/** Sends validated messages to the API's SQS queues (serializeQueueMessage). */
+export interface QueueSender {
+  send<Q extends ApiQueue>(queue: Q, message: QueueMessageInput<Q>): Promise<void>;
 }

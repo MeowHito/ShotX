@@ -123,11 +123,19 @@ describe('loadShareConfig', () => {
   it('uses the spec timings and the zip defaults', () => {
     expect(loadShareConfig({})).toEqual({
       signedUrlTtlSeconds: { view: 3600, download: 600 },
+      signedUrlExpiryBucketSeconds: 300,
       pageSize: 100,
       faceOnlyGrantTtlSeconds: 86_400,
       unlockTtlSeconds: 86_400,
       anonIdMaxAgeDays: 365,
-      zip: { maxFiles: 500, maxBytes: 2 * GiB },
+      viewerSessionTtlSeconds: 43_200,
+      zip: { maxFiles: 500, maxBytes: 2 * GiB, resultTtlSeconds: 86_400 },
+      rateLimits: {
+        unlockPerIp: { limit: 10, windowSeconds: 900 },
+        downloadPerViewer: { limit: 300, windowSeconds: 600 },
+        zipCreatePerViewer: { limit: 10, windowSeconds: 3600 },
+        feedbackPerViewer: { limit: 100, windowSeconds: 600 },
+      },
     });
   });
 
@@ -141,7 +149,29 @@ describe('loadShareConfig', () => {
     });
     expect(config.signedUrlTtlSeconds).toEqual({ view: 7200, download: 300 });
     expect(config.faceOnlyGrantTtlSeconds).toBe(3600);
-    expect(config.zip).toEqual({ maxFiles: 1000, maxBytes: 8 * GiB });
+    expect(config.zip).toEqual({ maxFiles: 1000, maxBytes: 8 * GiB, resultTtlSeconds: 86_400 });
+  });
+
+  it('reads the expiry bucket, viewer session, zip result TTL and rate limits', () => {
+    const config = loadShareConfig({
+      SIGNED_URL_EXPIRY_BUCKET_SECONDS: '60',
+      VIEWER_SESSION_TTL_SECONDS: '3600',
+      ZIP_RESULT_TTL_SECONDS: '7200',
+      SHARE_UNLOCK_RATE_PER_IP: '5',
+      SHARE_UNLOCK_RATE_PER_IP_WINDOW_SECONDS: '60',
+      ZIP_CREATE_RATE_PER_VIEWER: '3',
+    });
+    expect(config.signedUrlExpiryBucketSeconds).toBe(60);
+    expect(config.viewerSessionTtlSeconds).toBe(3600);
+    expect(config.zip.resultTtlSeconds).toBe(7200);
+    expect(config.rateLimits.unlockPerIp).toEqual({ limit: 5, windowSeconds: 60 });
+    expect(config.rateLimits.zipCreatePerViewer.limit).toBe(3);
+  });
+
+  it('rejects an expiry bucket longer than the download TTL', () => {
+    expect(() => loadShareConfig({ SIGNED_URL_EXPIRY_BUCKET_SECONDS: '900' })).toThrow(
+      /SIGNED_URL_EXPIRY_BUCKET_SECONDS must be less than or equal to SIGNED_URL_DOWNLOAD_TTL_SECONDS/,
+    );
   });
 
   it('rejects download URLs that outlive view URLs', () => {
@@ -157,6 +187,10 @@ describe('loadShareConfig', () => {
     ['ANON_ID_MAX_AGE_DAYS', '401'],
     ['SHARE_PAGE_SIZE', '501'],
     ['SIGNED_URL_VIEW_TTL_SECONDS', '59'],
+    ['SIGNED_URL_EXPIRY_BUCKET_SECONDS', '0'],
+    ['ZIP_RESULT_TTL_SECONDS', '259201'],
+    ['VIEWER_SESSION_TTL_SECONDS', '60'],
+    ['SHARE_UNLOCK_RATE_PER_IP', '0'],
   ])('rejects %s=%s', (key, value) => {
     expect(() => loadShareConfig({ [key]: value })).toThrow(new RegExp(`at ${key}\\b`));
   });

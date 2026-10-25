@@ -53,3 +53,35 @@ export type ActivityType = (typeof ACTIVITY_TYPES)[number];
  */
 export const ZIP_JOB_STATUSES = ['queued', 'running', 'ready', 'failed'] as const;
 export type ZipJobStatus = (typeof ZIP_JOB_STATUSES)[number];
+
+/**
+ * Where an activity event comes from (`activity_events.source`): `share` for everything a share
+ * link serves (views, scans, downloads, zips; `share_id` set), `owner` for downloads a
+ * photographer makes from their own drive (`share_id` null). Viewer dashboards (daily_stats
+ * visitors, scanners, scans, downloads, unique downloaders, and share_daily_stats) count `share`
+ * events only; `bytes_out` counts both, because it feeds cost estimates and the egress alert.
+ */
+export const ACTIVITY_SOURCES = ['share', 'owner'] as const;
+export type ActivitySource = (typeof ACTIVITY_SOURCES)[number];
+
+/**
+ * Why a share link no longer serves anything (SHARE_EXPIRED details):
+ * - `revoked`: the owner revoked it (`is_active = false`), or an admin took it down;
+ * - `expired`: `expires_at` has passed;
+ * - `unavailable`: the target was trashed or purged, or the owner's subscription is `expired` or
+ *   `purged` (the spec's "ลิงก์นี้หมดอายุ").
+ */
+export const SHARE_UNAVAILABLE_REASONS = ['revoked', 'expired', 'unavailable'] as const;
+export type ShareUnavailableReason = (typeof SHARE_UNAVAILABLE_REASONS)[number];
+
+/** Owner-facing state of a share, derived from `is_active` and `expires_at`. */
+export const SHARE_STATUSES = ['active', 'expired', 'revoked'] as const;
+export type ShareStatus = (typeof SHARE_STATUSES)[number];
+
+/** Similarity groups of a face search: "ใช่คุณ" (≥ FACE_STRONG) and "อาจจะเป็นคุณ" (≥ FACE_MAYBE). */
+export const FACE_MATCH_BUCKETS = ['strong', 'maybe'] as const;
+export type FaceMatchBucket = (typeof FACE_MATCH_BUCKETS)[number];
+
+/** Features behind a flag. The value appears in FEATURE_DISABLED details. */
+export const FEATURES = ['face_search'] as const;
+export type Feature = (typeof FEATURES)[number];

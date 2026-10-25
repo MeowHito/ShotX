@@ -37,17 +37,24 @@ import {
   type UpdateFileBody,
   type UpdateFolderBody,
   availableBytes,
+  type DownloadSize,
+  downloadObject,
+  isFaceIndexActive,
+  type SignedDownload,
+  subscriptionAllowsSharing,
 } from '@shotx/shared';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, type SQL, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
+import { recordActivity } from '../activity/activity';
 import type { ApiConfig } from '../config';
 import { type Db, isUniqueViolation, type Queryable, rows, type Tx } from '../db/db';
 import { ApiError, notFound } from '../http/api-error';
 import { validationError } from '../http/zod';
-import { API_CONFIG, DATABASE } from '../tokens';
+import { SignedUrls } from '../media/signed-urls';
+import { API_CONFIG, CLOCK, type Clock, DATABASE, QUEUE_SENDER, type QueueSender } from '../tokens';
 import { currentSubscription, storageCounters } from './account';
 import { ancestorsOf, insertFolder, liveFolder, subtreeMaxDepth } from './folders';
-import { DriveFileMapper, toDriveFolder } from './media-urls';
+import { DriveFileMapper, mediaKindOf, toDriveFolder } from './media-urls';
 import { fileFolderIs, folderParentIs, withFreeName } from './names';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -102,6 +109,9 @@ export class DriveService {
     @Inject(DATABASE) private readonly db: Db,
     @Inject(API_CONFIG) private readonly config: ApiConfig,
     @Inject(DriveFileMapper) private readonly mapper: DriveFileMapper,
+    @Inject(CLOCK) private readonly clock: Clock,
+    @Inject(QUEUE_SENDER) private readonly queue: QueueSender,
+    @Inject(SignedUrls) private readonly urls: SignedUrls,
   ) {}
 
   private item(row: Row): DriveItem {
@@ -677,6 +687,131 @@ export class DriveService {
         bytes: used + reserved,
       };
     });
+  }
+
+  // --- PATCH /drive/folders/:id/face-index --------------------------------------------------
+
+  /**
+   * Turns face indexing of a folder subtree on (PDPA: the photographer confirmed attendees were
+   * informed; stored as face_index_informed_at) or extends it to max(current, now +
+   * FACE_INDEX_EXPIRY_DAYS), or turns it off. Turning on a folder without an active index sends
+   * `index.folder` after the commit; if the send fails, the change is undone and the request fails,
+   * so a retry sends it again. Turning off always sends `unindex.folder` (idempotent; the daily
+   * expiry job also catches anything a failed send left behind).
+   */
+  async updateFaceIndex(
+    ownerId: string,
+    id: string,
+    body: { enabled: true; attendeesInformedConfirmed: true } | { enabled: false },
+  ): Promise<DriveFolder> {
+    const now = this.clock.now();
+    if (!body.enabled) {
+      const folder = await this.db.transaction(async (tx) => {
+        const current = await liveFolder(tx, ownerId, id, 'update');
+        if (current === null) throw notFound('Folder');
+        const [updated] = await tx
+          .update(folders)
+          .set({ faceIndexEnabled: false, faceIndexExpiresAt: null })
+          .where(and(eq(folders.id, id), eq(folders.ownerId, ownerId)))
+          .returning();
+        if (updated === undefined) throw new Error('Folder vanished inside its transaction');
+        return updated;
+      });
+      await this.queue.send('faces', { type: 'unindex.folder', folderId: folder.id });
+      return toDriveFolder(folder);
+    }
+
+    if (!this.config.features.faceSearch) {
+      throw new ApiError('FEATURE_DISABLED', 'Face search is not available', {
+        feature: 'face_search',
+      });
+    }
+    const target = new Date(now.getTime() + this.config.retention.faceIndexExpiryDays * MS_PER_DAY);
+    const { before, after } = await this.db.transaction(async (tx) => {
+      const subscription = await currentSubscription(tx, ownerId);
+      if (!subscriptionAllowsSharing(subscription?.status ?? null)) {
+        throw new ApiError('SUBSCRIPTION_INACTIVE', 'Face indexing needs an active subscription', {
+          status: subscription?.status ?? null,
+        });
+      }
+      const current = await liveFolder(tx, ownerId, id, 'update');
+      if (current === null) throw notFound('Folder');
+      const expiresAt =
+        current.faceIndexExpiresAt !== null && current.faceIndexExpiresAt > target
+          ? current.faceIndexExpiresAt
+          : target;
+      const [updated] = await tx
+        .update(folders)
+        .set({ faceIndexEnabled: true, faceIndexInformedAt: now, faceIndexExpiresAt: expiresAt })
+        .where(and(eq(folders.id, id), eq(folders.ownerId, ownerId)))
+        .returning();
+      if (updated === undefined) throw new Error('Folder vanished inside its transaction');
+      return { before: current, after: updated };
+    });
+    if (!isFaceIndexActive(before, now)) {
+      try {
+        await this.queue.send('faces', { type: 'index.folder', folderId: after.id });
+      } catch (error) {
+        // Undo, unless something else changed the folder meanwhile.
+        await this.db
+          .update(folders)
+          .set({
+            faceIndexEnabled: before.faceIndexEnabled,
+            faceIndexInformedAt: before.faceIndexInformedAt,
+            faceIndexExpiresAt: before.faceIndexExpiresAt,
+          })
+          .where(
+            and(
+              eq(folders.id, id),
+              eq(folders.ownerId, ownerId),
+              eq(folders.faceIndexInformedAt, now),
+            ),
+          );
+        throw error;
+      }
+    }
+    return toDriveFolder(after);
+  }
+
+  // --- GET /drive/files/:id/download ---------------------------------------------------------
+
+  /**
+   * The owner's download of their own file, in any subscription status, trashed files included:
+   * a signed URL with Content-Disposition attachment (download TTL) and an `owner` download event.
+   * `original` needs the upload completed and the bytes accepted; `web` needs the file `ready`.
+   */
+  async downloadFile(ownerId: string, id: string, size: DownloadSize): Promise<SignedDownload> {
+    const [file] = await this.db
+      .select()
+      .from(files)
+      .where(and(eq(files.id, id), eq(files.ownerId, ownerId), isNull(files.purgeRequestedAt)));
+    if (file === undefined) throw notFound('File');
+    const servable =
+      size === 'original'
+        ? file.uploadId === null && (file.status === 'processing' || file.status === 'ready')
+        : file.status === 'ready';
+    const object = servable
+      ? downloadObject({ ...file, mediaKind: mediaKindOf(file.mime) }, size)
+      : null;
+    if (object === null) throw new ApiError('CONFLICT', 'The file is not ready for download yet');
+    const signed = this.urls.download(object.key, object.fileName);
+    await recordActivity(this.db, {
+      type: 'download',
+      source: 'owner',
+      shareId: null,
+      photographerId: ownerId,
+      viewerId: null,
+      anonId: null,
+      fileId: file.id,
+      bytes: object.bytes,
+      meta: null,
+    });
+    return {
+      fileId: file.id,
+      url: signed.url,
+      fileName: object.fileName,
+      expiresAt: signed.expiresAt.toISOString(),
+    };
   }
 
   // --- GET /drive/usage ----------------------------------------------------------------------

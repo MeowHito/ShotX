@@ -1,21 +1,32 @@
 import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { createDb, createPool } from '@shotx/db';
+import {
+  createRedisRekognitionLimiters,
+  RekognitionFaceProvider,
+  S3TempImageStore,
+} from '@shotx/face';
+import type { QueueName } from '@shotx/shared';
 import { Redis } from 'ioredis';
 import { S3ObjectStore } from './aws/object-store';
 import { SqsQueueClient } from './aws/queue-client';
 import { CONSUMED_QUEUES, loadWorkerConfig } from './config';
-import { unavailableFaceDeleter } from './faces';
+import { checkFacesBudget } from './faces/budget';
+import { CollectionRegistry } from './faces/deps';
+import { createFacesHandler } from './faces/handler';
 import { createJobsHandler } from './jobs/handler';
 import { RedisJobRunLedger } from './jobs/ledger';
+import { S3OrphanScanStore } from './jobs/orphan-scans';
 import { createJsonLogger, errorFields } from './logger';
 import { createMediaHandler } from './media/handler';
 import { type MessageHandler, QueueConsumer } from './sqs/consumer';
+import { createZipHandler } from './zip/handler';
 
 async function main(): Promise<void> {
   const config = loadWorkerConfig(process.env);
+  const { worker } = config;
   const log = createJsonLogger({
-    minLevel: config.worker.logLevel,
+    minLevel: worker.logLevel,
     base: { service: 'worker', stage: config.app.stage },
   });
 
@@ -23,10 +34,8 @@ async function main(): Promise<void> {
     region: config.aws.region,
     ...(config.aws.endpointUrl === null ? {} : { endpoint: config.aws.endpointUrl }),
   };
-  const store = new S3ObjectStore(
-    new S3Client({ ...aws, forcePathStyle: config.storage.forcePathStyle }),
-    config.storage.bucket,
-  );
+  const s3 = new S3Client({ ...aws, forcePathStyle: config.storage.forcePathStyle });
+  const store = new S3ObjectStore(s3, config.storage.bucket);
   const queues = new SqsQueueClient(new SQSClient(aws));
   const pool = createPool(config.database);
   const db = createDb(pool);
@@ -39,7 +48,27 @@ async function main(): Promise<void> {
   });
   redis.on('error', (error) => log.warn('redis error', errorFields(error)));
 
-  const handlers: Record<(typeof CONSUMED_QUEUES)[number], MessageHandler> = {
+  // Rekognition behind FaceProvider (ADR 0001): background profile, rate limits shared through
+  // Redis with every api and worker task.
+  const limiters = createRedisRekognitionLimiters(redis, config.face.rekognition, 'background');
+  const provider = RekognitionFaceProvider.create(config.face.rekognition, 'background', limiters);
+
+  const budget = checkFacesBudget(
+    config.face,
+    worker.maxProcessingMs.faces,
+    config.visibilityTimeoutSeconds.faces,
+  );
+  for (const problem of budget.problems) log.error(`faces time budget: ${problem}`);
+  log.info('faces time budget', {
+    worstAttemptMs: budget.worstAttemptMs,
+    minOrphanGraceMs: budget.minOrphanGraceMs,
+    orphanGraceMs: config.face.index.orphanGraceMs,
+    maxProcessingMs: worker.maxProcessingMs.faces,
+    heartbeatIntervalMs: budget.heartbeatIntervalMs,
+    faceSearchEnabled: config.features.faceSearch,
+  });
+
+  const handlers: Record<QueueName, MessageHandler> = {
     media: createMediaHandler({
       db,
       store,
@@ -47,24 +76,48 @@ async function main(): Promise<void> {
       bucket: config.storage.bucket,
       facesQueueUrl: config.queueUrls.faces,
       media: config.media,
-      video: config.worker.video,
-      exifDefaultUtcOffset: config.worker.exifDefaultUtcOffset,
-      tmpDir: config.worker.tmpDir,
-      maxProcessingMs: config.worker.mediaMaxProcessingMs,
+      video: worker.video,
+      exifDefaultUtcOffset: worker.exifDefaultUtcOffset,
+      tmpDir: worker.tmpDir,
+      maxProcessingMs: worker.maxProcessingMs.media,
+    }),
+    faces: createFacesHandler({
+      db,
+      store,
+      queues,
+      facesQueueUrl: config.queueUrls.faces,
+      provider,
+      tempStore: new S3TempImageStore(s3, config.storage.bucket),
+      collections: new CollectionRegistry(provider),
+      face: config.face,
+      features: config.features,
+      retention: config.retention,
+      batchSize: worker.jobBatchSize,
+      maxProcessingMs: worker.maxProcessingMs.faces,
+      tmpDir: worker.tmpDir,
+      now: Date.now,
+    }),
+    zip: createZipHandler({
+      db,
+      store,
+      zip: config.zip,
+      partBytes: config.multipartPartBytes,
+      maxProcessingMs: worker.maxProcessingMs.zip,
     }),
     jobs: createJobsHandler({
       db,
       store,
-      // Phase 3 wires RekognitionFaceProvider (background profile) here.
-      faces: unavailableFaceDeleter,
+      faces: provider,
+      orphanScans: new S3OrphanScanStore(store),
+      orphanGraceMs: config.face.index.orphanGraceMs,
       ledger: new RedisJobRunLedger(
         redis,
         `shotx:${config.app.stage}:worker:jobs:done`,
-        config.worker.jobDedupeTtlSeconds,
+        worker.jobDedupeTtlSeconds,
       ),
       trashRetentionDays: config.retention.trashRetentionDays,
-      batchSize: config.worker.jobBatchSize,
-      maxRuntimeMs: config.worker.jobMaxRuntimeMs,
+      batchSize: worker.jobBatchSize,
+      maxRuntimeMs: worker.maxProcessingMs.jobs,
     }),
   };
 
@@ -76,11 +129,11 @@ async function main(): Promise<void> {
         client: queues,
         handler: handlers[queue],
         visibilityTimeoutSeconds: config.visibilityTimeoutSeconds[queue],
-        batchSize: config.worker.consumers[queue].batchSize,
-        concurrency: config.worker.consumers[queue].concurrency,
-        waitTimeSeconds: config.worker.receiveWaitSeconds,
-        retryBaseSeconds: config.worker.retryBaseSeconds,
-        shutdownGraceMs: config.worker.shutdownGraceMs,
+        batchSize: worker.consumers[queue].batchSize,
+        concurrency: worker.consumers[queue].concurrency,
+        waitTimeSeconds: worker.receiveWaitSeconds,
+        retryBaseSeconds: worker.retryBaseSeconds,
+        shutdownGraceMs: worker.shutdownGraceMs,
         log,
       }),
   );

@@ -16,11 +16,9 @@ import {
   type MultipartPlan,
   multipartPlan,
   originalKey,
+  parseS3Key,
   partsMatchPlan,
   reserveQuota,
-  S3_MULTIPART_MAX_PART_BYTES,
-  S3_MULTIPART_MIN_PART_BYTES,
-  S3_MULTIPART_MAX_PARTS,
   sanitizeOriginalName,
   type SignPartsResponse,
   subscriptionAllowsUploads,
@@ -30,7 +28,7 @@ import {
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import type { ApiConfig } from '../config';
-import { type Db, isUniqueViolation, rows, type Tx } from '../db/db';
+import { type Db, isUniqueViolation, type Queryable, rows, type Tx } from '../db/db';
 import { currentSubscription, storageCounters } from '../drive/account';
 import { insertFolder, liveFolder, newId } from '../drive/folders';
 import { DriveFileMapper, toDriveFolder } from '../drive/media-urls';
@@ -49,6 +47,8 @@ import {
   type UploadedPart,
 } from '../tokens';
 
+type InitBody = z.output<typeof uploadInitBodySchema>;
+
 const uploadNotFound = () => new ApiError('UPLOAD_NOT_FOUND', 'No pending upload with this id');
 
 /** ETags compare without their surrounding quotes (clients may send either form). */
@@ -56,27 +56,30 @@ export function normalizeEtag(etag: string): string {
   return etag.trim().replace(/^"(.*)"$/, '$1');
 }
 
+/** The multipart plan an upload was created with (`files.upload_part_bytes`, fixed at init). */
+export function storedPlan(sizeBytes: number, uploadPartBytes: number): MultipartPlan {
+  return multipartPlan(sizeBytes, uploadPartBytes);
+}
+
 /**
- * Whether the parts S3 has are exactly the upload's plan, so the object can't differ from the
- * reserved size. The plan is recomputed from UPLOAD_PART_BYTES; if that setting changed since
- * init (no column stores the part size yet), the plan implied by part 1 is accepted when it is a
- * valid multipart plan for the declared size.
+ * Whether the parts S3 has are exactly the upload's plan (the part size stored at init), so the
+ * object can't differ from the reserved size. A change of UPLOAD_PART_BYTES after init doesn't
+ * matter: the stored part size is used.
  */
 export function partsFitUpload(
   sizeBytes: number,
-  preferredPartBytes: number,
+  uploadPartBytes: number,
   parts: readonly { partNumber: number; size: number }[],
 ): boolean {
-  if (partsMatchPlan(multipartPlan(sizeBytes, preferredPartBytes), sizeBytes, parts)) return true;
-  const first = parts.find((p) => p.partNumber === 1);
-  if (first === undefined || parts.length < 2) return false;
-  const partSize = first.size;
-  if (partSize < S3_MULTIPART_MIN_PART_BYTES || partSize > S3_MULTIPART_MAX_PART_BYTES) {
-    return false;
-  }
-  const inferred: MultipartPlan = { partSize, partCount: Math.ceil(sizeBytes / partSize) };
-  if (inferred.partCount > S3_MULTIPART_MAX_PARTS) return false;
-  return partsMatchPlan(inferred, sizeBytes, parts);
+  return partsMatchPlan(storedPlan(sizeBytes, uploadPartBytes), sizeBytes, parts);
+}
+
+/** An open upload row: `upload_id` and `upload_part_bytes` are set together (CHECK). */
+type OpenUpload = DriveFileRow & { uploadId: string; uploadPartBytes: number };
+
+function partBytesOf(file: DriveFileRow): number {
+  if (file.uploadPartBytes === null) throw new Error('Open upload without upload_part_bytes');
+  return file.uploadPartBytes;
 }
 
 /**
@@ -95,16 +98,15 @@ export class UploadService {
     @Inject(DriveFileMapper) private readonly mapper: DriveFileMapper,
   ) {}
 
-  private plan(sizeBytes: number): MultipartPlan {
-    return multipartPlan(sizeBytes, this.config.upload.partBytes);
-  }
-
   // --- POST /uploads/init --------------------------------------------------------------------
 
-  async init(
-    ownerId: string,
-    body: z.output<typeof uploadInitBodySchema>,
-  ): Promise<UploadInitResponse> {
+  /**
+   * Starts an upload. With `clientUploadId`, inits are idempotent per photographer: a transaction
+   * advisory lock on (owner, clientUploadId) serialises retries, and an existing row is replayed
+   * (same declaration, still open: same fileId, fresh part URLs, nothing reserved again), or
+   * answered IDEMPOTENCY_KEY_REUSED (other declaration) or CONFLICT (completed, failed, expired).
+   */
+  async init(ownerId: string, body: InitBody): Promise<UploadInitResponse> {
     const { limit, windowSeconds } = this.config.limits.uploadInitRate;
     const rate = await this.rateLimiter.hit(`upload-init:${ownerId}`, limit, windowSeconds);
     if (!rate.allowed) {
@@ -127,14 +129,39 @@ export class UploadService {
       );
     }
     const { fileType } = declaration;
-    const plan = this.plan(body.size);
+    const plan = multipartPlan(body.size, this.config.upload.partBytes);
     const now = this.clock.now();
     const expiresAt = new Date(now.getTime() + this.config.upload.sessionTtlSeconds * 1000);
 
     let opened: { key: string; uploadId: string } | null = null;
-    let result: { file: DriveFileRow; created: Folder[] };
+    let result:
+      | { kind: 'created'; file: DriveFileRow; created: Folder[] }
+      | { kind: 'existing'; file: DriveFileRow; sameDeclaration: boolean };
     try {
       result = await this.db.transaction(async (tx) => {
+        if (body.clientUploadId !== undefined) {
+          await tx.execute(
+            sql`SELECT pg_advisory_xact_lock(hashtextextended(${`upload-init:${ownerId}:${body.clientUploadId}`}, 0))`,
+          );
+          const [existing] = await tx
+            .select()
+            .from(files)
+            .where(and(eq(files.ownerId, ownerId), eq(files.clientUploadId, body.clientUploadId)));
+          if (existing !== undefined) {
+            return {
+              kind: 'existing' as const,
+              file: existing,
+              sameDeclaration: await this.sameDeclaration(
+                tx,
+                ownerId,
+                existing,
+                body,
+                fileType.mime,
+              ),
+            };
+          }
+        }
+
         const subscription = await currentSubscription(tx, ownerId);
         if (!subscriptionAllowsUploads(subscription?.status ?? null)) {
           throw new ApiError('SUBSCRIPTION_INACTIVE', 'Uploads need an active subscription', {
@@ -215,6 +242,10 @@ export class UploadService {
               s3Key: key,
               status: 'uploading',
               uploadId,
+              // Written with upload_id (CHECK files_upload_part_bytes_valid): signParts and
+              // complete use this plan even if UPLOAD_PART_BYTES changes meanwhile.
+              uploadPartBytes: plan.partSize,
+              clientUploadId: body.clientUploadId ?? null,
               uploadExpiresAt: expiresAt,
             })
             .returning();
@@ -240,7 +271,7 @@ export class UploadService {
         }
         const [file] = inserted;
         if (file === undefined) throw new Error('File insert returned no row');
-        return { file, created };
+        return { kind: 'created' as const, file, created };
       });
     } catch (error) {
       const toAbort = opened as { key: string; uploadId: string } | null;
@@ -248,14 +279,28 @@ export class UploadService {
       throw error;
     }
 
-    const uploadId = result.file.uploadId ?? '';
-    const partTtl = this.partUrlTtlSeconds(now, expiresAt);
+    if (result.kind === 'existing') return this.replayInit(result.file, result.sameDeclaration);
+    return this.initResponse(result.file, result.created, now);
+  }
+
+  /** The init response for an open upload row: first part URLs, plan and session end. */
+  private async initResponse(
+    file: DriveFileRow,
+    created: Folder[],
+    now: Date,
+  ): Promise<UploadInitResponse> {
+    const uploadId = file.uploadId;
+    if (uploadId === null || file.uploadExpiresAt === null) {
+      throw new Error('initResponse needs an open upload');
+    }
+    const plan = storedPlan(file.sizeBytes, partBytesOf(file));
+    const partTtl = this.partUrlTtlSeconds(now, file.uploadExpiresAt);
     const first = Math.min(this.config.upload.initPresignedParts, plan.partCount);
     const parts = await Promise.all(
       Array.from({ length: first }, async (_, i) => ({
         partNumber: i + 1,
         url: await this.storage.presignUploadPart({
-          key: result.file.s3Key,
+          key: file.s3Key,
           uploadId,
           partNumber: i + 1,
           expiresInSeconds: partTtl,
@@ -263,17 +308,78 @@ export class UploadService {
       })),
     );
     return {
-      fileId: result.file.id,
+      fileId: file.id,
       uploadId,
-      file: this.mapper.toDriveFile(result.file),
-      createdFolders: result.created.map(toDriveFolder),
+      file: this.mapper.toDriveFile(file),
+      createdFolders: created.map(toDriveFolder),
       partSize: plan.partSize,
       partCount: plan.partCount,
       maxConcurrency: this.config.upload.partConcurrency,
       parts,
       partUrlsExpireAt: new Date(now.getTime() + partTtl * 1000).toISOString(),
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: file.uploadExpiresAt.toISOString(),
     };
+  }
+
+  /**
+   * A retry of an init that already created `file`. Folders the first init created are not
+   * reported again (`createdFolders` is empty): the client refreshes the folder listing.
+   */
+  private replayInit(file: DriveFileRow, sameDeclaration: boolean): Promise<UploadInitResponse> {
+    if (!sameDeclaration) {
+      throw new ApiError(
+        'IDEMPOTENCY_KEY_REUSED',
+        'clientUploadId was used before for another file declaration',
+      );
+    }
+    const now = this.clock.now();
+    const open =
+      file.uploadId !== null &&
+      file.status === 'uploading' &&
+      file.deletedAt === null &&
+      file.purgeRequestedAt === null &&
+      file.uploadExpiresAt !== null &&
+      now < file.uploadExpiresAt;
+    if (!open) {
+      throw new ApiError('CONFLICT', 'This upload was already completed, failed or expired');
+    }
+    return this.initResponse(file, [], now);
+  }
+
+  /**
+   * Whether a retried init declares the same file as the stored row: size, canonical MIME, the
+   * name in the original's key (the display name may have been renamed to ` (2)`), and the
+   * folder that folderId + relativePath resolve to now.
+   */
+  private async sameDeclaration(
+    q: Queryable,
+    ownerId: string,
+    file: DriveFileRow,
+    body: InitBody,
+    mime: string,
+  ): Promise<boolean> {
+    if (file.sizeBytes !== body.size || file.mime !== mime) return false;
+    const parsed = parseS3Key(file.s3Key);
+    if (parsed?.kind !== 'original' || parsed.originalName !== sanitizeOriginalName(body.name)) {
+      return false;
+    }
+    let folderId: string | null = body.folderId;
+    for (const name of body.relativePath ?? []) {
+      const [child] = await q
+        .select({ id: folders.id })
+        .from(folders)
+        .where(
+          and(
+            eq(folders.ownerId, ownerId),
+            folderParentIs(folderId),
+            isNull(folders.deletedAt),
+            sql`${driveNameKeySql(folders.name)} = ${driveNameKey(name)}`,
+          ),
+        );
+      if (child === undefined) return false;
+      folderId = child.id;
+    }
+    return folderId === file.folderId;
   }
 
   /** Part URLs live UPLOAD_PRESIGN_TTL_SECONDS, but never past the session's end. */
@@ -336,20 +442,20 @@ export class UploadService {
   }
 
   /** An upload that is still open: CONFLICT once completed, UPLOAD_EXPIRED past its session. */
-  private async openUpload(ownerId: string, id: string) {
+  private async openUpload(ownerId: string, id: string): Promise<OpenUpload> {
     const file = await this.findUpload(ownerId, id);
     if (file.uploadId === null) throw new ApiError('CONFLICT', 'The upload is already completed');
     if (file.uploadExpiresAt !== null && this.clock.now() >= file.uploadExpiresAt) {
       throw new ApiError('UPLOAD_EXPIRED', 'The upload session has expired');
     }
-    return { ...file, uploadId: file.uploadId };
+    return { ...file, uploadId: file.uploadId, uploadPartBytes: partBytesOf(file) };
   }
 
   // --- POST /uploads/:id/parts ---------------------------------------------------------------
 
   async signParts(ownerId: string, id: string, partNumbers: number[]): Promise<SignPartsResponse> {
     const file = await this.openUpload(ownerId, id);
-    const { partCount } = this.plan(file.sizeBytes);
+    const { partCount } = storedPlan(file.sizeBytes, file.uploadPartBytes);
     partNumbers.forEach((n, i) => {
       if (n > partCount) {
         throw validationError(['body', 'partNumbers', i], `must be at most ${partCount}`);
@@ -384,9 +490,9 @@ export class UploadService {
 
   /**
    * Completes the multipart upload after checking the parts against S3 (ListParts plus
-   * partsFitUpload), so the object is exactly the reserved size. Idempotent: an upload already
-   * completed returns its file, and a retry after S3 completed but before the row was updated
-   * recovers through HeadObject.
+   * partsFitUpload with the stored part size), so the object is exactly the reserved size.
+   * Idempotent: an upload already completed returns its file, and a retry after S3 completed but
+   * before the row was updated recovers through HeadObject.
    */
   async complete(
     ownerId: string,
@@ -403,7 +509,7 @@ export class UploadService {
     if (s3Parts === null) return this.recoverCompleted(ownerId, file, uploadId);
     if (
       !sentPartsMatch(sent, s3Parts) ||
-      !partsFitUpload(file.sizeBytes, this.config.upload.partBytes, s3Parts)
+      !partsFitUpload(file.sizeBytes, partBytesOf(file), s3Parts)
     ) {
       throw new ApiError(
         'UPLOAD_PARTS_INVALID',
@@ -430,7 +536,10 @@ export class UploadService {
     return this.markCompleted(ownerId, file.id, uploadId);
   }
 
-  /** Clears upload_id and moves `uploading` to `processing`, guarded by the UploadId. */
+  /**
+   * Clears upload_id (and upload_part_bytes with it) and moves `uploading` to `processing`,
+   * guarded by the UploadId.
+   */
   private async markCompleted(
     ownerId: string,
     fileId: string,
@@ -440,6 +549,7 @@ export class UploadService {
       .update(files)
       .set({
         uploadId: null,
+        uploadPartBytes: null,
         status: sql`CASE WHEN ${files.status} = 'uploading' THEN 'processing'::file_status ELSE ${files.status} END`,
       })
       .where(and(eq(files.id, fileId), eq(files.ownerId, ownerId), eq(files.uploadId, uploadId)))
@@ -455,6 +565,7 @@ export class UploadService {
   /**
    * Aborts an open upload: S3 AbortMultipartUpload, then deletes the row and releases its
    * reservation in one transaction (guarded as in drive/quota). A completed upload is CONFLICT.
+   * Deleting the row frees its clientUploadId.
    */
   async abort(ownerId: string, id: string): Promise<void> {
     const file = await this.findUpload(ownerId, id);

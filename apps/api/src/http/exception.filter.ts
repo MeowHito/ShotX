@@ -54,9 +54,62 @@ export function errorResponse(error: unknown): ErrorResponse {
   };
 }
 
+const MAX_LOGGED_MESSAGE = 200;
+
+/** The first PostgreSQL error (5-character SQLSTATE `code`) in an error's `cause` chain. */
+function pgErrorIn(error: unknown): (Error & { code: string }) | null {
+  let e: unknown = error;
+  for (let depth = 0; depth < 5 && e instanceof Error; depth++) {
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code))
+      return e as Error & { code: string };
+    e = e.cause;
+  }
+  return null;
+}
+
 /**
- * The global exception filter. Logs unexpected errors with the route pattern only: never the
- * request body, query values, headers or tokens (selfies and credentials must not reach logs).
+ * A message safe to log: the first line only (Drizzle appends the SQL and its `params` on later
+ * lines), with quoted values, emails, numbers and long tokens replaced. File names, S3 keys,
+ * emails and ids from parameters or driver messages (`invalid input syntax for type uuid: "…"`)
+ * never reach the logs.
+ */
+export function scrubMessage(message: string): string {
+  const firstLine = message.split('\n', 1)[0] ?? '';
+  if (/^Failed query:/i.test(firstLine)) return 'query failed';
+  return firstLine
+    .replace(/"[^"]*"|'[^']*'|`[^`]*`/g, '?')
+    .replace(/\(([^()]*)\)=\(([^()]*)\)/g, '(?)=(?)')
+    .replace(/[^\s@]+@[^\s@]+/g, '?')
+    .replace(/[A-Za-z0-9_\-./+=]{24,}/g, '?')
+    .replace(/\d+/g, '?')
+    .slice(0, MAX_LOGGED_MESSAGE);
+}
+
+/**
+ * What the filter logs for an unexpected error: the error class, the PostgreSQL error code (and
+ * constraint name) when there is one, and a scrubbed message. Never the stack, the SQL, its
+ * parameters, the request body or headers.
+ */
+export function describeError(error: unknown): string {
+  if (!(error instanceof Error)) return 'non-error thrown';
+  const pg = pgErrorIn(error);
+  const parts = [error.constructor.name || error.name];
+  if (pg !== null) {
+    parts.push(`pg=${pg.code}`);
+    const constraint = (pg as { constraint?: unknown }).constraint;
+    if (typeof constraint === 'string' && /^[a-z0-9_]{1,63}$/.test(constraint)) {
+      parts.push(`constraint=${constraint}`);
+    }
+  }
+  parts.push(scrubMessage((pg ?? error).message));
+  return parts.join(' ');
+}
+
+/**
+ * The global exception filter. Logs unexpected errors with the route pattern and describeError
+ * only: never the request body, query values, headers, tokens, SQL parameters or stacks (selfies,
+ * file names, emails and credentials must not reach logs).
  */
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
@@ -69,9 +122,10 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const { status, body, headers } = errorResponse(exception);
     if (status >= 500) {
       const route = (req.route as { path?: string } | undefined)?.path ?? '(unmatched)';
-      const detail =
-        exception instanceof Error ? (exception.stack ?? exception.message) : 'non-error thrown';
-      this.logger.error(`${req.method} ${route} failed: ${detail}`, 'ApiExceptionFilter');
+      this.logger.error(
+        `${req.method} ${route} failed: ${describeError(exception)}`,
+        'ApiExceptionFilter',
+      );
     }
     if (res.headersSent) return;
     for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);

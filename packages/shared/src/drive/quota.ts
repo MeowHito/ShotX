@@ -7,8 +7,10 @@ import { ErrorCode } from '../errors';
  * ({@link fileQuotaBucket}):
  *
  *   reserved_bytes  files not yet verified by the worker (`verified_at IS NULL`, not failed)
- *   used_bytes      files the worker verified (`verified_at IS NOT NULL`)
- *   neither         failed files, and files whose purge was requested (`purge_requested_at`)
+ *   used_bytes      files the worker verified (`verified_at IS NOT NULL`), including files that
+ *                   failed later in processing (`failed` with `verified_at` set)
+ *   neither         failed files that were never verified, and files whose purge was requested
+ *                   (`purge_requested_at`)
  *
  * Every transition moves a file's `size_bytes` between buckets in the same transaction as the
  * row change that causes it, guarded so a retry (SQS delivers at least once) moves nothing twice:

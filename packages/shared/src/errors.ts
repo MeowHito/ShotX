@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SUBSCRIPTION_STATUSES } from './domain';
+import { FEATURES, SHARE_UNAVAILABLE_REASONS, SUBSCRIPTION_STATUSES } from './domain';
 
 /** Stable API error codes. The web app maps each code to a Thai message. */
 export const ErrorCode = {
@@ -55,6 +55,40 @@ export const ErrorCode = {
    * the declared size.
    */
   UPLOAD_PARTS_INVALID: 'UPLOAD_PARTS_INVALID',
+
+  // Idempotency (Phase 3).
+  /**
+   * The idempotency key (`Idempotency-Key` header, or `clientUploadId` of upload init) was used
+   * before with a different request, or by another viewer. Details: none.
+   */
+  IDEMPOTENCY_KEY_REUSED: 'IDEMPOTENCY_KEY_REUSED',
+
+  // Sharing, face search and downloads (Phase 3). Unknown share tokens are NOT_FOUND.
+  /** The share requires a signed-in viewer (`require_login`) and the request has none. */
+  LOGIN_REQUIRED: 'LOGIN_REQUIRED',
+  /** The share has a password and this browser hasn't unlocked it (POST /s/:token/unlock). */
+  PASSWORD_REQUIRED: 'PASSWORD_REQUIRED',
+  /** POST /s/:token/unlock with the wrong password. */
+  PASSWORD_INCORRECT: 'PASSWORD_INCORRECT',
+  /**
+   * The consent was given for another policy version than the current one (the page showed an
+   * old text). Reload the share meta and show the current text. Details: ConsentVersionDetails.
+   */
+  CONSENT_VERSION_MISMATCH: 'CONSENT_VERSION_MISMATCH',
+  /** The share doesn't allow downloads (`allow_download = false`). */
+  DOWNLOAD_NOT_ALLOWED: 'DOWNLOAD_NOT_ALLOWED',
+  /** A zip request over ZIP_MAX_FILES or ZIP_MAX_BYTES. Details: ZipTooLargeDetails. */
+  ZIP_TOO_LARGE: 'ZIP_TOO_LARGE',
+  /**
+   * The feature is switched off by configuration (FACE_SEARCH_ENABLED=false): consent, face
+   * search, face deletion, feedback and enabling face indexing. Details: FeatureDisabledDetails.
+   */
+  FEATURE_DISABLED: 'FEATURE_DISABLED',
+  /**
+   * Face search is on, but not for this share: it isn't a folder share, or no folder in it has an
+   * active face index. Details: FaceSearchUnavailableDetails.
+   */
+  FACE_SEARCH_UNAVAILABLE: 'FACE_SEARCH_UNAVAILABLE',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -84,6 +118,17 @@ export const ERROR_HTTP_STATUS = {
   UPLOAD_NOT_FOUND: 404,
   UPLOAD_EXPIRED: 410,
   UPLOAD_PARTS_INVALID: 422,
+  IDEMPOTENCY_KEY_REUSED: 422,
+  LOGIN_REQUIRED: 401,
+  PASSWORD_REQUIRED: 403,
+  PASSWORD_INCORRECT: 403,
+  CONSENT_VERSION_MISMATCH: 409,
+  DOWNLOAD_NOT_ALLOWED: 403,
+  ZIP_TOO_LARGE: 422,
+  // Not 503: the feature is off on purpose, not an outage. 5xx would page on-call and make
+  // clients retry.
+  FEATURE_DISABLED: 404,
+  FACE_SEARCH_UNAVAILABLE: 409,
 } as const satisfies Record<ErrorCode, number>;
 
 /** Body of every API error response. */
@@ -160,6 +205,45 @@ export const subscriptionInactiveDetailsSchema = z.object({
 });
 export type SubscriptionInactiveDetails = z.output<typeof subscriptionInactiveDetailsSchema>;
 
+export const shareExpiredDetailsSchema = z.object({ reason: z.enum(SHARE_UNAVAILABLE_REASONS) });
+export type ShareExpiredDetails = z.output<typeof shareExpiredDetailsSchema>;
+
+/** CONSENT_REQUIRED and CONSENT_VERSION_MISMATCH: the version whose text the page must show. */
+export const consentVersionDetailsSchema = z.object({ policyVersion: z.string().min(1) });
+export type ConsentVersionDetails = z.output<typeof consentVersionDetailsSchema>;
+
+export const noFaceDetectedDetailsSchema = z.object({
+  /** Selfies in the request, and how many of them had no detectable face (all of them). */
+  selfies: z.number().int().positive(),
+  selfiesWithoutFace: z.number().int().nonnegative(),
+});
+export type NoFaceDetectedDetails = z.output<typeof noFaceDetectedDetailsSchema>;
+
+export const zipTooLargeDetailsSchema = z.object({
+  maxFiles: z.number().int().positive(),
+  maxBytes: z.number().int().positive(),
+  /** What the request asked for (files in the share's scope and grant only). */
+  files: z.number().int().nonnegative(),
+  bytes: z.number().int().nonnegative(),
+});
+export type ZipTooLargeDetails = z.output<typeof zipTooLargeDetailsSchema>;
+
+export const featureDisabledDetailsSchema = z.object({ feature: z.enum(FEATURES) });
+export type FeatureDisabledDetails = z.output<typeof featureDisabledDetailsSchema>;
+
+/**
+ * - `not_folder_share`: face search works on folder shares only;
+ * - `not_indexed`: no folder at or below the share's root (or above it) has an active face index
+ *   (`face_index_enabled` and `face_index_expires_at` in the future).
+ */
+export const FACE_SEARCH_UNAVAILABLE_REASONS = ['not_folder_share', 'not_indexed'] as const;
+export type FaceSearchUnavailableReason = (typeof FACE_SEARCH_UNAVAILABLE_REASONS)[number];
+
+export const faceSearchUnavailableDetailsSchema = z.object({
+  reason: z.enum(FACE_SEARCH_UNAVAILABLE_REASONS),
+});
+export type FaceSearchUnavailableDetails = z.output<typeof faceSearchUnavailableDetailsSchema>;
+
 /** Schema of `details` for the codes that have them. */
 export const ERROR_DETAILS_SCHEMAS = {
   VALIDATION_FAILED: validationFailedDetailsSchema,
@@ -169,10 +253,20 @@ export const ERROR_DETAILS_SCHEMAS = {
   NAME_TAKEN: nameTakenDetailsSchema,
   FOLDER_DEPTH_EXCEEDED: folderDepthExceededDetailsSchema,
   SUBSCRIPTION_INACTIVE: subscriptionInactiveDetailsSchema,
+  SHARE_EXPIRED: shareExpiredDetailsSchema,
+  CONSENT_REQUIRED: consentVersionDetailsSchema,
+  CONSENT_VERSION_MISMATCH: consentVersionDetailsSchema,
+  NO_FACE_DETECTED: noFaceDetectedDetailsSchema,
+  ZIP_TOO_LARGE: zipTooLargeDetailsSchema,
+  FEATURE_DISABLED: featureDisabledDetailsSchema,
+  FACE_SEARCH_UNAVAILABLE: faceSearchUnavailableDetailsSchema,
 } as const satisfies Partial<Record<ErrorCode, z.ZodType>>;
 
-/** Where a request part failed validation: `params`, `query` or `body`. */
-export type RequestPart = 'params' | 'query' | 'body';
+/**
+ * Where a request part failed validation: `params`, `query`, `body`, or `headers` (e.g. a
+ * missing or malformed `Idempotency-Key`; header names are lowercase in paths).
+ */
+export type RequestPart = 'params' | 'query' | 'body' | 'headers';
 
 /**
  * VALIDATION_FAILED details from a zod error, with paths prefixed by the request part. Uses only

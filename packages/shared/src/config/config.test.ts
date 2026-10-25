@@ -12,6 +12,14 @@ describe('loadFaceConfig', () => {
     expect(config.index.qualityFilter).toBe('LOW');
     expect(config.index.tileEdgeEpsilon).toBe(0.01);
     expect(config.rekognition.region).toBe('ap-southeast-1');
+    expect(config.deletion).toEqual({ threshold: 95 });
+  });
+
+  it('reads the deletion threshold and keeps it at or above FACE_MAYBE', () => {
+    expect(loadFaceConfig({ FACE_DELETION_THRESHOLD: '90' }).deletion.threshold).toBe(90);
+    expect(() => loadFaceConfig({ FACE_DELETION_THRESHOLD: '80' })).toThrow(
+      /FACE_DELETION_THRESHOLD must be greater than or equal to FACE_MAYBE/,
+    );
   });
 
   it('uses the default encode settings', () => {

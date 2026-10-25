@@ -3,6 +3,7 @@ import {
   bigint,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -12,14 +13,20 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { users } from './accounts';
-import { createdAt, id } from './columns';
-import { activityType } from './enums';
+import { createdAt, id, timestamptz } from './columns';
+import { activitySource, activityType } from './enums';
+import { shares } from './sharing';
 
 /** Counts attached to an event, e.g. a scan's `{ selfies, strong, maybe }`. Never biometrics. */
 export type ActivityCounts = Record<string, number>;
 
 /**
- * Raw activity: one row per issued view, download or zip URL and per scan.
+ * Raw activity: one row per issued view page, download or zip URL and per scan. Writers validate
+ * rows with `activityEventInputSchema` from @shotx/shared (counts only).
+ *
+ * `source` (migration 0003): `share` rows have `share_id`; `owner` rows are a photographer's
+ * downloads from their own drive and have no share and no viewer (`activity_events_source_share`).
+ * Viewer rollups count `share` rows only; `bytes_out` counts both (see ACTIVITY_SOURCES).
  *
  * PARTITIONED BY RANGE (created_at), one partition per calendar month (UTC) plus a default
  * partition. Drizzle can't express partitioning, so migration 0000 creates the table by hand and
@@ -36,7 +43,9 @@ export const activityEvents = pgTable(
   {
     id: bigint('id', { mode: 'number' }).generatedByDefaultAsIdentity(),
     type: activityType('type').notNull(),
-    shareId: uuid('share_id').notNull(),
+    source: activitySource('source').notNull().default('share'),
+    /** Null exactly for `owner` events. */
+    shareId: uuid('share_id'),
     fileId: uuid('file_id'),
     photographerId: uuid('photographer_id').notNull(),
     viewerId: uuid('viewer_id'),
@@ -51,6 +60,12 @@ export const activityEvents = pgTable(
     index('activity_events_share_created_idx').on(t.shareId, t.createdAt),
     index('activity_events_created_brin').using('brin', t.createdAt),
     check('activity_events_bytes_nonnegative', sql`${t.bytes} >= 0`),
+    // Unqualified column names: PostgreSQL rejects table-qualified names in a CHECK added to a
+    // partitioned table (it is copied to every partition, which has another name).
+    check(
+      'activity_events_source_share',
+      sql`("source" = 'share') = ("share_id" IS NOT NULL) AND ("source" = 'share' OR ("viewer_id" IS NULL AND "anon_id" IS NULL))`,
+    ),
   ],
 );
 
@@ -78,6 +93,41 @@ export const dailyStats = pgTable(
     check(
       'daily_stats_nonnegative',
       sql`${t.visitors} >= 0 AND ${t.scanners} >= 0 AND ${t.scans} >= 0 AND ${t.downloads} >= 0 AND ${t.uniqueDownloaders} >= 0 AND ${t.bytesOut} >= 0`,
+    ),
+  ],
+);
+
+/**
+ * Hourly rollup of `share` activity per share and day (Bangkok calendar day, as daily_stats), for
+ * `GET /shares/:id/stats`. Same counts as daily_stats plus `zips`. The rollup upserts the rows of
+ * the days it touched and sets `updated_at`. Deleting a share (purge) deletes its rows.
+ */
+export const shareDailyStats = pgTable(
+  'share_daily_stats',
+  {
+    shareId: uuid('share_id').notNull(),
+    date: date('date', { mode: 'string' }).notNull(),
+    photographerId: uuid('photographer_id').notNull(),
+    visitors: integer('visitors').notNull().default(0),
+    scanners: integer('scanners').notNull().default(0),
+    scans: integer('scans').notNull().default(0),
+    downloads: integer('downloads').notNull().default(0),
+    uniqueDownloaders: integer('unique_downloaders').notNull().default(0),
+    zips: integer('zips').notNull().default(0),
+    bytesOut: bigint('bytes_out', { mode: 'number' }).notNull().default(0),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'share_daily_stats_pkey', columns: [t.shareId, t.date] }),
+    foreignKey({
+      name: 'share_daily_stats_share_same_owner_fk',
+      columns: [t.shareId, t.photographerId],
+      foreignColumns: [shares.id, shares.ownerId],
+    }).onDelete('cascade'),
+    index('share_daily_stats_photographer_date_idx').on(t.photographerId, t.date),
+    check(
+      'share_daily_stats_nonnegative',
+      sql`${t.visitors} >= 0 AND ${t.scanners} >= 0 AND ${t.scans} >= 0 AND ${t.downloads} >= 0 AND ${t.uniqueDownloaders} >= 0 AND ${t.zips} >= 0 AND ${t.bytesOut} >= 0`,
     ),
   ],
 );

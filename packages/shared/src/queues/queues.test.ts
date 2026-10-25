@@ -213,7 +213,19 @@ describe('faces queue', () => {
     ).toEqual({ type: 'index.folder', folderId: fileId });
   });
 
+  it('parses unindex.folder and delete.faces jobs, which carry ids only', () => {
+    const unindex = { type: 'unindex.folder', folderId: fileId } as const;
+    expect(parseQueueMessage('faces', serializeQueueMessage('faces', unindex))).toEqual(unindex);
+    const deletion = { type: 'delete.faces', deletionId: jobId } as const;
+    expect(parseQueueMessage('faces', serializeQueueMessage('faces', deletion))).toEqual(deletion);
+    expect(
+      parseQueueMessage('faces', JSON.stringify({ ...deletion, faceIds: ['x'], bbox: {} })),
+    ).toEqual(deletion);
+  });
+
   it.each([
+    { type: 'delete.faces' },
+    { type: 'unindex.folder', fileId },
     { type: 'index.file' },
     { type: 'index.file', fileId: 'not-a-uuid' },
     { type: 'index.folder', fileId },

@@ -85,9 +85,11 @@ describe('upload part checks', () => {
     expect(partsFitUpload(size, 5 * MiB, parts([5 * MiB, 5 * MiB, 2 * MiB, 1]))).toBe(false);
   });
 
-  it('accept the plan of an older part size, never one below the S3 minimum', () => {
-    expect(partsFitUpload(size, 5 * MiB, parts([6 * MiB, 6 * MiB]))).toBe(true);
-    expect(partsFitUpload(size, 5 * MiB, parts([4 * MiB, 4 * MiB, 4 * MiB]))).toBe(false);
+  it('use the part size stored at init, whatever the parts suggest', () => {
+    // Stored 6 MiB (e.g. UPLOAD_PART_BYTES changed since): only that plan fits.
+    expect(partsFitUpload(size, 6 * MiB, parts([6 * MiB, 6 * MiB]))).toBe(true);
+    expect(partsFitUpload(size, 5 * MiB, parts([6 * MiB, 6 * MiB]))).toBe(false);
+    expect(partsFitUpload(size, 6 * MiB, parts([5 * MiB, 5 * MiB, 2 * MiB]))).toBe(false);
   });
 
   it('compare ETags with or without quotes', () => {

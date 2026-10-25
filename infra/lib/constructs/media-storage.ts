@@ -3,6 +3,7 @@ import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import type { PlatformConfig } from '../config';
+import { TMP_RECONCILE_PREFIX } from '../constants';
 
 export interface MediaStorageProps {
   readonly config: PlatformConfig;
@@ -50,10 +51,28 @@ export class MediaStorage extends Construct {
             storage.abortIncompleteMultipartUploadDays,
           ),
         },
+        // One rule per tmp/ prefix. Where rules overlap S3 applies the shortest expiration, so
+        // the tmp/ catch-all is at least as long as every specific rule (checked in config).
         {
-          id: 'expire-tmp',
+          id: 'expire-tmp-index',
+          prefix: S3_PREFIXES.tmpIndex,
+          expiration: Duration.days(storage.tmpIndexExpirationDays),
+        },
+        {
+          // Kept for at least ZIP_RESULT_TTL_SECONDS after the zip completes (config).
+          id: 'expire-tmp-zips',
+          prefix: S3_PREFIXES.tmpZips,
+          expiration: Duration.days(storage.tmpZipsExpirationDays),
+        },
+        {
+          id: 'expire-tmp-reconcile',
+          prefix: TMP_RECONCILE_PREFIX,
+          expiration: Duration.days(storage.tmpReconcileExpirationDays),
+        },
+        {
+          id: 'expire-tmp-other',
           prefix: S3_PREFIXES.tmp,
-          expiration: Duration.days(storage.tmpExpirationDays),
+          expiration: Duration.days(storage.tmpOtherExpirationDays),
         },
         {
           id: 'originals-intelligent-tiering',

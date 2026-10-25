@@ -1,12 +1,14 @@
 import 'reflect-metadata';
 import { ConsoleLogger } from '@nestjs/common';
 import { createDb, createPool, loadDatabaseConfig } from '@shotx/db';
+import { createRedisRekognitionLimiters, RekognitionFaceProvider } from '@shotx/face';
 import { createApiApp } from './app';
 import { CognitoTokenVerifier, remoteJwks } from './auth/cognito-verifier';
 import { loadApiConfig, redisKeyPrefix } from './config';
 import { CloudFrontMediaUrlSigner } from './infra/cloudfront-signer';
-import { createRedis, RedisRateLimiter } from './infra/redis';
+import { createRedis, RedisKeyValueStore, RedisRateLimiter } from './infra/redis';
 import { createS3Client, S3ObjectStorage } from './infra/s3-storage';
+import { createSqsClient, SqsQueueSender } from './infra/sqs-queue';
 import { systemClock } from './tokens';
 
 async function main(): Promise<void> {
@@ -15,6 +17,13 @@ async function main(): Promise<void> {
   const pool = createPool(loadDatabaseConfig(env));
   const redis = createRedis(config.redis);
   const s3 = createS3Client(config.aws, config.storage);
+  const sqs = createSqsClient(config.aws);
+  // Face search is the only synchronous Rekognition use: the interactive profile fails fast.
+  const faceProvider = RekognitionFaceProvider.create(
+    config.face.rekognition,
+    'interactive',
+    createRedisRekognitionLimiters(redis, config.face.rekognition, 'interactive'),
+  );
   const logger = new ConsoleLogger('api', { json: config.app.nodeEnv === 'production' });
 
   const app = await createApiApp(
@@ -26,8 +35,12 @@ async function main(): Promise<void> {
       rateLimiter: new RedisRateLimiter(redis, redisKeyPrefix(config)),
       tokenVerifier: new CognitoTokenVerifier(config.cognito, remoteJwks(config.cognito)),
       clock: systemClock,
+      store: new RedisKeyValueStore(redis, redisKeyPrefix(config)),
+      queue: new SqsQueueSender(sqs, config.queues),
+      faceProvider,
       onShutdown: async () => {
         s3.destroy();
+        sqs.destroy();
         redis.disconnect();
         await pool.end();
       },

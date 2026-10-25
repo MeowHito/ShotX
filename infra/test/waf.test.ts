@@ -51,7 +51,42 @@ const FACE_SEARCH_VARIANTS: Record<string, string> = {
   'percent-encoded prefix': `/api/%73/${TOKEN}/face-search`,
 };
 
+/** The same spellings for `POST /api/s/:token/face-deletion` ("ขอลบใบหน้าของฉัน"). */
+const FACE_DELETION_VARIANTS: Record<string, string> = Object.fromEntries(
+  Object.entries(FACE_SEARCH_VARIANTS).map(([label, path]) => [
+    label,
+    path
+      .replace('face-search', 'face-deletion')
+      .replace('FACE-SEARCH', 'FACE-DELETION')
+      .replace('Face-Search', 'Face-Deletion')
+      .replace('face%2Dsearch', 'face%2Ddeletion')
+      .replace('%66%61%63%65-search', '%66%61%63%65-deletion')
+      .replace('%46ACE-%53EARCH', '%46ACE-%44ELETION'),
+  ]),
+);
+/** Every face upload route: both share one rate budget, body exemption and size limit. */
+const FACE_UPLOAD_VARIANTS: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(FACE_SEARCH_VARIANTS).map(([l, p]) => [`search ${l}`, p])),
+  ...Object.fromEntries(
+    Object.entries(FACE_DELETION_VARIANTS).map(([l, p]) => [`deletion ${l}`, p]),
+  ),
+};
+
+/** Spellings of another public share route, `/api/s/:token/<suffix>`. */
+const routeVariants = (suffix: string): Record<string, string> => ({
+  canonical: `/api/s/${TOKEN}/${suffix}`,
+  'upper case': `/api/s/${TOKEN}/${suffix.toUpperCase()}`,
+  'upper-case prefix': `/API/S/${TOKEN}/${suffix}`,
+  'trailing slash': `/api/s/${TOKEN}/${suffix}/`,
+  'percent-encoded first letter': `/api/s/${TOKEN}/%${suffix.charCodeAt(0).toString(16)}${suffix.slice(1)}`,
+  'percent-encoded trailing slash': `/api/s/${TOKEN}/${suffix}%2F`,
+  'percent-encoded prefix': `/api/%73/${TOKEN}/${suffix}`,
+});
+
 const NOT_FACE_SEARCH = [
+  get(`/api/s/${TOKEN}/face-deletion`),
+  post(`/api/s/${TOKEN}/face-deletion/extra`),
+  post(`/api/s/${TOKEN}/face-deletions`),
   get(`/api/s/${TOKEN}/face-search`),
   post(`/api/s/${TOKEN}/consent`),
   post(`/api/s/${TOKEN}/face-search-feedback`),
@@ -98,7 +133,7 @@ describe('WAF path normalisation (face search)', () => {
     expect(pathMatches).toBeGreaterThan(0);
   });
 
-  for (const [label, path] of Object.entries(FACE_SEARCH_VARIANTS)) {
+  for (const [label, path] of Object.entries(FACE_UPLOAD_VARIANTS)) {
     it(`applies both face-search rate rules to POST ${label} (${path})`, () => {
       for (const r of faceRateRules) expect(ruleApplies(r, post(path)), String(r.Name)).toBe(true);
     });
@@ -157,7 +192,7 @@ describe('WAF on the admin distribution', () => {
 
   it('blocks share pages and face search, which are served on the main domain only', () => {
     expect(action(block)).toBe('Block');
-    for (const path of [...SHARE_VARIANTS, ...Object.values(FACE_SEARCH_VARIANTS)]) {
+    for (const path of [...SHARE_VARIANTS, ...Object.values(FACE_UPLOAD_VARIANTS)]) {
       expect(matches(block.Statement as Json, post(path)), path).toBe(true);
     }
   });
@@ -201,7 +236,7 @@ describe('WAF and face-search uploads', () => {
 
   for (const name of bodyRuleGroups) {
     it(`skips ${name} (body-inspecting rules) for face-search uploads`, () => {
-      for (const [label, path] of Object.entries(FACE_SEARCH_VARIANTS)) {
+      for (const [label, path] of Object.entries(FACE_UPLOAD_VARIANTS)) {
         expect(ruleApplies(managed(name), post(path, typical)), label).toBe(false);
         expect(
           ruleApplies(
@@ -269,7 +304,7 @@ describe('WAF and face-search uploads', () => {
     });
 
     it('blocks bodies over the limit on every spelling of the path', () => {
-      for (const [label, p] of Object.entries(FACE_SEARCH_VARIANTS)) {
+      for (const [label, p] of Object.entries(FACE_UPLOAD_VARIANTS)) {
         expect(blocks(post(p, multipart(limits.maxBodyBytes + 1))), label).toBe(true);
         expect(blocks(post(p, multipart(10 * limits.maxBodyBytes))), label).toBe(true);
       }
@@ -302,6 +337,90 @@ describe('WAF and face-search uploads', () => {
     edge.allResourcesProperties('AWS::WAFv2::WebACL', {
       AssociationConfig: { RequestBody: { CLOUDFRONT: { DefaultSizeInspectionLimit: 'KB_16' } } },
     });
+  });
+});
+
+describe('WAF and face deletion ("ขอลบใบหน้าของฉัน")', () => {
+  it('shares the face-search rate rules, CAPTCHA included', () => {
+    for (const name of ['face-search-rate-block', 'face-search-rate-captcha']) {
+      for (const [label, path] of Object.entries(FACE_DELETION_VARIANTS)) {
+        expect(ruleApplies(rule(mainRules, name), post(path)), `${name} ${label}`).toBe(true);
+      }
+    }
+  });
+
+  it('gets the managed-rule body exemption and the 413 limit of face search', () => {
+    const limits = faceSearchLimits(s.config);
+    const upload = (length: number) => ({
+      'content-type': 'multipart/form-data; boundary=x',
+      'content-length': String(length),
+    });
+    const tooLarge = rule(mainRules, 'face-search-body-too-large');
+    for (const [label, path] of Object.entries(FACE_DELETION_VARIANTS)) {
+      for (const name of ['AWSManagedRulesCommonRuleSet', 'AWSManagedRulesKnownBadInputsRuleSet']) {
+        expect(ruleApplies(rule(mainRules, `aws-${name}`), post(path, upload(1_000))), label).toBe(
+          false,
+        );
+      }
+      expect(matches(tooLarge.Statement as Json, post(path, upload(limits.maxBodyBytes)))).toBe(
+        false,
+      );
+      expect(
+        matches(tooLarge.Statement as Json, post(path, upload(limits.maxBodyBytes + 1))),
+        label,
+      ).toBe(true);
+    }
+  });
+});
+
+describe('WAF rate rules on unlock and downloads', () => {
+  for (const [suffix, name, limitKey] of [
+    ['unlock', 'share-unlock-rate-block', 'unlockBlockRateLimit'],
+    ['downloads', 'share-downloads-rate-block', 'downloadsBlockRateLimit'],
+  ] as const) {
+    describe(`POST /api/s/:token/${suffix}`, () => {
+      const r = rule(mainRules, name);
+
+      it('blocks with 429 and the RATE_LIMITED body at the configured per-IP limit', () => {
+        expect(r.Action).toEqual({
+          Block: { CustomResponse: { ResponseCode: 429, CustomResponseBodyKey: 'rate_limited' } },
+        });
+        const rate = (r.Statement as Json).RateBasedStatement as Json;
+        expect(rate.Limit).toBe(s.config.waf[limitKey]);
+        expect(rate.AggregateKeyType).toBe('IP');
+        expect(rate.EvaluationWindowSec).toBe(s.config.waf.evaluationWindowSeconds);
+      });
+
+      it('counts every spelling of the path', () => {
+        for (const [label, path] of Object.entries(routeVariants(suffix))) {
+          expect(ruleApplies(r, post(path)), `${label} ${path}`).toBe(true);
+        }
+      });
+
+      it('ignores other methods and routes', () => {
+        for (const req of [
+          get(`/api/s/${TOKEN}/${suffix}`),
+          post(`/api/s/${TOKEN}/${suffix}/extra`),
+          post(`/api/s/${TOKEN}/${suffix}x`),
+          post(`/api/s/${TOKEN}/consent`),
+          post(`/s/${TOKEN}/${suffix}`),
+          post(`/api/shares/${TOKEN}/${suffix}`),
+        ]) {
+          expect(ruleApplies(r, req), `${req.method} ${req.path}`).toBe(false);
+        }
+      });
+
+      it('runs before the general share rules, so it sees every request', () => {
+        expect(r.Priority as number).toBeLessThan(
+          rule(mainRules, 'share-rate-block').Priority as number,
+        );
+      });
+    });
+  }
+
+  it('gives every main ACL rule a unique priority', () => {
+    const priorities = mainRules.map((x) => x.Priority);
+    expect(new Set(priorities).size).toBe(priorities.length);
   });
 });
 

@@ -116,12 +116,18 @@ export interface CreatedOriginal extends CreatedObject {
  * - loads the `files` row by `fileId` and requires `owner_id = photographerId` and
  *   `s3_key = key`; with no such row (aborted, or purged) or a purge-requested row it deletes the
  *   object and stops;
- * - skips rows that are `failed` or already verified (`verified_at` set), so redelivery is a no-op;
+ * - skips rows that are `failed`, and rows that are verified (`verified_at` set) and `ready`, so
+ *   redelivery is a no-op;
+ * - finishes rows that are verified but not `ready` (an earlier attempt verified the bytes and
+ *   then died or failed before the derivatives were written): it writes the derivatives, sends
+ *   the faces job and marks the row `ready` without checking or moving the bytes again (they are
+ *   already in used_bytes; the guarded UPDATE of drive/quota moves nothing twice);
  * - otherwise HeadObject: the size must equal `files.size_bytes` exactly and the magic bytes must
  *   match `files.mime`, else delete the object, mark `failed` and release the reservation; then
  *   set `verified_at` (and `processing` if the row is still `uploading`: the event can arrive
  *   before the API's complete commits) and move the bytes from reserved to used, all guarded as in
- *   drive/quota.
+ *   drive/quota. If processing fails after that, the row may become `failed` with `verified_at`
+ *   set: its bytes stay in used_bytes until it is purged (fileQuotaBucket).
  *
  * `ignored` objects are logged and dropped (the bucket notification is filtered to `originals/`,
  * so they indicate a misconfiguration).

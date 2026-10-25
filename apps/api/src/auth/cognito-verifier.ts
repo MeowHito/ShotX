@@ -67,6 +67,30 @@ export class CognitoTokenVerifier implements TokenVerifier {
     }
     const sub = payload.sub;
     if (typeof sub !== 'string' || sub === '') throw unauthenticated();
-    return { pool, sub, tokenUse };
+    return { pool, sub, tokenUse, ...profileClaims(tokenUse, payload) };
   }
+}
+
+const MAX_EMAIL_LENGTH = 320;
+const MAX_NAME_LENGTH = 200;
+
+/**
+ * Email and name for provisioning (newUserForIdentity), from ID tokens only: a verified email and
+ * a non-empty name. Anything that doesn't fit the shared identity schema is dropped, never fatal.
+ */
+export function profileClaims(
+  tokenUse: 'id' | 'access',
+  payload: JWTPayload,
+): { email: string | null; name: string | null } {
+  if (tokenUse !== 'id') return { email: null, name: null };
+  const email =
+    payload.email_verified === true &&
+    typeof payload.email === 'string' &&
+    payload.email.length <= MAX_EMAIL_LENGTH &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)
+      ? payload.email
+      : null;
+  const rawName = typeof payload.name === 'string' ? payload.name.trim() : '';
+  const name = rawName.length > 0 && rawName.length <= MAX_NAME_LENGTH ? rawName : null;
+  return { email, name };
 }

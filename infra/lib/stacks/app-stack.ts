@@ -147,5 +147,7 @@ export class AppStack extends Stack {
     out('API_INTERNAL_URL', `http://${services.loadBalancer.loadBalancerDnsName}`);
     out('ECS_CLUSTER', services.cluster.clusterName);
     out('ALARM_TOPIC_ARN', alarmTopic.topicArn);
+    // ARN only: the api gets the value as the ECS secret IP_HASH_SECRET.
+    out('IP_HASH_SECRET_ARN', services.ipHashSecret.secretArn);
   }
 }

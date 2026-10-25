@@ -4,3 +4,9 @@ export function folderHref(folderId: string | null): string {
 }
 
 export const TRASH_HREF = '/studio/trash';
+
+export const SHARES_HREF = '/studio/shares';
+
+export function shareHref(shareId: string): string {
+  return `${SHARES_HREF}/${shareId}`;
+}

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { DRIVE_ITEMS_BATCH_MAX, DRIVE_PAGE_SIZE_LIMIT } from '../config/drive';
-import { FILE_STATUSES, SUBSCRIPTION_STATUSES } from '../domain';
+import { DOWNLOAD_SIZES, FILE_STATUSES, SUBSCRIPTION_STATUSES } from '../domain';
 import { DRIVE_CURSOR_MAX_LENGTH, DRIVE_SORTS, SORT_ORDERS } from '../drive/cursor';
 import { driveNameSchema } from '../drive/names';
 import { MEDIA_KINDS } from '../media-types';
@@ -42,6 +42,10 @@ export const driveFolderSchema = z.object({
   createdAt: isoDateTimeSchema,
   /** null unless the folder is in the trash (directly or through a trashed ancestor). */
   deletedAt: isoDateTimeSchema.nullable(),
+  /**
+   * This folder's own face-index switch. Indexing covers the folder's whole subtree while the
+   * switch is on and `faceIndexExpiresAt` is in the future (see isCoveredByFaceIndex).
+   */
   faceIndexEnabled: z.boolean(),
   faceIndexExpiresAt: isoDateTimeSchema.nullable(),
 });
@@ -237,3 +241,55 @@ export const driveUsageResponseSchema = z.object({
   uploadsBlockedBy: z.enum(['SUBSCRIPTION_INACTIVE', 'QUOTA_EXCEEDED']).nullable(),
 });
 export type DriveUsageResponse = z.output<typeof driveUsageResponseSchema>;
+
+// --- PATCH /drive/folders/:id/face-index ---------------------------------------------------
+
+/**
+ * Turn face indexing of a folder subtree on (or extend it) or off.
+ *
+ * - `enabled: true` needs `attendeesInformedConfirmed: true`: the photographer confirms the
+ *   attendees were informed (organiser notice or registration consent), as the PDPA checklist
+ *   requires; the API stores when (`folders.face_index_informed_at`). It sets
+ *   `face_index_expires_at = max(current, now + FACE_INDEX_EXPIRY_DAYS)`, so calling it again
+ *   extends the index. If the folder had no active index, the API sends `index.folder`.
+ *   FEATURE_DISABLED while FACE_SEARCH_ENABLED is false; SUBSCRIPTION_INACTIVE unless the
+ *   subscription is trial, active or grace.
+ * - `enabled: false` clears the switch and the expiry and sends `unindex.folder`, which deletes the
+ *   faces of files no longer covered by another active folder. Always allowed.
+ *
+ * The response is the folder as it now is. Uploads into a covered folder extend the expiry of the
+ * covering folders to last upload + FACE_INDEX_EXPIRY_DAYS (the worker does it when it indexes).
+ */
+export const updateFaceIndexBodySchema = z.discriminatedUnion('enabled', [
+  z.strictObject({
+    enabled: z.literal(true),
+    attendeesInformedConfirmed: z.literal(true, {
+      error: 'attendeesInformedConfirmed must be true to enable face indexing',
+    }),
+  }),
+  z.strictObject({ enabled: z.literal(false) }),
+]);
+export type UpdateFaceIndexBody = z.input<typeof updateFaceIndexBodySchema>;
+
+// --- GET /drive/files/:id/download -----------------------------------------------------------
+
+/**
+ * A photographer's download of their own file, allowed in any subscription status (spec: an
+ * expired photographer can still download their files). `size` defaults to `original`; `web`
+ * serves web.jpg (images) or preview.mp4 (videos), CONFLICT until the file is `ready`. Trashed
+ * files can be downloaded too. Logs an `owner` download activity event.
+ */
+export const ownerDownloadQuerySchema = z.object({
+  size: z.enum(DOWNLOAD_SIZES).default('original'),
+});
+export type OwnerDownloadQuery = z.input<typeof ownerDownloadQuerySchema>;
+
+/** A signed download URL with `Content-Disposition: attachment` and the file's name. */
+export const signedDownloadSchema = z.object({
+  fileId: idSchema,
+  url: signedUrlSchema,
+  /** The name the browser saves (Content-Disposition). */
+  fileName: z.string().min(1),
+  expiresAt: isoDateTimeSchema,
+});
+export type SignedDownload = z.output<typeof signedDownloadSchema>;

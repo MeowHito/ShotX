@@ -19,4 +19,10 @@ if (typeof window !== 'undefined') {
   proto.hasPointerCapture ??= () => false;
   proto.releasePointerCapture ??= () => undefined;
   proto.scrollIntoView ??= () => undefined;
+  // Radix Checkbox measures itself; jsdom has no layout.
+  globalThis.ResizeObserver ??= class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
 }

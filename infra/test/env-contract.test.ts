@@ -1,14 +1,18 @@
 import { readFileSync } from 'node:fs';
 import {
   type Env,
+  loadApiLimitsConfig,
   loadAppConfig,
   loadAwsConfig,
   loadBillingConfig,
   loadCloudFrontSigningConfig,
   loadCognitoConfig,
+  loadConsentConfig,
   loadCostConfig,
+  loadDriveConfig,
   loadFaceConfig,
   loadFaceSearchUploadConfig,
+  loadFeatureFlags,
   loadInternalApiConfig,
   loadMediaConfig,
   loadMediaStorageConfig,
@@ -21,6 +25,7 @@ import {
   loadShareConfig,
   loadUploadConfig,
   loadWafCaptchaConfig,
+  loadWorkerSettings,
   QUEUE_NAMES,
 } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
@@ -89,6 +94,7 @@ const SAMPLES: Record<string, string> = {
   PGDATABASE: 'shotx',
   PGUSER: 'shotx_admin',
   PGPASSWORD: 'secret-from-secrets-manager',
+  IP_HASH_SECRET: 'generated-by-secrets-manager-64-characters-long-0123456789abcdef',
 };
 
 /** What each service loads at startup. */
@@ -98,6 +104,10 @@ const SERVICE_LOADERS: Record<ServiceName, Loader[]> = {
     (e) => loadServerConfig(e, 3000),
     loadInternalApiConfig,
     (e) => loadCognitoConfig(e, ['users']),
+    // Upload UI settings and the CSP connect-src bucket origin (MEDIA_BUCKET, AWS_REGION).
+    loadAwsConfig,
+    loadUploadConfig,
+    loadMediaStorageConfig,
   ],
   admin: [
     loadAppConfig,
@@ -116,6 +126,12 @@ const SERVICE_LOADERS: Record<ServiceName, Loader[]> = {
     loadCloudFrontSigningConfig,
     loadFaceConfig,
     loadFaceSearchUploadConfig,
+    loadApiLimitsConfig,
+    loadFeatureFlags,
+    loadConsentConfig,
+    loadShareConfig,
+    loadUploadConfig,
+    loadDriveConfig,
   ],
   worker: [
     loadAppConfig,
@@ -125,6 +141,9 @@ const SERVICE_LOADERS: Record<ServiceName, Loader[]> = {
     (e) => loadQueueUrls(e, QUEUE_NAMES),
     (e) => loadQueueVisibilityTimeouts(e, QUEUE_NAMES),
     loadFaceConfig,
+    loadWorkerSettings,
+    loadFeatureFlags,
+    loadShareConfig,
   ],
 };
 
@@ -139,6 +158,11 @@ const ALL_LOADERS: Loader[] = [
   loadShareConfig,
   loadRetentionConfig,
   loadBillingConfig,
+  loadDriveConfig,
+  loadApiLimitsConfig,
+  loadWorkerSettings,
+  loadFeatureFlags,
+  loadConsentConfig,
 ];
 
 const throws = (loader: Loader, env: Env) => {

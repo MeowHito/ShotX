@@ -7,13 +7,25 @@ import {
   driveNameKey,
   ERROR_HTTP_STATUS,
   type ErrorCode,
+  ME_ROUTES,
+  type MeResponse,
   multipartPlan,
+  type OwnerShare,
   type RouteContract,
   UPLOAD_ROUTES,
   uploadFileType,
   validationFailedDetails,
+  type ZipJobView,
 } from '@shotx/shared';
 import { matchRoute } from '@/lib/bff/handler';
+import {
+  createPublicShare,
+  handlePhase3,
+  NOT_HANDLED,
+  type PublicShareFixture,
+} from './fake-share-api';
+
+export { shareItem, type PublicShareFixture } from './fake-share-api';
 
 /**
  * In-memory stand-in for the API, speaking the shared route contracts over `fetch`: request
@@ -22,10 +34,10 @@ import { matchRoute } from '@/lib/bff/handler';
  * worktree).
  */
 
-const NOW = '2026-10-25T05:00:00.000Z';
-const MEDIA = 'https://photos.example.com/media';
+export const NOW = '2026-10-25T05:00:00.000Z';
+export const MEDIA = 'https://photos.example.com/media';
 
-class Fail extends Error {
+export class Fail extends Error {
   constructor(
     readonly code: ErrorCode,
     readonly details?: unknown,
@@ -50,12 +62,25 @@ export interface FakeApiOptions {
   initPresignedParts?: number;
   /** Return a different part size than the client expects (plan mismatch test). */
   partSizeOverride?: number;
+  /** me.role (`user` until onboarding). */
+  role?: MeResponse['role'];
+  /** FACE_SEARCH_ENABLED as the API reports it (me.features.faceSearch). */
+  faceSearch?: boolean;
+  /** ZIP_MAX_FILES. */
+  zipMaxFiles?: number;
+  /** Polls of GET /zip-jobs/:id before the job is done. */
+  zipPollsUntilDone?: number;
+  zipOutcome?: 'ready' | 'failed';
 }
 
 export interface RecordedCall {
   method: string;
   path: string;
   body: unknown;
+  /** `/bff` or `/api`. */
+  prefix: string;
+  credentials: RequestCredentials | undefined;
+  headers: Record<string, string>;
 }
 
 export class FakeApi {
@@ -68,6 +93,21 @@ export class FakeApi {
   readonly options: Required<Omit<FakeApiOptions, 'partSizeOverride'>> &
     Pick<FakeApiOptions, 'partSizeOverride'>;
   private reservedBytes = 0;
+  /** clientUploadId -> the upload it started and its declaration. */
+  clientUploads = new Map<string, { fileId: string; declaration: string }>();
+  /** Process the request, then fail the fetch as if the response was lost (once per route). */
+  dropResponseOnce = new Set<RouteContract>();
+
+  me: MeResponse;
+  /** A viewer session exists (POST /me/viewer-session went through the BFF). */
+  viewerSession = false;
+  ownerShares = new Map<string, { share: OwnerShare; password: string | null }>();
+  publicShares = new Map<string, PublicShareFixture>();
+  feedback: { token: string; fileId: string }[] = [];
+  /** Selfie parts received per face request (sizes and types only). */
+  selfieUploads: { route: 'search' | 'deletion'; sizes: number[]; types: string[] }[] = [];
+  zipJobs = new Map<string, { job: ZipJobView; polls: number; token: string }>();
+  zipKeys = new Map<string, { ids: string; jobId: string }>();
 
   constructor(options: FakeApiOptions = {}) {
     this.options = {
@@ -77,8 +117,29 @@ export class FakeApi {
       uploadsBlockedBy: null,
       partBytes: 16 * 1024 * 1024,
       initPresignedParts: 2,
+      role: 'photographer',
+      faceSearch: false,
+      zipMaxFiles: 500,
+      zipPollsUntilDone: 2,
+      zipOutcome: 'ready',
       ...options,
     };
+    this.me = {
+      id: crypto.randomUUID(),
+      role: this.options.role,
+      email: 'photographer@example.com',
+      name: 'Somchai',
+      createdAt: NOW,
+      subscription: this.options.role === 'photographer' ? TRIAL : null,
+      features: { faceSearch: this.options.faceSearch },
+    };
+  }
+
+  /** Seeds a share for the public routes. */
+  addPublicShare(fixture: Partial<PublicShareFixture> & { itemCount?: number } = {}) {
+    const share = createPublicShare(fixture);
+    this.publicShares.set(share.token, share);
+    return share;
   }
 
   // --- Seeding ---------------------------------------------------------------------------
@@ -129,25 +190,71 @@ export class FakeApi {
 
   // --- fetch ------------------------------------------------------------------------------
 
-  fetch: typeof fetch = (input, init) => Promise.resolve(this.respond(input, init));
+  fetch: typeof fetch = (input, init) => {
+    try {
+      return Promise.resolve(this.respond(input, init));
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  };
 
   private respond(input: RequestInfo | URL, init?: RequestInit): Response {
     const href = input instanceof Request ? input.url : input.toString();
     const url = new URL(href, 'http://localhost');
     const method = init?.method ?? 'GET';
-    const path = url.pathname.replace(/^\/bff/, '');
+    const prefix = /^\/(bff|api)(?=\/)/.exec(url.pathname)?.[0] ?? '';
+    const path = url.pathname.slice(prefix.length);
+    const form = init?.body instanceof FormData ? init.body : undefined;
     const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
-    this.calls.push({ method, path, body });
+    const headers = Object.fromEntries(
+      Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [
+        k.toLowerCase(),
+        v,
+      ]),
+    );
+    this.calls.push({
+      method,
+      path,
+      body: body ?? form,
+      prefix,
+      credentials: init?.credentials,
+      headers,
+    });
     const route = matchRoute(method, path);
     if (route === null) return json(404, { code: 'NOT_FOUND', message: 'no route' });
+    // Public routes are called directly at /api, everything else through the BFF.
+    if ((route.auth === 'public') !== (prefix === '/api')) {
+      return json(404, { code: 'NOT_FOUND', message: `wrong prefix ${prefix}` });
+    }
     try {
       const params = route.params ? parse(route.params, paramsOf(route, path), 'params') : {};
       const query = route.query
         ? parse(route.query, Object.fromEntries(url.searchParams), 'query')
         : {};
       const parsedBody = route.body ? parse(route.body, body, 'body') : undefined;
-      const result = this.handle(route, params as Record<string, string>, query, parsedBody);
-      if (route.status === 204) return new Response(null, { status: 204 });
+      const parsedHeaders = route.headers ? parse(route.headers, headers, 'headers') : {};
+      if (route.multipart !== undefined && form === undefined) throw new Fail('VALIDATION_FAILED');
+      const extra = { headers: parsedHeaders as Record<string, string | undefined>, form };
+      const phase3 = handlePhase3(
+        this,
+        route,
+        params as Record<string, string>,
+        query,
+        parsedBody,
+        extra,
+      );
+      const result =
+        phase3 === NOT_HANDLED
+          ? this.handle(route, params as Record<string, string>, query, parsedBody)
+          : phase3;
+      if (this.dropResponseOnce.delete(route)) throw new TypeError('Failed to fetch');
+      if (route.status === 204) {
+        const response = new Response(null, { status: 204 });
+        if (route === ME_ROUTES.createViewerSession) {
+          response.headers.append('set-cookie', 'shotx_vs=vs-token; Path=/api; HttpOnly; Secure');
+        }
+        return response;
+      }
       // Make sure the fake never answers outside the contract.
       return json(route.status, route.response?.parse(result) ?? result);
     } catch (error) {
@@ -217,7 +324,7 @@ export class FakeApi {
     return [...items].filter((i) => i.deletedAt === null);
   }
 
-  private folderOrFail(id: string | null) {
+  folderOrFail(id: string | null) {
     if (id === null) return null;
     const folder = this.folders.get(id);
     if (folder === undefined || folder.deletedAt !== null) throw new Fail('NOT_FOUND');
@@ -260,7 +367,7 @@ export class FakeApi {
     return false;
   }
 
-  private page<T>(items: T[], cursor: string | undefined, limit?: number) {
+  page<T>(items: T[], cursor: string | undefined, limit?: number) {
     const start = cursor ? Number(cursor) : 0;
     const size = limit ?? this.options.pageSize;
     const slice = items.slice(start, start + size);
@@ -422,7 +529,18 @@ export class FakeApi {
           mime: string;
           folderId: string | null;
           relativePath?: string[];
+          clientUploadId?: string;
         };
+        const declaration = JSON.stringify([b.name, b.size, b.mime, b.folderId, b.relativePath]);
+        if (b.clientUploadId !== undefined) {
+          const previous = this.clientUploads.get(b.clientUploadId);
+          if (previous !== undefined) {
+            if (previous.declaration !== declaration) throw new Fail('IDEMPOTENCY_KEY_REUSED');
+            const open = this.uploads.get(previous.fileId);
+            if (open === undefined) throw new Fail('CONFLICT');
+            return this.initResponse(open, []);
+          }
+        }
         if (this.options.uploadsBlockedBy === 'SUBSCRIPTION_INACTIVE') {
           throw new Fail('SUBSCRIPTION_INACTIVE', { status: 'grace' });
         }
@@ -467,20 +585,12 @@ export class FakeApi {
         this.reservedBytes += b.size;
         const plan = multipartPlan(b.size, this.options.partBytes);
         const partSize = this.options.partSizeOverride ?? plan.partSize;
-        this.uploads.set(file.id, { file, partSize, partCount: plan.partCount, parts: new Map() });
-        const first = Math.min(this.options.initPresignedParts, plan.partCount);
-        return {
-          fileId: file.id,
-          uploadId: `upload-${file.id}`,
-          file,
-          createdFolders,
-          partSize,
-          partCount: plan.partCount,
-          maxConcurrency: 4,
-          parts: Array.from({ length: first }, (_, i) => this.partUrl(file.id, i + 1)),
-          partUrlsExpireAt: '2099-01-01T00:00:00.000Z',
-          expiresAt: '2099-01-01T00:00:00.000Z',
-        };
+        const upload: Upload = { file, partSize, partCount: plan.partCount, parts: new Map() };
+        this.uploads.set(file.id, upload);
+        if (b.clientUploadId !== undefined) {
+          this.clientUploads.set(b.clientUploadId, { fileId: file.id, declaration });
+        }
+        return this.initResponse(upload, createdFolders);
       }
       case UPLOAD_ROUTES.signParts: {
         const upload = this.uploadOrFail(params.id);
@@ -525,6 +635,23 @@ export class FakeApi {
     }
   }
 
+  private initResponse(upload: Upload, createdFolders: DriveFolder[]) {
+    const { file } = upload;
+    const first = Math.min(this.options.initPresignedParts, upload.partCount);
+    return {
+      fileId: file.id,
+      uploadId: `upload-${file.id}`,
+      file,
+      createdFolders,
+      partSize: upload.partSize,
+      partCount: upload.partCount,
+      maxConcurrency: 4,
+      parts: Array.from({ length: first }, (_, i) => this.partUrl(file.id, i + 1)),
+      partUrlsExpireAt: '2099-01-01T00:00:00.000Z',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    };
+  }
+
   private uploadOrFail(id: string | undefined): Upload {
     const upload = this.uploads.get(id ?? '');
     if (upload === undefined) throw new Fail('UPLOAD_NOT_FOUND');
@@ -537,6 +664,18 @@ export class FakeApi {
       url: `https://shotx-test-media.s3.ap-southeast-1.amazonaws.com/originals/${fileId}/x?partNumber=${partNumber}&uploadId=u&X-Amz-Signature=s`,
     };
   }
+}
+
+const TRIAL: NonNullable<MeResponse['subscription']> = {
+  status: 'trial',
+  planCode: 'trial',
+  periodEnd: '2026-11-08T05:00:00.000Z',
+  cancelAtPeriodEnd: false,
+};
+
+/** The trial a new photographer gets (POST /me/photographer). */
+export function trialSubscription(): NonNullable<MeResponse['subscription']> {
+  return { ...TRIAL };
 }
 
 function paramsOf(route: RouteContract, path: string): Record<string, string> {
@@ -552,7 +691,7 @@ function paramsOf(route: RouteContract, path: string): Record<string, string> {
 function parse(
   schema: NonNullable<RouteContract['body']>,
   value: unknown,
-  part: 'params' | 'query' | 'body',
+  part: 'params' | 'query' | 'body' | 'headers',
 ): unknown {
   const result = schema.safeParse(value);
   if (!result.success)

@@ -1,4 +1,5 @@
 import {
+  ACTIVITY_SOURCES,
   ACTIVITY_TYPES,
   AUTH_POOLS,
   BILLING_MODES,
@@ -29,4 +30,5 @@ export const shareMode = pgEnum('share_mode', SHARE_MODES);
 export const downloadSize = pgEnum('download_size', DOWNLOAD_SIZES);
 export const faceFeedbackVerdict = pgEnum('face_feedback_verdict', FACE_FEEDBACK_VERDICTS);
 export const activityType = pgEnum('activity_type', ACTIVITY_TYPES);
+export const activitySource = pgEnum('activity_source', ACTIVITY_SOURCES);
 export const zipJobStatus = pgEnum('zip_job_status', ZIP_JOB_STATUSES);

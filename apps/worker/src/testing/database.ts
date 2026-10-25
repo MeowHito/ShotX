@@ -59,9 +59,18 @@ export async function createFolder(
   const id = randomUUID();
   const { parent, ...rest } = options;
   const path = folderPath(parent?.path ?? null, id);
+  // folders_face_index_needs_confirmation: an enabled index has a confirmation and an expiry.
+  const faceIndex =
+    rest.faceIndexEnabled === true
+      ? {
+          faceIndexInformedAt: rest.faceIndexInformedAt ?? new Date(),
+          faceIndexExpiresAt: rest.faceIndexExpiresAt ?? new Date(Date.now() + 90 * 86_400_000),
+        }
+      : {};
   await db.insert(folders).values({
     name: `folder-${id.slice(0, 8)}`,
     ...rest,
+    ...faceIndex,
     id,
     ownerId,
     parentId: parent?.id ?? null,
@@ -69,6 +78,9 @@ export async function createFolder(
   });
   return { id, path };
 }
+
+/** Part size of the multipart plans test uploads were "created" with (16 MiB, the default). */
+export const TEST_UPLOAD_PART_BYTES = 16 * 1024 * 1024;
 
 /** A file row as `POST /uploads/init` leaves it (`uploading`, bytes reserved by the caller). */
 export async function createFileRow(
@@ -84,6 +96,8 @@ export async function createFileRow(
     mime: 'image/jpeg',
     sizeBytes: 1000,
     status: 'uploading',
+    // files_upload_part_bytes_valid: an open multipart upload records its part size.
+    ...(rest.uploadId != null ? { uploadPartBytes: TEST_UPLOAD_PART_BYTES } : {}),
     ...rest,
     id,
     ownerId,

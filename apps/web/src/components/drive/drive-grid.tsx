@@ -14,8 +14,8 @@ const GAP_PX = 12;
 /** Room under each square thumbnail for the name and status line. */
 const CAPTION_PX = 52;
 
-export function columnsFor(width: number): number {
-  return Math.max(2, Math.floor((width + GAP_PX) / (MIN_CELL_PX + GAP_PX)));
+export function columnsFor(width: number, minCellPx = MIN_CELL_PX, gapPx = GAP_PX): number {
+  return Math.max(2, Math.floor((width + gapPx) / (minCellPx + gapPx)));
 }
 
 const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
@@ -52,6 +52,11 @@ export interface DriveGridProps<T extends { id: string }> {
   /** Accessible name of the grid. */
   label: string;
   loadingMoreLabel: string;
+  /** Narrowest cell before another column is added (default 160 px). */
+  minCellPx?: number;
+  /** Height under each square cell (default 52 px for name and status; 0 for photos only). */
+  captionPx?: number;
+  gapPx?: number;
 }
 
 export function DriveGrid<T extends { id: string }>({
@@ -62,12 +67,16 @@ export function DriveGrid<T extends { id: string }>({
   fetchNextPage,
   label,
   loadingMoreLabel,
+  minCellPx = MIN_CELL_PX,
+  captionPx = CAPTION_PX,
+  gapPx = GAP_PX,
 }: DriveGridProps<T>) {
+  const GAP = gapPx;
   const containerRef = useRef<HTMLDivElement>(null);
   const { width, top } = useBox(containerRef);
-  const columns = columnsFor(width || 360);
-  const cellWidth = ((width || 360) - GAP_PX * (columns - 1)) / columns;
-  const rowHeight = Math.round(cellWidth + CAPTION_PX + GAP_PX);
+  const columns = columnsFor(width || 360, minCellPx, GAP);
+  const cellWidth = ((width || 360) - GAP * (columns - 1)) / columns;
+  const rowHeight = Math.round(cellWidth + captionPx + GAP);
   const rowCount = Math.ceil(items.length / columns);
 
   const virtualizer = useWindowVirtualizer({
@@ -107,11 +116,11 @@ export function DriveGrid<T extends { id: string }>({
                 top: 0,
                 left: 0,
                 width: '100%',
-                height: rowHeight - GAP_PX,
+                height: rowHeight - GAP,
                 transform: `translateY(${row.start - virtualizer.options.scrollMargin}px)`,
                 display: 'grid',
                 gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-                gap: GAP_PX,
+                gap: GAP,
               }}
             >
               {rowItems.map((item) => (

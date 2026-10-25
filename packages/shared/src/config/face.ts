@@ -38,6 +38,12 @@ const faceEnvSchema = z
     FACE_MAYBE: percent.default(85),
     FACE_MAX_SELFIES: int(1, 5).default(3),
     FACE_EXPANSION_SEEDS: int(0, 10).default(2),
+    /**
+     * "ขอลบใบหน้าของฉัน": faces matching a selfie at or above this similarity are deleted from the
+     * photographer's collection (direct matches only, no expansion). At least FACE_MAYBE.
+     * Assumption: the FACE_STRONG default, so a deletion rarely removes someone else's face.
+     */
+    FACE_DELETION_THRESHOLD: percent.default(95),
     FACE_SEARCH_MAX_FACES: int(1, 4096).default(1000),
     FACE_SEARCH_QUALITY_FILTER: z.enum(QUALITY_FILTERS).default('AUTO'),
     FACE_SELFIE_LONG_EDGE: int(320, 4096).default(1280),
@@ -94,6 +100,9 @@ const faceEnvSchema = z
   .refine((env) => env.FACE_STRONG >= env.FACE_MAYBE, {
     error: 'FACE_STRONG must be greater than or equal to FACE_MAYBE',
   })
+  .refine((env) => env.FACE_DELETION_THRESHOLD >= env.FACE_MAYBE, {
+    error: 'FACE_DELETION_THRESHOLD must be greater than or equal to FACE_MAYBE',
+  })
   .refine((env) => env.FACE_ENCODE_MIN_LONG_EDGE <= env.FACE_SELFIE_LONG_EDGE, {
     error: 'FACE_ENCODE_MIN_LONG_EDGE must be less than or equal to FACE_SELFIE_LONG_EDGE',
   })
@@ -136,8 +145,15 @@ export interface FaceConfig {
     qualityFilter: QualityFilter;
   };
   /**
+   * The "ขอลบใบหน้าของฉัน" flow (POST /s/:token/face-deletion): one SearchFacesByImage per selfie
+   * with FaceMatchThreshold = `threshold`, no expansion. It uses `search.maxFaces`,
+   * `search.qualityFilter` and the face-search request limits.
+   */
+  deletion: { threshold: number };
+  /**
    * Request limits for face search, enforced by the API before any Rekognition call. One request
-   * counts once however many selfies it carries. A viewer is the logged-in user or, when
+   * counts once however many selfies it carries. Face deletion requests count against the same
+   * limits. A viewer is the logged-in user or, when
    * anonymous, the `anon_id` cookie.
    */
   searchRateLimits: {
@@ -238,6 +254,7 @@ export function loadFaceConfig(env: Env): FaceConfig {
       maxFaces: e.FACE_SEARCH_MAX_FACES,
       qualityFilter: e.FACE_SEARCH_QUALITY_FILTER,
     },
+    deletion: { threshold: e.FACE_DELETION_THRESHOLD },
     searchRateLimits: {
       perIp: {
         limit: e.FACE_SEARCH_RATE_PER_IP,

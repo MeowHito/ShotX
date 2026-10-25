@@ -45,6 +45,27 @@ describe('CSP', () => {
     expect('upgrade-insecure-requests' in csp).toBe(true);
   });
 
+  it('allows wasm only where asked (share page face detector), never a CDN', () => {
+    expect(csp['script-src']).not.toContain('wasm-unsafe-eval');
+    const share = directives(
+      buildCsp({
+        nonce: 'abc',
+        isDev: false,
+        https: true,
+        publicBaseUrl: 'https://photos.example.com',
+        uploadOrigins: [],
+        allowWasm: true,
+      }),
+    );
+    expect(share['script-src']).toBe("'self' 'nonce-abc' 'strict-dynamic' 'wasm-unsafe-eval'");
+    // Model and wasm are fetched from the main origin; the detector runs on the main thread.
+    expect(share['connect-src']).toBe("'self' https://photos.example.com");
+    expect(share['worker-src']).toBe("'self' blob:");
+    expect(share['img-src']).toBe("'self' https://photos.example.com blob: data:");
+    expect(share['media-src']).toBe("'self' https://photos.example.com blob:");
+    for (const value of Object.values(share)) expect(value).not.toMatch(/cdn|jsdelivr|googleapis/);
+  });
+
   it('upgrades insecure requests only over https', () => {
     const plain = buildCsp({ nonce: 'n', isDev: false, https: false, uploadOrigins: [] });
     expect(plain).not.toContain('upgrade-insecure-requests');

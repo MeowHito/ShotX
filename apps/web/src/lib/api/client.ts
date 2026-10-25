@@ -1,4 +1,11 @@
-import { apiPath, type PathParamNames, type PathParams, type RouteContract } from '@shotx/shared';
+import {
+  API_PREFIX,
+  apiPath,
+  type MultipartSpec,
+  type PathParamNames,
+  type PathParams,
+  type RouteContract,
+} from '@shotx/shared';
 import type { z } from 'zod';
 import { ContractError, errorFromResponse, NetworkError } from './errors';
 
@@ -7,7 +14,9 @@ import { ContractError, errorFromResponse, NetworkError } from './errors';
  * route contract at compile time (params, query, body) and at run time (the response schema).
  *
  * In the browser the base URL is the web app's BFF (`/bff`), which adds the bearer token from the
- * httpOnly session cookie and forwards to the API; see src/lib/bff.
+ * httpOnly session cookie and forwards to the API; see src/lib/bff. Public share routes are the
+ * exception: the browser calls them directly at `/api/...` with its cookies (createPublicApiClient)
+ * so CloudFront's WAF rules apply and the API's viewer cookies reach it.
  */
 
 type ParamsOf<R> = R extends { path: infer P extends string }
@@ -24,7 +33,18 @@ type BodyOf<R> = R extends { body: infer B extends z.ZodType }
   ? { body: z.input<B> }
   : { body?: undefined };
 
-export type CallOptions<R> = ParamsOf<R> & QueryOf<R> & BodyOf<R> & { signal?: AbortSignal };
+type HeadersOf<R> = R extends { headers: infer H extends z.ZodType }
+  ? { headers?: z.input<H> }
+  : { headers?: undefined };
+
+/** Multipart routes take a FormData whose file parts follow the route's MultipartSpec. */
+type FormOf<R> = R extends { multipart: MultipartSpec } ? { form: FormData } : { form?: undefined };
+
+export type CallOptions<R> = ParamsOf<R> &
+  QueryOf<R> &
+  BodyOf<R> &
+  HeadersOf<R> &
+  FormOf<R> & { signal?: AbortSignal };
 
 export type ResponseOf<R> = R extends { response: infer S extends z.ZodType } ? z.output<S> : void;
 
@@ -43,6 +63,8 @@ export interface ApiClientOptions {
   baseUrl: string;
   fetch?: typeof fetch;
   headers?: Record<string, string>;
+  /** `same-origin` (default) for the BFF; `include` for the public routes at `/api`. */
+  credentials?: RequestCredentials;
 }
 
 export function buildUrl(baseUrl: string, path: string, query: unknown): string {
@@ -70,6 +92,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       params?: Record<string, string>;
       query?: unknown;
       body?: unknown;
+      headers?: Record<string, string | undefined>;
+      form?: FormData;
       signal?: AbortSignal;
     };
     const path = apiPath(route as { path: string }, opts.params as Record<string, never>, {
@@ -77,8 +101,14 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     });
     const url = buildUrl(options.baseUrl, path, opts.query);
     const headers: Record<string, string> = { accept: 'application/json', ...options.headers };
-    let body: string | undefined;
-    if (opts.body !== undefined) {
+    for (const [name, value] of Object.entries(opts.headers ?? {})) {
+      if (value !== undefined) headers[name] = value;
+    }
+    let body: string | FormData | undefined;
+    if (opts.form !== undefined) {
+      // The browser sets the multipart content type with its boundary.
+      body = opts.form;
+    } else if (opts.body !== undefined) {
       headers['content-type'] = 'application/json';
       body = JSON.stringify(opts.body);
     }
@@ -90,7 +120,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         headers,
         body,
         signal: opts.signal,
-        credentials: 'same-origin',
+        credentials: options.credentials ?? 'same-origin',
         cache: 'no-store',
       });
     } catch (error) {
@@ -125,4 +155,19 @@ async function readJson(response: Response): Promise<unknown> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Client of the public share routes, called by the browser directly at `/api/...` (through
+ * CloudFront and the WAF, not the BFF) with credentials, so the API's anon, viewer-session and
+ * unlock cookies travel with every request.
+ */
+export function createPublicApiClient(
+  options: { fetch?: typeof fetch; baseUrl?: string } = {},
+): ApiClient {
+  return createApiClient({
+    baseUrl: options.baseUrl ?? API_PREFIX,
+    fetch: options.fetch,
+    credentials: 'include',
+  });
 }

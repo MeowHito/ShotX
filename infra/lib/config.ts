@@ -1,8 +1,13 @@
 import {
+  CONSENT_POLICY_VERSIONS,
+  CONTENT_DISPOSITION_QUERY_PARAM,
   type FaceConfig,
+  loadUploadConfig,
+  type QueueName,
   S3_PREFIXES,
   SCHEDULED_JOB_TYPES,
   SQS_MAX_VISIBILITY_TIMEOUT_SECONDS,
+  type WorkerSettings,
 } from '@shotx/shared';
 import type { App } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
@@ -10,6 +15,7 @@ import { z } from 'zod';
 import {
   CONTEXT_KEY,
   FACES_MIN_VISIBILITY_TIMEOUT_SECONDS,
+  INFRA_OWNED_ENV,
   MIN_VISIBILITY_TIMEOUT_SECONDS,
 } from './constants';
 import {
@@ -21,6 +27,16 @@ import {
   minOrphanGraceMs,
   serviceFaceConfig,
 } from './face-limits';
+import {
+  describeZipLifetime,
+  minZipExpirationDays,
+  serviceShareConfig,
+  serviceWorkerSettings,
+  workerStopTimeoutIssue,
+  zipJobWorstCaseSeconds,
+  zipObjectLifetime,
+  type ZipObjectLifetime,
+} from './worker-limits';
 
 // Values from cdk.json arrive typed; values from `-c shotx:<path>=<value>` arrive as strings.
 // These helpers accept both.
@@ -84,6 +100,12 @@ const workerSchema = z.object({
   minCapacity: int(0, 100),
   maxCapacity: int(1, 200),
   ephemeralStorageGiB: int(21, 200),
+  /**
+   * The container's stopTimeout is WORKER_SHUTDOWN_GRACE_SECONDS plus this, so messages still
+   * running after the grace get their visibility reset before ECS kills the task. At most 120 s
+   * in total (Fargate's limit).
+   */
+  stopTimeoutMarginSeconds: int(1, 120),
   queueDepthScaling: z.object({
     periodSeconds: int(60, 3600),
     cooldownSeconds: int(0, 3600),
@@ -124,6 +146,17 @@ const facesQueueSchema = queueSchema.extend({
     /** Collection calls a faces job may make before indexing (CreateCollection + Describe). */
     collectionCallsPerJob: int(0, 10),
     /** Non-Rekognition work for one photo: decode, tile encodes, S3 temp objects, DB writes. */
+    processingSeconds: int(0, 3600),
+  }),
+});
+
+/**
+ * The zip queue carries the inputs of its worst-case job that ShareConfig doesn't have (see
+ * zipJobWorstCaseSeconds in lib/worker-limits.ts); ZIP_MAX_BYTES comes from the worker's env.
+ */
+const zipQueueSchema = queueSchema.extend({
+  jobBudget: z.object({
+    minThroughputBytesPerSecond: int(64 * 1024, 10 * 1024 * 1024 * 1024),
     processingSeconds: int(0, 3600),
   }),
 });
@@ -235,7 +268,21 @@ export const configSchema = z
 
     storage: z.object({
       abortIncompleteMultipartUploadDays: int(1, 7),
-      tmpExpirationDays: int(1, 3),
+      /**
+       * tmp/ has one lifecycle rule per prefix (S3 applies the shortest matching expiration, so a
+       * single tmp/ rule would cut zips short). tmp/index/ holds face-index scratch images that
+       * are deleted right after IndexFaces: keep it short.
+       */
+      tmpIndexExpirationDays: int(1, 3),
+      /** tmp/zips/: at least ZIP_RESULT_TTL_SECONDS plus the margins in minZipExpirationDays. */
+      tmpZipsExpirationDays: int(1, 30),
+      /** tmp/reconcile/: the worker's reconciliation scan files. */
+      tmpReconcileExpirationDays: int(1, 30),
+      /**
+       * Anything else under tmp/. Must be at least every per-prefix value above, or it would
+       * expire those objects first.
+       */
+      tmpOtherExpirationDays: int(1, 30),
       originalsIntelligentTieringAfterDays: int(0, 3650),
       uploadCorsMaxAgeSeconds: int(0, 86_400),
       cloudFrontLogExpirationDays: int(1, 3650),
@@ -244,7 +291,7 @@ export const configSchema = z
     queues: z.object({
       media: queueSchema,
       faces: facesQueueSchema,
-      zip: queueSchema,
+      zip: zipQueueSchema,
       jobs: queueSchema,
     }),
 
@@ -268,7 +315,9 @@ export const configSchema = z
       /**
        * Extra environment variables. `common` goes to every service, `backend` to api and worker
        * (FACE_* keys, which must match because both share the Redis rate-limit buckets), and the
-       * named groups to one service. Later groups win.
+       * named groups to one service. Later groups win. UPLOAD_* keys read by loadUploadConfig
+       * belong in `common` only (web and api must agree on part size and limits), and the
+       * INFRA_OWNED_ENV keys can't be set here at all.
        */
       env: z.object({
         common: envMap,
@@ -291,8 +340,17 @@ export const configSchema = z
         minTtlSeconds: int(0, 31_536_000),
         defaultTtlSeconds: int(0, 31_536_000),
         maxTtlSeconds: int(0, 31_536_000),
-        /** Query strings forwarded to S3 and part of the cache key (S3 response overrides). */
-        cacheQueryStrings: z.array(nonEmpty),
+        /**
+         * Query strings forwarded to S3 and part of the cache key (S3 response overrides). Must
+         * include response-content-disposition: downloads are signed URLs with
+         * `Content-Disposition: attachment; filename=...` as an S3 override, and without it in
+         * the cache key a download and an inline view of the same object would share one entry.
+         */
+        cacheQueryStrings: z
+          .array(nonEmpty)
+          .refine((q) => q.includes(CONTENT_DISPOSITION_QUERY_PARAM), {
+            error: `must include ${CONTENT_DISPOSITION_QUERY_PARAM} (attachment downloads)`,
+          }),
         /** S3 prefixes CloudFront may read. tmp/index/ must never be listed. */
         readablePrefixes: z
           .array(str.pipe(z.string().regex(/^[a-z0-9/_-]+\/$/)))
@@ -363,14 +421,25 @@ export const configSchema = z
       globalRateLimit: int(10, 2_000_000_000),
       shareBlockRateLimit: int(10, 2_000_000_000),
       shareCaptchaRateLimit: int(10, 2_000_000_000),
+      /** Face search and face deletion together, per IP: the same limits as the API. */
       faceSearchBlockRateLimit: int(10, 2_000_000_000),
       faceSearchCaptchaRateLimit: int(10, 2_000_000_000),
+      /** POST /api/s/:token/unlock per IP (password guessing across shares). */
+      unlockBlockRateLimit: int(10, 2_000_000_000),
+      /** POST /api/s/:token/downloads per IP (signed download URLs and zip jobs). */
+      downloadsBlockRateLimit: int(10, 2_000_000_000),
       captchaImmunitySeconds: int(60, 259_200),
       /** Path prefixes of the public share page and its API. */
       sharePathPrefixes: z.array(lowercasePath).min(1),
-      /** Face search is POST <faceSearchPathPrefix><token><faceSearchPathSuffix>[/]. */
-      faceSearchPathPrefix: lowercasePath,
+      /**
+       * Public share API routes are POST <shareApiPathPrefix><token><suffix>[/]. Face search and
+       * face deletion take selfie uploads and share the face-search rules.
+       */
+      shareApiPathPrefix: lowercasePath,
       faceSearchPathSuffix: lowercasePath,
+      faceDeletionPathSuffix: lowercasePath,
+      unlockPathSuffix: lowercasePath,
+      downloadsPathSuffix: lowercasePath,
       /**
        * How much of a request body CloudFront forwards to WAF for inspection. KB_16 is included in
        * the WAF price; each larger step is billed per request.
@@ -418,6 +487,19 @@ export const configSchema = z
     secrets: z.object({
       /** Secrets Manager secret holding the CloudFront signing private key (PEM). */
       cloudFrontSigningPrivateKeyName: nonEmpty,
+      /** Length of the generated IP_HASH_SECRET (api; HMAC key of consents.ip_hash). */
+      ipHashSecretLength: int(32, 4096),
+    }),
+
+    /** Feature flags passed to api and worker. */
+    features: z.object({
+      /** FACE_SEARCH_ENABLED. Stays false until a real-event Phase 0 evaluation passes. */
+      faceSearchEnabled: bool,
+    }),
+
+    consent: z.object({
+      /** CONSENT_POLICY_VERSION (api): one of CONSENT_POLICY_VERSIONS in packages/shared. */
+      policyVersion: z.enum(CONSENT_POLICY_VERSIONS),
     }),
 
     rekognition: z.object({
@@ -531,19 +613,122 @@ export const configSchema = z
         return undefined;
       }
     };
+    const envIssue = (message: string) =>
+      ctx.addIssue({ code: 'custom', path: ['services', 'env'], message });
+    const queueIssues = (q: QueueName, issues: ReturnType<typeof heartbeatQueueIssues>) => {
+      for (const issue of issues) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['queues', q, ...issue.path],
+          message: issue.message,
+        });
+      }
+    };
+    const parsed = <T>(what: string, load: () => T): T | undefined => {
+      try {
+        return load();
+      } catch (error) {
+        envIssue(`${what}: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      }
+    };
+
+    // Keys infra sets itself, and upload settings web and api must agree on.
+    const groups = c.services.env;
+    for (const [group, vars] of Object.entries(groups)) {
+      for (const key of Object.keys(vars)) {
+        if ((INFRA_OWNED_ENV as readonly string[]).includes(key)) {
+          envIssue(`${group}: ${key} is set by infra (features, consent, secrets, buckets)`);
+        }
+        if (group !== 'common' && readsUploadKey(key)) {
+          envIssue(
+            `${group}: ${key} must be in services.env.common so web and api use the same value`,
+          );
+        }
+      }
+    }
+
+    const worker = parsed('worker', () => serviceWorkerSettings(groups));
+    const shares = (['api', 'worker'] as const).map((service) =>
+      parsed(service, () => serviceShareConfig(groups, service)),
+    );
+    if (worker !== undefined) {
+      const stop = workerStopTimeoutIssue(worker, c.services.worker.stopTimeoutMarginSeconds);
+      if (stop !== undefined) {
+        ctx.addIssue({ code: 'custom', path: ['services', 'worker'], message: stop });
+      }
+      // Media and jobs have no modelled worst case: their caps only have to fit SQS and the
+      // retention period.
+      for (const q of ['media', 'jobs'] as const) {
+        queueIssues(q, heartbeatQueueIssues(c.queues[q], 0, q, capSeconds(worker, q)));
+      }
+      const workerShare = shares[1];
+      if (workerShare !== undefined) {
+        const zipWorst = zipJobWorstCaseSeconds(workerShare, c.queues.zip.jobBudget);
+        const describeZip =
+          `one zip job streams up to ZIP_MAX_BYTES (${workerShare.zip.maxBytes}) at ` +
+          `${c.queues.zip.jobBudget.minThroughputBytesPerSecond} B/s plus ` +
+          `${c.queues.zip.jobBudget.processingSeconds}s of processing`;
+        queueIssues(
+          'zip',
+          heartbeatQueueIssues(c.queues.zip, zipWorst, describeZip, capSeconds(worker, 'zip')),
+        );
+        if (capSeconds(worker, 'zip') < zipWorst) {
+          envIssue(
+            `worker: WORKER_ZIP_MAX_PROCESSING_SECONDS (${capSeconds(worker, 'zip')}) must be >= ` +
+              `the zip worst case of ${zipWorst}s (${describeZip}), or healthy zips are cut off`,
+          );
+        }
+      }
+      if (shares.every((s) => s !== undefined)) {
+        const lifetime = zipObjectLifetime(worker, shares);
+        const minDays = minZipExpirationDays(lifetime);
+        if (c.storage.tmpZipsExpirationDays < minDays) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['storage', 'tmpZipsExpirationDays'],
+            message:
+              `must be >= ${minDays} days: a zip may still be downloaded at age ` +
+              `${describeZipLifetime(lifetime)}`,
+          });
+        }
+      }
+    }
+    const s = c.storage;
+    const longestTmp = Math.max(
+      s.tmpIndexExpirationDays,
+      s.tmpZipsExpirationDays,
+      s.tmpReconcileExpirationDays,
+    );
+    if (s.tmpOtherExpirationDays < longestTmp) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['storage', 'tmpOtherExpirationDays'],
+        message:
+          `must be >= ${longestTmp} (the longest per-prefix tmp/ rule): S3 applies the ` +
+          `shortest matching expiration`,
+      });
+    }
+
     const workerFace = faceConfig('worker');
     if (workerFace !== undefined) {
       const worst = facesJobWorstCase(workerFace, c.queues.faces.jobBudget);
-      for (const issue of heartbeatQueueIssues(
-        c.queues.faces,
-        worst.seconds,
-        describeFacesWorstCase(worst),
-      )) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['queues', 'faces', ...issue.path],
-          message: issue.message,
-        });
+      const facesCap = worker === undefined ? worst.seconds : capSeconds(worker, 'faces');
+      queueIssues(
+        'faces',
+        heartbeatQueueIssues(
+          c.queues.faces,
+          worst.seconds,
+          describeFacesWorstCase(worst),
+          facesCap,
+        ),
+      );
+      if (facesCap < worst.seconds) {
+        envIssue(
+          `worker: WORKER_FACES_MAX_PROCESSING_SECONDS (${facesCap}) must be >= the faces worst ` +
+            `case of ${worst.seconds}s (${describeFacesWorstCase(worst)}), or healthy indexing ` +
+            `attempts are cut off`,
+        );
       }
       const minGrace = minOrphanGraceMs(worst);
       if (workerFace.index.orphanGraceMs < minGrace) {
@@ -563,6 +748,34 @@ export const configSchema = z
   });
 
 export type PlatformConfig = z.output<typeof configSchema>;
+
+/** The worker's per-message processing cap for a queue, in seconds. */
+export function capSeconds(worker: WorkerSettings, q: QueueName): number {
+  return worker.maxProcessingMs[q] / 1000;
+}
+
+/** True when loadUploadConfig reads `key` (an invalid value makes it throw). */
+function readsUploadKey(key: string): boolean {
+  try {
+    loadUploadConfig({ [key]: '\u0000 not a valid value' });
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/** The worker's WORKER_* settings for this configuration. */
+export function workerSettings(config: PlatformConfig): WorkerSettings {
+  return serviceWorkerSettings(config.services.env);
+}
+
+/** How long a zip object must outlive its creation for this configuration. */
+export function zipLifetime(config: PlatformConfig): ZipObjectLifetime {
+  return zipObjectLifetime(
+    workerSettings(config),
+    (['api', 'worker'] as const).map((s) => serviceShareConfig(config.services.env, s)),
+  );
+}
 
 /** One-line explanation of the faces job worst case, used in validation errors. */
 export function describeFacesWorstCase(w: FacesJobWorstCase): string {

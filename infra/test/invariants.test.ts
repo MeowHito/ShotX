@@ -1,4 +1,6 @@
 import {
+  CONTENT_DISPOSITION_QUERY_PARAM,
+  LATEST_CONSENT_POLICY_VERSION,
   QUEUE_NAMES,
   QUEUE_VISIBILITY_TIMEOUT_ENV,
   SCHEDULED_JOB_TYPES,
@@ -6,9 +8,10 @@ import {
 } from '@shotx/shared';
 import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
-import { faceSearchLimits, facesQueueWorstCase } from '../lib/config';
-import { EDGE_REGION, PRIMARY_REGION } from '../lib/constants';
+import { faceSearchLimits, facesQueueWorstCase, zipLifetime } from '../lib/config';
+import { EDGE_REGION, PRIMARY_REGION, TMP_RECONCILE_PREFIX } from '../lib/constants';
 import { heartbeatQueueIssues } from '../lib/face-limits';
+import { minZipExpirationDays } from '../lib/worker-limits';
 import { collect, resourcesOfType, synthPlatform } from './helpers';
 
 type Json = Record<string, unknown>;
@@ -146,11 +149,49 @@ describe('S3 lifecycle rules', () => {
     );
   });
 
-  it('expires tmp/ after 1 to 3 days', () => {
-    const tmp = rules.find((r) => r.Prefix === 'tmp/');
-    expect(tmp?.Status).toBe('Enabled');
-    expect(tmp?.ExpirationInDays).toBeGreaterThanOrEqual(1);
-    expect(tmp?.ExpirationInDays).toBeLessThanOrEqual(3);
+  const expiry = (prefix: string): number => {
+    const r = rules.find((x) => x.Prefix === prefix);
+    expect(r?.Status, prefix).toBe('Enabled');
+    return r?.ExpirationInDays as number;
+  };
+
+  it('expires tmp/index/ (face-index scratch images) after 1 to 3 days', () => {
+    expect(expiry('tmp/index/')).toBeGreaterThanOrEqual(1);
+    expect(expiry('tmp/index/')).toBeLessThanOrEqual(3);
+  });
+
+  it('keeps tmp/zips/ for ZIP_RESULT_TTL_SECONDS plus the zip cap and the last download URL', () => {
+    const lifetime = zipLifetime(s.config);
+    expect(lifetime.resultTtlSeconds).toBe(86_400);
+    expect(expiry('tmp/zips/') * 86_400).toBeGreaterThanOrEqual(lifetime.seconds);
+    expect(expiry('tmp/zips/')).toBeGreaterThanOrEqual(minZipExpirationDays(lifetime));
+  });
+
+  it('expires tmp/reconcile/ (reconciliation scan files) after 7 days', () => {
+    expect(TMP_RECONCILE_PREFIX).toBe('tmp/reconcile/');
+    expect(expiry('tmp/reconcile/')).toBe(7);
+  });
+
+  it('has no tmp/ rule shorter than a more specific one (S3 applies the shortest match)', () => {
+    const tmpRules = rules.filter(
+      (r) => typeof r.Prefix === 'string' && r.Prefix.startsWith('tmp/'),
+    );
+    expect(tmpRules.map((r) => r.Prefix).sort()).toEqual([
+      'tmp/',
+      'tmp/index/',
+      'tmp/reconcile/',
+      'tmp/zips/',
+    ]);
+    for (const general of tmpRules) {
+      for (const specific of tmpRules) {
+        if ((specific.Prefix as string).startsWith(general.Prefix as string)) {
+          expect(
+            general.ExpirationInDays as number,
+            `${String(general.Prefix)} vs ${String(specific.Prefix)}`,
+          ).toBeGreaterThanOrEqual(specific.ExpirationInDays as number);
+        }
+      }
+    }
   });
 
   it('moves originals/ to Intelligent-Tiering', () => {
@@ -200,6 +241,25 @@ describe('CloudFront', () => {
       expect.objectContaining({ EventType: 'viewer-request' }),
     ]);
     app.resourceCountIs('AWS::CloudFront::KeyGroup', 1);
+  });
+
+  it('forwards response-content-disposition to S3 and keys the /media/* cache on it', () => {
+    const media = behaviour('/media/*');
+    // A cache policy's query strings are both in the cache key and forwarded to the origin; an
+    // origin request policy is the only other way to forward one, and /media/* has none.
+    expect(media.OriginRequestPolicyId).toBeUndefined();
+    const [policyId] = collect(media.CachePolicyId, 'Ref') as string[];
+    const policy = app.findResources('AWS::CloudFront::CachePolicy')[policyId as string];
+    const params = ((policy?.Properties as Json).CachePolicyConfig as Json)
+      .ParametersInCacheKeyAndForwardedToOrigin as Json;
+    expect(params.QueryStringsConfig).toEqual({
+      QueryStringBehavior: 'whitelist',
+      QueryStrings: [CONTENT_DISPOSITION_QUERY_PARAM],
+    });
+    expect(CONTENT_DISPOSITION_QUERY_PARAM).toBe('response-content-disposition');
+    // The viewer-request function rewrites the path only, never the query string.
+    const [fn] = Object.values(app.findResources('AWS::CloudFront::Function'));
+    expect(JSON.stringify(fn)).not.toMatch(/querystring/i);
   });
 
   it('never caches /api/* and sends the default behaviour to the web app', () => {
@@ -664,6 +724,77 @@ describe('ECS', () => {
     expect(containerEnv('api').FACE_SEARCH_MAX_SELFIE_BYTES).toBe(String(limits.selfieMaxBytes));
   });
 
+  it('gives the worker a stop timeout above WORKER_SHUTDOWN_GRACE_SECONDS (20 s + 10 s)', () => {
+    expect(container('worker').StopTimeout).toBe(30);
+    for (const name of ['web', 'admin', 'api']) expect(container(name).StopTimeout).toBeUndefined();
+  });
+
+  it('passes FACE_SEARCH_ENABLED=false to api and worker, and the consent version to api', () => {
+    for (const name of ['api', 'worker']) {
+      expect(containerEnv(name).FACE_SEARCH_ENABLED, name).toBe('false');
+    }
+    expect(containerEnv('api').CONSENT_POLICY_VERSION).toBe(LATEST_CONSENT_POLICY_VERSION);
+    for (const name of ['web', 'admin']) {
+      expect(containerEnv(name).FACE_SEARCH_ENABLED, name).toBeUndefined();
+    }
+    const on = synthPlatform((c) => {
+      (c.features as Json).faceSearchEnabled = true;
+    });
+    const onApp = on.template(on.platform.app);
+    onApp.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      Family: 'shotx-prod-worker',
+      ContainerDefinitions: [
+        Match.objectLike({
+          Environment: Match.arrayWith([{ Name: 'FACE_SEARCH_ENABLED', Value: 'true' }]),
+        }),
+      ],
+    });
+  });
+
+  it('gives the api a generated IP_HASH_SECRET of at least 32 characters, as an ECS secret', () => {
+    const secrets = app.findResources('AWS::SecretsManager::Secret', {
+      Properties: { Name: 'shotx-prod/ip-hash-secret' },
+    });
+    const [[secretId, secret]] = Object.entries(secrets) as [[string, Json]];
+    const generate = (secret.Properties as Json).GenerateSecretString as Json;
+    expect(generate.PasswordLength).toBe(64);
+    expect(generate.PasswordLength as number).toBeGreaterThanOrEqual(32);
+    expect(generate.ExcludePunctuation).toBe(true);
+    expect(secret.DeletionPolicy).toBe('Retain');
+    expect(JSON.stringify(containerSecrets('api').IP_HASH_SECRET)).toContain(`"${secretId}"`);
+    expect(containerEnv('api').IP_HASH_SECRET).toBeUndefined();
+    for (const name of ['web', 'admin', 'worker']) {
+      expect(containerSecrets(name).IP_HASH_SECRET, name).toBeUndefined();
+    }
+  });
+
+  it('passes MEDIA_BUCKET to web for its CSP connect-src', () => {
+    const [bucketId] = Object.keys(
+      app.findResources('AWS::S3::Bucket', {
+        Properties: { OwnershipControls: { Rules: [{ ObjectOwnership: 'BucketOwnerEnforced' }] } },
+      }),
+    );
+    expect(containerEnv('web').MEDIA_BUCKET).toEqual({ Ref: bucketId });
+    expect(containerEnv('web').MEDIA_BUCKET).toEqual(containerEnv('api').MEDIA_BUCKET);
+  });
+
+  it('gives web and api the same UPLOAD_* overrides (common group)', () => {
+    const edited = synthPlatform((c) => {
+      ((c.services as Json).env as Json).common = { UPLOAD_PART_BYTES: '33554432' };
+    });
+    const t = edited.template(edited.platform.app);
+    for (const name of ['web', 'api']) {
+      t.hasResourceProperties('AWS::ECS::TaskDefinition', {
+        Family: `shotx-prod-${name}`,
+        ContainerDefinitions: [
+          Match.objectLike({
+            Environment: Match.arrayWith([{ Name: 'UPLOAD_PART_BYTES', Value: '33554432' }]),
+          }),
+        ],
+      });
+    }
+  });
+
   it('keeps the ALB internal and reachable only from the CloudFront origin-facing prefix list', () => {
     app.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', { Scheme: 'internal' });
     const [albSgId] = Object.keys(
@@ -710,7 +841,116 @@ describe('IAM for Rekognition', () => {
 
   it('lets the IndexFaces caller (worker) read tmp/index/*', () => {
     const reads = has(workerStatements, 's3:GetObject').map((st) => JSON.stringify(st.Resource));
-    expect(reads.some((r) => r.includes('/tmp/*') || r.includes('/tmp/index/*'))).toBe(true);
+    expect(reads.some((r) => r.includes('/tmp/index/*'))).toBe(true);
+  });
+
+  const apiStatements = policies
+    .filter((p) => p.id.includes('apiTask'))
+    .flatMap((p) => p.statements);
+
+  /**
+   * Allowed actions per resource: S3 object prefixes as "tmp/zips/*", the bucket as "bucket",
+   * Rekognition collections as "collection". Merged statements (minimizePolicies) are split again.
+   */
+  function grants(statements: Json[]): Map<string, Set<string>> {
+    const out = new Map<string, Set<string>>();
+    for (const st of statements) {
+      expect(st.Effect).toBe('Allow');
+      const resources = ([] as unknown[]).concat(st.Resource);
+      for (const r of resources) {
+        const json = JSON.stringify(r);
+        const key = json.includes(':collection/')
+          ? 'collection'
+          : (/"\/([a-z/_-]*\*)"/.exec(json)?.[1] ??
+            (json.includes('MediaBucket') ? 'bucket' : json));
+        const set = out.get(key) ?? new Set<string>();
+        for (const a of ([] as string[]).concat(st.Action as string[])) set.add(a);
+        out.set(key, set);
+      }
+    }
+    return out;
+  }
+  const sorted = (set: Set<string> | undefined) => [...(set ?? [])].sort();
+  const workerGrants = grants(workerStatements);
+  const apiGrants = grants(apiStatements);
+
+  it('gives the worker exactly what each S3 prefix needs', () => {
+    const media = ['s3:AbortMultipartUpload', 's3:DeleteObject', 's3:GetObject', 's3:PutObject'];
+    expect(sorted(workerGrants.get('originals/*'))).toEqual(media);
+    expect(sorted(workerGrants.get('derived/*'))).toEqual(media);
+    expect(sorted(workerGrants.get('tmp/index/*'))).toEqual([
+      's3:DeleteObject',
+      's3:GetObject',
+      's3:PutObject',
+    ]);
+    // Zips: multipart Put and Abort only.
+    expect(sorted(workerGrants.get('tmp/zips/*'))).toEqual([
+      's3:AbortMultipartUpload',
+      's3:PutObject',
+    ]);
+    expect(sorted(workerGrants.get('tmp/reconcile/*'))).toEqual([
+      's3:DeleteObject',
+      's3:GetObject',
+      's3:PutObject',
+    ]);
+    expect(sorted(workerGrants.get('bucket'))).toEqual(['s3:ListBucket']);
+    // Nothing on tmp/* as a whole.
+    expect(workerGrants.has('tmp/*')).toBe(false);
+    const s3Keys = [...workerGrants.keys()].filter((k) => k.endsWith('*'));
+    expect(s3Keys.sort()).toEqual([
+      'derived/*',
+      'originals/*',
+      'tmp/index/*',
+      'tmp/reconcile/*',
+      'tmp/zips/*',
+    ]);
+  });
+
+  it('gives the worker indexing, deletion and reconciliation calls, but no selfie search', () => {
+    const rekognition = sorted(workerGrants.get('collection'));
+    expect(rekognition).toEqual([
+      'rekognition:CreateCollection',
+      'rekognition:DeleteCollection',
+      'rekognition:DeleteFaces',
+      'rekognition:DescribeCollection',
+      'rekognition:IndexFaces',
+      'rekognition:ListFaces',
+      'rekognition:SearchFaces',
+    ]);
+  });
+
+  it('gives the api search only: face deletion runs in the worker (delete.faces)', () => {
+    expect(sorted(apiGrants.get('collection'))).toEqual([
+      'rekognition:DescribeCollection',
+      'rekognition:SearchFaces',
+      'rekognition:SearchFacesByImage',
+    ]);
+  });
+
+  it('lets the api presign uploads into originals/ and HeadObject derived/ only', () => {
+    expect(sorted(apiGrants.get('originals/*'))).toEqual([
+      's3:AbortMultipartUpload',
+      's3:GetObject',
+      's3:ListMultipartUploadParts',
+      's3:PutObject',
+    ]);
+    // s3:GetObject is what authorises HeadObject.
+    expect(sorted(apiGrants.get('derived/*'))).toEqual(['s3:GetObject']);
+    const s3Keys = [...apiGrants.keys()].filter((k) => k.endsWith('*'));
+    expect(s3Keys.sort()).toEqual(['derived/*', 'originals/*']);
+  });
+
+  it('lets the api send to the faces and zip queues only', () => {
+    const queueIds = (name: string) =>
+      Object.keys(
+        app.findResources('AWS::SQS::Queue', { Properties: { QueueName: `shotx-prod-${name}` } }),
+      );
+    const sends = apiStatements
+      .filter((st) => ([] as unknown[]).concat(st.Action).includes('sqs:SendMessage'))
+      .map((st) => JSON.stringify(st.Resource))
+      .join(' ');
+    for (const q of ['faces', 'zip']) expect(sends, q).toContain(`"${queueIds(q)[0]}"`);
+    for (const q of ['media', 'jobs']) expect(sends, q).not.toContain(`"${queueIds(q)[0]}"`);
   });
 
   it('gives Rekognition permissions to no role other than api and worker', () => {

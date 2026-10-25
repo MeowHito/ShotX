@@ -3,6 +3,9 @@ import { ErrorCode } from '../errors';
 import { API_PREFIX, idParamsSchema } from './common';
 import {
   createFolderBodySchema,
+  ownerDownloadQuerySchema,
+  signedDownloadSchema,
+  updateFaceIndexBodySchema,
   driveFileSchema,
   driveFolderSchema,
   driveItemsBodySchema,
@@ -18,6 +21,34 @@ import {
   updateFileBodySchema,
   updateFolderBodySchema,
 } from './drive';
+import { becomePhotographerBodySchema, meResponseSchema } from './me';
+import {
+  consentResponseSchema,
+  createDownloadBodySchema,
+  createDownloadResponseSchema,
+  downloadsHeadersSchema,
+  faceDeletionResponseSchema,
+  faceFeedbackBodySchema,
+  faceSearchResponseSchema,
+  giveConsentBodySchema,
+  SELFIE_FIELD_NAME,
+  SELFIE_MIME_TYPES,
+  shareItemsQuerySchema,
+  shareItemsResponseSchema,
+  shareMetaResponseSchema,
+  shareTokenParamsSchema,
+  unlockShareBodySchema,
+  zipJobResponseSchema,
+} from './share-page';
+import {
+  createShareBodySchema,
+  listSharesQuerySchema,
+  listSharesResponseSchema,
+  ownerShareSchema,
+  shareStatsQuerySchema,
+  shareStatsResponseSchema,
+  updateShareBodySchema,
+} from './shares';
 import {
   completeUploadBodySchema,
   completeUploadResponseSchema,
@@ -31,9 +62,32 @@ import {
 export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 
 /**
+ * Who may call a route:
+ * - `photographer`: a users-pool token of a user with role `photographer` (via the web BFF);
+ * - `user`: any users-pool token (role `user` or `photographer`); the guard provisions the
+ *   `users` row on first use (newUserForIdentity);
+ * - `public`: no token needed; called by the browser directly at `/api/...` through CloudFront and
+ *   the WAF, not through the BFF. The viewer is resolved as described in share/viewer (optional
+ *   bearer token, viewer-session cookie, anon cookie). State-changing public requests from another
+ *   origin (Origin header) are FORBIDDEN.
+ * Admins (admins-pool tokens) use only `/admin/*` routes; anywhere else they are UNAUTHENTICATED.
+ */
+export type RouteAuth = 'photographer' | 'user' | 'public';
+
+/** A multipart/form-data request body of file parts only. */
+export interface MultipartSpec {
+  /** Name of the (repeatable) file part. */
+  fileField: string;
+  /** Accepted part content types; anything else is UNSUPPORTED_FILE_TYPE. */
+  mimeTypes: readonly string[];
+  /** Config key of the most parts accepted; more is VALIDATION_FAILED. */
+  maxFilesConfigKey: string;
+}
+
+/**
  * One API route: everything api (NestJS controllers and zod pipes), web (the client) and the
  * OpenAPI generator need. `path` is relative to {@link API_PREFIX} in NestJS syntax (`:id`).
- * Validation failures of params, query or body are VALIDATION_FAILED with
+ * Validation failures of params, query, headers or body are VALIDATION_FAILED with
  * `validationFailedDetails`.
  */
 export interface RouteContract {
@@ -41,11 +95,15 @@ export interface RouteContract {
   path: string;
   /** Status of a successful response. 204 has no body. */
   status: 200 | 201 | 202 | 204;
-  /** Who may call it. `photographer` routes take a users-pool token of a photographer. */
-  auth: 'photographer';
+  auth: RouteAuth;
   params?: z.ZodType;
   query?: z.ZodType;
+  /** Request headers the route reads, by lowercase name (other headers are ignored). */
+  headers?: z.ZodType;
+  /** JSON request body. */
   body?: z.ZodType;
+  /** Instead of `body`: a multipart/form-data body. */
+  multipart?: MultipartSpec;
   /** Absent for 204. */
   response?: z.ZodType;
   /** Every error code the route can return. */
@@ -151,6 +209,35 @@ export const DRIVE_ROUTES = {
     response: emptyTrashResponseSchema,
     errors: errors(),
   },
+  /**
+   * Added (Phase 3): turn face indexing of a folder subtree on (PDPA confirmation required),
+   * extend it, or turn it off. See updateFaceIndexBodySchema.
+   */
+  updateFaceIndex: {
+    method: 'PATCH',
+    path: '/drive/folders/:id/face-index',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    body: updateFaceIndexBodySchema,
+    response: driveFolderSchema,
+    errors: errors(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.FEATURE_DISABLED,
+      ErrorCode.SUBSCRIPTION_INACTIVE,
+    ),
+  },
+  /** Added (Phase 3): the owner's own download (any subscription status). */
+  downloadFile: {
+    method: 'GET',
+    path: '/drive/files/:id/download',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    query: ownerDownloadQuerySchema,
+    response: signedDownloadSchema,
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.CONFLICT),
+  },
   /** Added (not in the spec's route list): the studio's storage meter. */
   usage: {
     method: 'GET',
@@ -179,6 +266,8 @@ export const UPLOAD_ROUTES = {
       ErrorCode.NOT_FOUND,
       ErrorCode.NAME_TAKEN,
       ErrorCode.FOLDER_DEPTH_EXCEEDED,
+      ErrorCode.IDEMPOTENCY_KEY_REUSED,
+      ErrorCode.CONFLICT,
     ),
   },
   /** Added: presigned URLs for more parts (Uppy `signPart`). */
@@ -227,8 +316,263 @@ export const UPLOAD_ROUTES = {
   },
 } as const satisfies Record<string, RouteContract>;
 
+/** The signed-in user (Phase 3). */
+export const ME_ROUTES = {
+  /** Provisions the `users` row on first use. */
+  get: {
+    method: 'GET',
+    path: '/me',
+    status: 200,
+    auth: 'user',
+    response: meResponseSchema,
+    errors: errors(),
+  },
+  /** Photographer onboarding: role + 14-day trial, idempotent. */
+  becomePhotographer: {
+    method: 'POST',
+    path: '/me/photographer',
+    status: 200,
+    auth: 'user',
+    body: becomePhotographerBodySchema,
+    response: meResponseSchema,
+    errors: errors(),
+  },
+  /**
+   * Called by the web BFF for a signed-in user before the share page uses the public routes:
+   * sets the viewer-session cookie (viewerSessionCookie, Path=/api). The BFF must pass the
+   * Set-Cookie header through to the browser.
+   */
+  createViewerSession: {
+    method: 'POST',
+    path: '/me/viewer-session',
+    status: 204,
+    auth: 'user',
+    errors: errors(),
+  },
+  /** Ends the viewer session of the cookie it carries (sign-out) and clears the cookie. */
+  deleteViewerSession: {
+    method: 'DELETE',
+    path: '/me/viewer-session',
+    status: 204,
+    auth: 'public',
+    errors: errors(),
+  },
+} as const satisfies Record<string, RouteContract>;
+
+/** Owner share routes (Phase 3). Shares of other owners are NOT_FOUND. */
+export const SHARE_ROUTES = {
+  create: {
+    method: 'POST',
+    path: '/shares',
+    status: 201,
+    auth: 'photographer',
+    body: createShareBodySchema,
+    response: ownerShareSchema,
+    errors: errors(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.SUBSCRIPTION_INACTIVE,
+      ErrorCode.FEATURE_DISABLED,
+    ),
+  },
+  /** Added: the studio's share list (optionally of one file or folder). */
+  list: {
+    method: 'GET',
+    path: '/shares',
+    status: 200,
+    auth: 'photographer',
+    query: listSharesQuerySchema,
+    response: listSharesResponseSchema,
+    errors: errors(),
+  },
+  /** Added: one share, for its settings page. */
+  get: {
+    method: 'GET',
+    path: '/shares/:id',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    response: ownerShareSchema,
+    errors: errors(ErrorCode.NOT_FOUND),
+  },
+  /** Change settings; a revoked share is CONFLICT. */
+  update: {
+    method: 'PATCH',
+    path: '/shares/:id',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    body: updateShareBodySchema,
+    response: ownerShareSchema,
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.CONFLICT, ErrorCode.FEATURE_DISABLED),
+  },
+  /** Added: revoke (is_active = false), final and idempotent. */
+  revoke: {
+    method: 'DELETE',
+    path: '/shares/:id',
+    status: 204,
+    auth: 'photographer',
+    params: idParamsSchema,
+    errors: errors(ErrorCode.NOT_FOUND),
+  },
+  stats: {
+    method: 'GET',
+    path: '/shares/:id/stats',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    query: shareStatsQuerySchema,
+    response: shareStatsResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND),
+  },
+} as const satisfies Record<string, RouteContract>;
+
+/** Unknown or malformed token, and a share that serves nothing. */
+const SHARE_LOOKUP_ERRORS = [ErrorCode.NOT_FOUND, ErrorCode.SHARE_EXPIRED] as const;
+/** ...plus the login and password gates. */
+const SHARE_GATE_ERRORS = [
+  ...SHARE_LOOKUP_ERRORS,
+  ErrorCode.LOGIN_REQUIRED,
+  ErrorCode.PASSWORD_REQUIRED,
+] as const;
+/** The selfie upload of face search and face deletion. */
+const SELFIE_UPLOAD: MultipartSpec = {
+  fileField: SELFIE_FIELD_NAME,
+  mimeTypes: SELFIE_MIME_TYPES,
+  maxFilesConfigKey: 'FACE_MAX_SELFIES',
+};
+const FACE_ERRORS = [
+  ErrorCode.FEATURE_DISABLED,
+  ErrorCode.CONSENT_REQUIRED,
+  ErrorCode.NO_FACE_DETECTED,
+  ErrorCode.PAYLOAD_TOO_LARGE,
+  ErrorCode.UNSUPPORTED_FILE_TYPE,
+] as const;
+
+/** Public share-page routes (Phase 3); see api/share-page for the rules. */
+export const PUBLIC_SHARE_ROUTES = {
+  /** Meta for SSR and OG tags; reports the login and password gates as flags. */
+  meta: {
+    method: 'GET',
+    path: '/s/:token',
+    status: 200,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    response: shareMetaResponseSchema,
+    errors: errors(...SHARE_LOOKUP_ERRORS),
+  },
+  items: {
+    method: 'GET',
+    path: '/s/:token/items',
+    status: 200,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    query: shareItemsQuerySchema,
+    response: shareItemsResponseSchema,
+    errors: errors(...SHARE_GATE_ERRORS),
+  },
+  /** Sets the share's unlock cookie. */
+  unlock: {
+    method: 'POST',
+    path: '/s/:token/unlock',
+    status: 204,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    body: unlockShareBodySchema,
+    errors: errors(...SHARE_LOOKUP_ERRORS, ErrorCode.LOGIN_REQUIRED, ErrorCode.PASSWORD_INCORRECT),
+  },
+  giveConsent: {
+    method: 'POST',
+    path: '/s/:token/consent',
+    status: 200,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    body: giveConsentBodySchema,
+    response: consentResponseSchema,
+    errors: errors(
+      ...SHARE_GATE_ERRORS,
+      ErrorCode.FEATURE_DISABLED,
+      ErrorCode.CONSENT_VERSION_MISMATCH,
+    ),
+  },
+  /**
+   * Withdraw consent. Only the token lookup applies (NOT_FOUND): withdrawal works on revoked or
+   * expired shares and while face search is disabled.
+   */
+  withdrawConsent: {
+    method: 'DELETE',
+    path: '/s/:token/consent',
+    status: 204,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    errors: errors(ErrorCode.NOT_FOUND),
+  },
+  faceSearch: {
+    method: 'POST',
+    path: '/s/:token/face-search',
+    status: 200,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    multipart: SELFIE_UPLOAD,
+    response: faceSearchResponseSchema,
+    errors: errors(...SHARE_GATE_ERRORS, ...FACE_ERRORS, ErrorCode.FACE_SEARCH_UNAVAILABLE),
+  },
+  /** "ไม่ใช่ฉัน". */
+  feedback: {
+    method: 'POST',
+    path: '/s/:token/feedback',
+    status: 204,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    body: faceFeedbackBodySchema,
+    errors: errors(...SHARE_GATE_ERRORS, ErrorCode.FEATURE_DISABLED),
+  },
+  /** "ขอลบใบหน้าของฉัน". */
+  faceDeletion: {
+    method: 'POST',
+    path: '/s/:token/face-deletion',
+    status: 202,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    multipart: SELFIE_UPLOAD,
+    response: faceDeletionResponseSchema,
+    errors: errors(...SHARE_GATE_ERRORS, ...FACE_ERRORS),
+  },
+  /** One file: a signed URL; several: a zip job (Idempotency-Key required). */
+  downloads: {
+    method: 'POST',
+    path: '/s/:token/downloads',
+    status: 200,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    headers: downloadsHeadersSchema,
+    body: createDownloadBodySchema,
+    response: createDownloadResponseSchema,
+    errors: errors(
+      ...SHARE_GATE_ERRORS,
+      ErrorCode.DOWNLOAD_NOT_ALLOWED,
+      ErrorCode.ZIP_TOO_LARGE,
+      ErrorCode.IDEMPOTENCY_KEY_REUSED,
+    ),
+  },
+  zipJob: {
+    method: 'GET',
+    path: '/zip-jobs/:id',
+    status: 200,
+    auth: 'public',
+    params: idParamsSchema,
+    response: zipJobResponseSchema,
+    errors: errors(...SHARE_GATE_ERRORS),
+  },
+} as const satisfies Record<string, RouteContract>;
+
 /** Every route with a contract, by module. */
-export const API_ROUTES = { drive: DRIVE_ROUTES, uploads: UPLOAD_ROUTES } as const;
+export const API_ROUTES = {
+  drive: DRIVE_ROUTES,
+  uploads: UPLOAD_ROUTES,
+  me: ME_ROUTES,
+  shares: SHARE_ROUTES,
+  publicShare: PUBLIC_SHARE_ROUTES,
+} as const;
 
 /** Every route as a flat list, e.g. for OpenAPI generation. */
 export const ALL_ROUTES: readonly RouteContract[] = Object.values(API_ROUTES).flatMap(

@@ -1,3 +1,4 @@
+import { S3_MULTIPART_MAX_PART_BYTES, S3_MULTIPART_MIN_PART_BYTES } from '@shotx/shared';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
@@ -17,6 +18,9 @@ import {
 import { users } from './accounts';
 import { createdAt, driveNameKeySql, id, ltree, parentKeySql, timestamptz } from './columns';
 import { fileStatus } from './enums';
+
+const minPart = sql.raw(String(S3_MULTIPART_MIN_PART_BYTES));
+const maxPart = sql.raw(String(S3_MULTIPART_MAX_PART_BYTES));
 
 /**
  * Drive folders. `path` is the ltree of folder ids from the root down to this folder, each label
@@ -44,8 +48,17 @@ export const folders = pgTable(
     parentId: uuid('parent_id'),
     name: text('name').notNull(),
     path: ltree('path').notNull(),
+    /**
+     * This folder's own switch; indexing covers the whole subtree while it is on and
+     * `face_index_expires_at` is in the future (isCoveredByFaceIndex in @shotx/shared).
+     */
     faceIndexEnabled: boolean('face_index_enabled').notNull().default(false),
     faceIndexExpiresAt: timestamptz('face_index_expires_at'),
+    /**
+     * When the photographer last confirmed that attendees were informed (PDPA checklist), which
+     * enabling face indexing requires. Kept when indexing is turned off, as a record.
+     */
+    faceIndexInformedAt: timestamptz('face_index_informed_at'),
     deletedAt: timestamptz('deleted_at'),
     /** The trashed ancestor that took this folder to the trash; null if trashed directly. */
     trashedViaFolderId: uuid('trashed_via_folder_id'),
@@ -91,6 +104,14 @@ export const folders = pgTable(
     index('folders_face_index_expiry_idx')
       .on(t.faceIndexExpiresAt)
       .where(sql`${t.faceIndexEnabled}`),
+    // Coverage lookups: the owner's folders with indexing on (then path @> / <@ via the GiST index).
+    index('folders_face_index_owner_idx')
+      .on(t.ownerId)
+      .where(sql`${t.faceIndexEnabled}`),
+    check(
+      'folders_face_index_needs_confirmation',
+      sql`NOT ${t.faceIndexEnabled} OR (${t.faceIndexInformedAt} IS NOT NULL AND ${t.faceIndexExpiresAt} IS NOT NULL)`,
+    ),
     check(
       'folders_name_valid',
       sql`length(${t.name}) BETWEEN 1 AND 255 AND strpos(${t.name}, '/') = 0`,
@@ -121,12 +142,19 @@ export const folders = pgTable(
  * Trash works as for folders (`trashed_via_folder_id`, `purge_requested_at`).
  *
  * Upload and quota state (see drive/quota in @shotx/shared for the transitions):
- *   uploading, upload_id set      multipart upload open until upload_expires_at; bytes reserved
+ *   uploading, upload_id set      multipart upload open until upload_expires_at; bytes reserved;
+ *                                 upload_part_bytes is the plan's part size
  *   uploading/processing,         completed by the client (upload_id cleared), waiting for the
  *     verified_at null            worker; bytes still reserved
  *   verified_at set               the worker checked size and magic bytes; bytes are used
  *   failed, verified_at null      bytes rejected; nothing counted
+ *   failed, verified_at set       verified, then processing failed (e.g. a corrupt image); the
+ *                                 bytes stay in used until the file is purged
  *   purge_requested_at set        nothing counted; the worker deletes objects and the row
+ *
+ * Upload init idempotency (migration 0003): `client_upload_id` is the client's random id for one
+ * intended upload, unique per owner (`files_client_upload_id_unique`); see `clientUploadId` of
+ * `POST /uploads/init` in @shotx/shared.
  */
 export const files = pgTable(
   'files',
@@ -156,6 +184,19 @@ export const files = pgTable(
     faceCount: integer('face_count'),
     /** S3 multipart UploadId while `uploading`; cleared on complete or abort. */
     uploadId: text('upload_id'),
+    /**
+     * Part size of the upload's multipart plan, fixed at init (multipartPlan with the
+     * UPLOAD_PART_BYTES of that moment), so signing parts and completing use the same plan even
+     * if the setting changes. Required while `upload_id` is set.
+     */
+    uploadPartBytes: bigint('upload_part_bytes', { mode: 'number' }),
+    /** The client's idempotency id of `POST /uploads/init`; null for older clients. */
+    clientUploadId: uuid('client_upload_id'),
+    /**
+     * Size of the `web` download variant (web.jpg for images, preview.mp4 for videos), written by
+     * the worker with the derivatives; for download activity `bytes` and zip totals.
+     */
+    webSizeBytes: bigint('web_size_bytes', { mode: 'number' }),
     /** End of the upload session (`expiresAt` of `POST /uploads/init`). */
     uploadExpiresAt: timestamptz('upload_expires_at'),
     /** When the worker verified the object; from then on the bytes are in used_bytes. */
@@ -189,6 +230,9 @@ export const files = pgTable(
     index('files_purge_requested_idx')
       .on(t.purgeRequestedAt)
       .where(sql`${t.purgeRequestedAt} IS NOT NULL`),
+    uniqueIndex('files_client_upload_id_unique')
+      .on(t.ownerId, t.clientUploadId)
+      .where(sql`${t.clientUploadId} IS NOT NULL`),
     // Expired upload sessions, for the nightly cleanup.
     index('files_upload_expiry_idx')
       .on(t.uploadExpiresAt)
@@ -217,6 +261,11 @@ export const files = pgTable(
       sql`${t.uploadId} IS NULL OR (${t.status} = 'uploading' AND ${t.uploadExpiresAt} IS NOT NULL)`,
     ),
     check(
+      'files_upload_part_bytes_valid',
+      sql`(${t.uploadId} IS NULL OR ${t.uploadPartBytes} IS NOT NULL) AND (${t.uploadPartBytes} IS NULL OR ${t.uploadPartBytes} BETWEEN ${minPart} AND ${maxPart})`,
+    ),
+    check('files_web_size_nonnegative', sql`${t.webSizeBytes} IS NULL OR ${t.webSizeBytes} >= 0`),
+    check(
       'files_trash_fields_need_deleted',
       sql`${t.deletedAt} IS NOT NULL OR (${t.trashedViaFolderId} IS NULL AND ${t.purgeRequestedAt} IS NULL)`,
     ),
@@ -232,9 +281,50 @@ export interface FaceBox {
 }
 
 /**
+ * "ขอลบใบหน้าของฉัน" requests (migration 0003), counts only: no selfie, no face ids, no viewer.
+ * `POST /s/:token/face-deletion` inserts the row and sets `faces.deletion_id` on the matched faces
+ * in one transaction, then sends `delete.faces`; the worker deletes the faces from the collection
+ * and the database and sets `faces_deleted` and `completed_at`. `share_id` records which link was
+ * used; it has no foreign key so the record survives the share's purge.
+ */
+export const faceDeletions = pgTable(
+  'face_deletions',
+  {
+    id: id(),
+    photographerId: uuid('photographer_id')
+      .notNull()
+      .references(() => users.id),
+    shareId: uuid('share_id').notNull(),
+    facesMatched: integer('faces_matched').notNull(),
+    facesDeleted: integer('faces_deleted'),
+    createdAt: createdAt(),
+    completedAt: timestamptz('completed_at'),
+  },
+  (t) => [
+    unique('face_deletions_id_photographer_unique').on(t.id, t.photographerId),
+    index('face_deletions_photographer_created_idx').on(t.photographerId, t.createdAt),
+    index('face_deletions_pending_idx')
+      .on(t.createdAt)
+      .where(sql`${t.completedAt} IS NULL`),
+    check(
+      'face_deletions_counts_nonnegative',
+      sql`${t.facesMatched} >= 0 AND (${t.facesDeleted} IS NULL OR ${t.facesDeleted} >= 0)`,
+    ),
+    check(
+      'face_deletions_completed_has_count',
+      sql`(${t.completedAt} IS NULL) = (${t.facesDeleted} IS NULL)`,
+    ),
+  ],
+);
+
+/**
  * Faces indexed in the photographer's Rekognition collection. A file can't be deleted while it
  * has faces (ON DELETE RESTRICT): purge must call DeleteFaces first, or the faces would outlive
  * every record of them.
+ *
+ * `deletion_id` (migration 0003) marks a face a "ขอลบใบหน้าของฉัน" request matched. From then on
+ * it is not searchable: face search maps Rekognition matches to rows `WHERE deletion_id IS NULL`
+ * (searchableFaceSql), until the worker deletes the face and the row.
  */
 export const faces = pgTable(
   'faces',
@@ -247,10 +337,19 @@ export const faces = pgTable(
     rekognitionFaceId: text('rekognition_face_id').notNull(),
     bbox: jsonb('bbox').$type<FaceBox>().notNull(),
     confidence: real('confidence').notNull(),
+    deletionId: uuid('deletion_id'),
     createdAt: createdAt(),
   },
   (t) => [
     unique('faces_rekognition_face_id_unique').on(t.rekognitionFaceId),
+    foreignKey({
+      name: 'faces_deletion_same_owner_fk',
+      columns: [t.deletionId, t.ownerId],
+      foreignColumns: [faceDeletions.id, faceDeletions.photographerId],
+    }),
+    index('faces_deletion_idx')
+      .on(t.deletionId)
+      .where(sql`${t.deletionId} IS NOT NULL`),
     foreignKey({
       name: 'faces_file_same_owner_fk',
       columns: [t.fileId, t.ownerId],

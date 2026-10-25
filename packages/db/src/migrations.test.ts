@@ -44,6 +44,27 @@ describe('migrations', () => {
     }
   });
 
+  it('0003 is sharing_face_search and backfills before the checks and indexes that need it', () => {
+    expect(journal.entries[3]?.tag).toBe('0003_sharing_face_search');
+    const list = statements(sqlOf('0003_sharing_face_search'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    expect(at('SET "upload_part_bytes"')).toBeGreaterThan(at('ADD COLUMN "upload_part_bytes"'));
+    expect(at('SET "upload_part_bytes"')).toBeLessThan(at('"files_upload_part_bytes_valid"'));
+    expect(at('SET "face_index_enabled" = false')).toBeGreaterThan(
+      at('ADD COLUMN "face_index_informed_at"'),
+    );
+    expect(at('SET "face_index_enabled" = false')).toBeLessThan(
+      at('"folders_face_index_needs_confirmation"'),
+    );
+    expect(at('SET "anon_id" = NULL')).toBeGreaterThan(
+      at('DROP CONSTRAINT "consents_viewer_or_anon"'),
+    );
+    expect(at('SET "anon_id" = NULL')).toBeLessThan(at('ADD CONSTRAINT "consents_viewer_or_anon"'));
+    expect(at('AS "c" SET "withdrawn_at"')).toBeLessThan(at('"consents_current_anon_unique"'));
+    // A CHECK added to the partitioned table must not qualify columns with the table name.
+    expect(list[at('"activity_events_source_share"')]).not.toContain('"activity_events"."');
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

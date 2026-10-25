@@ -8,6 +8,7 @@ import { createDriveUploader, type DriveUploader, type DriveUploaderOptions } fr
 
 const MiB = 1024 * 1024;
 const PART = 5 * MiB;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 let current: DriveUploader | null = null;
 afterEach(() => {
@@ -64,6 +65,7 @@ describe('drive uploader (Uppy + @uppy/aws-s3 multipart)', () => {
       size: 12 * MiB,
       mime: 'image/jpeg',
       folderId: null,
+      clientUploadId: expect.stringMatching(UUID) as unknown,
     });
     // Init presigned part 1; parts 2 and 3 were signed on demand.
     const signed = fake
@@ -173,6 +175,63 @@ describe('drive uploader (Uppy + @uppy/aws-s3 multipart)', () => {
     expect(fake.callsTo(UPLOAD_ROUTES.listParts).length).toBeGreaterThan(0);
     expect(fake.s3Puts.map((p) => p.partNumber).sort()).toEqual([1, 2, 3]);
     expect(fake.callsTo(UPLOAD_ROUTES.complete)).toHaveLength(1);
+  });
+
+  describe('clientUploadId (init idempotency)', () => {
+    const initIds = (fake: { callsTo: typeof FakeApi.prototype.callsTo }) =>
+      fake
+        .callsTo(UPLOAD_ROUTES.init)
+        .map((c) => (c.body as { clientUploadId?: string }).clientUploadId);
+
+    it('sends a distinct UUID per file', async () => {
+      const { fake, uppy } = setup();
+      add(uppy, jpeg('a.jpg', 1000));
+      add(uppy, jpeg('b.jpg', 1000));
+      await uppy.upload();
+      const ids = initIds(fake);
+      expect(ids).toHaveLength(2);
+      for (const id of ids) expect(id).toMatch(UUID);
+      expect(new Set(ids).size).toBe(2);
+    });
+
+    it('reuses the key when init is retried after a lost response, reserving once', async () => {
+      const { fake, uppy, uploader } = setup();
+      fake.dropResponseOnce.add(UPLOAD_ROUTES.init);
+      const id = add(uppy, jpeg('a.jpg', 1000));
+      const first = await uppy.upload();
+      expect(first?.failed).toHaveLength(1);
+      expect(uploader.errorFor(id)).toBeInstanceOf(Error);
+      // The API created the upload although the browser never saw the answer.
+      expect(fake.uploads.size).toBe(1);
+
+      await uppy.retryUpload(id);
+      const ids = initIds(fake);
+      expect(ids).toHaveLength(2);
+      expect(ids[1]).toBe(ids[0]);
+      // Same file, one reservation: the retry resumed the open upload.
+      expect(fake.files.size).toBe(1);
+      expect(fake.callsTo(UPLOAD_ROUTES.complete)).toHaveLength(1);
+    });
+
+    it('rotates the key after CONFLICT so the next retry starts a new upload', async () => {
+      const { fake, uppy, uploader } = setup();
+      const id = add(uppy, jpeg('a.jpg', 1000));
+      const key = uppy.getFile(id).meta.clientUploadId as string;
+      // That key's upload is over (e.g. expired): the fake knows it but has no open upload.
+      fake.clientUploads.set(key, {
+        fileId: crypto.randomUUID(),
+        declaration: JSON.stringify(['a.jpg', 1000, 'image/jpeg', null, undefined]),
+      });
+      await uppy.upload();
+      expect(uploader.errorFor(id)).toMatchObject({ code: ErrorCode.CONFLICT });
+      const rotated = uppy.getFile(id).meta.clientUploadId;
+      expect(rotated).toMatch(UUID);
+      expect(rotated).not.toBe(key);
+
+      await uppy.retryUpload(id);
+      expect(initIds(fake).at(-1)).toBe(rotated);
+      expect(fake.callsTo(UPLOAD_ROUTES.complete)).toHaveLength(1);
+    });
   });
 
   it('never calls drive routes while uploading', async () => {

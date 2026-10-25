@@ -1,6 +1,14 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import {
+  type Env,
+  LATEST_CONSENT_POLICY_VERSION,
+  loadApiLimitsConfig,
+  loadDriveConfig,
   loadFaceConfig,
+  loadFeatureFlags,
+  loadShareConfig,
+  loadUploadConfig,
+  loadWorkerSettings,
   QUEUE_NAMES,
   QUEUE_VISIBILITY_TIMEOUT_ENV,
   SCHEDULED_JOB_TYPES,
@@ -15,7 +23,49 @@ const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta
 
 describe('CI', () => {
   const ci = read('.github/workflows/ci.yml');
-  const checks = ci.slice(ci.indexOf('\n  checks:'), ci.indexOf('\n  synth:'));
+  const job = (name: string) => {
+    const start = ci.indexOf(`\n  ${name}:`);
+    expect(start, name).toBeGreaterThan(0);
+    const next = ci.slice(start + 1).search(/\n {2}[a-z][a-z0-9_-]*:\n/);
+    return next < 0 ? ci.slice(start) : ci.slice(start, start + 1 + next);
+  };
+  const checks = job('checks');
+
+  it('installs ffmpeg before the tests, so the worker video tests run', () => {
+    const install = checks.indexOf('apt-get install -y --no-install-recommends ffmpeg');
+    expect(install).toBeGreaterThan(0);
+    expect(install).toBeLessThan(checks.indexOf('pnpm turbo run lint typecheck test'));
+  });
+
+  describe('image builds', () => {
+    const images = job('images');
+    const config = parseConfig(rawConfig());
+
+    it('lints and builds the api, worker and web Dockerfiles', () => {
+      expect(images).toMatch(/app: \[api, worker, web\]/);
+      for (const app of ['api', 'worker', 'web']) {
+        expect(existsSync(new URL(`../../apps/${app}/Dockerfile`, import.meta.url)), app).toBe(
+          true,
+        );
+      }
+      expect(images).toContain(
+        'docker buildx build --check -f apps/${{ matrix.app }}/Dockerfile .',
+      );
+      expect(images).toContain('file: apps/${{ matrix.app }}/Dockerfile');
+    });
+
+    it('builds for the ECS CPU architecture under QEMU and never pushes', () => {
+      const platform = { ARM64: 'linux/arm64', X86_64: 'linux/amd64' }[
+        config.services.cpuArchitecture
+      ];
+      expect(images).toContain(`platforms: ${platform}`);
+      expect(images).toMatch(/docker\/setup-qemu-action@[0-9a-f]{40}/);
+      expect(images).toMatch(/docker\/build-push-action@[0-9a-f]{40}/);
+      expect(images).toMatch(/push: false/);
+      expect(images).not.toMatch(/push: true|docker\/login-action|--push/);
+      expect(images).toMatch(/timeout-minutes: \d+/);
+    });
+  });
 
   it('runs PostgreSQL 18 for the packages/db integration tests', () => {
     expect(checks).toMatch(/^\s{6}postgres:\n\s{8}image: postgres:18-alpine$/m);
@@ -84,11 +134,71 @@ describe('.env.example', () => {
     );
   });
 
+  /** `KEY=value` lines, plus `# KEY=` lines for optional keys documented without a value. */
+  const listed = new Set(
+    read('.env.example')
+      .split('\n')
+      .map((l) => /^(?:# )?([A-Z][A-Z0-9_]*)=/.exec(l)?.[1])
+      .filter((k): k is string => k !== undefined),
+  );
+  const loaderFiles: Record<string, (e: Env) => unknown> = {
+    'api.ts': loadApiLimitsConfig,
+    'consent.ts': () => undefined,
+    'features.ts': loadFeatureFlags,
+    'worker.ts': loadWorkerSettings,
+    'share.ts': loadShareConfig,
+    'upload.ts': loadUploadConfig,
+    'drive.ts': loadDriveConfig,
+  };
+
+  for (const [file, load] of Object.entries(loaderFiles)) {
+    it(`lists every setting of packages/shared/src/config/${file} at its code default`, () => {
+      const keys = [
+        ...read(`packages/shared/src/config/${file}`).matchAll(/^\s+([A-Z][A-Z0-9_]+): /gm),
+      ].map((m) => m[1] as string);
+      expect(keys.length, file).toBeGreaterThan(0);
+      for (const key of keys) expect(listed.has(key), key).toBe(true);
+      const values = Object.fromEntries(keys.flatMap((k) => (k in env ? [[k, env[k]]] : [])));
+      expect(load(values), file).toEqual(load({}));
+    });
+  }
+
+  it('lists the Phase 3 face, feature and consent keys', () => {
+    expect(env.FACE_DELETION_THRESHOLD).toBe('95');
+    expect(env.FACE_SEARCH_ENABLED).toBe('false');
+    expect(env.CONSENT_POLICY_VERSION).toBe(LATEST_CONSENT_POLICY_VERSION);
+    // A local placeholder that loadConsentConfig accepts; on AWS it is a generated secret.
+    expect(env.IP_HASH_SECRET?.length).toBeGreaterThanOrEqual(32);
+  });
+
+  it('documents the face deletion threshold right above it', () => {
+    const lines = read('.env.example').split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FACE_DELETION_THRESHOLD='));
+    expect(lines[i - 1]).toContain('FACE_MAYBE');
+  });
+
   it('documents that the burst window is in (0, 1]', () => {
     const lines = read('.env.example').split('\n');
     const i = lines.findIndex((l) => l.startsWith('FACE_REKOGNITION_BURST_SECONDS='));
     expect(lines.slice(Math.max(0, i - 3), i).join('\n')).toContain('(0, 1]');
     expect(() => loadFaceConfig({ FACE_REKOGNITION_BURST_SECONDS: '1.5' })).toThrow();
+  });
+});
+
+describe('LocalStack init script', () => {
+  const script = read('infra/local/localstack/init-aws.sh');
+  const storage = parseConfig(rawConfig()).storage;
+
+  it('reads only storage keys that exist in cdk.json', () => {
+    const keys = [...script.matchAll(/storage\["([A-Za-z]+)"\]/g)].map((m) => m[1] as string);
+    expect(keys.length).toBeGreaterThan(0);
+    for (const key of keys) expect(storage, key).toHaveProperty(key);
+  });
+
+  it('mirrors the per-prefix tmp/ lifecycle rules', () => {
+    for (const prefix of ['tmp/index/', 'tmp/zips/', 'tmp/reconcile/', 'tmp/']) {
+      expect(script, prefix).toContain(`{"Prefix": "${prefix}"}`);
+    }
   });
 });
 

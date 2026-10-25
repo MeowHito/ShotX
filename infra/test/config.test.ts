@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { facesQueueWorstCase, parseConfig, resolveRawConfig } from '../lib/config';
+import { facesQueueWorstCase, parseConfig, resolveRawConfig, zipLifetime } from '../lib/config';
 import { CONTEXT_KEY } from '../lib/constants';
 import { facesJobWorstCase, serviceFaceConfig } from '../lib/face-limits';
+import {
+  minZipExpirationDays,
+  serviceShareConfig,
+  serviceWorkerSettings,
+  workerStopTimeoutSeconds,
+  zipJobWorstCaseSeconds,
+} from '../lib/worker-limits';
 import { rawConfig } from './helpers';
 
 type Json = Record<string, unknown>;
@@ -20,11 +27,210 @@ describe('cdk.json config', () => {
     expect(config.storage.abortIncompleteMultipartUploadDays).toBe(2);
   });
 
-  it('rejects tmp/ expiry outside 1-3 days', () => {
+  it('rejects tmp/index/ expiry outside 1-3 days', () => {
     const c = withEdit((x) => {
-      at(x, 'storage').tmpExpirationDays = 5;
+      at(x, 'storage').tmpIndexExpirationDays = 5;
     });
-    expect(() => parseConfig(c)).toThrow(/tmpExpirationDays/);
+    expect(() => parseConfig(c)).toThrow(/tmpIndexExpirationDays/);
+  });
+
+  describe('tmp/zips/ lifecycle', () => {
+    const withZips = (days: number, env: Record<string, Record<string, string>> = {}) =>
+      withEdit((x) => {
+        at(x, 'storage').tmpZipsExpirationDays = days;
+        for (const [group, vars] of Object.entries(env)) {
+          Object.assign(at(x, 'services', 'env', group), vars);
+        }
+      });
+
+    it('outlives ZIP_RESULT_TTL_SECONDS plus the zip cap and the last download URL', () => {
+      // 7200 s zip cap + 86400 s TTL + 600 s download URL + 300 s expiry bucket = 94500 s > 1 day.
+      const config = parseConfig(withZips(2));
+      expect(zipLifetime(config).seconds).toBe(94_500);
+      expect(minZipExpirationDays(zipLifetime(config))).toBe(2);
+      expect(() => parseConfig(withZips(1))).toThrow(
+        /must be >= 2 days: a zip may still be downloaded at age WORKER_ZIP_MAX_PROCESSING_SECONDS 7200s[\s\S]*at storage\.tmpZipsExpirationDays/,
+      );
+    });
+
+    it('follows ZIP_RESULT_TTL_SECONDS from either api or worker', () => {
+      // 3 days of TTL: 7200 + 259200 + 600 + 300 = 267300 s -> 4 days.
+      for (const group of ['backend', 'api', 'worker', 'common']) {
+        const env = { [group]: { ZIP_RESULT_TTL_SECONDS: '259200' } };
+        expect(() => parseConfig(withZips(3, env)), group).toThrow(/must be >= 4 days/);
+        expect(() => parseConfig(withZips(4, env)), group).not.toThrow();
+      }
+    });
+
+    it('follows the worker zip cap and the download URL settings', () => {
+      // 7200 + 230000 + 900 = 238100 s -> 3 days; with an 11 h cap 270500 s -> 4 days.
+      const ttl = { ZIP_RESULT_TTL_SECONDS: '230000' };
+      expect(() => parseConfig(withZips(3, { backend: ttl }))).not.toThrow();
+      expect(() =>
+        parseConfig(
+          withZips(3, { backend: ttl, worker: { WORKER_ZIP_MAX_PROCESSING_SECONDS: '39600' } }),
+        ),
+      ).toThrow(/must be >= 4 days[\s\S]*at storage\.tmpZipsExpirationDays/);
+      expect(() =>
+        parseConfig(
+          withZips(2, {
+            backend: {
+              SIGNED_URL_VIEW_TTL_SECONDS: '604800',
+              SIGNED_URL_DOWNLOAD_TTL_SECONDS: '86400',
+            },
+          }),
+        ),
+      ).toThrow(/must be >= 3 days/);
+    });
+
+    it('keeps the tmp/ catch-all at least as long as every per-prefix rule', () => {
+      const c = withEdit((x) => {
+        at(x, 'storage').tmpOtherExpirationDays = 2;
+      });
+      expect(() => parseConfig(c)).toThrow(/must be >= 7[\s\S]*at storage\.tmpOtherExpirationDays/);
+    });
+  });
+
+  describe('worker caps (WORKER_*_MAX_PROCESSING_SECONDS)', () => {
+    const withWorker = (vars: Record<string, string>, edit: (x: Json) => void = () => {}) =>
+      withEdit((x) => {
+        Object.assign(at(x, 'services', 'env', 'worker'), vars);
+        edit(x);
+      });
+
+    it('keeps the faces cap above the faces worst case (3960 s)', () => {
+      expect(() =>
+        parseConfig(withWorker({ WORKER_FACES_MAX_PROCESSING_SECONDS: '3960' })),
+      ).not.toThrow();
+      expect(() =>
+        parseConfig(withWorker({ WORKER_FACES_MAX_PROCESSING_SECONDS: '3959' })),
+      ).toThrow(
+        /WORKER_FACES_MAX_PROCESSING_SECONDS \(3959\) must be >= the faces worst case of 3960s/,
+      );
+    });
+
+    it('checks the faces retention against the cap, not only the worst case', () => {
+      // 5 x (39600 s cap + 900 s) = 202500 s > 2 days; with the 3960 s worst case it would fit.
+      const c = withWorker({ WORKER_FACES_MAX_PROCESSING_SECONDS: '39600' }, (x) => {
+        at(x, 'queues', 'faces').retentionDays = 2;
+      });
+      expect(() => parseConfig(c)).toThrow(/queues\.faces\.retentionDays/);
+    });
+
+    it('sizes the zip worst case from ZIP_MAX_BYTES and keeps the zip cap above it', () => {
+      // 2 GiB at 10 MiB/s = 204.8 s, plus 60 s = 265 s.
+      const config = parseConfig(rawConfig());
+      expect(
+        zipJobWorstCaseSeconds(
+          serviceShareConfig(config.services.env, 'worker'),
+          config.queues.zip.jobBudget,
+        ),
+      ).toBe(265);
+      expect(() => parseConfig(withWorker({ WORKER_ZIP_MAX_PROCESSING_SECONDS: '240' }))).toThrow(
+        /WORKER_ZIP_MAX_PROCESSING_SECONDS \(240\) must be >= the zip worst case of 265s/,
+      );
+    });
+
+    it('requires zip receives x timeout to cover the zip worst case', () => {
+      // 3 x 60 s = 180 s < 265 s.
+      const c = withEdit((x) => {
+        at(x, 'queues', 'zip').visibilityTimeoutSeconds = 60;
+      });
+      expect(() => parseConfig(c)).toThrow(/queues\.zip\.visibilityTimeoutSeconds/);
+    });
+
+    it('checks every queue retention against its cap', () => {
+      // zip: 3 x (39600 + 300) > 1 day. jobs: 3 x (39600 + 900) > 1 day. media: 5 x 39900 > 2 days.
+      for (const [q, key, retention] of [
+        ['zip', 'WORKER_ZIP_MAX_PROCESSING_SECONDS', 1],
+        ['jobs', 'WORKER_JOB_MAX_RUNTIME_SECONDS', 1],
+        ['media', 'WORKER_MEDIA_MAX_PROCESSING_SECONDS', 2],
+      ] as const) {
+        const c = withWorker({ [key]: '39600' }, (x) => {
+          at(x, 'queues', q).retentionDays = retention;
+        });
+        expect(() => parseConfig(c), q).toThrow(new RegExp(`queues\\.${q}\\.retentionDays`));
+      }
+    });
+
+    it('rejects WORKER_* values that loadWorkerSettings rejects', () => {
+      expect(() => parseConfig(withWorker({ WORKER_ZIP_CONCURRENCY: '2' }))).toThrow(
+        /worker: [\s\S]*WORKER_ZIP_CONCURRENCY/,
+      );
+    });
+  });
+
+  describe('worker stop timeout', () => {
+    it('is WORKER_SHUTDOWN_GRACE_SECONDS plus the margin, at most 120 s', () => {
+      const config = parseConfig(rawConfig());
+      expect(
+        workerStopTimeoutSeconds(
+          serviceWorkerSettings(config.services.env),
+          config.services.worker.stopTimeoutMarginSeconds,
+        ),
+      ).toBe(30);
+      const c = (grace: string, margin: number) =>
+        withEdit((x) => {
+          at(x, 'services', 'env', 'worker').WORKER_SHUTDOWN_GRACE_SECONDS = grace;
+          at(x, 'services', 'worker').stopTimeoutMarginSeconds = margin;
+        });
+      expect(() => parseConfig(c('110', 10))).not.toThrow();
+      expect(() => parseConfig(c('110', 11))).toThrow(
+        /= 121s exceeds the Fargate maximum stop timeout of 120s\n\s+→ at services\.worker$/m,
+      );
+    });
+  });
+
+  describe('services.env', () => {
+    it('refuses keys infra sets from typed context or secrets', () => {
+      for (const [group, key] of [
+        ['backend', 'FACE_SEARCH_ENABLED'],
+        ['api', 'CONSENT_POLICY_VERSION'],
+        ['api', 'IP_HASH_SECRET'],
+        ['web', 'MEDIA_BUCKET'],
+      ] as const) {
+        const c = withEdit((x) => {
+          at(x, 'services', 'env', group)[key] = 'x'.repeat(40);
+        });
+        expect(() => parseConfig(c), key).toThrow(new RegExp(`${group}: ${key} is set by infra`));
+      }
+    });
+
+    it('keeps upload settings in the common group so web and api agree', () => {
+      for (const group of ['backend', 'web', 'api', 'worker']) {
+        const c = withEdit((x) => {
+          at(x, 'services', 'env', group).UPLOAD_PART_BYTES = '33554432';
+        });
+        expect(() => parseConfig(c), group).toThrow(
+          /UPLOAD_PART_BYTES must be in services\.env\.common/,
+        );
+      }
+      const common = withEdit((x) => {
+        at(x, 'services', 'env', 'common').UPLOAD_PART_BYTES = '33554432';
+      });
+      expect(() => parseConfig(common)).not.toThrow();
+      // api-only request limits (loadApiLimitsConfig) can stay with the api.
+      const apiLimit = withEdit((x) => {
+        at(x, 'services', 'env', 'api').UPLOAD_INIT_RATE_PER_USER = '100';
+      });
+      expect(() => parseConfig(apiLimit)).not.toThrow();
+    });
+  });
+
+  it('only accepts a known consent policy version', () => {
+    const c = withEdit((x) => {
+      at(x, 'consent').policyVersion = '2099-01-01';
+    });
+    expect(() => parseConfig(c)).toThrow(/consent\.policyVersion/);
+  });
+
+  it('keeps response-content-disposition in the /media/* cache key', () => {
+    const c = withEdit((x) => {
+      at(x, 'cdn', 'media').cacheQueryStrings = [];
+    });
+    expect(() => parseConfig(c)).toThrow(
+      /response-content-disposition[\s\S]*at cdn\.media\.cacheQueryStrings/,
+    );
   });
 
   it('rejects a faces visibility timeout below 180 s', () => {

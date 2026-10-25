@@ -61,9 +61,17 @@ Placeholders to replace before the first deploy: `account`, `domain.*`, `cdn.sig
 | `COGNITO_ADMIN_USER_POOL_ID`, `COGNITO_ADMIN_CLIENT_ID`, `COGNITO_ADMIN_DOMAIN`         |     |   x   |  x  |        | Auth stack                                  |
 | `FACE_*`, `NODE_EXTRA_CA_CERTS`                                                         |     |       |  x  |   x    | `services.env.backend`                      |
 | `FACE_SEARCH_MAX_SELFIE_BYTES`, `FACE_SEARCH_MAX_BODY_BYTES`                            |     |       |  x  |        | derived, see "Face-search uploads"          |
+| `MEDIA_BUCKET` (CSP `connect-src` for upload parts)                                     |  x  |       |     |        | App stack                                   |
+| `FACE_SEARCH_ENABLED`                                                                   |     |       |  x  |   x    | `features.faceSearchEnabled` (false)        |
+| `CONSENT_POLICY_VERSION`                                                                |     |       |  x  |        | `consent.policyVersion`                     |
+| `IP_HASH_SECRET`                                                                        |     |       |  x  |        | generated secret; ECS secret                |
 
 Extra variables go in `services.env.{common,backend,web,admin,api,worker}`. Derived variables
-(the last row, and the queue visibility timeouts) are set after them and can't be overridden.
+(face-search limits, queue visibility timeouts, feature flag, consent version) are set after them
+and can't be overridden; synth rejects `FACE_SEARCH_ENABLED`, `CONSENT_POLICY_VERSION`,
+`IP_HASH_SECRET` and `MEDIA_BUCKET` in any group. `UPLOAD_*` keys that `loadUploadConfig` reads
+(part size, size limits, concurrency) are accepted in `services.env.common` only, so web's
+Uppy and the API presigner always agree.
 `services.env.backend` sets the `FACE_REKOGNITION_TPS_*` placeholders; `FACE_ORPHAN_GRACE_MS`
 keeps its 3 h code default, which synth checks (see "Queue visibility and heartbeats").
 
@@ -165,6 +173,15 @@ headers):
   case-insensitively and decodes percent-escapes. Face search matches
   `^/api/s/.+/face-search/?$`, so `/api/s/<t>/FACE-SEARCH`, `/api/s/<t>/face-search/` and
   `/api/s/<t>/face%2Dsearch` all hit the face-search limits. Configured paths must be lowercase.
+- **Face deletion** (`POST /api/s/:token/face-deletion`, "ขอลบใบหน้าของฉัน") posts selfies like
+  face search and shares everything with it: the same per-IP block and CAPTCHA rate rules (one
+  budget for both routes, as in the API's `FACE_SEARCH_RATE_*`), the managed-rule body exemption
+  and the 413 `Content-Length` rule.
+- **Unlock and downloads.** `POST /api/s/:token/unlock` (password guessing) and
+  `POST /api/s/:token/downloads` (download URLs and zip jobs) have their own per-IP block rules
+  (`waf.unlockBlockRateLimit`, `waf.downloadsBlockRateLimit`), evaluated before the general share
+  rules. The API's per-share and per-viewer limits stay the fine-grained ones; these are the
+  coarse per-IP backstop. Mobile carriers in Thailand use CGNAT, so keep them generous.
 - **Face-search uploads.** Multipart `POST`s to face search skip `AWSManagedRulesCommonRuleSet`
   and `AWSManagedRulesKnownBadInputsRuleSet` (scope-down), whose body rules (XSS, LFI, RFI, SSRF,
   size, Java/Log4j payloads) would read selfie JPEG bytes as text and block real scans. Every
@@ -210,6 +227,17 @@ soon a crashed worker's message comes back, and one failed heartbeat never expos
 
 Every timeout must be at least 60 s (faces: 180 s), so heartbeats are at least 20 s apart.
 
+The worker also caps each message (`WORKER_<QUEUE>_MAX_PROCESSING_SECONDS`, `loadWorkerSettings`
+defaults: media 4 h, faces 2 h, zip 2 h, jobs 6 h). The cap bounds how long heartbeats can hold a
+message, so rules 1 and 3 below use it, for every queue. Synth also requires the faces cap ≥ the
+faces worst case (3960 s) and the zip cap ≥ the zip worst case: `ZIP_MAX_BYTES` at
+`queues.zip.jobBudget.minThroughputBytesPerSecond` plus `processingSeconds` (2 GiB at 10 MiB/s +
+60 s = 265 s, which 3 × 300 s also covers for rule 2).
+
+On SIGTERM the worker lets running messages finish for `WORKER_SHUTDOWN_GRACE_SECONDS` (20 s) and
+then resets their visibility; the container's `stopTimeout` is that grace plus
+`services.worker.stopTimeoutMarginSeconds` (30 s at the defaults, at most Fargate's 120 s).
+
 **The faces job worst case** is computed by `lib/face-limits.ts` from the worker's `FACE_*`
 values with `loadFaceConfig`, plus `queues.faces.jobBudget`. At the defaults:
 
@@ -254,6 +282,28 @@ The worker must:
   listing (the daily cadence gives 24 h).
 
 The worker role has `sqs:ChangeMessageVisibility` on every queue it consumes.
+
+## S3 lifecycle (tmp/)
+
+One rule per `tmp/` prefix (ADR 0006). Where rules overlap S3 applies the shortest expiration, so
+a single `tmp/` rule would cut zips short.
+
+| prefix           | days | config                               | why                                                 |
+| ---------------- | ---: | ------------------------------------ | --------------------------------------------------- |
+| `tmp/index/`     |    1 | `storage.tmpIndexExpirationDays`     | face-index scratch images, deleted after IndexFaces |
+| `tmp/zips/`      |    2 | `storage.tmpZipsExpirationDays`      | must outlive the zip download window (below)        |
+| `tmp/reconcile/` |    7 | `storage.tmpReconcileExpirationDays` | worker reconciliation scan files                    |
+| `tmp/` (rest)    |    7 | `storage.tmpOtherExpirationDays`     | catch-all; must be ≥ every rule above (checked)     |
+
+Synth fails unless `tmpZipsExpirationDays` days cover the oldest age at which a zip can still be
+downloaded. S3 dates a multipart object from its initiation, so:
+
+```text
+WORKER_ZIP_MAX_PROCESSING_SECONDS (7200) + ZIP_RESULT_TTL_SECONDS (86400)
+  + SIGNED_URL_DOWNLOAD_TTL_SECONDS (600) + SIGNED_URL_EXPIRY_BUCKET_SECONDS (300) = 94500 s -> 2 days
+```
+
+Each value is the larger of the api's and the worker's.
 
 ## Redis
 

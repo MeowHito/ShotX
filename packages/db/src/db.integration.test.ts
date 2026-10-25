@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { ltree } from '@electric-sql/pglite/contrib/ltree';
-import { eq, type SQL, sql } from 'drizzle-orm';
+import { and, eq, type SQL, sql } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
 import { migrate as migratePglite } from 'drizzle-orm/pglite/migrator';
@@ -14,10 +14,16 @@ import { createDb, createPool } from './client';
 import { loadDatabaseConfig, pgPoolConfig } from './config';
 import { folderPath, folderSubtreeMoveSql, planFolderMove } from './ltree';
 import { MIGRATIONS_FOLDER, migrateDatabase } from './migrate';
-import { driveNameKey, zipKey } from '@shotx/shared';
+import { driveNameKey, isCoveredByFaceIndex, isFileInShareScope, zipKey } from '@shotx/shared';
 import { driveNameKeySql } from './schema/columns';
 import * as schema from './schema/index';
 import { SEED_PLANS, seedPlans } from './seed';
+import {
+  coveredByFaceIndexSql,
+  fileInShareScopeSql,
+  searchableFaceSql,
+  shareFaceSearchAvailableSql,
+} from './share-scope';
 import type { NewDriveFile, NewShare, NewUser, NewZipJob } from './types';
 
 // Migrations and seed against a real PostgreSQL. Two backends run the same tests:
@@ -105,6 +111,8 @@ const CHECK = '23514';
 const FOREIGN_KEY = '23503';
 /** ON DELETE RESTRICT reports restrict_violation, not foreign_key_violation. */
 const RESTRICT = '23001';
+
+const MiB = 1024 * 1024;
 
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 
@@ -932,7 +940,396 @@ for (const backend of backends) {
             }),
           ),
         ).toEqual({ code: CHECK, constraint: 'files_upload_id_while_uploading' });
-        await newFile(owner.id, { uploadId: 'upload-1', uploadExpiresAt: new Date() });
+        expect(
+          await pgError(newFile(owner.id, { uploadId: 'upload-1', uploadExpiresAt: new Date() })),
+        ).toEqual({ code: CHECK, constraint: 'files_upload_part_bytes_valid' });
+        await newFile(owner.id, {
+          uploadId: 'upload-1',
+          uploadExpiresAt: new Date(),
+          uploadPartBytes: 16 * MiB,
+        });
+      });
+    });
+
+    describe('sharing and face search (migration 0003)', () => {
+      const now = new Date();
+      const inDays = (days: number) => new Date(now.getTime() + days * 86_400_000);
+
+      const newShare = async (ownerId: string, target: Partial<NewShare>) =>
+        one(
+          await db()
+            .insert(schema.shares)
+            .values({ ownerId, targetType: 'folder', token: newToken(), ...target })
+            .returning(),
+        );
+
+      it('makes client upload ids unique per owner only', async () => {
+        const a = await newUser();
+        const b = await newUser();
+        const clientUploadId = randomUUID();
+        await newFile(a.id, { clientUploadId });
+        expect(await pgError(newFile(a.id, { clientUploadId }))).toEqual({
+          code: UNIQUE,
+          constraint: 'files_client_upload_id_unique',
+        });
+        await newFile(b.id, { clientUploadId });
+        await newFile(a.id, { clientUploadId: null });
+        await newFile(a.id, { clientUploadId: null });
+      });
+
+      it('keeps the upload part size within S3 limits', async () => {
+        const owner = await newUser();
+        const open = { uploadId: 'u', uploadExpiresAt: new Date() };
+        for (const uploadPartBytes of [5 * MiB - 1, 5 * 1024 * MiB + 1]) {
+          expect(await pgError(newFile(owner.id, { ...open, uploadPartBytes }))).toEqual({
+            code: CHECK,
+            constraint: 'files_upload_part_bytes_valid',
+          });
+        }
+        await newFile(owner.id, { ...open, uploadPartBytes: 5 * 1024 * MiB });
+        expect(await pgError(newFile(owner.id, { webSizeBytes: -1 }))).toEqual({
+          code: CHECK,
+          constraint: 'files_web_size_nonnegative',
+        });
+      });
+
+      it('enables face indexing only with the attendees-informed confirmation', async () => {
+        const owner = await newUser();
+        const folder = await newFolder(owner.id, null);
+        const set = (values: Partial<typeof schema.folders.$inferInsert>) =>
+          db().update(schema.folders).set(values).where(eq(schema.folders.id, folder.id));
+        expect(
+          await pgError(set({ faceIndexEnabled: true, faceIndexExpiresAt: inDays(90) })),
+        ).toEqual({ code: CHECK, constraint: 'folders_face_index_needs_confirmation' });
+        expect(await pgError(set({ faceIndexEnabled: true, faceIndexInformedAt: now }))).toEqual({
+          code: CHECK,
+          constraint: 'folders_face_index_needs_confirmation',
+        });
+        await set({
+          faceIndexEnabled: true,
+          faceIndexInformedAt: now,
+          faceIndexExpiresAt: inDays(90),
+        });
+        await set({ faceIndexEnabled: false, faceIndexExpiresAt: null });
+      });
+
+      it('keeps one current consent per share, viewer or session and version', async () => {
+        const owner = await newUser();
+        const viewer = await newUser({ role: 'user' });
+        const share = await newShare(owner.id, {
+          targetType: 'file',
+          targetFileId: (await newFile(owner.id)).id,
+        });
+        const anonId = randomUUID();
+        const consent = { shareId: share.id, policyVersion: '2026-10-25', ipHash: 'v1:h' };
+        await db()
+          .insert(schema.consents)
+          .values({ ...consent, anonId });
+        expect(
+          await pgError(
+            db()
+              .insert(schema.consents)
+              .values({ ...consent, anonId }),
+          ),
+        ).toEqual({ code: UNIQUE, constraint: 'consents_current_anon_unique' });
+        // Idempotent upsert: the conflict is skipped.
+        await db()
+          .insert(schema.consents)
+          .values({ ...consent, anonId })
+          .onConflictDoNothing();
+        // Withdrawal frees the slot; history stays.
+        await db()
+          .update(schema.consents)
+          .set({ withdrawnAt: new Date() })
+          .where(eq(schema.consents.anonId, anonId));
+        await db()
+          .insert(schema.consents)
+          .values({ ...consent, anonId });
+        await db()
+          .insert(schema.consents)
+          .values({ ...consent, policyVersion: '2027-01-01', anonId });
+        await db()
+          .insert(schema.consents)
+          .values({ ...consent, viewerId: viewer.id });
+        expect(
+          await pgError(
+            db()
+              .insert(schema.consents)
+              .values({ ...consent, viewerId: viewer.id }),
+          ),
+        ).toEqual({ code: UNIQUE, constraint: 'consents_current_viewer_unique' });
+        expect(
+          await pgError(
+            db()
+              .insert(schema.consents)
+              .values({ ...consent, viewerId: viewer.id, anonId: randomUUID() }),
+          ),
+        ).toEqual({ code: CHECK, constraint: 'consents_viewer_or_anon' });
+        expect(
+          await pgError(
+            db()
+              .insert(schema.consents)
+              .values({
+                ...consent,
+                anonId: randomUUID(),
+                acceptedAt: now,
+                withdrawnAt: new Date(now.getTime() - 1000),
+              }),
+          ),
+        ).toEqual({ code: CHECK, constraint: 'consents_withdrawn_after_accepted' });
+      });
+
+      it('records owner downloads without a share, on every partition', async () => {
+        const photographer = await newUser();
+        const insert = (values: Partial<typeof schema.activityEvents.$inferInsert>) =>
+          db()
+            .insert(schema.activityEvents)
+            .values({
+              type: 'download',
+              photographerId: photographer.id,
+              fileId: randomUUID(),
+              ...values,
+            });
+        await insert({ source: 'owner', shareId: null, bytes: 10 });
+        await insert({ shareId: randomUUID(), anonId: randomUUID() });
+        await insert({ source: 'owner', shareId: null, createdAt: new Date(Date.UTC(2099, 0, 1)) });
+        for (const values of [
+          { source: 'owner' as const, shareId: randomUUID() },
+          { source: 'share' as const, shareId: null },
+          { source: 'owner' as const, shareId: null, anonId: randomUUID() },
+        ]) {
+          expect(await pgError(insert(values))).toMatchObject({ code: CHECK });
+        }
+      });
+
+      it('marks faces for deletion only within their owner', async () => {
+        const owner = await newUser();
+        const other = await newUser();
+        const file = await newFile(owner.id, { status: 'ready' });
+        const face = one(
+          await db()
+            .insert(schema.faces)
+            .values({
+              fileId: file.id,
+              ownerId: owner.id,
+              rekognitionFaceId: randomUUID(),
+              bbox: { left: 0.1, top: 0.1, width: 0.2, height: 0.2 },
+              confidence: 99.9,
+            })
+            .returning(),
+        );
+        const deletion = (photographerId: string) =>
+          db()
+            .insert(schema.faceDeletions)
+            .values({ photographerId, shareId: randomUUID(), facesMatched: 1 })
+            .returning();
+        const mine = one(await deletion(owner.id));
+        const theirs = one(await deletion(other.id));
+        const mark = (deletionId: string) =>
+          db().update(schema.faces).set({ deletionId }).where(eq(schema.faces.id, face.id));
+        expect(await pgError(mark(theirs.id))).toEqual({
+          code: FOREIGN_KEY,
+          constraint: 'faces_deletion_same_owner_fk',
+        });
+        await mark(mine.id);
+        const searchable = await db()
+          .select({ id: schema.faces.id })
+          .from(schema.faces)
+          .where(and(eq(schema.faces.fileId, file.id), searchableFaceSql()));
+        expect(searchable).toEqual([]);
+        expect(
+          await pgError(
+            db()
+              .update(schema.faceDeletions)
+              .set({ completedAt: new Date() })
+              .where(eq(schema.faceDeletions.id, mine.id)),
+          ),
+        ).toEqual({ code: CHECK, constraint: 'face_deletions_completed_has_count' });
+      });
+
+      it('keeps share stats and zip URL issue consistent', async () => {
+        const owner = await newUser();
+        const other = await newUser();
+        const share = await newShare(owner.id, {
+          targetType: 'file',
+          targetFileId: (await newFile(owner.id)).id,
+        });
+        await db()
+          .insert(schema.shareDailyStats)
+          .values({ shareId: share.id, photographerId: owner.id, date: '2026-10-25', visitors: 3 });
+        expect(
+          await pgError(
+            db()
+              .insert(schema.shareDailyStats)
+              .values({ shareId: share.id, photographerId: other.id, date: '2026-10-26' }),
+          ),
+        ).toEqual({ code: FOREIGN_KEY, constraint: 'share_daily_stats_share_same_owner_fk' });
+        expect(
+          await pgError(
+            db().insert(schema.zipJobs).values({
+              photographerId: owner.id,
+              shareId: share.id,
+              anonId: randomUUID(),
+              downloadSize: 'web',
+              fileCount: 1,
+              totalBytes: 1,
+              urlIssuedAt: new Date(),
+            }),
+          ),
+        ).toEqual({ code: CHECK, constraint: 'zip_jobs_url_issued_when_ready' });
+      });
+
+      describe('scope SQL agrees with the shared rules', () => {
+        it('serves ready, live files inside the root, and follows moves', async () => {
+          const owner = await newUser();
+          const a = await newFolder(owner.id, null);
+          const b = await newFolder(owner.id, a);
+          const c = await newFolder(owner.id, null);
+          const inB = await newFile(owner.id, { folderId: b.id, status: 'ready' });
+          const inA = await newFile(owner.id, { folderId: a.id, status: 'ready' });
+          await newFile(owner.id, { folderId: c.id, status: 'ready' });
+          await newFile(owner.id, { folderId: b.id, status: 'processing' });
+          await newFile(owner.id, { folderId: b.id, status: 'ready', deletedAt: new Date() });
+          await newFile(owner.id, { folderId: null, status: 'ready' });
+          const share = {
+            ownerId: owner.id,
+            targetType: 'folder' as const,
+            targetFileId: null,
+            targetFolderId: a.id,
+          };
+          const inScope = async () =>
+            (
+              await db()
+                .select({ id: schema.files.id })
+                .from(schema.files)
+                .where(fileInShareScopeSql(share))
+            )
+              .map((r) => r.id)
+              .sort();
+          expect(await inScope()).toEqual([inA.id, inB.id].sort());
+
+          // The same answer from the pure rule, file by file.
+          const fileRows = await rows<{
+            id: string;
+            status: string;
+            deleted: boolean;
+            path: string | null;
+          }>(
+            db(),
+            sql`SELECT f.id, f.status, f.deleted_at IS NOT NULL AS deleted, d.path::text AS path
+                FROM files f LEFT JOIN folders d ON d.id = f.folder_id WHERE f.owner_id = ${owner.id}`,
+          );
+          const pure = fileRows
+            .filter((r) =>
+              isFileInShareScope(share, a.path, {
+                id: r.id,
+                ownerId: owner.id,
+                status: r.status as 'ready',
+                deletedAt: r.deleted ? new Date() : null,
+                purgeRequestedAt: null,
+                folderPath: r.path,
+              }),
+            )
+            .map((r) => r.id)
+            .sort();
+          expect(pure).toEqual(await inScope());
+
+          // Move b under c: its files leave a's scope at once.
+          const move = planFolderMove({
+            folder: b,
+            newParent: c,
+            subtreeMaxDepth: 2,
+            maxDepth: 32,
+          });
+          if (!move.ok) throw new Error('move rejected');
+          await db().execute(folderSubtreeMoveSql(owner.id, move.plan));
+          expect(await inScope()).toEqual([inA.id]);
+
+          // A trashed root serves nothing.
+          await db()
+            .update(schema.folders)
+            .set({ deletedAt: new Date() })
+            .where(eq(schema.folders.id, a.id));
+          expect(await inScope()).toEqual([]);
+
+          const fileShare = {
+            ...share,
+            targetType: 'file' as const,
+            targetFileId: inA.id,
+            targetFolderId: null,
+          };
+          expect(
+            await db()
+              .select({ id: schema.files.id })
+              .from(schema.files)
+              .where(fileInShareScopeSql(fileShare)),
+          ).toEqual([{ id: inA.id }]);
+        });
+
+        it('finds face-index coverage above and below a share root', async () => {
+          const owner = await newUser();
+          const event = await newFolder(owner.id, null);
+          const day1 = await newFolder(owner.id, event);
+          const other = await newFolder(owner.id, null);
+          const enable = (id: string, expiresAt: Date) =>
+            db()
+              .update(schema.folders)
+              .set({
+                faceIndexEnabled: true,
+                faceIndexInformedAt: now,
+                faceIndexExpiresAt: expiresAt,
+              })
+              .where(eq(schema.folders.id, id));
+          const covered = async () =>
+            (
+              await db()
+                .select({ id: schema.folders.id })
+                .from(schema.folders)
+                .where(
+                  and(
+                    eq(schema.folders.ownerId, owner.id),
+                    coveredByFaceIndexSql(schema.folders.path, schema.folders.ownerId, now),
+                  ),
+                )
+            )
+              .map((r) => r.id)
+              .sort();
+          const available = async (folderId: string) =>
+            one(
+              await rows<{ ok: boolean }>(
+                db(),
+                sql`SELECT ${shareFaceSearchAvailableSql({ ownerId: owner.id, targetFolderId: folderId }, now)} AS ok`,
+              ),
+            ).ok;
+
+          expect(await covered()).toEqual([]);
+          expect(await available(event.id)).toBe(false);
+
+          await enable(day1.id, inDays(90));
+          expect(await covered()).toEqual([day1.id]);
+          expect(await available(event.id)).toBe(true); // an index below the root
+          expect(await available(day1.id)).toBe(true);
+          expect(await available(other.id)).toBe(false);
+
+          await enable(event.id, inDays(-1)); // expired: covers nothing
+          expect(await covered()).toEqual([day1.id]);
+          await enable(event.id, inDays(30));
+          expect(await covered()).toEqual([event.id, day1.id].sort());
+          expect(
+            isCoveredByFaceIndex(
+              day1.path,
+              [
+                {
+                  path: event.path,
+                  faceIndexEnabled: true,
+                  faceIndexExpiresAt: inDays(30),
+                  deletedAt: null,
+                },
+              ],
+              now,
+            ),
+          ).toBe(true);
+        });
       });
     });
 
@@ -1129,4 +1526,100 @@ describe('migration 0001 on a database with 0000 and existing shares (PGlite)', 
       await t.client.close();
     }
   }, 60_000);
+});
+
+describe('migration 0003 on a database with 0002 and existing rows (PGlite)', () => {
+  function migrationsUpTo(count: number): string {
+    const dir = mkdtempSync(join(tmpdir(), 'shotx-migrations-'));
+    mkdirSync(join(dir, 'meta'));
+    const journal = JSON.parse(
+      readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8'),
+    ) as { entries: { tag: string }[] };
+    const entries = journal.entries.slice(0, count);
+    writeFileSync(join(dir, 'meta', '_journal.json'), JSON.stringify({ ...journal, entries }));
+    for (const { tag } of entries) {
+      copyFileSync(join(MIGRATIONS_FOLDER, `${tag}.sql`), join(dir, `${tag}.sql`));
+    }
+    return dir;
+  }
+
+  it('backfills part sizes, turns off unconfirmed face indexes and dedupes consents', async () => {
+    const client = await PGlite.create({ extensions: { ltree } });
+    try {
+      const db = drizzlePglite({ client, schema });
+      const folder = migrationsUpTo(3);
+      await migratePglite(db, { migrationsFolder: folder });
+      rmSync(folder, { recursive: true });
+      const exec = (query: SQL) => db.execute(query);
+
+      const owner = randomUUID();
+      await exec(
+        sql`INSERT INTO users (id, cognito_pool, cognito_sub, role) VALUES (${owner}, 'users', ${owner}, 'photographer')`,
+      );
+      const folderId = randomUUID();
+      await exec(
+        sql`INSERT INTO folders (id, owner_id, name, path, face_index_enabled, face_index_expires_at)
+            VALUES (${folderId}, ${owner}, 'f', ${folderPath(null, folderId)}::ltree, true, now() + interval '90 days')`,
+      );
+      const file = async (size: number, open: boolean) => {
+        const id = randomUUID();
+        await exec(
+          sql`INSERT INTO files (id, owner_id, name, mime, size_bytes, s3_key, upload_id, upload_expires_at)
+              VALUES (${id}, ${owner}, ${`${id}.jpg`}, 'image/jpeg', ${size}, ${`originals/${owner}/${id}/a.jpg`},
+                      ${open ? 'u' : null}, ${open ? sql`now() + interval '1 day'` : null})`,
+        );
+        return id;
+      };
+      const small = await file(1, true);
+      const huge = await file(300 * 1024 * MiB, true);
+      const done = await file(1, false);
+      const shareId = randomUUID();
+      await exec(
+        sql`INSERT INTO shares (id, owner_id, target_type, target_file_id, token) VALUES (${shareId}, ${owner}, 'file', ${done}, ${newToken()})`,
+      );
+      const anon = randomUUID();
+      const viewer = randomUUID();
+      await exec(
+        sql`INSERT INTO users (id, cognito_pool, cognito_sub, role) VALUES (${viewer}, 'users', ${viewer}, 'user')`,
+      );
+      const consent = (anonId: string | null, viewerId: string | null, acceptedAt: string) =>
+        exec(
+          sql`INSERT INTO consents (share_id, viewer_id, anon_id, policy_version, ip_hash, accepted_at)
+              VALUES (${shareId}, ${viewerId}, ${anonId}, '2026-10-25', 'h', ${acceptedAt}::timestamptz)`,
+        );
+      await consent(anon, null, '2026-10-01T00:00:00Z');
+      await consent(anon, null, '2026-10-02T00:00:00Z');
+      await consent(randomUUID(), viewer, '2026-10-03T00:00:00Z');
+
+      await migratePglite(db, { migrationsFolder: MIGRATIONS_FOLDER });
+
+      const parts = await rows<{ id: string; part: number | null }>(
+        db,
+        sql`SELECT id, upload_part_bytes::float8 AS part FROM files`,
+      );
+      const partOf = (id: string) => parts.find((p) => p.id === id)?.part;
+      expect(partOf(small)).toBe(16 * MiB);
+      expect(partOf(huge)).toBe(31 * MiB);
+      expect(partOf(done)).toBeNull();
+
+      const folders = await rows<{ enabled: boolean }>(
+        db,
+        sql`SELECT face_index_enabled AS enabled FROM folders WHERE id = ${folderId}`,
+      );
+      expect(folders).toEqual([{ enabled: false }]);
+
+      const consents = await rows<{ anon: string | null; viewer: string | null; current: boolean }>(
+        db,
+        sql`SELECT anon_id AS anon, viewer_id AS viewer, withdrawn_at IS NULL AS current
+            FROM consents ORDER BY accepted_at`,
+      );
+      expect(consents).toEqual([
+        { anon, viewer: null, current: false },
+        { anon, viewer: null, current: true },
+        { anon: null, viewer, current: true },
+      ]);
+    } finally {
+      await client.close();
+    }
+  }, 120_000);
 });

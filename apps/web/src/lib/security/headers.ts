@@ -8,6 +8,9 @@
  * - connect-src: the BFF ('self') and the S3 upload origin(s) the browser PUTs parts to.
  * - form-action: the logout form redirects to the Cognito domain.
  * - style-src keeps 'unsafe-inline': Radix and TanStack Virtual set inline styles at run time.
+ * - Share pages (`allowWasm`) add 'wasm-unsafe-eval' for MediaPipe's face detector. Its loader
+ *   script is inserted by our own (nonced) code, which 'strict-dynamic' allows; its wasm and model
+ *   are fetched from same-origin paths (connect-src 'self'); no CDN is allowed anywhere.
  */
 
 export interface CspOptions {
@@ -18,6 +21,8 @@ export interface CspOptions {
   publicBaseUrl?: string;
   uploadOrigins: readonly string[];
   cognitoDomain?: string;
+  /** Allow compiling WebAssembly (the share page's MediaPipe face detector). */
+  allowWasm?: boolean;
 }
 
 export function buildCsp(options: CspOptions): string {
@@ -28,7 +33,7 @@ export function buildCsp(options: CspOptions): string {
   const unique = (values: string[]) => [...new Set(values)].join(' ');
   const directives: Record<string, string> = {
     'default-src': "'self'",
-    'script-src': `'self' 'nonce-${options.nonce}' 'strict-dynamic'${options.isDev ? " 'unsafe-eval'" : ''}`,
+    'script-src': `'self' 'nonce-${options.nonce}' 'strict-dynamic'${options.allowWasm ? " 'wasm-unsafe-eval'" : ''}${options.isDev ? " 'unsafe-eval'" : ''}`,
     'style-src': "'self' 'unsafe-inline'",
     'img-src': unique([...self, 'blob:', 'data:']),
     'media-src': unique([...self, 'blob:']),

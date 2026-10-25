@@ -1,8 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { DriveFile as DriveFileRow, Folder } from '@shotx/db';
 import { type DriveFile, type DriveFolder, type MediaKind, UPLOAD_FILE_TYPES } from '@shotx/shared';
-import type { ApiConfig } from '../config';
-import { API_CONFIG, CLOCK, type Clock, MEDIA_URL_SIGNER, type MediaUrlSigner } from '../tokens';
+import { SignedUrls } from '../media/signed-urls';
 
 const iso = (d: Date) => d.toISOString();
 const isoOrNull = (d: Date | null) => (d === null ? null : d.toISOString());
@@ -46,27 +45,21 @@ export function toDriveFileBase(row: DriveFileRow): DriveFile {
 }
 
 /**
- * Builds API files with CloudFront signed URLs of the derivatives that exist (view TTL from the
- * share config). Signed URLs only, never S3 URLs. These are the owner's own drive views; they
- * are not share activity, so no activity_event is written (activity_events.share_id is required).
+ * Builds API files with CloudFront signed URLs of the derivatives that exist (view TTL, bucketed
+ * expiry: see SignedUrls). Signed URLs only, never S3 URLs. These are the owner's own drive
+ * views; owner thumbnail views are not activity (decision 3 of the Phase 3 contracts), only owner
+ * downloads are.
  */
 @Injectable()
 export class DriveFileMapper {
-  constructor(
-    @Inject(MEDIA_URL_SIGNER) private readonly signer: MediaUrlSigner,
-    @Inject(API_CONFIG) private readonly config: ApiConfig,
-    @Inject(CLOCK) private readonly clock: Clock,
-  ) {}
+  constructor(@Inject(SignedUrls) private readonly urls: SignedUrls) {}
 
-  toDriveFile(row: DriveFileRow): DriveFile {
+  toDriveFile(row: DriveFileRow, expiresAt: Date = this.urls.viewExpiry()): DriveFile {
     const file = toDriveFileBase(row);
     if (row.purgeRequestedAt !== null) return file;
-    const expiresAt = new Date(
-      this.clock.now().getTime() + this.config.share.signedUrlTtlSeconds.view * 1000,
-    );
-    if (row.thumbKey !== null) file.thumbUrl = this.signer.sign(row.thumbKey, expiresAt);
-    if (row.previewKey !== null) file.previewUrl = this.signer.sign(row.previewKey, expiresAt);
-    if (row.posterKey !== null) file.posterUrl = this.signer.sign(row.posterKey, expiresAt);
+    if (row.thumbKey !== null) file.thumbUrl = this.urls.view(row.thumbKey, expiresAt);
+    if (row.previewKey !== null) file.previewUrl = this.urls.view(row.previewKey, expiresAt);
+    if (row.posterKey !== null) file.posterUrl = this.urls.view(row.posterKey, expiresAt);
     return file;
   }
 }

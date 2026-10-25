@@ -1,6 +1,6 @@
 'use client';
 
-import { type DriveItem, folderIdFromRef, type FolderRef } from '@shotx/shared';
+import { type DriveFolder, type DriveItem, folderIdFromRef, type FolderRef } from '@shotx/shared';
 import {
   Alert,
   Button,
@@ -11,10 +11,13 @@ import {
   DropdownMenuTrigger,
 } from '@shotx/ui';
 import {
+  DownloadIcon,
   FolderInputIcon,
   FolderPlusIcon,
   MoreVerticalIcon,
   PencilIcon,
+  ScanFaceIcon,
+  Share2Icon,
   Trash2Icon,
   XIcon,
 } from 'lucide-react';
@@ -31,10 +34,14 @@ import {
   useRenameItem,
   useTrashItems,
 } from '@/lib/drive/queries';
+import { ShareDialog, type ShareTargetRef } from '@/components/shares/share-dialog';
+import { startBrowserDownload } from '@/lib/downloads/downloads';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
+import { useMe, useOwnerDownload } from '@/lib/studio/queries';
 import { filesFromDataTransfer } from '@/lib/upload/dropped-files';
 import { Breadcrumbs } from './breadcrumbs';
 import { DriveGrid } from './drive-grid';
+import { FaceIndexDialog } from './face-index-dialog';
 import { ItemCard } from './item-card';
 import { MoveDialog } from './move-dialog';
 import { NameDialog } from './name-dialog';
@@ -43,7 +50,14 @@ import { folderHref } from './paths';
 type Notice = { kind: 'info' | 'error'; text: string } | null;
 
 /** The studio drive: one folder's contents with create, rename, move, trash and upload. */
-export function DriveBrowser({ folderRef }: { folderRef: FolderRef }) {
+export function DriveBrowser({
+  folderRef,
+  startDownload = startBrowserDownload,
+}: {
+  folderRef: FolderRef;
+  /** Tests observe downloads instead of navigating. */
+  startDownload?: (url: string, fileName?: string) => void;
+}) {
   const t = useTranslations();
   const describe = useErrorMessage();
   const folderId = folderIdFromRef(folderRef);
@@ -54,6 +68,11 @@ export function DriveBrowser({ folderRef }: { folderRef: FolderRef }) {
   const renameItem = useRenameItem();
   const moveItems = useMoveItems();
   const trashItems = useTrashItems();
+  const me = useMe();
+  const ownerDownload = useOwnerDownload();
+  const faceSearch = me.data?.features.faceSearch ?? false;
+  const [sharing, setSharing] = useState<ShareTargetRef | null>(null);
+  const [faceIndexing, setFaceIndexing] = useState<DriveFolder | null>(null);
 
   const [selected, setSelected] = useState<ReadonlyMap<string, DriveItem>>(new Map());
   const [creating, setCreating] = useState(false);
@@ -121,7 +140,17 @@ export function DriveBrowser({ folderRef }: { folderRef: FolderRef }) {
 
   const selection = [...selected.values()];
 
+  async function download(fileId: string) {
+    try {
+      const signed = await ownerDownload.mutateAsync(fileId);
+      startDownload(signed.url, signed.fileName);
+    } catch (error) {
+      setNotice({ kind: 'error', text: describe(error) });
+    }
+  }
+
   function actionsFor(item: DriveItem) {
+    const shareable = item.kind === 'folder' || item.status === 'ready';
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -135,6 +164,26 @@ export function DriveBrowser({ folderRef }: { folderRef: FolderRef }) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          {shareable ? (
+            <DropdownMenuItem
+              onSelect={() => setSharing({ type: item.kind, id: item.id, name: item.name })}
+            >
+              <Share2Icon aria-hidden />
+              {t('drive.share')}
+            </DropdownMenuItem>
+          ) : null}
+          {item.kind === 'folder' && faceSearch ? (
+            <DropdownMenuItem onSelect={() => setFaceIndexing(item)}>
+              <ScanFaceIcon aria-hidden />
+              {t('drive.faceIndex')}
+            </DropdownMenuItem>
+          ) : null}
+          {item.kind === 'file' && item.status === 'ready' ? (
+            <DropdownMenuItem onSelect={() => void download(item.id)}>
+              <DownloadIcon aria-hidden />
+              {t('drive.download')}
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem onSelect={() => setRenaming(item)}>
             <PencilIcon aria-hidden />
             {t('drive.rename')}
@@ -251,6 +300,11 @@ export function DriveBrowser({ folderRef }: { folderRef: FolderRef }) {
               selected={selected.has(item.id)}
               onToggleSelect={() => toggle(item)}
               href={item.kind === 'folder' ? folderHref(item.id) : null}
+              subtitle={
+                item.kind === 'folder' && item.faceIndexEnabled && faceSearch
+                  ? t('faceIndex.badge')
+                  : undefined
+              }
               actions={actionsFor(item)}
             />
           )}
@@ -289,6 +343,17 @@ export function DriveBrowser({ folderRef }: { folderRef: FolderRef }) {
           setSelected(new Map());
         }}
       />
+      <ShareDialog target={sharing} onOpenChange={(open) => !open && setSharing(null)} />
+      {faceSearch ? (
+        <FaceIndexDialog
+          folder={faceIndexing}
+          onOpenChange={(open) => !open && setFaceIndexing(null)}
+          onDone={(text) => {
+            setFaceIndexing(null);
+            setNotice({ kind: 'info', text });
+          }}
+        />
+      ) : null}
       <MoveDialog
         open={moving !== null}
         onOpenChange={(open) => !open && setMoving(null)}

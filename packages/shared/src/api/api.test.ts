@@ -216,7 +216,7 @@ describe('upload schemas', () => {
 });
 
 describe('route table', () => {
-  it('covers every Phase 2 route of the spec, plus the added ones', () => {
+  it('covers every Phase 2 and Phase 3 route of the spec, plus the added ones', () => {
     const routes = ALL_ROUTES.map((r) => `${r.method} ${r.path}`);
     expect(routes).toEqual([
       'GET /drive/folders/:id/children',
@@ -227,12 +227,34 @@ describe('route table', () => {
       'POST /drive/items/restore',
       'GET /drive/trash',
       'DELETE /drive/trash',
+      'PATCH /drive/folders/:id/face-index',
+      'GET /drive/files/:id/download',
       'GET /drive/usage',
       'POST /uploads/init',
       'POST /uploads/:id/parts',
       'GET /uploads/:id/parts',
       'POST /uploads/:id/complete',
       'DELETE /uploads/:id',
+      'GET /me',
+      'POST /me/photographer',
+      'POST /me/viewer-session',
+      'DELETE /me/viewer-session',
+      'POST /shares',
+      'GET /shares',
+      'GET /shares/:id',
+      'PATCH /shares/:id',
+      'DELETE /shares/:id',
+      'GET /shares/:id/stats',
+      'GET /s/:token',
+      'GET /s/:token/items',
+      'POST /s/:token/unlock',
+      'POST /s/:token/consent',
+      'DELETE /s/:token/consent',
+      'POST /s/:token/face-search',
+      'POST /s/:token/feedback',
+      'POST /s/:token/face-deletion',
+      'POST /s/:token/downloads',
+      'GET /zip-jobs/:id',
     ]);
     expect(new Set(routes).size).toBe(routes.length);
   });
@@ -262,6 +284,7 @@ describe('route table', () => {
         route.response === undefined,
       );
       if (route.method === 'GET' || route.method === 'DELETE') expect(route.body).toBeUndefined();
+      expect(route.body !== undefined && route.multipart !== undefined).toBe(false);
       if (route.path.includes(':')) expect(route.params).toBeDefined();
     }
   });

@@ -42,7 +42,8 @@ export interface EdgeStackProps extends StackProps {
  * case-insensitively and decodes percent-escapes: `/api/s/<t>/FACE-SEARCH/` and
  * `/api/s/<t>/face%2Dsearch` must hit the same limits as `/api/s/<t>/face-search`.
  *
- * Face-search uploads (multipart POSTs of up to FACE_MAX_SELFIES JPEG selfies) skip the managed
+ * Face-search and face-deletion uploads (multipart POSTs of up to FACE_MAX_SELFIES JPEG
+ * selfies, rate-limited together) skip the managed
  * rule groups, whose body rules (XSS, LFI, RFI, SSRF, size, Java/Log4j payloads) would read
  * JPEG bytes as text and block real scans. They get a Content-Length limit sized from the face
  * configuration instead. WAF only ever sees the first `waf.bodyInspectionLimit` of a body (16 KB
@@ -84,15 +85,22 @@ export class EdgeStack extends Stack {
 
     const prefix = `shotx-${config.stage}`;
     const window = waf.evaluationWindowSeconds;
-    const faceSearchPath = uriMatches(
-      tokenPathRegex(waf.faceSearchPathPrefix, waf.faceSearchPathSuffix),
-    );
+    const shareApiPath = (suffix: string) =>
+      uriMatches(tokenPathRegex(waf.shareApiPathPrefix, suffix));
+    // Face search and "delete my face" both take selfie uploads and share one per-IP budget, as
+    // they share the API's FACE_SEARCH_RATE_* limits.
+    const faceSearchPath = anyOf([
+      shareApiPath(waf.faceSearchPathSuffix),
+      shareApiPath(waf.faceDeletionPathSuffix),
+    ]);
     const faceSearch = allOf([methodIs('POST'), faceSearchPath]);
     const faceSearchUpload = allOf([
       methodIs('POST'),
       faceSearchPath,
       headerStartsWith(HTTP_HEADERS.contentType, FACE_SEARCH_CONTENT_TYPE),
     ]);
+    const unlock = allOf([methodIs('POST'), shareApiPath(waf.unlockPathSuffix)]);
+    const downloads = allOf([methodIs('POST'), shareApiPath(waf.downloadsPathSuffix)]);
     const sharePaths = anyOf(waf.sharePathPrefixes.map(uriStartsWith));
     const { maxBodyBytes } = faceSearchLimits(config);
     // Managed groups with body rules see every request except face-search uploads.
@@ -146,6 +154,22 @@ export class EdgeStack extends Stack {
             headerIntegerGreaterThan(HTTP_HEADERS.contentLength, maxBodyBytes),
           ]),
         ),
+        rateRule({
+          name: 'share-unlock-rate-block',
+          priority: 26,
+          limit: waf.unlockBlockRateLimit,
+          evaluationWindowSec: window,
+          action: 'block',
+          scopeDown: unlock,
+        }),
+        rateRule({
+          name: 'share-downloads-rate-block',
+          priority: 27,
+          limit: waf.downloadsBlockRateLimit,
+          evaluationWindowSec: window,
+          action: 'block',
+          scopeDown: downloads,
+        }),
         rateRule({
           name: 'share-rate-block',
           priority: 30,

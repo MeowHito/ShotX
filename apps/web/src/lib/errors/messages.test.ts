@@ -1,4 +1,9 @@
-import { ERROR_CODES, ErrorCode, REJECTED_FILE_TYPE_HINTS } from '@shotx/shared';
+import {
+  ERROR_CODES,
+  ErrorCode,
+  REJECTED_FILE_TYPE_HINTS,
+  SHARE_UNAVAILABLE_REASONS,
+} from '@shotx/shared';
 import { createTranslator } from 'next-intl';
 import { describe, expect, it } from 'vitest';
 import { th } from '../../messages/th';
@@ -58,6 +63,39 @@ describe('error message map', () => {
     ).toContain('ช่วงผ่อนผัน');
     expect(messageForCode(ErrorCode.SUBSCRIPTION_INACTIVE, { status: null }).key).toBe(
       'details.subscriptionNone',
+    );
+  });
+
+  it('says "ลิงก์นี้หมดอายุ" for every SHARE_EXPIRED reason', () => {
+    for (const reason of SHARE_UNAVAILABLE_REASONS) {
+      const text = render(messageForCode(ErrorCode.SHARE_EXPIRED, { reason }));
+      expect(text, reason).toContain('ลิงก์นี้หมดอายุ');
+    }
+    expect(render(messageForCode(ErrorCode.SHARE_EXPIRED, undefined))).toBe('ลิงก์นี้หมดอายุ');
+  });
+
+  it('gives the Phase 3 codes their detail messages', () => {
+    expect(
+      render(
+        messageForCode(ErrorCode.ZIP_TOO_LARGE, {
+          maxFiles: 500,
+          maxBytes: 2 * 1024 ** 3,
+          files: 600,
+          bytes: 3 * 1024 ** 3,
+        }),
+      ),
+    ).toBe('ดาวน์โหลดพร้อมกันได้ไม่เกิน 500 รูป และรวมไม่เกิน 2 GB (เลือกไว้ 600 รูป 3 GB)');
+    expect(
+      render(messageForCode(ErrorCode.NO_FACE_DETECTED, { selfies: 2, selfiesWithoutFace: 2 })),
+    ).toContain('หันหน้าตรง ถอดแว่นดำ/แมสก์');
+    expect(
+      messageForCode(ErrorCode.FACE_SEARCH_UNAVAILABLE, { reason: 'not_folder_share' }).key,
+    ).toBe('details.faceSearchNotFolder');
+    expect(messageForCode(ErrorCode.FACE_SEARCH_UNAVAILABLE, { reason: 'not_indexed' }).key).toBe(
+      'details.faceSearchNotIndexed',
+    );
+    expect(render(messageForCode(ErrorCode.PASSWORD_INCORRECT, undefined))).toBe(
+      'รหัสผ่านไม่ถูกต้อง',
     );
   });
 

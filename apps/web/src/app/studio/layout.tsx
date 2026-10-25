@@ -1,10 +1,11 @@
-import { Button } from '@shotx/ui';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getTranslations } from 'next-intl/server';
 import type { ReactNode } from 'react';
-import { TRASH_HREF } from '@/components/drive/paths';
+import { SHARES_HREF, TRASH_HREF } from '@/components/drive/paths';
 import { UsageBar } from '@/components/drive/usage-bar';
+import { LogoutButton } from '@/components/studio/logout-button';
+import { StudioGate } from '@/components/studio/studio-gate';
 import { UploadPanel } from '@/components/upload/upload-panel';
 import { UploadProvider } from '@/components/upload/upload-context';
 import { AUTH_PATHS } from '@/lib/auth/handlers';
@@ -17,7 +18,7 @@ export default async function StudioLayout({ children }: { children: ReactNode }
   const t = await getTranslations('studio');
 
   return (
-    <UploadProvider config={clientUploadConfig()}>
+    <>
       <header className="border-b">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3">
           <Link href="/studio" className="font-bold">
@@ -26,6 +27,9 @@ export default async function StudioLayout({ children }: { children: ReactNode }
           <nav aria-label={t('navLabel')} className="flex gap-1 text-sm">
             <Link href="/studio" className="rounded-md px-2 py-1 hover:bg-accent">
               {t('drive')}
+            </Link>
+            <Link href={SHARES_HREF} className="rounded-md px-2 py-1 hover:bg-accent">
+              {t('shares')}
             </Link>
             <Link href={TRASH_HREF} className="rounded-md px-2 py-1 hover:bg-accent">
               {t('trash')}
@@ -37,19 +41,20 @@ export default async function StudioLayout({ children }: { children: ReactNode }
                 {viewer.user.name ?? viewer.user.email}
               </span>
             ) : null}
-            <form action={AUTH_PATHS.logout} method="post">
-              <Button type="submit" variant="ghost" size="sm">
-                {t('logout')}
-              </Button>
-            </form>
+            <LogoutButton />
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl space-y-6 px-4 py-4 pb-40">
-        <UsageBar />
-        {children}
-      </main>
-      <UploadPanel />
-    </UploadProvider>
+      {/* GET /me first: viewers who aren't photographers yet get the onboarding screen. */}
+      <StudioGate>
+        <UploadProvider config={clientUploadConfig()}>
+          <main className="mx-auto max-w-6xl space-y-6 px-4 py-4 pb-40">
+            <UsageBar />
+            {children}
+          </main>
+          <UploadPanel />
+        </UploadProvider>
+      </StudioGate>
+    </>
   );
 }
