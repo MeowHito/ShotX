@@ -1,5 +1,6 @@
+import type { FaceConfig } from '@shotx/shared';
 import { countDistinct, tileBoxToImage, tileRects, touchesInnerEdge } from './geometry';
-import { type EncodedImage, encodeJpeg, orientedSize } from './image';
+import { type EncodedImage, type EncodeOptions, encodeJpeg, orientedSize } from './image';
 import type { FaceProvider } from './provider';
 import type { TempImageStore } from './temp-store';
 import type { IndexedFace, IndexFacesResult, QualityFilter } from './types';
@@ -9,9 +10,6 @@ export type TilingMode = (typeof TILING_MODES)[number];
 
 /** Rekognition reasons meaning faces were skipped for being small or too many. */
 const TILE_REASONS = new Set(['SMALL_BOUNDING_BOX', 'EXCEEDS_MAX_FACES']);
-
-/** Tile faces this close (in tile ratios) to an inner tile edge count as cut off. */
-const INNER_EDGE_EPSILON = 0.01;
 
 /** Cheap local face detector (e.g. OpenCV YuNet) that decides whether small faces need tiles. */
 export interface SmallFaceDetector {
@@ -39,8 +37,37 @@ export interface IndexPhotoOptions {
   tiling: TilingMode;
   tileGrid: number;
   tileOverlap: number;
+  /** Tile faces this close (in tile ratios) to an inner tile edge count as cut off. */
+  tileEdgeEpsilon: number;
   smallFaceRatio: number;
   dedupeIou: number;
+  encode: EncodeOptions;
+}
+
+/** What a caller decides per photo; everything else comes from FaceConfig. */
+export interface IndexPhotoTarget {
+  collectionId: string;
+  fileId: string;
+  tempKeyPrefix: string;
+  tiling: TilingMode;
+}
+
+export function indexPhotoOptions(config: FaceConfig, target: IndexPhotoTarget): IndexPhotoOptions {
+  const { index } = config;
+  return {
+    ...target,
+    longEdge: index.longEdge,
+    jpegQuality: index.jpegQuality,
+    maxBytes: index.maxBytes,
+    maxFaces: index.maxFaces,
+    qualityFilter: index.qualityFilter,
+    tileGrid: index.tileGrid,
+    tileOverlap: index.tileOverlap,
+    tileEdgeEpsilon: index.tileEdgeEpsilon,
+    smallFaceRatio: index.smallFaceRatio,
+    dedupeIou: index.dedupeIou,
+    encode: config.encode,
+  };
 }
 
 export interface PhotoFace extends IndexedFace {
@@ -82,6 +109,7 @@ export async function indexPhoto(
     longEdge: options.longEdge,
     quality: options.jpegQuality,
     maxBytes: Math.min(options.maxBytes, deps.tempStore.maxBytes),
+    encode: options.encode,
   };
   try {
     const full = await encodeJpeg(original, jpeg);
@@ -111,7 +139,7 @@ export async function indexPhoto(
         indexCalls++;
         for (const face of result.faces) {
           indexedIds.push(face.faceId);
-          if (touchesInnerEdge(face.bbox, rect, size, INNER_EDGE_EPSILON)) {
+          if (touchesInnerEdge(face.bbox, rect, size, options.tileEdgeEpsilon)) {
             discarded.push(face.faceId);
           } else {
             faces.push({ ...face, bbox: tileBoxToImage(face.bbox, rect, size), tile: i });

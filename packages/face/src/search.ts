@@ -1,3 +1,4 @@
+import type { FaceConfig } from '@shotx/shared';
 import { type FaceProvider, NoFaceDetectedError } from './provider';
 import type { FaceMatch, FaceThresholds, QualityFilter } from './types';
 
@@ -117,6 +118,16 @@ export interface SelfieSearchOptions {
   expansionSeeds: number;
   maxFaces: number;
   qualityFilter: QualityFilter;
+}
+
+export function selfieSearchOptions(config: FaceConfig, collectionId: string): SelfieSearchOptions {
+  return {
+    collectionId,
+    thresholds: config.thresholds,
+    expansionSeeds: config.search.expansionSeeds,
+    maxFaces: config.search.maxFaces,
+    qualityFilter: config.search.qualityFilter,
+  };
 }
 
 export interface SelfieSearchResult {

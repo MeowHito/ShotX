@@ -11,6 +11,9 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "synth": "turbo run synth",
+    "dev:services": "docker compose up -d --wait",
+    "dev:services:down": "docker compose down",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "face-eval": "tsx tools/face-eval/src/cli.ts"

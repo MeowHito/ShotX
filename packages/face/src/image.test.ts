@@ -1,3 +1,4 @@
+import { loadFaceConfig } from '@shotx/shared';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import { encodeJpeg, orientedSize, prepareSelfie, UnreadableImageError } from './image';
@@ -35,7 +36,8 @@ async function rotatedPhoto(): Promise<Buffer> {
     .toBuffer();
 }
 
-const options = { longEdge: 3500, quality: 90, maxBytes: 15 * 1024 * 1024 };
+const config = loadFaceConfig({});
+const options = { longEdge: 3500, quality: 90, maxBytes: 15 * 1024 * 1024, encode: config.encode };
 
 describe('encodeJpeg', () => {
   it('caps the long edge and keeps the aspect ratio', async () => {
@@ -78,6 +80,25 @@ describe('encodeJpeg', () => {
     expect(image.bytes.length).toBeLessThanOrEqual(maxBytes);
   });
 
+  it('gives up below the minimum long edge', async () => {
+    const input = await noise(1600, 1600);
+    const encode = { ...config.encode, minLongEdge: 1500 };
+    await expect(encodeJpeg(input, { ...options, maxBytes: 50 * 1024, encode })).rejects.toThrow(
+      /does not fit/,
+    );
+  });
+
+  it('rejects encode options that would never terminate', async () => {
+    const input = await solid(100, 100);
+    for (const encode of [
+      { ...config.encode, shrinkFactor: 1 },
+      { ...config.encode, qualityStep: 0 },
+      { ...config.encode, minLongEdge: 0 },
+    ]) {
+      await expect(encodeJpeg(input, { ...options, encode })).rejects.toBeInstanceOf(RangeError);
+    }
+  });
+
   it('reports undecodable input', async () => {
     await expect(encodeJpeg(Buffer.from('not an image'), options)).rejects.toBeInstanceOf(
       UnreadableImageError,
@@ -87,7 +108,7 @@ describe('encodeJpeg', () => {
 
 describe('prepareSelfie', () => {
   it('downscales like the web client', async () => {
-    const selfie = await prepareSelfie(await solid(3000, 4000), { longEdge: 1280, jpegQuality: 90 });
+    const selfie = await prepareSelfie(await solid(3000, 4000), config);
     expect([selfie.width, selfie.height]).toEqual([960, 1280]);
   });
 });

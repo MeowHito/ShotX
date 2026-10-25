@@ -1,0 +1,395 @@
+{
+  "app": "tsx bin/shotx.ts",
+  "watch": {
+    "include": ["**"],
+    "exclude": [
+      "README.md",
+      "cdk*.json",
+      "**/*.d.ts",
+      "**/*.js",
+      "tsconfig.json",
+      "package*.json",
+      "node_modules",
+      "test",
+      "local"
+    ]
+  },
+  "context": {
+    "shotx": {
+      "stage": "prod",
+      "account": "000000000000",
+      "tags": {
+        "Project": "shotx",
+        "ManagedBy": "cdk"
+      },
+      "domain": {
+        "main": "photos.example.com",
+        "admin": "admin.photos.example.com",
+        "hostedZoneId": "Z00000000000000000000",
+        "hostedZoneName": "photos.example.com",
+        "certificateArn": "",
+        "adminCertificateArn": ""
+      },
+      "network": {
+        "cidr": "10.20.0.0/16",
+        "azCount": 2,
+        "natGateways": 2,
+        "subnetCidrMasks": {
+          "public": 24,
+          "app": 20,
+          "data": 24
+        },
+        "interfaceEndpoints": [],
+        "cloudFrontOriginFacingPrefixListId": "pl-31a34658"
+      },
+      "registry": {
+        "keepImages": 50
+      },
+      "database": {
+        "engineVersion": "18.3",
+        "instanceType": "m7g.large",
+        "databaseName": "shotx",
+        "username": "shotx_admin",
+        "port": 5432,
+        "allocatedStorageGiB": 100,
+        "maxAllocatedStorageGiB": 1000,
+        "backupRetentionDays": 14,
+        "deletionProtection": true,
+        "monitoringIntervalSeconds": 60,
+        "performanceInsights": true,
+        "logRetentionDays": 30
+      },
+      "redis": {
+        "engine": "redis",
+        "engineVersion": "7.1",
+        "nodeType": "cache.t4g.small",
+        "numCacheClusters": 2,
+        "port": 6379,
+        "snapshotRetentionDays": 1
+      },
+      "storage": {
+        "abortIncompleteMultipartUploadDays": 2,
+        "tmpExpirationDays": 1,
+        "originalsIntelligentTieringAfterDays": 0,
+        "uploadCorsMaxAgeSeconds": 3000,
+        "cloudFrontLogExpirationDays": 400
+      },
+      "queues": {
+        "media": {
+          "visibilityTimeoutSeconds": 900,
+          "retentionDays": 4,
+          "dlqRetentionDays": 14,
+          "maxReceiveCount": 5,
+          "receiveWaitSeconds": 20,
+          "alarms": {
+            "dlqVisibleMessagesThreshold": 1,
+            "oldestMessageAgeSeconds": 900,
+            "oldestMessageAgeEvaluationPeriods": 5
+          }
+        },
+        "faces": {
+          "visibilityTimeoutSeconds": 300,
+          "retentionDays": 4,
+          "dlqRetentionDays": 14,
+          "maxReceiveCount": 5,
+          "receiveWaitSeconds": 20,
+          "alarms": {
+            "dlqVisibleMessagesThreshold": 1,
+            "oldestMessageAgeSeconds": 1800,
+            "oldestMessageAgeEvaluationPeriods": 5
+          }
+        },
+        "zip": {
+          "visibilityTimeoutSeconds": 900,
+          "retentionDays": 1,
+          "dlqRetentionDays": 14,
+          "maxReceiveCount": 3,
+          "receiveWaitSeconds": 20,
+          "alarms": {
+            "dlqVisibleMessagesThreshold": 1,
+            "oldestMessageAgeSeconds": 600,
+            "oldestMessageAgeEvaluationPeriods": 5
+          }
+        },
+        "jobs": {
+          "visibilityTimeoutSeconds": 3600,
+          "retentionDays": 1,
+          "dlqRetentionDays": 14,
+          "maxReceiveCount": 3,
+          "receiveWaitSeconds": 20,
+          "alarms": {
+            "dlqVisibleMessagesThreshold": 1,
+            "oldestMessageAgeSeconds": 3600,
+            "oldestMessageAgeEvaluationPeriods": 5
+          }
+        }
+      },
+      "alarms": {
+        "email": ""
+      },
+      "services": {
+        "imageTag": "bootstrap",
+        "cpuArchitecture": "ARM64",
+        "containerInsights": "enabled",
+        "logRetentionDays": 30,
+        "albIdleTimeoutSeconds": 60,
+        "targetDeregistrationDelaySeconds": 30,
+        "healthCheckGracePeriodSeconds": 60,
+        "web": {
+          "cpu": 512,
+          "memoryMiB": 1024,
+          "minCapacity": 2,
+          "maxCapacity": 10,
+          "containerPort": 3000,
+          "healthCheckPath": "/healthz",
+          "cpuTargetUtilizationPercent": 60
+        },
+        "admin": {
+          "cpu": 256,
+          "memoryMiB": 512,
+          "minCapacity": 1,
+          "maxCapacity": 2,
+          "containerPort": 3000,
+          "healthCheckPath": "/healthz",
+          "cpuTargetUtilizationPercent": 70
+        },
+        "api": {
+          "cpu": 512,
+          "memoryMiB": 1024,
+          "minCapacity": 2,
+          "maxCapacity": 20,
+          "containerPort": 4000,
+          "healthCheckPath": "/api/health",
+          "cpuTargetUtilizationPercent": 60
+        },
+        "worker": {
+          "cpu": 2048,
+          "memoryMiB": 4096,
+          "minCapacity": 1,
+          "maxCapacity": 10,
+          "ephemeralStorageGiB": 50,
+          "queueDepthScaling": {
+            "periodSeconds": 60,
+            "cooldownSeconds": 120,
+            "steps": [
+              {
+                "upper": 0,
+                "change": -1
+              },
+              {
+                "lower": 1,
+                "change": 1
+              },
+              {
+                "lower": 100,
+                "change": 2
+              },
+              {
+                "lower": 1000,
+                "change": 4
+              }
+            ]
+          }
+        },
+        "env": {
+          "common": {},
+          "backend": {
+            "FACE_REKOGNITION_TPS_INDEX_FACES": "5",
+            "FACE_REKOGNITION_TPS_SEARCH_FACES_BY_IMAGE": "5",
+            "FACE_REKOGNITION_TPS_SEARCH_FACES": "5",
+            "FACE_REKOGNITION_TPS_DELETE_FACES": "5",
+            "FACE_REKOGNITION_TPS_COLLECTION": "5",
+            "NODE_EXTRA_CA_CERTS": "/etc/ssl/certs/rds-global-bundle.pem"
+          },
+          "web": {},
+          "admin": {},
+          "api": {},
+          "worker": {}
+        }
+      },
+      "cdn": {
+        "priceClass": "PriceClass_All",
+        "adminPriceClass": "PriceClass_200",
+        "signingPublicKeyPem": "-----BEGIN PUBLIC KEY-----\nREPLACE_WITH_CLOUDFRONT_SIGNING_PUBLIC_KEY\n-----END PUBLIC KEY-----\n",
+        "originReadTimeoutSeconds": 60,
+        "originKeepaliveSeconds": 5,
+        "media": {
+          "minTtlSeconds": 0,
+          "defaultTtlSeconds": 2592000,
+          "maxTtlSeconds": 31536000,
+          "cacheQueryStrings": ["response-content-disposition"],
+          "readablePrefixes": ["originals/", "derived/", "tmp/zips/"]
+        },
+        "flatRatePlan": {
+          "enabled": true,
+          "tier": "BUSINESS",
+          "attachHostedZone": true
+        }
+      },
+      "waf": {
+        "evaluationWindowSeconds": 300,
+        "globalRateLimit": 20000,
+        "shareBlockRateLimit": 3000,
+        "shareCaptchaRateLimit": 1000,
+        "faceSearchBlockRateLimit": 100,
+        "faceSearchCaptchaRateLimit": 30,
+        "captchaImmunitySeconds": 1800,
+        "sharePathPrefixes": ["/s/", "/api/s/"],
+        "faceSearchPathPrefix": "/api/s/",
+        "faceSearchPathSuffix": "/face-search",
+        "commonRuleSetCountOverrides": ["SizeRestrictions_BODY"],
+        "adminRateLimit": 1000,
+        "adminAllowedIpv4Cidrs": [],
+        "logRetentionDays": 30
+      },
+      "auth": {
+        "domainPrefix": "shotx-prod-auth",
+        "adminDomainPrefix": "shotx-prod-admin-auth",
+        "callbackPath": "/auth/callback",
+        "logoutPath": "/",
+        "adminCallbackPath": "/auth/callback",
+        "adminLogoutPath": "/",
+        "extraCallbackUrls": [],
+        "extraLogoutUrls": [],
+        "passwordMinLength": 10,
+        "adminPasswordMinLength": 14,
+        "accessTokenMinutes": 60,
+        "idTokenMinutes": 60,
+        "refreshTokenDays": 30,
+        "adminRefreshTokenHours": 12,
+        "deletionProtection": true,
+        "google": {
+          "clientId": "REPLACE_ME.apps.googleusercontent.com",
+          "clientSecretName": "shotx/prod/google-oauth-client-secret"
+        },
+        "line": {
+          "channelId": "0000000000",
+          "channelSecretName": "shotx/prod/line-login-channel-secret",
+          "issuerUrl": "https://access.line.me",
+          "scopes": ["openid", "profile", "email"]
+        }
+      },
+      "secrets": {
+        "cloudFrontSigningPrivateKeyName": "shotx/prod/cloudfront-signing-private-key"
+      },
+      "rekognition": {
+        "collectionPrefix": "pg-"
+      },
+      "schedules": {
+        "timezone": "Asia/Bangkok",
+        "retryAttempts": 3,
+        "maxEventAgeSeconds": 3600,
+        "jobs": {
+          "stats.rollup.hourly": {
+            "expression": "cron(5 * * * ? *)",
+            "enabled": true
+          },
+          "subscriptions.transition.daily": {
+            "expression": "cron(0 1 * * ? *)",
+            "enabled": true
+          },
+          "trash.purge.daily": {
+            "expression": "cron(30 1 * * ? *)",
+            "enabled": true
+          },
+          "faces.expire.daily": {
+            "expression": "cron(0 2 * * ? *)",
+            "enabled": true
+          },
+          "quota.reconcile.nightly": {
+            "expression": "cron(30 3 * * ? *)",
+            "enabled": true
+          }
+        }
+      }
+    },
+    "@aws-cdk/aws-signer:signingProfileNamePassedToCfn": true,
+    "@aws-cdk/aws-ecs-patterns:secGroupsDisablesImplicitOpenListener": true,
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/core:target-partitions": ["aws", "aws-cn"],
+    "@aws-cdk-containers/ecs-service-extensions:enableDefaultLogDriver": true,
+    "@aws-cdk/aws-ec2:uniqueImdsv2TemplateName": true,
+    "@aws-cdk/aws-ecs:arnFormatIncludesClusterName": true,
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/core:validateSnapshotRemovalPolicy": true,
+    "@aws-cdk/aws-codepipeline:crossAccountKeyAliasStackSafeResourceName": true,
+    "@aws-cdk/aws-s3:createDefaultLoggingPolicy": true,
+    "@aws-cdk/aws-sns-subscriptions:restrictSqsDescryption": true,
+    "@aws-cdk/aws-apigateway:disableCloudWatchRole": true,
+    "@aws-cdk/core:enablePartitionLiterals": true,
+    "@aws-cdk/aws-events:eventsTargetQueueSameAccount": true,
+    "@aws-cdk/aws-ecs:disableExplicitDeploymentControllerForCircuitBreaker": true,
+    "@aws-cdk/aws-iam:importedRoleStackSafeDefaultPolicyName": true,
+    "@aws-cdk/aws-s3:serverAccessLogsUseBucketPolicy": true,
+    "@aws-cdk/aws-route53-patters:useCertificate": true,
+    "@aws-cdk/customresources:installLatestAwsSdkDefault": false,
+    "@aws-cdk/aws-rds:databaseProxyUniqueResourceName": true,
+    "@aws-cdk/aws-codedeploy:removeAlarmsFromDeploymentGroup": true,
+    "@aws-cdk/aws-apigateway:authorizerChangeDeploymentLogicalId": true,
+    "@aws-cdk/aws-ec2:launchTemplateDefaultUserData": true,
+    "@aws-cdk/aws-secretsmanager:useAttachedSecretResourcePolicyForSecretTargetAttachments": true,
+    "@aws-cdk/aws-redshift:columnId": true,
+    "@aws-cdk/aws-stepfunctions-tasks:enableEmrServicePolicyV2": true,
+    "@aws-cdk/aws-ec2:restrictDefaultSecurityGroup": true,
+    "@aws-cdk/aws-apigateway:requestValidatorUniqueId": true,
+    "@aws-cdk/aws-kms:aliasNameRef": true,
+    "@aws-cdk/aws-kms:applyImportedAliasPermissionsToPrincipal": true,
+    "@aws-cdk/aws-autoscaling:generateLaunchTemplateInsteadOfLaunchConfig": true,
+    "@aws-cdk/core:includePrefixInUniqueNameGeneration": true,
+    "@aws-cdk/aws-efs:denyAnonymousAccess": true,
+    "@aws-cdk/aws-opensearchservice:enableOpensearchMultiAzWithStandby": true,
+    "@aws-cdk/aws-lambda-nodejs:useLatestRuntimeVersion": true,
+    "@aws-cdk/aws-efs:mountTargetOrderInsensitiveLogicalId": true,
+    "@aws-cdk/aws-rds:auroraClusterChangeScopeOfInstanceParameterGroupWithEachParameters": true,
+    "@aws-cdk/aws-appsync:useArnForSourceApiAssociationIdentifier": true,
+    "@aws-cdk/aws-rds:preventRenderingDeprecatedCredentials": true,
+    "@aws-cdk/aws-codepipeline-actions:useNewDefaultBranchForCodeCommitSource": true,
+    "@aws-cdk/aws-cloudwatch-actions:changeLambdaPermissionLogicalIdForLambdaAction": true,
+    "@aws-cdk/aws-codepipeline:crossAccountKeysDefaultValueToFalse": true,
+    "@aws-cdk/aws-codepipeline:defaultPipelineTypeToV2": true,
+    "@aws-cdk/aws-kms:reduceCrossAccountRegionPolicyScope": true,
+    "@aws-cdk/aws-eks:nodegroupNameAttribute": true,
+    "@aws-cdk/aws-eks:useNativeOidcProvider": true,
+    "@aws-cdk/aws-ec2:ebsDefaultGp3Volume": true,
+    "@aws-cdk/aws-ecs:removeDefaultDeploymentAlarm": true,
+    "@aws-cdk/custom-resources:logApiResponseDataPropertyTrueDefault": false,
+    "@aws-cdk/aws-s3:keepNotificationInImportedBucket": false,
+    "@aws-cdk/core:explicitStackTags": true,
+    "@aws-cdk/aws-ecs:reduceEc2FargateCloudWatchPermissions": true,
+    "@aws-cdk/aws-dynamodb:resourcePolicyPerReplica": true,
+    "@aws-cdk/aws-ec2:ec2SumTImeoutEnabled": true,
+    "@aws-cdk/aws-appsync:appSyncGraphQLAPIScopeLambdaPermission": true,
+    "@aws-cdk/aws-rds:setCorrectValueForDatabaseInstanceReadReplicaInstanceResourceId": true,
+    "@aws-cdk/core:cfnIncludeRejectComplexResourceUpdateCreatePolicyIntrinsics": true,
+    "@aws-cdk/aws-lambda-nodejs:sdkV3ExcludeSmithyPackages": true,
+    "@aws-cdk/aws-stepfunctions-tasks:fixRunEcsTaskPolicy": true,
+    "@aws-cdk/aws-ec2:bastionHostUseAmazonLinux2023ByDefault": true,
+    "@aws-cdk/aws-route53-targets:userPoolDomainNameMethodWithoutCustomResource": true,
+    "@aws-cdk/aws-elasticloadbalancingV2:albDualstackWithoutPublicIpv4SecurityGroupRulesDefault": true,
+    "@aws-cdk/aws-iam:oidcRejectUnauthorizedConnections": true,
+    "@aws-cdk/core:enableAdditionalMetadataCollection": true,
+    "@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy": false,
+    "@aws-cdk/aws-s3:setUniqueReplicationRoleName": true,
+    "@aws-cdk/aws-events:requireEventBusPolicySid": true,
+    "@aws-cdk/core:aspectPrioritiesMutating": true,
+    "@aws-cdk/aws-dynamodb:retainTableReplica": true,
+    "@aws-cdk/aws-stepfunctions:useDistributedMapResultWriterV2": true,
+    "@aws-cdk/s3-notifications:addS3TrustKeyPolicyForSnsSubscriptions": true,
+    "@aws-cdk/aws-ec2:requirePrivateSubnetsForEgressOnlyInternetGateway": true,
+    "@aws-cdk/aws-s3:publicAccessBlockedByDefault": true,
+    "@aws-cdk/aws-lambda:useCdkManagedLogGroup": true,
+    "@aws-cdk/aws-elasticloadbalancingv2:networkLoadBalancerWithSecurityGroupByDefault": true,
+    "@aws-cdk/aws-ecs-patterns:uniqueTargetGroupId": true,
+    "@aws-cdk/aws-route53-patterns:useDistribution": true,
+    "@aws-cdk/aws-cloudfront:defaultFunctionRuntimeV2_0": true,
+    "@aws-cdk/aws-elasticloadbalancingv2:usePostQuantumTlsPolicy": true,
+    "@aws-cdk/aws-batch:defaultToAL2023": true,
+    "@aws-cdk/aws-eks:defaultToAL2023": true,
+    "@aws-cdk/core:annotationsInValidationReport": true,
+    "@aws-cdk/core:defaultCrossStackReferences": "weak",
+    "@aws-cdk/core:validateAgainstDefaultRules": true,
+    "@aws-cdk/aws-ecs:removeEmptyLoadBalancers": true,
+    "@aws-cdk/aws-cloudfront:defaultViewerProtocolPolicyRedirectToHttps": true
+  }
+}

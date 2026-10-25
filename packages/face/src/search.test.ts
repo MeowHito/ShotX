@@ -1,11 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
-import { type FaceProvider, NoFaceDetectedError } from './provider';
+import { loadFaceConfig } from '@shotx/shared';
+import {
+  type FaceProvider,
+  NoFaceDetectedError,
+  type SearchByFaceRequest,
+  type SearchByImageRequest,
+} from './provider';
 import {
   bucketByFile,
   combineMatches,
   mergeMatches,
   searchBySelfies,
   selectSeeds,
+  selfieSearchOptions,
   type SourcedMatch,
 } from './search';
 import type { FaceMatch } from './types';
@@ -95,9 +102,11 @@ describe('bucketByFile', () => {
   });
 
   it('drops faces the resolver rejects (outside the share, deleted, not ready)', () => {
-    const hits = bucketByFile([sourced('e', 99), sourced('x', 99)], (id) =>
-      id === 'e' ? undefined : files[id],
-    thresholds);
+    const hits = bucketByFile(
+      [sourced('e', 99), sourced('x', 99)],
+      (id) => (id === 'e' ? undefined : files[id]),
+      thresholds,
+    );
     expect(hits).toEqual([]);
   });
 });
@@ -111,18 +120,15 @@ describe('searchBySelfies', () => {
     qualityFilter: 'AUTO' as const,
   };
 
-  function stubProvider(
-    bySelfie: Array<FaceMatch[] | Error>,
-    byFace: Record<string, FaceMatch[]>,
-  ): FaceProvider & { searchFaces: ReturnType<typeof vi.fn> } {
-    const searchFacesByImage = vi.fn(({ image }: { image: Uint8Array }) => {
-      const result = bySelfie[image[0]!]!;
+  function stubProvider(bySelfie: Array<FaceMatch[] | Error>, byFace: Record<string, FaceMatch[]>) {
+    const searchFacesByImage = vi.fn((request: SearchByImageRequest) => {
+      const result = bySelfie[request.image[0]!]!;
       return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
     });
-    const searchFaces = vi.fn(({ faceId }: { faceId: string }) =>
-      Promise.resolve(byFace[faceId] ?? []),
+    const searchFaces = vi.fn((request: SearchByFaceRequest) =>
+      Promise.resolve(byFace[request.faceId] ?? []),
     );
-    return {
+    const provider: FaceProvider = {
       createCollection: vi.fn(),
       deleteCollection: vi.fn(),
       indexFaces: vi.fn(),
@@ -130,22 +136,20 @@ describe('searchBySelfies', () => {
       searchFacesByImage,
       searchFaces,
     };
+    return { provider, searchFacesByImage, searchFaces };
   }
   const selfie = (n: number) => new Uint8Array([n]);
 
   it('searches every selfie at the maybe threshold and expands from strong seeds', async () => {
-    const provider = stubProvider(
-      [
-        [match('a', 99, 'f1'), match('b', 90, 'f2')],
-        [match('c', 97, 'f3')],
-      ],
+    const { provider, searchFacesByImage, searchFaces } = stubProvider(
+      [[match('a', 99, 'f1'), match('b', 90, 'f2')], [match('c', 97, 'f3')]],
       { a: [match('d', 92, 'f4')], c: [match('e', 87, 'f5')] },
     );
     const result = await searchBySelfies(provider, [selfie(0), selfie(1)], options);
-    expect(provider.searchFacesByImage).toHaveBeenCalledWith(
+    expect(searchFacesByImage).toHaveBeenCalledWith(
       expect.objectContaining({ threshold: 85, maxFaces: 1000 }),
     );
-    expect(provider.searchFaces.mock.calls.map(([request]) => request.faceId)).toEqual(['a', 'c']);
+    expect(searchFaces.mock.calls.map(([request]) => request.faceId)).toEqual(['a', 'c']);
     expect(result.seeds).toBe(2);
     expect(result.matches.map((m) => [m.faceId, m.via])).toEqual([
       ['a', 'selfie'],
@@ -157,7 +161,7 @@ describe('searchBySelfies', () => {
   });
 
   it('skips selfies without a face', async () => {
-    const provider = stubProvider([new NoFaceDetectedError(), [match('a', 90)]], {});
+    const { provider } = stubProvider([new NoFaceDetectedError(), [match('a', 90)]], {});
     const result = await searchBySelfies(provider, [selfie(0), selfie(1)], options);
     expect(result.selfiesWithoutFace).toBe(1);
     expect(result.seeds).toBe(0);
@@ -165,16 +169,29 @@ describe('searchBySelfies', () => {
   });
 
   it('throws NoFaceDetectedError when no selfie has a face', async () => {
-    const provider = stubProvider([new NoFaceDetectedError()], {});
+    const { provider } = stubProvider([new NoFaceDetectedError()], {});
     await expect(searchBySelfies(provider, [selfie(0)], options)).rejects.toBeInstanceOf(
       NoFaceDetectedError,
     );
   });
 
   it('propagates other provider errors', async () => {
-    const provider = stubProvider([new Error('throttled'), [match('a', 99)]], {});
+    const { provider } = stubProvider([new Error('throttled'), [match('a', 99)]], {});
     await expect(searchBySelfies(provider, [selfie(0), selfie(1)], options)).rejects.toThrow(
       'throttled',
     );
+  });
+});
+
+describe('selfieSearchOptions', () => {
+  it('takes thresholds and search settings from FaceConfig', () => {
+    const config = loadFaceConfig({ FACE_STRONG: '96', FACE_EXPANSION_SEEDS: '0' });
+    expect(selfieSearchOptions(config, 'pg-7')).toEqual({
+      collectionId: 'pg-7',
+      thresholds: { strong: 96, maybe: 85 },
+      expansionSeeds: 0,
+      maxFaces: 1000,
+      qualityFilter: 'AUTO',
+    });
   });
 });

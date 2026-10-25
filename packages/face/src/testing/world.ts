@@ -76,13 +76,11 @@ export class SyntheticWorld {
     }
     const random = mulberry32(options.seed);
     const colors = shuffle([...PALETTE], random);
-    const persons = colors.slice(0, total).map(
-      (color, i): WorldPerson => ({
-        id: i < options.volunteers ? `v${pad(i + 1)}` : `b${pad(i - options.volunteers + 1)}`,
-        color,
-        selfieGap: random() < 0.3 ? 4 + random() * 6 : random() * 3,
-      }),
-    );
+    const persons = colors.slice(0, total).map((color, i): WorldPerson => ({
+      id: i < options.volunteers ? `v${pad(i + 1)}` : `b${pad(i - options.volunteers + 1)}`,
+      color,
+      selfieGap: random() < 0.3 ? 4 + random() * 6 : random() * 3,
+    }));
     const order = shuffle([...persons], random);
     const lookalikes: Lookalike[] = [];
     for (let i = 0; i + 1 < order.length && lookalikes.length < Math.round(total * 0.15); i += 2) {

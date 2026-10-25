@@ -7,10 +7,7 @@ import {
   type FaceMatch as AwsFaceMatch,
   type Image,
   IndexFacesCommand,
-  InvalidParameterException,
   RekognitionClient,
-  ResourceAlreadyExistsException,
-  ResourceNotFoundException,
   SearchFacesByImageCommand,
   SearchFacesCommand,
 } from '@aws-sdk/client-rekognition';
@@ -19,13 +16,17 @@ import {
   type FaceProvider,
   type IndexFacesRequest,
   NoFaceDetectedError,
+  REKOGNITION_DELETE_FACES_BATCH,
   type SearchByFaceRequest,
   type SearchByImageRequest,
 } from './provider';
-import { type RateLimiter, type RetryOptions, TokenBucket, withRetry } from './throttling';
+import type {
+  RekognitionLimiters,
+  RekognitionOperation,
+  RekognitionProfile,
+} from './rekognition-limits';
+import { type RetryOptions, withRetry } from './throttling';
 import type { BoundingBox, FaceMatch, ImageInput, IndexFacesResult } from './types';
-
-const DELETE_FACES_BATCH = 4096;
 
 const RETRYABLE_NAMES = new Set([
   'ThrottlingException',
@@ -51,39 +52,71 @@ export function isRetryableAwsError(error: unknown): boolean {
   );
 }
 
+/**
+ * Errors are matched by name rather than class, so they're recognized even when two copies of the
+ * SDK are installed.
+ */
+function isAwsError(error: unknown, name: string): error is Error {
+  return error instanceof Error && error.name === name;
+}
+
+/**
+ * SearchFacesByImage reports an input image without a face as InvalidParameterException with the
+ * message "There are no faces in the image. Should be at least 1." Every other invalid parameter
+ * (MaxFaces, threshold, image format, …) is a bug and must not turn into "no face".
+ */
+const NO_FACE_MESSAGE = /\bno faces in the image\b/i;
+
+export function isNoFaceInImageError(error: unknown): boolean {
+  return isAwsError(error, 'InvalidParameterException') && NO_FACE_MESSAGE.test(error.message);
+}
+
+/** Retry settings of a profile: the API fails fast, the worker keeps trying. */
+export function rekognitionRetryOptions(
+  config: FaceConfig['rekognition'],
+  profile: RekognitionProfile,
+): RetryOptions {
+  const { maxAttempts, retryBaseMs, retryMaxMs } = config[profile];
+  return { maxAttempts, baseDelayMs: retryBaseMs, maxDelayMs: retryMaxMs };
+}
+
 export interface RekognitionProviderOptions {
   client: RekognitionClient;
-  /** Every call takes a token, keeping the account under its Rekognition TPS quota. */
-  limiter: RateLimiter;
+  /** Every call takes a token from its operation's limiter, keeping under the per-operation TPS. */
+  limiters: RekognitionLimiters;
   retry: RetryOptions;
 }
 
 export class RekognitionFaceProvider implements FaceProvider {
   constructor(private readonly options: RekognitionProviderOptions) {}
 
-  /** Retries happen here (with the limiter), so the SDK's own retries are turned off. */
-  static create(config: FaceConfig['rekognition']): RekognitionFaceProvider {
+  /**
+   * Builds the provider for one process. Pass limiters from `createRedisRekognitionLimiters` with
+   * the same profile in production. Retries happen here (behind the limiters), so the SDK's own
+   * retries are turned off.
+   */
+  static create(
+    config: FaceConfig['rekognition'],
+    profile: RekognitionProfile,
+    limiters: RekognitionLimiters,
+  ): RekognitionFaceProvider {
     return new RekognitionFaceProvider({
       client: new RekognitionClient({ region: config.region, maxAttempts: 1 }),
-      limiter: new TokenBucket(config.tps),
-      retry: {
-        maxAttempts: config.maxAttempts,
-        baseDelayMs: config.retryBaseMs,
-        maxDelayMs: config.retryMaxMs,
-      },
+      limiters,
+      retry: rekognitionRetryOptions(config, profile),
     });
   }
 
   async createCollection(collectionId: string): Promise<{ faceModelVersion?: string }> {
     const { client } = this.options;
     try {
-      const out = await this.call(() =>
+      const out = await this.call('CreateCollection', () =>
         client.send(new CreateCollectionCommand({ CollectionId: collectionId })),
       );
       return { faceModelVersion: out.FaceModelVersion };
     } catch (error) {
-      if (!(error instanceof ResourceAlreadyExistsException)) throw error;
-      const out = await this.call(() =>
+      if (!isAwsError(error, 'ResourceAlreadyExistsException')) throw error;
+      const out = await this.call('DescribeCollection', () =>
         client.send(new DescribeCollectionCommand({ CollectionId: collectionId })),
       );
       return { faceModelVersion: out.FaceModelVersion };
@@ -92,16 +125,16 @@ export class RekognitionFaceProvider implements FaceProvider {
 
   async deleteCollection(collectionId: string): Promise<void> {
     try {
-      await this.call(() =>
+      await this.call('DeleteCollection', () =>
         this.options.client.send(new DeleteCollectionCommand({ CollectionId: collectionId })),
       );
     } catch (error) {
-      if (!(error instanceof ResourceNotFoundException)) throw error;
+      if (!isAwsError(error, 'ResourceNotFoundException')) throw error;
     }
   }
 
   async indexFaces(request: IndexFacesRequest): Promise<IndexFacesResult> {
-    const out = await this.call(() =>
+    const out = await this.call('IndexFaces', () =>
       this.options.client.send(
         new IndexFacesCommand({
           CollectionId: request.collectionId,
@@ -115,7 +148,13 @@ export class RekognitionFaceProvider implements FaceProvider {
     return {
       faces: (out.FaceRecords ?? []).flatMap(({ Face: face }) =>
         face?.FaceId
-          ? [{ faceId: face.FaceId, bbox: toBox(face.BoundingBox), confidence: face.Confidence ?? 0 }]
+          ? [
+              {
+                faceId: face.FaceId,
+                bbox: toBox(face.BoundingBox),
+                confidence: face.Confidence ?? 0,
+              },
+            ]
           : [],
       ),
       unindexed: (out.UnindexedFaces ?? []).map((face) => ({
@@ -127,7 +166,7 @@ export class RekognitionFaceProvider implements FaceProvider {
 
   async searchFacesByImage(request: SearchByImageRequest): Promise<FaceMatch[]> {
     try {
-      const out = await this.call(() =>
+      const out = await this.call('SearchFacesByImage', () =>
         this.options.client.send(
           new SearchFacesByImageCommand({
             CollectionId: request.collectionId,
@@ -140,16 +179,13 @@ export class RekognitionFaceProvider implements FaceProvider {
       );
       return toMatches(out.FaceMatches);
     } catch (error) {
-      // Rekognition reports "There are no faces in the image" as an invalid parameter.
-      if (error instanceof InvalidParameterException && /face/i.test(error.message)) {
-        throw new NoFaceDetectedError();
-      }
+      if (isNoFaceInImageError(error)) throw new NoFaceDetectedError();
       throw error;
     }
   }
 
   async searchFaces(request: SearchByFaceRequest): Promise<FaceMatch[]> {
-    const out = await this.call(() =>
+    const out = await this.call('SearchFaces', () =>
       this.options.client.send(
         new SearchFacesCommand({
           CollectionId: request.collectionId,
@@ -163,9 +199,9 @@ export class RekognitionFaceProvider implements FaceProvider {
   }
 
   async deleteFaces(collectionId: string, faceIds: readonly string[]): Promise<void> {
-    for (let start = 0; start < faceIds.length; start += DELETE_FACES_BATCH) {
-      const batch = faceIds.slice(start, start + DELETE_FACES_BATCH);
-      await this.call(() =>
+    for (let start = 0; start < faceIds.length; start += REKOGNITION_DELETE_FACES_BATCH) {
+      const batch = faceIds.slice(start, start + REKOGNITION_DELETE_FACES_BATCH);
+      await this.call('DeleteFaces', () =>
         this.options.client.send(
           new DeleteFacesCommand({ CollectionId: collectionId, FaceIds: batch }),
         ),
@@ -173,10 +209,12 @@ export class RekognitionFaceProvider implements FaceProvider {
     }
   }
 
-  private call<T>(send: () => Promise<T>): Promise<T> {
+  /** Each attempt, retries included, is a real call and takes its own token. */
+  private call<T>(operation: RekognitionOperation, send: () => Promise<T>): Promise<T> {
+    const limiter = this.options.limiters[operation];
     return withRetry(
       async () => {
-        await this.options.limiter.acquire();
+        await limiter.acquire();
         return send();
       },
       isRetryableAwsError,

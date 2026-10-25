@@ -5,6 +5,7 @@ import type { FaceMatch, ImageInput, IndexFacesResult, QualityFilter } from './t
 export const REKOGNITION_INLINE_MAX_BYTES = 5 * 1024 * 1024;
 export const REKOGNITION_S3_MAX_BYTES = 15 * 1024 * 1024;
 export const REKOGNITION_MAX_SEARCH_FACES = 4096;
+export const REKOGNITION_DELETE_FACES_BATCH = 4096;
 
 export interface IndexFacesRequest {
   collectionId: string;

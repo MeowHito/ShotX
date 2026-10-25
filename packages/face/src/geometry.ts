@@ -12,7 +12,11 @@ export function tileRects(image: Size, grid: number, overlap: number): PixelRect
   );
 }
 
-function spans(length: number, count: number, overlap: number): Array<[start: number, size: number]> {
+function spans(
+  length: number,
+  count: number,
+  overlap: number,
+): Array<[start: number, size: number]> {
   if (count <= 1) return [[0, length]];
   const size = Math.min(length, Math.ceil(length / (count - (count - 1) * overlap)));
   const step = (length - size) / (count - 1);

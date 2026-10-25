@@ -1,0 +1,80 @@
+# Local development services: PostgreSQL (with ltree), Redis, and LocalStack (S3 + SQS).
+#
+#   cp .env.example .env        # then set LOCALSTACK_AUTH_TOKEN
+#   docker compose up -d --wait
+#
+# Versions follow AWS: PostgreSQL 18 (RDS, infra/cdk.json database.engineVersion) and Redis 7
+# (ElastiCache, redis.engineVersion). Ports bind to 127.0.0.1 only.
+name: shotx
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: shotx
+      POSTGRES_PASSWORD: shotx
+      POSTGRES_DB: shotx
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      # PostgreSQL 18 images keep data under /var/lib/postgresql/18/docker.
+      - postgres-data:/var/lib/postgresql
+      - ./infra/local/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # Over TCP and checking ltree: the init-time server listens on the socket only, so this
+      # stays unhealthy until the init scripts have finished.
+      test:
+        - CMD-SHELL
+        - >-
+          psql -h 127.0.0.1 -U shotx -d shotx -tAc
+          "select 1 from pg_extension where extname = 'ltree'" | grep -q 1
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 10s
+
+  redis:
+    image: redis:7.2-alpine
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports:
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  localstack:
+    # LocalStack releases from 2026.03 on need LOCALSTACK_AUTH_TOKEN (set it in .env).
+    image: ${LOCALSTACK_IMAGE:-localstack/localstack:2026.10}
+    environment:
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:-}
+      SERVICES: s3,sqs
+      AWS_DEFAULT_REGION: ap-southeast-1
+      # Queue URLs look like http://localhost:4566/queue/ap-southeast-1/000000000000/<name>.
+      SQS_ENDPOINT_STRATEGY: path
+      SHOTX_LOCAL_STAGE: local
+      SHOTX_CDK_JSON: /etc/shotx/cdk.json
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+    ports:
+      - '127.0.0.1:${LOCALSTACK_PORT:-4566}:4566'
+    volumes:
+      - ./infra/local/localstack/init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh:ro
+      - ./infra/cdk.json:/etc/shotx/cdk.json:ro
+      - localstack-data:/var/lib/localstack
+    healthcheck:
+      # Healthy only after the ready hook (bucket + queues) finished successfully.
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS http://localhost:4566/_localstack/init/ready | python3 -c
+          "import json,sys; d=json.load(sys.stdin);
+          sys.exit(0 if d['completed'] and all(s['state'] == 'SUCCESSFUL' for s in d['scripts']) else 1)"
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+
+volumes:
+  postgres-data:
+  localstack-data:

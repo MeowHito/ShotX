@@ -93,7 +93,8 @@ export class FakeFaceProvider implements FaceProvider {
     for (const face of largestFirst) {
       const bbox = toRatios(face.box, size);
       const reasons: string[] = [];
-      if (rule && face.box.width < minWidth * rule.minSizeFactor) reasons.push('SMALL_BOUNDING_BOX');
+      if (rule && face.box.width < minWidth * rule.minSizeFactor)
+        reasons.push('SMALL_BOUNDING_BOX');
       if (rule && faceQuality(face.box.width) < rule.minQuality) reasons.push('LOW_FACE_QUALITY');
       if (reasons.length === 0 && result.faces.length >= request.maxFaces) {
         reasons.push('EXCEEDS_MAX_FACES');

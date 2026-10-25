@@ -34,10 +34,7 @@ describe('tileRects', () => {
       const [first, right] = rects;
       const below = rects[grid]!;
       const size = Math.floor(
-        Math.min(
-          first!.left + first!.width - right!.left,
-          first!.top + first!.height - below.top,
-        ),
+        Math.min(first!.left + first!.width - right!.left, first!.top + first!.height - below.top),
       );
       const random = mulberry32(grid);
       for (let n = 0; n < 2000; n++) {

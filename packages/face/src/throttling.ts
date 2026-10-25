@@ -1,11 +1,16 @@
+import { ErrorCode } from '@shotx/shared';
+
 export interface RateLimiter {
-  /** Resolves when the caller may make one call. */
+  /**
+   * Resolves when the caller may make one call. Throws RateLimitedError when the caller would have
+   * to wait longer than the limiter allows.
+   */
   acquire(): Promise<void>;
 }
 
 export interface Clock {
-  now(): number;
-  sleep(ms: number): Promise<void>;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
 }
 
 export const systemClock: Clock = {
@@ -13,9 +18,23 @@ export const systemClock: Clock = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
+/** A rate limiter refused a call because the next free slot is too far away. */
+export class RateLimitedError extends Error {
+  readonly code = ErrorCode.RATE_LIMITED;
+
+  constructor(
+    readonly limiter: string,
+    /** How long the caller would have had to wait for a slot. */
+    readonly waitMs: number,
+  ) {
+    super(`Rate limit ${limiter}: next slot in ${waitMs} ms`);
+    this.name = 'RateLimitedError';
+  }
+}
+
 /**
- * In-process token bucket. Workers that share an account's Rekognition quota need a shared
- * bucket (Redis) behind the same interface.
+ * In-process token bucket for tests and local evaluation. Production uses RedisTokenBucket, which
+ * every API and worker instance shares.
  */
 export class TokenBucket implements RateLimiter {
   private tokens: number;

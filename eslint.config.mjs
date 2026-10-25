@@ -3,7 +3,17 @@ import { defineConfig } from 'eslint/config';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
-  { ignores: ['**/node_modules/', '**/dist/', '**/.next/', '**/.turbo/', 'data/', 'runs/'] },
+  {
+    ignores: [
+      '**/node_modules/',
+      '**/dist/',
+      '**/.next/',
+      '**/.turbo/',
+      '**/cdk.out/',
+      'data/',
+      'runs/',
+    ],
+  },
   js.configs.recommended,
   tseslint.configs.recommendedTypeChecked,
   {

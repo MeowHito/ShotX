@@ -22,7 +22,12 @@ export class S3TempImageStore implements TempImageStore {
 
   async put(key: string, bytes: Uint8Array): Promise<ImageInput> {
     await this.s3.send(
-      new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: bytes, ContentType: 'image/jpeg' }),
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: bytes,
+        ContentType: 'image/jpeg',
+      }),
     );
     return { s3: { bucket: this.bucket, key } };
   }

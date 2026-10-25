@@ -1,3 +1,4 @@
+import type { FaceConfig } from '@shotx/shared';
 import sharp, { type OutputInfo } from 'sharp';
 import { REKOGNITION_INLINE_MAX_BYTES } from './provider';
 import type { PixelRect, Size } from './types';
@@ -6,17 +7,15 @@ export interface EncodedImage extends Size {
   bytes: Buffer;
 }
 
+/** How an image is squeezed under its byte limit: lower the quality first, then the size. */
+export type EncodeOptions = FaceConfig['encode'];
+
 export interface JpegOptions {
   longEdge: number;
   quality: number;
   maxBytes: number;
+  encode: EncodeOptions;
 }
-
-// How an image is squeezed under maxBytes: lower the quality first, then the size.
-const QUALITY_STEP = 5;
-const MIN_QUALITY = 60;
-const SHRINK_FACTOR = 0.85;
-const MIN_LONG_EDGE = 320;
 
 export class UnreadableImageError extends Error {
   constructor(cause: unknown) {
@@ -47,6 +46,11 @@ export async function encodeJpeg(
   options: JpegOptions,
   region?: PixelRect,
 ): Promise<EncodedImage> {
+  const { qualityStep, minQuality, shrinkFactor, minLongEdge } = options.encode;
+  // Without these the loop below would never end.
+  if (!(qualityStep >= 1 && shrinkFactor > 0 && shrinkFactor < 1 && minLongEdge >= 1)) {
+    throw new RangeError('Invalid JPEG encode options');
+  }
   let quality = options.quality;
   let longEdge = options.longEdge;
   for (;;) {
@@ -66,11 +70,11 @@ export async function encodeJpeg(
     if (data.length <= options.maxBytes) {
       return { bytes: data, width: info.width, height: info.height };
     }
-    if (quality - QUALITY_STEP >= MIN_QUALITY) {
-      quality -= QUALITY_STEP;
+    if (quality - qualityStep >= minQuality) {
+      quality -= qualityStep;
     } else {
-      longEdge = Math.floor(Math.max(info.width, info.height) * SHRINK_FACTOR);
-      if (longEdge < MIN_LONG_EDGE) {
+      longEdge = Math.floor(Math.max(info.width, info.height) * shrinkFactor);
+      if (longEdge < minLongEdge) {
         throw new RangeError(`Image does not fit in ${options.maxBytes} bytes`);
       }
     }
@@ -80,11 +84,12 @@ export async function encodeJpeg(
 /** Prepares a selfie the way the web client does before upload. */
 export function prepareSelfie(
   input: Uint8Array,
-  options: { longEdge: number; jpegQuality: number },
+  config: Pick<FaceConfig, 'selfie' | 'encode'>,
 ): Promise<EncodedImage> {
   return encodeJpeg(input, {
-    longEdge: options.longEdge,
-    quality: options.jpegQuality,
+    longEdge: config.selfie.longEdge,
+    quality: config.selfie.jpegQuality,
     maxBytes: REKOGNITION_INLINE_MAX_BYTES,
+    encode: config.encode,
   });
 }
