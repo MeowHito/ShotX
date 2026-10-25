@@ -5,7 +5,9 @@ import {
   type FaceProvider,
   faceCollectionId,
   indexPhoto,
+  IndexPhotoError,
   indexPhotoOptions,
+  type IndexTempKey,
   mergeMatches,
   NoFaceDetectedError,
   prepareSelfie,
@@ -32,6 +34,13 @@ export interface SearchOption {
   /** 0 turns expansion off. */
   expansionSeeds: number;
 }
+
+/**
+ * Keys of temporary index images, `tmp/index/{fileId}/{attemptId}/{part}.jpg`: the format of the
+ * shared key builder contracts is adding to packages/shared, which replaces this once it lands.
+ */
+export const evalTempKey: IndexTempKey = ({ fileId, attemptId, part }) =>
+  `tmp/index/${fileId}/${attemptId}/${part}.jpg`;
 
 export const indexKey = (o: IndexOption) =>
   `le${o.longEdge}-${o.qualityFilter.toLowerCase()}-${o.tiling}`;
@@ -140,18 +149,14 @@ export async function evaluate(input: EvaluationInput): Promise<EvaluationResult
       };
       const photoOfFace = new Map<string, string>();
       const options = (fileId: string) => ({
-        ...indexPhotoOptions(config, {
-          collectionId,
-          fileId,
-          tempKeyPrefix: 'tmp/index/',
-          tiling: indexOption.tiling,
-        }),
+        ...indexPhotoOptions(config, { collectionId, fileId, tiling: indexOption.tiling }),
         longEdge: indexOption.longEdge,
         qualityFilter: indexOption.qualityFilter,
       });
       const deps = {
         provider,
         tempStore: input.tempStore,
+        tempKey: evalTempKey,
         smallFaceDetector: input.smallFaceDetector,
       };
       await pool(dataset.photos, input.concurrency, async (photo) => {
@@ -164,7 +169,7 @@ export async function evaluate(input: EvaluationInput): Promise<EvaluationResult
           if (result.tiled) stats.tiledPhotos++;
         } catch (error) {
           stats.failedPhotos++;
-          log(`  ${photo.path}: ${error instanceof Error ? error.name : 'error'}`);
+          log(`  ${photo.path}: ${describeFailure(error)}`);
         }
       });
       const indexCalls = diffCounts(provider.snapshot(), before);
@@ -195,6 +200,21 @@ export async function evaluate(input: EvaluationInput): Promise<EvaluationResult
     }
   }
   return { indexStats, combos, harnessCalls: provider.snapshot(), faceModelVersion };
+}
+
+/**
+ * Error names and counts only: messages could carry file names, and the collection is deleted at
+ * the end of the run anyway (unless --keep-collections), orphaned faces included.
+ */
+function describeFailure(error: unknown): string {
+  if (!(error instanceof IndexPhotoError)) return error instanceof Error ? error.name : 'error';
+  const cause = error.cause instanceof Error ? error.cause.name : 'error';
+  const left = [
+    error.orphanFaceIds.length > 0 ? `${error.orphanFaceIds.length} orphaned faces` : '',
+    error.untrackedFacesPossible ? 'faces of unknown ids may remain' : '',
+    error.cleanupErrors.length > 0 ? `${error.cleanupErrors.length} cleanup errors` : '',
+  ].filter(Boolean);
+  return left.length > 0 ? `${cause} (${left.join(', ')})` : cause;
 }
 
 /** Each selfie's matches at the sweep floor, or null when it has no face. Bytes stay in memory. */

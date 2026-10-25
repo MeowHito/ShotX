@@ -1,5 +1,6 @@
 import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
+import { faceSearchLimits, facesQueueWorstCase } from '../lib/config';
 import { EDGE_REGION, PRIMARY_REGION, QUEUE_NAMES, SCHEDULED_JOB_TYPES } from '../lib/constants';
 import { collect, resourcesOfType, synthPlatform } from './helpers';
 
@@ -27,6 +28,26 @@ function behaviour(pathPattern: string): Json {
   const b = behaviours.find((x) => x.PathPattern === pathPattern);
   if (b === undefined) throw new Error(`no ${pathPattern} behaviour`);
   return b;
+}
+
+function container(service: string): Json {
+  const [td] = Object.values(
+    app.findResources('AWS::ECS::TaskDefinition', {
+      Properties: { Family: `shotx-prod-${service}` },
+    }),
+  );
+  if (td === undefined) throw new Error(`no ${service} task definition`);
+  return ((td.Properties as Json).ContainerDefinitions as Json[])[0] as Json;
+}
+
+type NameValue = { Name: string; Value?: unknown; ValueFrom?: unknown };
+function containerEnv(service: string): Record<string, unknown> {
+  const env = (container(service).Environment ?? []) as NameValue[];
+  return Object.fromEntries(env.map((e) => [e.Name, e.Value]));
+}
+function containerSecrets(service: string): Record<string, unknown> {
+  const secrets = (container(service).Secrets ?? []) as NameValue[];
+  return Object.fromEntries(secrets.map((e) => [e.Name, e.ValueFrom]));
 }
 
 describe('regions', () => {
@@ -219,33 +240,61 @@ describe('CloudFront', () => {
   });
 });
 
-describe('WAF', () => {
-  const mainRules = (() => {
-    const [acl] = Object.values(
-      edge.findResources('AWS::WAFv2::WebACL', { Properties: { Name: 'shotx-prod-main' } }),
-    );
-    return ((acl as Json).Properties as Json).Rules as Json[];
+// WAF rules are evaluated against request variants in waf.test.ts.
+
+describe('/media/* response headers', () => {
+  const media = behaviour('/media/*');
+  const [policyId] = collect(media.ResponseHeadersPolicyId, 'Ref') as string[];
+  const policy = (() => {
+    const resources = app.findResources('AWS::CloudFront::ResponseHeadersPolicy');
+    const r = policyId === undefined ? undefined : resources[policyId];
+    if (r === undefined) throw new Error('/media/* has no custom response headers policy');
+    return (r.Properties as Json).ResponseHeadersPolicyConfig as Json;
   })();
-  const rateRules = mainRules.filter((r) => (r.Statement as Json).RateBasedStatement !== undefined);
-  const scoped = (needle: string) =>
-    rateRules.filter((r) => JSON.stringify(r.Statement).includes(`"SearchString":"${needle}"`));
+  const security = policy.SecurityHeadersConfig as Json;
+  const expected = s.config.cdn.media.responseHeaders;
 
-  it('rate-limits /s/* with a CAPTCHA tier and a block tier', () => {
-    const share = scoped('/s/');
-    expect(share.map((r) => Object.keys(r.Action as Json)[0]).sort()).toEqual(['Block', 'Captcha']);
+  it('sends nosniff, HSTS, a sandboxing CSP and a referrer policy', () => {
+    expect(security.ContentTypeOptions).toEqual({ Override: true });
+    expect(security.StrictTransportSecurity).toMatchObject({
+      AccessControlMaxAgeSec: expected.hstsMaxAgeSeconds,
+      Override: true,
+    });
+    expect(expected.hstsMaxAgeSeconds).toBeGreaterThanOrEqual(31_536_000);
+    const csp = (security.ContentSecurityPolicy as Json).ContentSecurityPolicy as string;
+    expect((security.ContentSecurityPolicy as Json).Override).toBe(true);
+    const directives = csp.split(';').map((d) => d.trim());
+    expect(directives).toContain("default-src 'none'");
+    expect(directives).toContain('sandbox');
+    expect(csp).not.toMatch(/allow-|script-src|unsafe/);
+    expect(security.ReferrerPolicy).toEqual({
+      ReferrerPolicy: expected.referrerPolicy,
+      Override: true,
+    });
   });
 
-  it('rate-limits face search with a CAPTCHA tier and a block tier', () => {
-    const face = scoped('/face-search');
-    expect(face.map((r) => Object.keys(r.Action as Json)[0]).sort()).toEqual(['Block', 'Captcha']);
-    for (const r of face) expect(JSON.stringify(r.Statement)).toContain('"SearchString":"POST"');
+  it('keeps media usable in <img>, PhotoSwipe and attachment downloads', () => {
+    // Nothing that blocks cross-context embedding or rewrites the object's own headers.
+    expect(policy.CustomHeadersConfig).toBeUndefined();
+    expect(policy.RemoveHeadersConfig).toBeUndefined();
+    expect(policy.CorsConfig).toBeUndefined();
+    expect(security.FrameOptions).toBeUndefined();
+    expect(JSON.stringify(policy)).not.toMatch(
+      /Content-Disposition|Content-Type"|Cross-Origin-(Resource|Embedder)-Policy/i,
+    );
+    // response-content-disposition still reaches S3 and is part of the cache key.
+    const cachePolicy = Object.values(
+      app.findResources('AWS::CloudFront::CachePolicy', {
+        Properties: { CachePolicyConfig: { Name: 'shotx-prod-media' } },
+      }),
+    )[0] as Json;
+    expect(JSON.stringify(cachePolicy)).toContain('response-content-disposition');
+    expect(media.AllowedMethods).toEqual(['GET', 'HEAD']);
   });
 
-  it('evaluates each block rule before its CAPTCHA rule', () => {
-    for (const needle of ['/s/', '/face-search']) {
-      const [a, b] = scoped(needle).sort((x, y) => (x.Priority as number) - (y.Priority as number));
-      expect(Object.keys(a?.Action as Json)).toEqual(['Block']);
-      expect(Object.keys(b?.Action as Json)).toEqual(['Captcha']);
+  it('is used by /media/* only; pages keep the managed security headers policy', () => {
+    for (const b of [behaviour('/api/*'), behaviour('/_next/static/*')]) {
+      expect(JSON.stringify(b.ResponseHeadersPolicyId)).not.toContain(policyId);
     }
   });
 });
@@ -283,15 +332,36 @@ describe('SQS', () => {
     for (const dlq of dlqLogicalIds) expect(alarmedQueues.has(dlq), dlq).toBe(true);
   });
 
-  it('gives the faces queue at least 180 s of visibility', () => {
-    app.hasResourceProperties('AWS::SQS::Queue', {
-      QueueName: 'shotx-prod-faces',
-      VisibilityTimeout: Match.anyValue(),
-    });
+  it('sets the faces visibility timeout from context, at or above the worst-case job', () => {
     const [faces] = Object.values(
       app.findResources('AWS::SQS::Queue', { Properties: { QueueName: 'shotx-prod-faces' } }),
     );
-    expect(((faces as Json).Properties as Json).VisibilityTimeout).toBeGreaterThanOrEqual(180);
+    const visibility = ((faces as Json).Properties as Json).VisibilityTimeout as number;
+    expect(visibility).toBe(s.config.queues.faces.visibilityTimeoutSeconds);
+    expect(visibility).toBeGreaterThanOrEqual(facesQueueWorstCase(s.config).floorSeconds);
+    expect(visibility).toBeGreaterThanOrEqual(180);
+    expect(visibility).toBeLessThanOrEqual(43_200);
+  });
+
+  it('lets the worker heartbeat faces jobs with ChangeMessageVisibility', () => {
+    const [facesId] = Object.keys(
+      app.findResources('AWS::SQS::Queue', { Properties: { QueueName: 'shotx-prod-faces' } }),
+    );
+    const statements = Object.entries(app.findResources('AWS::IAM::Policy'))
+      .filter(([id]) => id.includes('workerTask'))
+      .flatMap(
+        ([, p]) => ((p.Properties as Json).PolicyDocument as { Statement: Json[] }).Statement,
+      );
+    const heartbeat = statements.filter(
+      (st) =>
+        ([] as unknown[]).concat(st.Action).includes('sqs:ChangeMessageVisibility') &&
+        JSON.stringify(st.Resource).includes(`"${facesId}"`),
+    );
+    expect(heartbeat).toHaveLength(1);
+    // The worker learns each queue's timeout from its environment.
+    expect(containerEnv('worker').FACES_QUEUE_VISIBILITY_TIMEOUT_SECONDS).toBe(
+      String(s.config.queues.faces.visibilityTimeoutSeconds),
+    );
   });
 
   it('starts the media pipeline only for originals/', () => {
@@ -329,6 +399,84 @@ describe('data stores', () => {
       AutomaticFailoverEnabled: true,
       TransitEncryptionEnabled: true,
       AtRestEncryptionEnabled: true,
+    });
+  });
+
+  describe('Redis authentication (RBAC)', () => {
+    const users: (Json & { id: string })[] = Object.entries(
+      data.findResources('AWS::ElastiCache::User'),
+    ).map(([id, r]) => ({ id, ...(r.Properties as Json) }));
+    const groups = Object.values(data.findResources('AWS::ElastiCache::UserGroup')).map(
+      (r) => r.Properties as Json,
+    );
+    const [replicationGroup] = Object.values(
+      data.findResources('AWS::ElastiCache::ReplicationGroup'),
+    ).map((r) => r.Properties as Json);
+
+    it('attaches exactly one user group to the replication group', () => {
+      expect(groups).toHaveLength(1);
+      expect(replicationGroup?.UserGroupIds).toEqual([groups[0]?.UserGroupId]);
+      expect(replicationGroup?.AuthToken).toBeUndefined();
+      expect(replicationGroup?.TransitEncryptionEnabled).toBe(true);
+    });
+
+    it('disables the default user', () => {
+      const group = groups[0] as Json;
+      const members = users.filter((u) => (group.UserIds as unknown[]).includes(u.UserId));
+      expect(members).toHaveLength((group.UserIds as unknown[]).length);
+      const defaults = members.filter((u) => u.UserName === 'default');
+      expect(defaults).toHaveLength(1);
+      expect(String(defaults[0]?.AccessString)).toMatch(/^off\b/);
+      expect(String(defaults[0]?.AccessString)).toContain('-@all');
+    });
+
+    it('gives api and worker one password user whose password lives in Secrets Manager', () => {
+      const app = users.filter((u) => u.UserName === s.config.redis.username);
+      expect(app).toHaveLength(1);
+      expect(String(app[0]?.AccessString)).toMatch(/^on\b/);
+      expect((groups[0]?.UserIds as unknown[]).includes(app[0]?.UserId)).toBe(true);
+      for (const u of users) {
+        expect(u.NoPasswordRequired, u.id).not.toBe(true);
+        expect(u.Passwords, u.id).toBeUndefined();
+        const mode = u.AuthenticationMode as { Type: string; Passwords: unknown[] };
+        expect(mode.Type, u.id).toBe('password');
+        expect(mode.Passwords, u.id).toHaveLength(1);
+        // Only a dynamic reference, never a literal password.
+        expect(JSON.stringify(mode.Passwords), u.id).toMatch(
+          /^\[\{"Fn::Join":\["",\["\{\{resolve:secretsmanager:",\{"Ref":"[^"]+"\},":SecretString:password::\}\}"\]\]\}\]$/,
+        );
+      }
+    });
+
+    it('passes the credentials to api and worker as ECS secrets, not in REDIS_URL', () => {
+      for (const service of ['api', 'worker']) {
+        const secrets = containerSecrets(service);
+        for (const [name, key] of [
+          ['REDIS_USERNAME', 'username'],
+          ['REDIS_PASSWORD', 'password'],
+        ] as const) {
+          const valueFrom = JSON.stringify(secrets[name]);
+          expect(valueFrom, `${service} ${name}`).toContain(`:${key}::`);
+          expect(valueFrom, `${service} ${name}`).toContain(
+            `"StackName":"${platform.data.stackName}"`,
+          );
+          expect(valueFrom, `${service} ${name}`).toMatch(/RedisAppUserSecret/);
+        }
+        const url = JSON.stringify(containerEnv(service).REDIS_URL);
+        expect(url).toContain('rediss://');
+        expect(url).not.toContain('@');
+        expect(containerEnv(service).REDIS_PASSWORD).toBeUndefined();
+      }
+      for (const service of ['web', 'admin']) {
+        const names = [
+          ...Object.keys(containerSecrets(service)),
+          ...Object.keys(containerEnv(service)),
+        ];
+        expect(
+          names.filter((n) => n.startsWith('REDIS_')),
+          service,
+        ).toEqual([]);
+      }
     });
   });
 
@@ -370,6 +518,12 @@ describe('ECS', () => {
     }
   });
 
+  it('gives the api the face-search byte limits that the WAF enforces', () => {
+    const limits = faceSearchLimits(s.config);
+    expect(containerEnv('api').FACE_SEARCH_MAX_BODY_BYTES).toBe(String(limits.maxBodyBytes));
+    expect(containerEnv('api').FACE_SEARCH_MAX_SELFIE_BYTES).toBe(String(limits.selfieMaxBytes));
+  });
+
   it('keeps the ALB internal and reachable only from the CloudFront origin-facing prefix list', () => {
     app.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', { Scheme: 'internal' });
     const [albSgId] = Object.keys(
@@ -405,6 +559,13 @@ describe('IAM for Rekognition', () => {
   it('lets the worker call IndexFaces only on pg-* collections', () => {
     const [st] = has(workerStatements, 'rekognition:IndexFaces');
     expect(JSON.stringify(st?.Resource)).toMatch(/:collection\/pg-\*/);
+  });
+
+  it('lets the worker list faces (reconciliation) only on pg-* collections', () => {
+    const listing = has(workerStatements, 'rekognition:ListFaces');
+    expect(listing).toHaveLength(1);
+    expect(JSON.stringify(listing[0]?.Resource)).toMatch(/:collection\/pg-\*"/);
+    expect(JSON.stringify(listing[0]?.Resource)).not.toMatch(/collection\/\*"/);
   });
 
   it('lets the IndexFaces caller (worker) read tmp/index/*', () => {

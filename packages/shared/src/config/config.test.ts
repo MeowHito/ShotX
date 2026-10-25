@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { loadCostConfig } from './cost';
-import { loadFaceConfig } from './face';
+import { loadFaceConfig, TILING_MODES } from './face';
 
 describe('loadFaceConfig', () => {
   it('uses the spec defaults', () => {
@@ -98,6 +98,41 @@ describe('loadFaceConfig', () => {
     expectTypeOf(rekognition).not.toHaveProperty('tps');
   });
 
+  it('defaults FACE_INDEX_TILING to signal and accepts every tiling mode', () => {
+    expect(loadFaceConfig({}).index.tiling).toBe('signal');
+    for (const mode of TILING_MODES) {
+      expect(loadFaceConfig({ FACE_INDEX_TILING: mode }).index.tiling).toBe(mode);
+    }
+    expect(TILING_MODES).toEqual(['never', 'signal', 'always']);
+    expect(() => loadFaceConfig({ FACE_INDEX_TILING: 'sometimes' })).toThrow(
+      /at FACE_INDEX_TILING\b/,
+    );
+  });
+
+  it('defaults the face-search request limits to 10 per IP per 10 minutes', () => {
+    expect(loadFaceConfig({}).searchRateLimits).toEqual({
+      perIp: { limit: 10, windowSeconds: 600 },
+      perShare: { limit: 1200, windowSeconds: 600 },
+      perViewer: { limit: 10, windowSeconds: 600 },
+    });
+  });
+
+  it('reads the face-search request limits from the environment', () => {
+    const { searchRateLimits } = loadFaceConfig({
+      FACE_SEARCH_RATE_PER_IP: '30',
+      FACE_SEARCH_RATE_PER_IP_WINDOW_SECONDS: '300',
+      FACE_SEARCH_RATE_PER_SHARE: '5000',
+      FACE_SEARCH_RATE_PER_SHARE_WINDOW_SECONDS: '60',
+      FACE_SEARCH_RATE_PER_VIEWER: '3',
+      FACE_SEARCH_RATE_PER_VIEWER_WINDOW_SECONDS: '3600',
+    });
+    expect(searchRateLimits).toEqual({
+      perIp: { limit: 30, windowSeconds: 300 },
+      perShare: { limit: 5000, windowSeconds: 60 },
+      perViewer: { limit: 3, windowSeconds: 3600 },
+    });
+  });
+
   it('treats empty variables as unset', () => {
     expect(loadFaceConfig({ FACE_STRONG: '' }).thresholds.strong).toBe(95);
     expect(
@@ -160,6 +195,11 @@ describe('loadFaceConfig', () => {
     ['FACE_REKOGNITION_RATE_LIMIT_PREFIX', 'shotx rekognition'],
     ['FACE_REKOGNITION_RATE_LIMIT_PREFIX', 'shotx/{rekognition}'],
     ['FACE_REKOGNITION_RATE_LIMIT_PREFIX', 'x'.repeat(65)],
+    ['FACE_SEARCH_RATE_PER_IP', '0'],
+    ['FACE_SEARCH_RATE_PER_IP', '2.5'],
+    ['FACE_SEARCH_RATE_PER_SHARE', '-1'],
+    ['FACE_SEARCH_RATE_PER_VIEWER_WINDOW_SECONDS', '0'],
+    ['FACE_SEARCH_RATE_PER_IP_WINDOW_SECONDS', '86401'],
   ])('rejects %s=%s', (key, value) => {
     expect(() => loadFaceConfig({ [key]: value })).toThrow(new RegExp(`at ${key}\\b`));
   });

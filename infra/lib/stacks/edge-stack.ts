@@ -5,16 +5,23 @@ import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { ArnFormat } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import type { PlatformConfig } from '../config';
+import { faceSearchLimits, type PlatformConfig } from '../config';
+import { FACE_SEARCH_CONTENT_TYPE, HTTP_HEADERS } from '../constants';
 import {
   allOf,
   anyOf,
+  blockRule,
   blockUnlessIpInSet,
+  customResponseBodies,
+  headerIntegerGreaterThan,
+  headerStartsWith,
   managedRuleGroup,
   methodIs,
-  rateLimitedResponseBodies,
+  not,
+  payloadTooLargeRule,
   rateRule,
-  uriEndsWith,
+  tokenPathRegex,
+  uriMatches,
   uriStartsWith,
   wafVisibility,
 } from '../constructs/waf-rules';
@@ -30,6 +37,17 @@ export interface EdgeStackProps extends StackProps {
  *
  * The main and admin distributions get separate web ACLs: a web ACL attached to a distribution
  * on a flat-rate plan can't be shared with another distribution.
+ *
+ * Path matching URL-decodes and lowercases the path first, because the API routes
+ * case-insensitively and decodes percent-escapes: `/api/s/<t>/FACE-SEARCH/` and
+ * `/api/s/<t>/face%2Dsearch` must hit the same limits as `/api/s/<t>/face-search`.
+ *
+ * Face-search uploads (multipart POSTs of up to FACE_MAX_SELFIES JPEG selfies) skip the managed
+ * rule groups, whose body rules (XSS, LFI, RFI, SSRF, size, Java/Log4j payloads) would read
+ * JPEG bytes as text and block real scans. They get a Content-Length limit sized from the face
+ * configuration instead. WAF only ever sees the first `waf.bodyInspectionLimit` of a body (16 KB
+ * by default, 64 KB at most), less than one selfie, so body inspection can't protect that route
+ * anyway; the API enforces the same byte limits while it reads the upload.
  */
 export class EdgeStack extends Stack {
   readonly mainCertificate: acm.ICertificate;
@@ -66,12 +84,23 @@ export class EdgeStack extends Stack {
 
     const prefix = `shotx-${config.stage}`;
     const window = waf.evaluationWindowSeconds;
-    const faceSearch = allOf([
+    const faceSearchPath = uriMatches(
+      tokenPathRegex(waf.faceSearchPathPrefix, waf.faceSearchPathSuffix),
+    );
+    const faceSearch = allOf([methodIs('POST'), faceSearchPath]);
+    const faceSearchUpload = allOf([
       methodIs('POST'),
-      uriStartsWith(waf.faceSearchPathPrefix),
-      uriEndsWith(waf.faceSearchPathSuffix),
+      faceSearchPath,
+      headerStartsWith(HTTP_HEADERS.contentType, FACE_SEARCH_CONTENT_TYPE),
     ]);
     const sharePaths = anyOf(waf.sharePathPrefixes.map(uriStartsWith));
+    const { maxBodyBytes } = faceSearchLimits(config);
+    // Managed groups with body rules see every request except face-search uploads.
+    const managed = (name: string, priority: number, countOverrides: string[] = []) =>
+      managedRuleGroup(name, priority, { countOverrides, scopeDown: not(faceSearchUpload) });
+    const associationConfig = {
+      requestBody: { CLOUDFRONT: { defaultSizeInspectionLimit: waf.bodyInspectionLimit } },
+    };
 
     const mainAcl = new wafv2.CfnWebACL(this, 'MainWebAcl', {
       name: `${prefix}-main`,
@@ -80,7 +109,8 @@ export class EdgeStack extends Stack {
       defaultAction: { allow: {} },
       visibilityConfig: wafVisibility(`${prefix}-main`),
       captchaConfig: { immunityTimeProperty: { immunityTime: waf.captchaImmunitySeconds } },
-      customResponseBodies: rateLimitedResponseBodies,
+      customResponseBodies,
+      associationConfig,
       rules: [
         managedRuleGroup('AWSManagedRulesAmazonIpReputationList', 0),
         rateRule({
@@ -106,6 +136,16 @@ export class EdgeStack extends Stack {
           action: 'captcha',
           scopeDown: faceSearch,
         }),
+        // After the face-search rate rules, so oversized posts still count towards them.
+        payloadTooLargeRule(
+          'face-search-body-too-large',
+          25,
+          allOf([
+            methodIs('POST'),
+            faceSearchPath,
+            headerIntegerGreaterThan(HTTP_HEADERS.contentLength, maxBodyBytes),
+          ]),
+        ),
         rateRule({
           name: 'share-rate-block',
           priority: 30,
@@ -122,8 +162,8 @@ export class EdgeStack extends Stack {
           action: 'captcha',
           scopeDown: sharePaths,
         }),
-        managedRuleGroup('AWSManagedRulesCommonRuleSet', 40, waf.commonRuleSetCountOverrides),
-        managedRuleGroup('AWSManagedRulesKnownBadInputsRuleSet', 50),
+        managed('AWSManagedRulesCommonRuleSet', 40, waf.commonRuleSetCountOverrides),
+        managed('AWSManagedRulesKnownBadInputsRuleSet', 50),
       ],
     });
 
@@ -136,7 +176,12 @@ export class EdgeStack extends Stack {
         evaluationWindowSec: window,
         action: 'block',
       }),
-      managedRuleGroup('AWSManagedRulesCommonRuleSet', 40, waf.commonRuleSetCountOverrides),
+      // The admin distribution forwards /api/* to the same API. Share pages and face search are
+      // served on the main domain only, where their rate limits and CAPTCHA apply.
+      blockRule('public-share-paths-block', 20, sharePaths),
+      managedRuleGroup('AWSManagedRulesCommonRuleSet', 40, {
+        countOverrides: waf.commonRuleSetCountOverrides,
+      }),
       managedRuleGroup('AWSManagedRulesKnownBadInputsRuleSet', 50),
     ];
     if (waf.adminAllowedIpv4Cidrs.length > 0) {
@@ -154,7 +199,8 @@ export class EdgeStack extends Stack {
       scope: 'CLOUDFRONT',
       defaultAction: { allow: {} },
       visibilityConfig: wafVisibility(`${prefix}-admin`),
-      customResponseBodies: rateLimitedResponseBodies,
+      customResponseBodies,
+      associationConfig,
       rules: adminRules.sort((a, b) => a.priority - b.priority),
     });
 

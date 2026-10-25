@@ -16,16 +16,56 @@ function fakeClock(): Clock & { time: number; sleeps: number[] } {
 }
 
 describe('TokenBucket', () => {
-  it('allows a burst, then one call per 1/rate seconds', async () => {
+  it('lets the burst through, then spreads the rest of the second', async () => {
     const clock = fakeClock();
-    const bucket = new TokenBucket(5, 2, clock);
+    const bucket = new TokenBucket(
+      { ratePerSecond: 5, burstSeconds: 0.4, maxWaitMs: Number.POSITIVE_INFINITY },
+      clock,
+    );
     await bucket.acquire();
     await bucket.acquire();
     expect(clock.time).toBe(0);
+    // Two calls per 400 ms, and five per second.
     await bucket.acquire();
-    expect(clock.time).toBe(200);
-    await Promise.all([bucket.acquire(), bucket.acquire()]);
-    expect(clock.time).toBe(600);
+    expect(clock.time).toBe(400);
+    await bucket.acquire();
+    await bucket.acquire();
+    expect(clock.time).toBe(800);
+    await bucket.acquire();
+    expect(clock.time).toBe(1000);
+    expect(clock.sleeps).toEqual([400, 400, 200]);
+  });
+
+  it('serves concurrent callers in call order, each in its own slot', async () => {
+    // Time stands still: every caller arrives at once.
+    const sleeps: number[] = [];
+    const clock: Clock = {
+      now: () => 0,
+      sleep: (ms) => {
+        sleeps.push(ms);
+        return Promise.resolve();
+      },
+    };
+    const bucket = new TokenBucket({ ratePerSecond: 2, burstSeconds: 1, maxWaitMs: 5000 }, clock);
+    const slots = Array.from({ length: 5 }, () => bucket.reserve().slotUs);
+    expect(slots).toEqual([0, 0, 1_000_000, 1_000_000, 2_000_000]);
+    // acquire() reserves before its first await, so concurrent callers keep their call order.
+    await Promise.all([bucket.acquire(), bucket.acquire(), bucket.acquire()]);
+    expect(sleeps).toEqual([2000, 3000, 3000]);
+  });
+
+  it('rejects with RateLimitedError naming the limiter when the wait is too long', async () => {
+    const bucket = new TokenBucket(
+      { ratePerSecond: 1, burstSeconds: 1, maxWaitMs: 0 },
+      fakeClock(),
+      'IndexFaces',
+    );
+    await bucket.acquire();
+    await expect(bucket.acquire()).rejects.toMatchObject({
+      name: 'RateLimitedError',
+      limiter: 'IndexFaces',
+      waitMs: 1000,
+    });
   });
 });
 

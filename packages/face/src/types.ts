@@ -46,3 +46,10 @@ export interface FaceMatch {
   /** The id the face was indexed with, which is always the file id. */
   externalImageId?: string | undefined;
 }
+
+/** A face in a collection, as ListFaces returns it. */
+export interface ListedFace {
+  faceId: string;
+  /** The id the face was indexed with, which is always the file id. */
+  externalImageId?: string | undefined;
+}

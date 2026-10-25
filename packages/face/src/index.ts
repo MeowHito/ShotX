@@ -1,6 +1,7 @@
 export * from './types';
 export * from './provider';
 export * from './collection';
+export * from './bucket';
 export * from './throttling';
 export * from './redis-token-bucket';
 export * from './rekognition-limits';
@@ -9,4 +10,5 @@ export * from './temp-store';
 export * from './image';
 export * from './geometry';
 export * from './index-photo';
+export * from './reconcile';
 export * from './search';

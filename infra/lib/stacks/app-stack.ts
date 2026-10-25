@@ -78,7 +78,12 @@ export class AppStack extends Stack {
         secret: data.databaseSecret,
         securityGroup: data.databaseSecurityGroup,
       },
-      redis: { host: data.redisHost, port: data.redisPort, securityGroup: data.redisSecurityGroup },
+      redis: {
+        host: data.redisHost,
+        port: data.redisPort,
+        secret: data.redisSecret,
+        securityGroup: data.redisSecurityGroup,
+      },
       cognito: {
         userPoolId: auth.userPool.userPoolId,
         webClientId: auth.webClient.userPoolClientId,

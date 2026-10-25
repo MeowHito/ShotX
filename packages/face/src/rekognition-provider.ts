@@ -7,6 +7,8 @@ import {
   type FaceMatch as AwsFaceMatch,
   type Image,
   IndexFacesCommand,
+  type IndexFacesCommandOutput,
+  ListFacesCommand,
   RekognitionClient,
   SearchFacesByImageCommand,
   SearchFacesCommand,
@@ -14,7 +16,10 @@ import {
 import type { FaceConfig } from '@shotx/shared';
 import {
   type FaceProvider,
+  IndexFacesOutcomeUnknownError,
   type IndexFacesRequest,
+  type ListFacesPage,
+  type ListFacesRequest,
   NoFaceDetectedError,
   REKOGNITION_DELETE_FACES_BATCH,
   type SearchByFaceRequest,
@@ -25,31 +30,55 @@ import type {
   RekognitionOperation,
   RekognitionProfile,
 } from './rekognition-limits';
-import { type RetryOptions, withRetry } from './throttling';
+import { RateLimitedError, type RetryOptions, withRetry } from './throttling';
 import type { BoundingBox, FaceMatch, ImageInput, IndexFacesResult } from './types';
 
+/** Rekognition rejected the call for exceeding a rate: nothing was done, so a retry is safe. */
+const THROTTLING_NAMES = new Set(['ThrottlingException', 'ProvisionedThroughputExceededException']);
 const RETRYABLE_NAMES = new Set([
-  'ThrottlingException',
-  'ProvisionedThroughputExceededException',
+  ...THROTTLING_NAMES,
   'InternalServerError',
   'ServiceUnavailableException',
   'TimeoutError',
 ]);
 const RETRYABLE_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'EAI_AGAIN']);
 
+type AwsErrorFields = Error & {
+  $retryable?: { throttling?: boolean } | undefined;
+  $metadata?: { httpStatusCode?: number } | undefined;
+  code?: string | undefined;
+};
+
+/**
+ * Worth retrying, but the first attempt may have taken effect. Only for calls that are safe to
+ * repeat: everything except IndexFaces.
+ */
 export function isRetryableAwsError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  const e = error as Error & {
-    $retryable?: unknown;
-    $metadata?: { httpStatusCode?: number };
-    code?: string;
-  };
+  const e = error as AwsErrorFields;
   return (
     Boolean(e.$retryable) ||
     RETRYABLE_NAMES.has(e.name) ||
     (e.$metadata?.httpStatusCode ?? 0) >= 500 ||
     (e.code !== undefined && RETRYABLE_CODES.has(e.code))
   );
+}
+
+/** Rekognition throttled the call, which means it rejected it: retrying never repeats work. */
+export function isThrottlingError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const e = error as AwsErrorFields;
+  return THROTTLING_NAMES.has(e.name) || e.$retryable?.throttling === true;
+}
+
+/**
+ * The call certainly did nothing: the rate limiter refused it before sending, or Rekognition
+ * answered with a 4xx (throttling, validation, access, missing collection).
+ */
+function wasRejected(error: unknown): boolean {
+  if (error instanceof RateLimitedError || isThrottlingError(error)) return true;
+  const status = (error as AwsErrorFields | undefined)?.$metadata?.httpStatusCode;
+  return status !== undefined && status >= 400 && status < 500;
 }
 
 /**
@@ -133,18 +162,32 @@ export class RekognitionFaceProvider implements FaceProvider {
     }
   }
 
+  /**
+   * IndexFaces is not idempotent, so only throttling is retried: a throttled request was
+   * rejected. After a 5xx, a timeout or a dropped connection the faces may already be indexed, and
+   * a retry would index them twice, so the call fails with IndexFacesOutcomeUnknownError instead.
+   */
   async indexFaces(request: IndexFacesRequest): Promise<IndexFacesResult> {
-    const out = await this.call('IndexFaces', () =>
-      this.options.client.send(
-        new IndexFacesCommand({
-          CollectionId: request.collectionId,
-          Image: toImage(request.image),
-          ExternalImageId: request.externalImageId,
-          MaxFaces: request.maxFaces,
-          QualityFilter: request.qualityFilter,
-        }),
-      ),
-    );
+    let out: IndexFacesCommandOutput;
+    try {
+      out = await this.call(
+        'IndexFaces',
+        () =>
+          this.options.client.send(
+            new IndexFacesCommand({
+              CollectionId: request.collectionId,
+              Image: toImage(request.image),
+              ExternalImageId: request.externalImageId,
+              MaxFaces: request.maxFaces,
+              QualityFilter: request.qualityFilter,
+            }),
+          ),
+        isThrottlingError,
+      );
+    } catch (error) {
+      if (wasRejected(error)) throw error;
+      throw new IndexFacesOutcomeUnknownError(error);
+    }
     return {
       faces: (out.FaceRecords ?? []).flatMap(({ Face: face }) =>
         face?.FaceId
@@ -209,15 +252,37 @@ export class RekognitionFaceProvider implements FaceProvider {
     }
   }
 
+  async listFaces(request: ListFacesRequest): Promise<ListFacesPage> {
+    const out = await this.call('ListFaces', () =>
+      this.options.client.send(
+        new ListFacesCommand({
+          CollectionId: request.collectionId,
+          MaxResults: request.maxResults,
+          NextToken: request.nextToken,
+        }),
+      ),
+    );
+    return {
+      faces: (out.Faces ?? []).flatMap((face) =>
+        face.FaceId ? [{ faceId: face.FaceId, externalImageId: face.ExternalImageId }] : [],
+      ),
+      nextToken: out.NextToken || undefined,
+    };
+  }
+
   /** Each attempt, retries included, is a real call and takes its own token. */
-  private call<T>(operation: RekognitionOperation, send: () => Promise<T>): Promise<T> {
+  private call<T>(
+    operation: RekognitionOperation,
+    send: () => Promise<T>,
+    isRetryable: (error: unknown) => boolean = isRetryableAwsError,
+  ): Promise<T> {
     const limiter = this.options.limiters[operation];
     return withRetry(
       async () => {
         await limiter.acquire();
         return send();
       },
-      isRetryableAwsError,
+      isRetryable,
       this.options.retry,
     );
   }

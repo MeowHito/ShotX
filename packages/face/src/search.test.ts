@@ -133,6 +133,7 @@ describe('searchBySelfies', () => {
       deleteCollection: vi.fn(),
       indexFaces: vi.fn(),
       deleteFaces: vi.fn(),
+      listFaces: vi.fn(),
       searchFacesByImage,
       searchFaces,
     };

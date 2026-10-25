@@ -3,6 +3,8 @@ import {
   type FaceProvider,
   type IndexFacesRequest,
   type IndexFacesResult,
+  type ListFacesPage,
+  type ListFacesRequest,
   REKOGNITION_DELETE_FACES_BATCH,
   type SearchByFaceRequest,
   type SearchByImageRequest,
@@ -15,6 +17,7 @@ export interface CallCounts {
   searchFacesByImage: number;
   searchFaces: number;
   deleteFaces: number;
+  listFaces: number;
 }
 
 export const emptyCounts = (): CallCounts => ({
@@ -24,6 +27,7 @@ export const emptyCounts = (): CallCounts => ({
   searchFacesByImage: 0,
   searchFaces: 0,
   deleteFaces: 0,
+  listFaces: 0,
 });
 
 export function totalCalls(counts: CallCounts): number {
@@ -64,6 +68,11 @@ export class CountingFaceProvider implements FaceProvider {
   deleteFaces(collectionId: string, faceIds: readonly string[]): Promise<void> {
     this.counts.deleteFaces += Math.ceil(faceIds.length / REKOGNITION_DELETE_FACES_BATCH);
     return this.inner.deleteFaces(collectionId, faceIds);
+  }
+
+  listFaces(request: ListFacesRequest): Promise<ListFacesPage> {
+    this.counts.listFaces++;
+    return this.inner.listFaces(request);
   }
 
   snapshot(): CallCounts {

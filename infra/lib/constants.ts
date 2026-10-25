@@ -61,14 +61,28 @@ export type AlbServiceName = (typeof ALB_SERVICES)[number];
 export const SERVICE_NAMES = [...ALB_SERVICES, 'worker'] as const;
 export type ServiceName = (typeof SERVICE_NAMES)[number];
 
-/**
- * Defaults from packages/shared/src/config/face.ts, used only to check that the faces queue
- * visibility timeout covers the worst-case rate-limit wait when cdk.json doesn't override them.
- */
-export const FACE_DEFAULTS_FOR_VISIBILITY_CHECK = {
-  FACE_TILE_GRID: 2,
-  FACE_REKOGNITION_MAX_WAIT_MS: 30_000,
-} as const;
-
 /** Hard floor for the faces queue visibility timeout agreed with face-poc. */
 export const FACES_MIN_VISIBILITY_TIMEOUT_SECONDS = 180;
+
+/** SQS caps a message's visibility timeout (and any ChangeMessageVisibility) at 12 hours. */
+export const SQS_MAX_VISIBILITY_TIMEOUT_SECONDS = 43_200;
+
+/**
+ * Amazon Rekognition API limits (AWS facts, not tunables). packages/face/src/provider.ts has the
+ * same values; infra doesn't import @shotx/face because that pulls in sharp and the AWS SDK.
+ */
+export const REKOGNITION_LIMITS = {
+  /** Largest image passed inline as bytes (SearchFacesByImage with a selfie). */
+  inlineImageMaxBytes: 5 * 1024 * 1024,
+  /** Most face ids one DeleteFaces call accepts. */
+  deleteFacesBatch: 4096,
+} as const;
+
+/** Header names the WAF inspects on face-search uploads. */
+export const HTTP_HEADERS = {
+  contentType: 'content-type',
+  contentLength: 'content-length',
+} as const;
+
+/** Face search posts selfies as multipart form data (never JSON or base64). */
+export const FACE_SEARCH_CONTENT_TYPE = 'multipart/form-data';

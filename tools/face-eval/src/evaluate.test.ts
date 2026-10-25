@@ -17,7 +17,13 @@ import {
 import { loadFaceConfig } from '@shotx/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type Dataset, loadDataset, readSelfies } from './dataset';
-import { evaluate, type EvaluationResult, indexKey, type IndexOption } from './evaluate';
+import {
+  evalTempKey,
+  evaluate,
+  type EvaluationResult,
+  indexKey,
+  type IndexOption,
+} from './evaluate';
 import { synthesize } from './synth';
 
 const config = loadFaceConfig({});
@@ -30,6 +36,7 @@ const searchOptions = [
 let dir: string;
 let dataset: Dataset;
 let fake: FakeFaceProvider;
+let tempStore: MemoryTempImageStore;
 let result: EvaluationResult;
 
 beforeAll(async () => {
@@ -46,7 +53,7 @@ beforeAll(async () => {
   });
   dataset = await loadDataset(join(dir, 'synthetic'));
   const world = new SyntheticWorld(dataset.synthetic!.world);
-  const tempStore = new MemoryTempImageStore();
+  tempStore = new MemoryTempImageStore();
   fake = new FakeFaceProvider(world, tempStore);
   result = await evaluate({
     dataset,
@@ -79,6 +86,18 @@ describe('evaluate', () => {
     for (const combo of result.combos) expect(combo.scans).toHaveLength(5);
     // The comparison below only means something if expansion actually ran.
     expect(result.combos[0]!.scans.some((scan) => scan.seedSimilarities.length > 0)).toBe(true);
+  });
+
+  it('gives every attempt and part its own temporary image and deletes them all', () => {
+    expect(evalTempKey({ fileId: 'p01', attemptId: 'a1', part: 't2' })).toBe(
+      'tmp/index/p01/a1/t2.jpg',
+    );
+    expect(tempStore.putKeys).toHaveLength(8 * 5);
+    expect(new Set(tempStore.putKeys).size).toBe(tempStore.putKeys.length);
+    for (const key of tempStore.putKeys) {
+      expect(key).toMatch(/^tmp\/index\/p\d+\/[0-9a-f-]{36}\/(full|t[0-3])\.jpg$/);
+    }
+    expect(tempStore.keys()).toEqual([]);
   });
 
   // The harness searches once at the sweep floor and applies thresholds offline. That must give

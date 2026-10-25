@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
+import { type BucketOptions, type BucketParams, bucketParams, type Reservation } from './bucket';
 import { type Clock, RateLimitedError, type RateLimiter, systemClock } from './throttling';
+
+const US_PER_MS = 1000;
 
 /**
  * The two Redis commands the bucket needs. ioredis's `Redis` and `Cluster` satisfy it; inject one
@@ -11,72 +14,48 @@ export interface RedisScriptClient {
 }
 
 /**
- * GCRA token bucket with reservations, run atomically inside Redis.
+ * `nextSlotUs` from `./bucket`, run atomically inside Redis with Redis server time.
  *
- * KEYS[1] holds the bucket's theoretical arrival time (TAT) in microseconds of Redis server time.
- * ARGV: emission interval, burst tolerance and maximum wait, all in whole microseconds.
+ * KEYS[1] is a list of the latest grants (microseconds of Redis time, newest first, at most
+ * `limit` entries). ARGV: limit, window µs, burst, burst window µs, maximum wait µs.
  *
- * A caller gets the earliest free slot and sleeps until then, so waiters never poll Redis. When the
- * slot is more than the maximum wait away, nothing is reserved. Returns {granted (1|0), wait µs}.
- * The key expires once the bucket is full again, because a missing key means a full bucket.
+ * A caller gets the earliest slot that keeps every window within its limit and sleeps until then,
+ * so waiters never poll Redis. When the slot is more than the maximum wait away, nothing is
+ * reserved. Returns {granted (1|0), wait µs, slot µs}. The key expires once its newest grant has
+ * left the window, because a missing key means an idle bucket.
  */
 export const TOKEN_BUCKET_SCRIPT = `
 if redis.replicate_commands then redis.replicate_commands() end
-local interval = tonumber(ARGV[1])
-local tolerance = tonumber(ARGV[2])
-local max_wait = tonumber(ARGV[3])
+local limit = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local burst = tonumber(ARGV[3])
+local burst_window = tonumber(ARGV[4])
+local max_wait = tonumber(ARGV[5])
 local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000000 + tonumber(time[2])
-local tat = tonumber(redis.call('GET', KEYS[1])) or now
-if tat < now then tat = now end
-local wait = tat - tolerance - now
-if wait < 0 then wait = 0 end
-if wait > max_wait then return {0, wait} end
-local next_tat = tat + interval
-local ttl = math.ceil((next_tat - now) / 1000)
-redis.call('SET', KEYS[1], string.format('%d', next_tat), 'PX', string.format('%d', ttl))
-return {1, wait}
+local slot = now
+local newest = redis.call('LINDEX', KEYS[1], 0)
+if newest then slot = math.max(slot, tonumber(newest)) end
+local oldest = redis.call('LINDEX', KEYS[1], limit - 1)
+if oldest then slot = math.max(slot, tonumber(oldest) + window) end
+if burst < limit then
+  local oldest_burst = redis.call('LINDEX', KEYS[1], burst - 1)
+  if oldest_burst then slot = math.max(slot, tonumber(oldest_burst) + burst_window) end
+end
+local wait = slot - now
+if wait > max_wait then return {0, wait, slot} end
+redis.call('LPUSH', KEYS[1], string.format('%d', slot))
+redis.call('LTRIM', KEYS[1], 0, limit - 1)
+redis.call('PEXPIRE', KEYS[1], string.format('%d', math.ceil((slot + window - now) / 1000)))
+return {1, wait, slot}
 `;
 
 const SCRIPT_SHA = createHash('sha1').update(TOKEN_BUCKET_SCRIPT).digest('hex');
 
-export interface BucketOptions {
-  ratePerSecond: number;
-  /** The bucket holds max(1, floor(rate × burstSeconds)) tokens. */
-  burstSeconds: number;
-  /** Longest one call may wait for a slot before RateLimitedError. */
-  maxWaitMs: number;
-}
-
-/** Bucket parameters in whole microseconds, so the script's arithmetic stays exact. */
-export interface BucketParams {
-  capacity: number;
-  intervalUs: number;
-  toleranceUs: number;
-  maxWaitUs: number;
-}
-
-export function bucketParams(options: BucketOptions): BucketParams {
-  const { ratePerSecond, burstSeconds, maxWaitMs } = options;
-  if (!(ratePerSecond > 0) || !(burstSeconds > 0) || !(maxWaitMs >= 0)) {
-    throw new RangeError(
-      `Invalid token bucket: rate ${ratePerSecond}/s, burst ${burstSeconds} s, wait ${maxWaitMs} ms`,
-    );
-  }
-  const capacity = Math.max(1, Math.floor(ratePerSecond * burstSeconds));
-  // Rounding the interval up keeps the real rate at or below the configured one.
-  const intervalUs = Math.ceil(1_000_000 / ratePerSecond);
-  return {
-    capacity,
-    intervalUs,
-    toleranceUs: (capacity - 1) * intervalUs,
-    maxWaitUs: Math.floor(maxWaitMs * 1000),
-  };
-}
-
 /**
- * Token bucket shared by every process that uses the same Redis key. Redis errors propagate: the
- * limiter fails closed instead of letting calls through unmetered.
+ * Rate limiter shared by every process that uses the same Redis key (see `./bucket` for the
+ * guarantee). Redis errors propagate: the limiter fails closed instead of letting calls through
+ * unmetered.
  */
 export class RedisTokenBucket implements RateLimiter {
   readonly params: BucketParams;
@@ -88,18 +67,29 @@ export class RedisTokenBucket implements RateLimiter {
     private readonly clock: Clock = systemClock,
   ) {
     this.params = bucketParams(options);
+    if (!Number.isFinite(this.params.maxWaitUs)) {
+      throw new RangeError(`Token bucket ${key} needs a finite maximum wait`);
+    }
+  }
+
+  /**
+   * Reserves the next slot in Redis, or throws RateLimitedError (reserving nothing) when it is
+   * more than `maxWaitMs` away.
+   */
+  async reserve(): Promise<Reservation> {
+    const { granted, waitUs, slotUs } = parseReply(await this.run());
+    if (!granted) throw new RateLimitedError(this.key, Math.ceil(waitUs / US_PER_MS));
+    return { slotUs, waitUs };
   }
 
   async acquire(): Promise<void> {
-    const { granted, waitUs } = parseReply(await this.reserve());
-    const waitMs = Math.ceil(waitUs / 1000);
-    if (!granted) throw new RateLimitedError(this.key, waitMs);
+    const waitMs = Math.ceil((await this.reserve()).waitUs / US_PER_MS);
     if (waitMs > 0) await this.clock.sleep(waitMs);
   }
 
-  private async reserve(): Promise<unknown> {
-    const { intervalUs, toleranceUs, maxWaitUs } = this.params;
-    const args = [this.key, intervalUs, toleranceUs, maxWaitUs] as const;
+  private async run(): Promise<unknown> {
+    const { limit, windowUs, burst, burstWindowUs, maxWaitUs } = this.params;
+    const args = [this.key, limit, windowUs, burst, burstWindowUs, maxWaitUs] as const;
     try {
       return await this.redis.evalsha(SCRIPT_SHA, 1, ...args);
     } catch (error) {
@@ -110,11 +100,17 @@ export class RedisTokenBucket implements RateLimiter {
   }
 }
 
-function parseReply(reply: unknown): { granted: boolean; waitUs: number } {
-  if (Array.isArray(reply) && reply.length === 2) {
-    const [granted, waitUs] = reply.map(Number) as [number, number];
-    if ((granted === 0 || granted === 1) && Number.isFinite(waitUs) && waitUs >= 0) {
-      return { granted: granted === 1, waitUs };
+function parseReply(reply: unknown): { granted: boolean; waitUs: number; slotUs: number } {
+  if (Array.isArray(reply) && reply.length === 3) {
+    const [granted, waitUs, slotUs] = reply.map(Number) as [number, number, number];
+    if (
+      (granted === 0 || granted === 1) &&
+      Number.isSafeInteger(waitUs) &&
+      waitUs >= 0 &&
+      Number.isSafeInteger(slotUs) &&
+      slotUs >= 0
+    ) {
+      return { granted: granted === 1, waitUs, slotUs };
     }
   }
   throw new Error(`Unexpected token bucket reply: ${JSON.stringify(reply)}`);

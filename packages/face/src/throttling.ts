@@ -1,4 +1,13 @@
 import { ErrorCode } from '@shotx/shared';
+import {
+  type BucketOptions,
+  type BucketParams,
+  bucketParams,
+  nextSlotUs,
+  type Reservation,
+} from './bucket';
+
+const US_PER_MS = 1000;
 
 export interface RateLimiter {
   /**
@@ -33,44 +42,43 @@ export class RateLimitedError extends Error {
 }
 
 /**
- * In-process token bucket for tests and local evaluation. Production uses RedisTokenBucket, which
- * every API and worker instance shares.
+ * In-process rate limiter for tests and local evaluation, with the same algorithm and parameters
+ * as RedisTokenBucket (see `./bucket`). Production uses RedisTokenBucket, which every API and
+ * worker instance shares.
  */
 export class TokenBucket implements RateLimiter {
-  private tokens: number;
-  private last: number;
-  private queue: Promise<void> = Promise.resolve();
+  readonly params: BucketParams;
+  /** Latest grants in microseconds of `clock` time, newest first; at most `params.limit`. */
+  private readonly recent: number[] = [];
 
   constructor(
-    private readonly ratePerSecond: number,
-    private readonly burst: number = Math.max(1, Math.floor(ratePerSecond)),
+    options: BucketOptions,
     private readonly clock: Clock = systemClock,
+    /** Names the limiter in RateLimitedError. */
+    readonly name = 'local',
   ) {
-    this.tokens = burst;
-    this.last = clock.now();
+    this.params = bucketParams(options);
   }
 
-  acquire(): Promise<void> {
-    // Chain acquisitions so callers are served in order.
-    const turn = this.queue.then(() => this.take());
-    this.queue = turn;
-    return turn;
-  }
-
-  private async take(): Promise<void> {
-    for (;;) {
-      const now = this.clock.now();
-      this.tokens = Math.min(
-        this.burst,
-        this.tokens + ((now - this.last) / 1000) * this.ratePerSecond,
-      );
-      this.last = now;
-      if (this.tokens >= 1) {
-        this.tokens -= 1;
-        return;
-      }
-      await this.clock.sleep(Math.ceil(((1 - this.tokens) / this.ratePerSecond) * 1000));
+  /**
+   * Reserves the next slot, or throws RateLimitedError (reserving nothing) when it is more than
+   * `maxWaitMs` away. Synchronous, so callers get slots in call order.
+   */
+  reserve(): Reservation {
+    const nowUs = this.clock.now() * US_PER_MS;
+    const slotUs = nextSlotUs(this.recent, nowUs, this.params);
+    const waitUs = slotUs - nowUs;
+    if (waitUs > this.params.maxWaitUs) {
+      throw new RateLimitedError(this.name, Math.ceil(waitUs / US_PER_MS));
     }
+    this.recent.unshift(slotUs);
+    if (this.recent.length > this.params.limit) this.recent.length = this.params.limit;
+    return { slotUs, waitUs };
+  }
+
+  async acquire(): Promise<void> {
+    const waitMs = Math.ceil(this.reserve().waitUs / US_PER_MS);
+    if (waitMs > 0) await this.clock.sleep(waitMs);
   }
 }
 

@@ -120,14 +120,19 @@ export function planScenes(world: SyntheticWorld, options: Omit<SynthOptions, 'o
   return scenes;
 }
 
+/** A rejection handler that turns "no such file or folder" into `value` and rethrows the rest. */
+function ifMissing<T>(value: T): (error: unknown) => T {
+  return (error) => {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') return value;
+    throw error;
+  };
+}
+
 async function prepareOutput(out: string, force: boolean): Promise<void> {
-  const entries = await readdir(out).catch(() => [] as string[]);
+  const entries = await readdir(out).catch(ifMissing([] as string[]));
   if (entries.length === 0) return;
   // Only ever delete a folder that synth itself created.
-  const generated = await stat(join(out, SYNTHETIC_FILE)).then(
-    () => true,
-    () => false,
-  );
+  const generated = await stat(join(out, SYNTHETIC_FILE)).then(() => true, ifMissing(false));
   if (!force || !generated) {
     throw new Error(
       `${out} is not empty. ${generated ? 'Pass --force to replace it.' : 'Choose an empty folder.'}`,

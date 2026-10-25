@@ -65,7 +65,9 @@
         "nodeType": "cache.t4g.small",
         "numCacheClusters": 2,
         "port": 6379,
-        "snapshotRetentionDays": 1
+        "snapshotRetentionDays": 1,
+        "username": "shotx-app",
+        "accessString": "on ~* &* +@all"
       },
       "storage": {
         "abortIncompleteMultipartUploadDays": 2,
@@ -88,7 +90,7 @@
           }
         },
         "faces": {
-          "visibilityTimeoutSeconds": 300,
+          "visibilityTimeoutSeconds": 3600,
           "retentionDays": 4,
           "dlqRetentionDays": 14,
           "maxReceiveCount": 5,
@@ -97,6 +99,11 @@
             "dlqVisibleMessagesThreshold": 1,
             "oldestMessageAgeSeconds": 1800,
             "oldestMessageAgeEvaluationPeriods": 5
+          },
+          "visibilityFloor": {
+            "rekognitionCallTimeoutSeconds": 10,
+            "collectionCallsPerJob": 2,
+            "processingSeconds": 60
           }
         },
         "zip": {
@@ -218,7 +225,14 @@
           "defaultTtlSeconds": 2592000,
           "maxTtlSeconds": 31536000,
           "cacheQueryStrings": ["response-content-disposition"],
-          "readablePrefixes": ["originals/", "derived/", "tmp/zips/"]
+          "readablePrefixes": ["originals/", "derived/", "tmp/zips/"],
+          "responseHeaders": {
+            "contentSecurityPolicy": "default-src 'none'; sandbox",
+            "referrerPolicy": "no-referrer",
+            "hstsMaxAgeSeconds": 31536000,
+            "hstsIncludeSubdomains": false,
+            "hstsPreload": false
+          }
         },
         "flatRatePlan": {
           "enabled": true,
@@ -237,6 +251,11 @@
         "sharePathPrefixes": ["/s/", "/api/s/"],
         "faceSearchPathPrefix": "/api/s/",
         "faceSearchPathSuffix": "/face-search",
+        "bodyInspectionLimit": "KB_16",
+        "faceSearchBody": {
+          "jpegBytesPerPixel": 3,
+          "multipartOverheadBytes": 65536
+        },
         "commonRuleSetCountOverrides": ["SizeRestrictions_BODY"],
         "adminRateLimit": 1000,
         "adminAllowedIpv4Cidrs": [],

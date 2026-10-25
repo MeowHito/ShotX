@@ -16,6 +16,7 @@
       "passThroughEnv": [
         "REDIS_URL",
         "DATABASE_URL",
+        "TEST_DATABASE_URL",
         "AWS_REGION",
         "AWS_ENDPOINT_URL",
         "AWS_ACCESS_KEY_ID",

@@ -31,8 +31,25 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
+      # packages/db integration tests (skipped without TEST_DATABASE_URL). Same major as RDS
+      # (infra/cdk.json database.engineVersion). ltree ships in the image's contrib modules; the
+      # migrations run CREATE EXTENSION themselves, as they do on RDS.
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: shotx
+          POSTGRES_PASSWORD: shotx
+          POSTGRES_DB: shotx_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U shotx -d shotx_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     env:
       REDIS_URL: redis://localhost:6379
+      TEST_DATABASE_URL: postgres://shotx:shotx@localhost:5432/shotx_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

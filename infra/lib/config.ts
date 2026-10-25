@@ -1,12 +1,15 @@
+import type { FaceConfig } from '@shotx/shared';
 import type { App } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { z } from 'zod';
+import { CONTEXT_KEY, SCHEDULED_JOB_TYPES, SQS_MAX_VISIBILITY_TIMEOUT_SECONDS } from './constants';
 import {
-  CONTEXT_KEY,
-  FACE_DEFAULTS_FOR_VISIBILITY_CHECK,
-  FACES_MIN_VISIBILITY_TIMEOUT_SECONDS,
-  SCHEDULED_JOB_TYPES,
-} from './constants';
+  type FaceSearchBodyLimits,
+  faceSearchBodyLimits,
+  facesJobWorstCase,
+  type FacesJobWorstCase,
+  serviceFaceConfig,
+} from './face-limits';
 
 // Values from cdk.json arrive typed; values from `-c shotx:<path>=<value>` arrive as strings.
 // These helpers accept both.
@@ -36,6 +39,13 @@ const logRetention = z.coerce
       'must be a CloudWatch Logs retention value (1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, ...)',
   });
 const envMap = z.record(z.string().regex(/^[A-Z][A-Z0-9_]*$/), str);
+/** WAF lowercases the URI path before matching, so configured paths must be lowercase too. */
+const lowercasePath = str.pipe(
+  z
+    .string()
+    .startsWith('/')
+    .refine((p) => p === p.toLowerCase(), { error: 'must be lowercase (WAF lowercases the path)' }),
+);
 
 const albServiceSchema = z.object({
   cpu: int(256, 16384),
@@ -71,7 +81,7 @@ const workerSchema = z.object({
 });
 
 const queueSchema = z.object({
-  visibilityTimeoutSeconds: int(0, 43_200),
+  visibilityTimeoutSeconds: int(0, SQS_MAX_VISIBILITY_TIMEOUT_SECONDS),
   retentionDays: int(1, 14),
   dlqRetentionDays: int(1, 14),
   maxReceiveCount: int(1, 1000),
@@ -81,6 +91,21 @@ const queueSchema = z.object({
     oldestMessageAgeSeconds: int(60, 1_209_600),
     /** Consecutive 1-minute periods above the age threshold before the alarm fires. */
     oldestMessageAgeEvaluationPeriods: int(1, 60),
+  }),
+});
+
+/**
+ * The faces queue also carries the inputs of its visibility floor (see facesJobWorstCase in
+ * lib/face-limits.ts). The rest of the worst case comes from the worker's FACE_* configuration.
+ */
+const facesQueueSchema = queueSchema.extend({
+  visibilityFloor: z.object({
+    /** Upper bound on one Rekognition request. The worker sets its SDK request timeout to this. */
+    rekognitionCallTimeoutSeconds: int(1, 300),
+    /** Collection calls a faces job may make before indexing (CreateCollection + Describe). */
+    collectionCallsPerJob: int(0, 10),
+    /** Non-Rekognition work for one photo: decode, tile encodes, S3 temp objects, DB writes. */
+    processingSeconds: int(0, 3600),
   }),
 });
 
@@ -147,6 +172,15 @@ export const configSchema = z
       numCacheClusters: int(2, 6),
       port: int(1024, 65535),
       snapshotRetentionDays: int(0, 35),
+      /** RBAC user api and worker authenticate as. The `default` user is always disabled. */
+      username: str.pipe(
+        z
+          .string()
+          .regex(/^[a-zA-Z][a-zA-Z0-9-]{0,39}$/)
+          .refine((u) => u !== 'default', { error: 'the default user is disabled' }),
+      ),
+      /** Redis ACL rules for that user, e.g. "on ~* &* +@all". */
+      accessString: str.pipe(z.string().startsWith('on ', { error: 'must start with "on "' })),
     }),
 
     storage: z.object({
@@ -159,7 +193,7 @@ export const configSchema = z
 
     queues: z.object({
       media: queueSchema,
-      faces: queueSchema,
+      faces: facesQueueSchema,
       zip: queueSchema,
       jobs: queueSchema,
     }),
@@ -216,6 +250,35 @@ export const configSchema = z
           .refine((p) => !p.some((x) => 'tmp/index/'.startsWith(x)), {
             error: 'CloudFront must not be able to read tmp/index/ (face-index scratch images)',
           }),
+        /**
+         * Response headers on /media/*. User uploads are served from the main origin, so a file
+         * with an HTML or SVG content type must never run as an active document there.
+         */
+        responseHeaders: z.object({
+          contentSecurityPolicy: str.pipe(
+            z
+              .string()
+              .refine((v) => /(^|;)\s*default-src 'none'\s*(;|$)/.test(v), {
+                error: "must contain default-src 'none'",
+              })
+              .refine((v) => /(^|;)\s*sandbox\s*(;|$)/.test(v), {
+                error: 'must contain a bare sandbox directive (no allow-* tokens)',
+              }),
+          ),
+          referrerPolicy: z.enum([
+            'no-referrer',
+            'no-referrer-when-downgrade',
+            'origin',
+            'origin-when-cross-origin',
+            'same-origin',
+            'strict-origin',
+            'strict-origin-when-cross-origin',
+            'unsafe-url',
+          ]),
+          hstsMaxAgeSeconds: int(0, 63_072_000),
+          hstsIncludeSubdomains: bool,
+          hstsPreload: bool,
+        }),
       }),
       flatRatePlan: z.object({
         enabled: bool,
@@ -235,10 +298,20 @@ export const configSchema = z
       faceSearchCaptchaRateLimit: int(10, 2_000_000_000),
       captchaImmunitySeconds: int(60, 259_200),
       /** Path prefixes of the public share page and its API. */
-      sharePathPrefixes: z.array(str.pipe(z.string().startsWith('/'))).min(1),
-      /** Face search is POST <faceSearchPathPrefix><token><faceSearchPathSuffix>. */
-      faceSearchPathPrefix: str.pipe(z.string().startsWith('/')),
-      faceSearchPathSuffix: str.pipe(z.string().startsWith('/')),
+      sharePathPrefixes: z.array(lowercasePath).min(1),
+      /** Face search is POST <faceSearchPathPrefix><token><faceSearchPathSuffix>[/]. */
+      faceSearchPathPrefix: lowercasePath,
+      faceSearchPathSuffix: lowercasePath,
+      /**
+       * How much of a request body CloudFront forwards to WAF for inspection. KB_16 is included in
+       * the WAF price; each larger step is billed per request.
+       */
+      bodyInspectionLimit: z.enum(['KB_16', 'KB_32', 'KB_48', 'KB_64']),
+      /** Size budget of a face-search upload (see faceSearchBodyLimits in lib/face-limits.ts). */
+      faceSearchBody: z.object({
+        jpegBytesPerPixel: z.coerce.number().positive().max(8),
+        multipartOverheadBytes: int(0, 1_048_576),
+      }),
       /** AWSManagedRulesCommonRuleSet rules switched to Count (e.g. body size for uploads). */
       commonRuleSetCountOverrides: z.array(nonEmpty),
       adminRateLimit: int(10, 2_000_000_000),
@@ -352,36 +425,71 @@ export const configSchema = z
         message: 'without a Route 53 hosted zone, provide certificateArn and adminCertificateArn',
       });
     }
-    const visibility = c.queues.faces.visibilityTimeoutSeconds;
-    const required = facesVisibilityFloorSeconds(c.services.env);
-    if (visibility < required) {
+    const headers = c.cdn.media.responseHeaders;
+    if (
+      headers.hstsPreload &&
+      !(headers.hstsIncludeSubdomains && headers.hstsMaxAgeSeconds >= 31_536_000)
+    ) {
       ctx.addIssue({
         code: 'custom',
-        path: ['queues', 'faces', 'visibilityTimeoutSeconds'],
-        message: `must be >= ${required}s: a faces job can wait (1 + FACE_TILE_GRID^2) x FACE_REKOGNITION_MAX_WAIT_MS for rate-limit tokens`,
+        path: ['cdn', 'media', 'responseHeaders'],
+        message: 'hstsPreload needs hstsIncludeSubdomains and hstsMaxAgeSeconds >= 31536000',
       });
     }
+
+    // FACE_* values are parsed exactly as api and worker parse them at runtime.
+    const faceConfig = (service: 'api' | 'worker'): FaceConfig | undefined => {
+      try {
+        return serviceFaceConfig(c.services.env, service);
+      } catch (error) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['services', 'env'],
+          message: `${service}: ${error instanceof Error ? error.message : String(error)}`,
+        });
+        return undefined;
+      }
+    };
+    const workerFace = faceConfig('worker');
+    if (workerFace !== undefined) {
+      const worst = facesJobWorstCase(workerFace, c.queues.faces.visibilityFloor);
+      if (c.queues.faces.visibilityTimeoutSeconds < worst.floorSeconds) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['queues', 'faces', 'visibilityTimeoutSeconds'],
+          message: `must be >= ${worst.floorSeconds}s: ${describeFacesWorstCase(worst)}`,
+        });
+      }
+    }
+    // The api's FACE_* values size the face-search body limit (WAF rule and api env).
+    faceConfig('api');
   });
 
 export type PlatformConfig = z.output<typeof configSchema>;
 
-/**
- * Minimum visibility timeout for the faces queue: the worst-case Rekognition rate-limit wait for
- * one photo (full image plus FACE_TILE_GRID^2 tiles) plus 30 s of processing, and never below the
- * agreed 180 s floor.
- */
-export function facesVisibilityFloorSeconds(env: PlatformConfig['services']['env']): number {
-  const pick = (key: keyof typeof FACE_DEFAULTS_FOR_VISIBILITY_CHECK): number => {
-    const raw = env.worker[key] ?? env.backend[key] ?? env.common[key];
-    const parsed = raw === undefined || raw === '' ? Number.NaN : Number(raw);
-    return Number.isFinite(parsed) ? parsed : FACE_DEFAULTS_FOR_VISIBILITY_CHECK[key];
-  };
-  const grid = pick('FACE_TILE_GRID');
-  const maxWaitSeconds = pick('FACE_REKOGNITION_MAX_WAIT_MS') / 1000;
-  const processingMarginSeconds = 30;
-  return Math.max(
-    FACES_MIN_VISIBILITY_TIMEOUT_SECONDS,
-    Math.ceil((1 + grid * grid) * maxWaitSeconds + processingMarginSeconds),
+/** One-line explanation of the faces queue visibility floor, used in validation errors. */
+export function describeFacesWorstCase(w: FacesJobWorstCase): string {
+  return (
+    `one faces job makes up to ${w.totalCalls} Rekognition calls ` +
+    `(${w.collectionCalls} collection + ${w.indexFacesCalls} IndexFaces + ` +
+    `${w.deleteFacesCalls} DeleteFaces), each up to ${w.perCallSeconds}s with retries and ` +
+    `rate-limit waits, plus ${w.processingSeconds}s of processing`
+  );
+}
+
+/** The faces queue worst case for this configuration (the worker's FACE_* values). */
+export function facesQueueWorstCase(config: PlatformConfig): FacesJobWorstCase {
+  return facesJobWorstCase(
+    serviceFaceConfig(config.services.env, 'worker'),
+    config.queues.faces.visibilityFloor,
+  );
+}
+
+/** Face-search upload limits for this configuration (the api's FACE_* values). */
+export function faceSearchLimits(config: PlatformConfig): FaceSearchBodyLimits {
+  return faceSearchBodyLimits(
+    serviceFaceConfig(config.services.env, 'api'),
+    config.waf.faceSearchBody,
   );
 }
 

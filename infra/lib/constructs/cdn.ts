@@ -29,7 +29,8 @@ export interface CdnProps {
  *
  * main (flat-rate plan, see PricingPlanStack)
  *   /api/*            -> ALB (api), no caching, all viewer headers/cookies/query forwarded
- *   /media/*          -> S3 via OAC, signed URLs (key group), long cache, /media prefix stripped
+ *   /media/*          -> S3 via OAC, signed URLs (key group), long cache, /media prefix stripped,
+ *                        nosniff + sandboxing CSP + HSTS + referrer policy
  *   /_next/static/*   -> ALB (web), cached
  *   default           -> ALB (web), no caching
  *
@@ -108,6 +109,37 @@ export class Cdn extends Construct {
       enableAcceptEncodingGzip: false,
       enableAcceptEncodingBrotli: false,
     });
+    // Uploads are served from the main origin, so an object stored with an HTML or SVG content type
+    // must never run as a page there: nosniff stops type sniffing, and the CSP (default-src 'none'
+    // plus a bare sandbox) gives any document an opaque origin with no scripts, no subresources and
+    // no access to the site's cookies. CSP only governs documents, so <img>, <video>, PhotoSwipe
+    // and `response-content-disposition` downloads are unaffected.
+    const headers = cdn.media.responseHeaders;
+    const mediaResponseHeaders = new cloudfront.ResponseHeadersPolicy(
+      this,
+      'MediaResponseHeaders',
+      {
+        responseHeadersPolicyName: `${prefix}-media`,
+        comment: 'Media from S3: never an active document on the main origin',
+        securityHeadersBehavior: {
+          contentTypeOptions: { override: true },
+          contentSecurityPolicy: {
+            contentSecurityPolicy: headers.contentSecurityPolicy,
+            override: true,
+          },
+          referrerPolicy: {
+            referrerPolicy: headers.referrerPolicy as cloudfront.HeadersReferrerPolicy,
+            override: true,
+          },
+          strictTransportSecurity: {
+            accessControlMaxAge: Duration.seconds(headers.hstsMaxAgeSeconds),
+            includeSubdomains: headers.hstsIncludeSubdomains,
+            preload: headers.hstsPreload,
+            override: true,
+          },
+        },
+      },
+    );
     // S3 keys don't carry the /media prefix (originals/..., derived/..., tmp/zips/...).
     const stripMediaPrefix = new cloudfront.Function(this, 'StripMediaPrefix', {
       functionName: `${prefix}-strip-media-prefix`,
@@ -148,6 +180,7 @@ export class Cdn extends Construct {
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
           cachePolicy: mediaCachePolicy,
+          responseHeadersPolicy: mediaResponseHeaders,
           trustedKeyGroups: [
             new cloudfront.KeyGroup(this, 'MediaKeyGroup', {
               keyGroupName: `${prefix}-media`,

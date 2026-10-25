@@ -10,7 +10,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import type * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
-import type { PlatformConfig } from '../config';
+import { faceSearchLimits, type PlatformConfig } from '../config';
 import {
   ALB_SERVICES,
   APP_ROUTING_HEADER,
@@ -38,6 +38,8 @@ export interface ServicesProps {
   readonly redis: {
     readonly host: string;
     readonly port: number;
+    /** JSON `{ username, password }` of the RBAC user. */
+    readonly secret: secretsmanager.ISecret;
     readonly securityGroup: ec2.ISecurityGroup;
   };
   readonly cognito: {
@@ -141,6 +143,7 @@ export class Services extends Construct {
       PGPORT: String(database.port),
       PGDATABASE: database.name,
       PGSSLMODE: 'verify-full',
+      // TLS, no credentials in the URL: clients pass REDIS_USERNAME and REDIS_PASSWORD (RBAC).
       REDIS_URL: `rediss://${redis.host}:${redis.port}`,
       MEDIA_BUCKET: bucket.bucketName,
       ...queueUrls,
@@ -148,7 +151,23 @@ export class Services extends Construct {
     const backendSecrets: Record<string, ecs.Secret> = {
       PGUSER: ecs.Secret.fromSecretsManager(database.secret, 'username'),
       PGPASSWORD: ecs.Secret.fromSecretsManager(database.secret, 'password'),
+      REDIS_USERNAME: ecs.Secret.fromSecretsManager(redis.secret, 'username'),
+      REDIS_PASSWORD: ecs.Secret.fromSecretsManager(redis.secret, 'password'),
     };
+    // Derived from the FACE_* configuration; set after the extra groups so they always match the
+    // WAF rule and the faces queue.
+    const faceSearch = faceSearchLimits(config);
+    const apiDerived: Record<string, string> = {
+      FACE_SEARCH_MAX_SELFIE_BYTES: String(faceSearch.selfieMaxBytes),
+      FACE_SEARCH_MAX_BODY_BYTES: String(faceSearch.maxBodyBytes),
+    };
+    // The worker heartbeats long jobs with ChangeMessageVisibility and needs each queue's timeout.
+    const workerDerived = Object.fromEntries(
+      QUEUE_NAMES.map((q) => [
+        `${q.toUpperCase()}_QUEUE_VISIBILITY_TIMEOUT_SECONDS`,
+        String(config.queues[q].visibilityTimeoutSeconds),
+      ]),
+    );
     const signingKey = secretsmanager.Secret.fromSecretNameV2(
       this,
       'CloudFrontSigningKey',
@@ -194,6 +213,7 @@ export class Services extends Construct {
         ...extra.common,
         ...extra.backend,
         ...extra.api,
+        ...apiDerived,
       },
       worker: {
         ...base,
@@ -201,6 +221,7 @@ export class Services extends Construct {
         ...extra.common,
         ...extra.backend,
         ...extra.worker,
+        ...workerDerived,
       },
     };
     const secrets: Record<ServiceName, Record<string, ecs.Secret>> = {
@@ -439,12 +460,15 @@ export class Services extends Construct {
           'rekognition:DescribeCollection',
           'rekognition:IndexFaces',
           'rekognition:DeleteFaces',
+          // Reconciliation: find faces in a collection that have no `faces` row, and delete them.
+          'rekognition:ListFaces',
           'rekognition:SearchFaces',
           'rekognition:SearchFacesByImage',
         ],
         resources: [collections],
       }),
     );
+    // Includes sqs:ChangeMessageVisibility, which the worker uses to heartbeat long jobs.
     for (const q of QUEUE_NAMES) queues[q].queue.grantConsumeMessages(taskRoles.worker);
     queues.faces.queue.grantSendMessages(taskRoles.worker);
 

@@ -8,6 +8,7 @@ export const REKOGNITION_OPERATIONS = [
   'SearchFacesByImage',
   'SearchFaces',
   'DeleteFaces',
+  'ListFaces',
   'CreateCollection',
   'DescribeCollection',
   'DeleteCollection',
@@ -37,6 +38,9 @@ export function operationTps(config: RekognitionConfig, operation: RekognitionOp
       return tps.searchFaces;
     case 'DeleteFaces':
       return tps.deleteFaces;
+    // ListFaces has its own quota and bucket. It shares the collection rate until FaceConfig has
+    // a key of its own; only orphan reconciliation calls it.
+    case 'ListFaces':
     case 'CreateCollection':
     case 'DescribeCollection':
     case 'DeleteCollection':
@@ -89,16 +93,24 @@ export function createRedisRekognitionLimiters(
 }
 
 /**
- * In-process limiters with the same rates, for tests and the local evaluation harness. They only
- * hold when a single process calls Rekognition, and they wait instead of failing.
+ * In-process limiters with the same rates and algorithm, for tests and the local evaluation
+ * harness. They only hold when a single process calls Rekognition, and they wait instead of
+ * failing.
  */
 export function createLocalRekognitionLimiters(
   config: RekognitionConfig,
   clock: Clock = systemClock,
 ): RekognitionLimiters {
-  return buildLimiters((operation) => {
-    const rate = operationTps(config, operation);
-    const burst = Math.max(1, Math.floor(rate * config.rateLimit.burstSeconds));
-    return new TokenBucket(rate, burst, clock);
-  });
+  return buildLimiters(
+    (operation) =>
+      new TokenBucket(
+        {
+          ratePerSecond: operationTps(config, operation),
+          burstSeconds: config.rateLimit.burstSeconds,
+          maxWaitMs: Number.POSITIVE_INFINITY,
+        },
+        clock,
+        operation,
+      ),
+  );
 }

@@ -1,0 +1,30 @@
+{
+  "name": "@shotx/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "generate": "drizzle-kit generate && prettier --write migrations/meta",
+    "migrate": "tsx src/cli/migrate.ts",
+    "seed": "tsx src/cli/seed.ts"
+  },
+  "dependencies": {
+    "@shotx/shared": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "pg": "^8.23.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.10",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.11",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15"
+  }
+}

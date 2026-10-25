@@ -123,8 +123,9 @@ when the retention period ends.
 
 This calls Amazon Rekognition: it is billed and sends the photos and selfies to AWS. Selfies are sent
 inline and never stored. Photos are sent inline (up to 5 MB) or, with `--temp-bucket`, through
-`s3://<bucket>/tmp/index/`, which the bucket's `tmp/` lifecycle rule expires. Each object is deleted
-right after IndexFaces.
+`s3://<bucket>/tmp/index/<photo>/<attempt>/<part>.jpg`, which the bucket's `tmp/` lifecycle rule
+expires. Each object is deleted right after IndexFaces; if that delete fails, the photo counts as
+failed and the log says so.
 
 ```sh
 export AWS_REGION=ap-southeast-1          # plus credentials for the approved evaluation account
@@ -140,8 +141,10 @@ pnpm face-eval run \
   so budget about 50,000 calls (about $50) per 1,000 photos. Narrow the grid to spend less, for
   example
   `--long-edges 2400,3500 --quality-filters LOW,MEDIUM --tiling never,signal`.
-- **Rate:** calls go through in-process token buckets at `FACE_REKOGNITION_TPS_*`, with
-  `FACE_REKOGNITION_*` retries (worker profile). Set the rates below the account's quotas.
+- **Rate:** calls go through in-process rate limiters at `FACE_REKOGNITION_TPS_*` (never more than
+  that many calls of one operation in any second), with `FACE_REKOGNITION_*` retries (worker
+  profile). IndexFaces is retried only when throttled. Set the rates at or below the account's
+  quotas.
 - **Cleanup:** every evaluation collection (`pg-eval-<timestamp>-<option>`) is deleted at the end;
   `--keep-collections` keeps them.
 - **Gap:** no YuNet detector is wired in yet, so on real photos `signal` tiling relies only on

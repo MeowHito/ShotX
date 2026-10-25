@@ -28,6 +28,7 @@ describe('operationTps', () => {
       ['SearchFacesByImage', 20],
       ['SearchFaces', 10],
       ['DeleteFaces', 4],
+      ['ListFaces', 1],
       ['CreateCollection', 1],
       ['DescribeCollection', 1],
       ['DeleteCollection', 1],
@@ -49,8 +50,9 @@ describe('createRedisRekognitionLimiters', () => {
     const keys = REKOGNITION_OPERATIONS.map((op) => (limiters[op] as RedisTokenBucket).key);
     expect(new Set(keys).size).toBe(REKOGNITION_OPERATIONS.length);
     expect((limiters.SearchFacesByImage as RedisTokenBucket).params).toMatchObject({
-      capacity: 20,
-      intervalUs: 50_000,
+      limit: 20,
+      windowUs: 1_000_000,
+      burst: 20,
     });
   });
 
@@ -67,8 +69,15 @@ describe('createRedisRekognitionLimiters', () => {
 });
 
 describe('createLocalRekognitionLimiters', () => {
-  it('builds in-process buckets for every operation', () => {
-    const limiters = createLocalRekognitionLimiters(config);
-    for (const op of REKOGNITION_OPERATIONS) expect(limiters[op]).toBeInstanceOf(TokenBucket);
+  it('builds in-process buckets with the same parameters, which wait instead of failing', () => {
+    const local = createLocalRekognitionLimiters(config);
+    const shared = createRedisRekognitionLimiters(redis, config, 'background');
+    for (const op of REKOGNITION_OPERATIONS) {
+      expect(local[op]).toBeInstanceOf(TokenBucket);
+      expect((local[op] as TokenBucket).params).toEqual({
+        ...(shared[op] as RedisTokenBucket).params,
+        maxWaitUs: Number.POSITIVE_INFINITY,
+      });
+    }
   });
 });

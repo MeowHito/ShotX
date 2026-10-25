@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type BucketOptions, type RedisScriptClient, RedisTokenBucket } from './redis-token-bucket';
+import type { BucketOptions } from './bucket';
+import { type RedisScriptClient, RedisTokenBucket } from './redis-token-bucket';
 import { type Clock, RateLimitedError } from './throttling';
 
 const url = process.env.REDIS_URL;
+const SECOND_US = 1_000_000;
 
 /** Records how long each caller was told to wait instead of sleeping. */
 function recordingClock(): Clock & { sleeps: number[] } {
@@ -17,6 +19,18 @@ function recordingClock(): Clock & { sleeps: number[] } {
       return Promise.resolve();
     },
   };
+}
+
+/** The most grants in any half-open window [t, t + windowUs); see bucket.test.ts. */
+function maxInWindow(slots: readonly number[], windowUs: number): number {
+  const sorted = [...slots].sort((a, b) => a - b);
+  let max = 0;
+  let end = 0;
+  for (let start = 0; start < sorted.length; start++) {
+    while (end < sorted.length && sorted[end]! < sorted[start]! + windowUs) end++;
+    max = Math.max(max, end - start);
+  }
+  return max;
 }
 
 describe.skipIf(!url)('RedisTokenBucket against Redis', () => {
@@ -43,39 +57,52 @@ describe.skipIf(!url)('RedisTokenBucket against Redis', () => {
     return { key, clock, limiter: new RedisTokenBucket(client, key, options, clock) };
   }
 
-  it('grants a burst, then spaces calls one interval apart', async () => {
-    const { limiter, clock } = bucket({ ratePerSecond: 10, burstSeconds: 0.5, maxWaitMs: 5000 });
-    for (let i = 0; i < 7; i++) await limiter.acquire();
-    // Five tokens are free; the 6th and 7th reserve slots about 100 ms and 200 ms out.
-    const waits = clock.sleeps;
-    expect(waits).toHaveLength(2);
-    expect(waits[0]).toBeGreaterThan(50);
-    expect(waits[0]).toBeLessThanOrEqual(100);
-    expect(waits[1]! - waits[0]!).toBeGreaterThan(80);
-    expect(waits[1]! - waits[0]!).toBeLessThanOrEqual(110);
-  });
+  for (const [ratePerSecond, burstSeconds] of [
+    [10, 1],
+    [10, 0.3],
+    [7, 0.05],
+    [3.5, 2.5],
+    [50, 0.5],
+    [0.5, 1],
+  ] as const) {
+    it(`never grants more than ${ratePerSecond}/s in any 1-second window (burst ${burstSeconds} s)`, async () => {
+      const options = { ratePerSecond, burstSeconds, maxWaitMs: 60_000 };
+      const a = bucket(options, redis);
+      const b = new RedisTokenBucket(other, a.key, options);
+      const { limit, burst, windowUs } = a.limiter.params;
+      // Three windows' quota from two connections at once, against an idle bucket.
+      const reservations = await Promise.all(
+        Array.from({ length: 3 * limit }, (_, i) => (i % 2 ? b : a.limiter).reserve()),
+      );
+      const slots = reservations.map((r) => r.slotUs);
+      expect(maxInWindow(slots, SECOND_US)).toBeLessThanOrEqual(
+        Math.max(1, Math.floor(ratePerSecond)),
+      );
+      expect(maxInWindow(slots, windowUs)).toBeLessThanOrEqual(limit);
+      // An idle bucket lets the burst through at once, and no more.
+      expect(reservations.filter((r) => r.waitUs === 0)).toHaveLength(burst);
+      expect(Math.max(...slots) - Math.min(...slots)).toBeLessThan(3 * windowUs);
+    });
+  }
 
-  it('gives every concurrent caller its own slot', async () => {
-    const { limiter, clock } = bucket({ ratePerSecond: 20, burstSeconds: 0.25, maxWaitMs: 5000 });
-    await Promise.all(Array.from({ length: 25 }, () => limiter.acquire()));
-    // Capacity 5 at 20/s: 5 free calls, then 20 slots 50 ms apart.
-    const waits = [...clock.sleeps].sort((a, b) => a - b);
-    expect(waits).toHaveLength(20);
-    for (let i = 1; i < waits.length; i++) {
-      expect(waits[i]! - waits[i - 1]!).toBeGreaterThanOrEqual(35);
-      expect(waits[i]! - waits[i - 1]!).toBeLessThanOrEqual(65);
+  it('lets one second of quota through at once, then waits for the window', async () => {
+    const { limiter, clock } = bucket({ ratePerSecond: 10, burstSeconds: 1, maxWaitMs: 5000 });
+    for (let i = 0; i < 12; i++) await limiter.acquire();
+    // Ten calls are free; the 11th and 12th wait until the first ones leave the window.
+    expect(clock.sleeps).toHaveLength(2);
+    for (const wait of clock.sleeps) {
+      expect(wait).toBeGreaterThan(800);
+      expect(wait).toBeLessThanOrEqual(1000);
     }
-    expect(waits.at(-1)).toBeLessThanOrEqual(1000);
   });
 
   it('shares one bucket between connections', async () => {
-    const options = { ratePerSecond: 1, burstSeconds: 2, maxWaitMs: 0 };
+    const options = { ratePerSecond: 1, burstSeconds: 1, maxWaitMs: 0 };
     const a = bucket(options, redis);
     const b = new RedisTokenBucket(other, a.key, options, recordingClock());
     await a.limiter.acquire();
-    await b.acquire();
-    await expect(a.limiter.acquire()).rejects.toBeInstanceOf(RateLimitedError);
     await expect(b.acquire()).rejects.toBeInstanceOf(RateLimitedError);
+    await expect(a.limiter.acquire()).rejects.toBeInstanceOf(RateLimitedError);
   });
 
   it('does not reserve a slot when it refuses a call', async () => {
@@ -89,12 +116,15 @@ describe.skipIf(!url)('RedisTokenBucket against Redis', () => {
     expect((second as RateLimitedError).waitMs).toBeLessThanOrEqual(1000);
   });
 
-  it('stores integer microseconds and expires the key once the bucket is full', async () => {
-    const { key, limiter } = bucket({ ratePerSecond: 2, burstSeconds: 1, maxWaitMs: 0 });
-    await limiter.acquire();
-    const [value, ttl] = await Promise.all([redis.get(key), redis.pttl(key)]);
-    expect(value).toMatch(/^\d{16,}$/);
-    expect(ttl).toBeGreaterThan(0);
-    expect(ttl).toBeLessThanOrEqual(500);
+  it('stores integer microseconds and expires the key once the window is empty', async () => {
+    const { key, limiter } = bucket({ ratePerSecond: 2, burstSeconds: 1, maxWaitMs: 5000 });
+    for (let i = 0; i < 3; i++) await limiter.reserve();
+    const [values, ttl] = await Promise.all([redis.lrange(key, 0, -1), redis.pttl(key)]);
+    // Only the latest `limit` grants are kept, newest first.
+    expect(values).toHaveLength(2);
+    for (const value of values) expect(value).toMatch(/^\d{16,}$/);
+    expect(Number(values[0])).toBeGreaterThanOrEqual(Number(values[1]));
+    expect(ttl).toBeGreaterThan(1000);
+    expect(ttl).toBeLessThanOrEqual(2000);
   });
 });
