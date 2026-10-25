@@ -1,0 +1,17 @@
+{
+  "name": "@shotx/face-eval",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1152.0",
+    "@shotx/face": "workspace:*",
+    "@shotx/shared": "workspace:*",
+    "zod": "^4.6.7"
+  }
+}

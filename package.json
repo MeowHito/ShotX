@@ -1,14 +1,29 @@
 {
-  "name": "shotx-eventdd",
-  "version": "0.1.0",
+  "name": "shotx",
   "private": true,
-  "scripts": {
-    "dev": "pnpm --parallel --filter frontend --filter backend dev",
-    "dev:frontend": "pnpm --filter frontend dev",
-    "dev:backend": "pnpm --filter backend dev",
-    "dev:worker": "python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --app-dir worker",
-    "db:generate": "pnpm --filter backend db:generate",
-    "db:migrate": "pnpm --filter backend db:migrate"
+  "type": "module",
+  "packageManager": "pnpm@12.3.4",
+  "engines": {
+    "node": ">=24"
   },
-  "packageManager": "pnpm@9.12.0"
+  "scripts": {
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "face-eval": "tsx tools/face-eval/src/cli.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.0.0",
+    "eslint": "^10.13.0",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15",
+    "turbo": "^2.11.9",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.2",
+    "vitest": "^4.1.12"
+  }
 }

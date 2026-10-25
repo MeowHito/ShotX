@@ -1,34 +1,17 @@
-node_modules
-**/node_modules
-.next
-frontend/.next
-dist
-backend/dist
+node_modules/
+dist/
+.next/
+.turbo/
+coverage/
+*.tsbuildinfo
+.DS_Store
 
-# Secrets — NEVER commit these
 .env
 .env.*
 !.env.example
-!.env.production.example
 
-# Logs & coverage
-coverage
-*.log
-**/*.log
+.claude/settings.local.json
 
-# OS / Editor
-.DS_Store
-Thumbs.db
-.idea
-.vscode
-
-# Python
-__pycache__
-**/__pycache__
-*.pyc
-*.pyo
-.venv
-**/venv
-
-# Local uploads (dev only)
-uploads
+# Face PoC: datasets contain biometric data and must never be committed.
+data/
+runs/
