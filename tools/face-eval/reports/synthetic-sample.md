@@ -6,7 +6,7 @@
 
 # Face search evaluation: Synthetic event (seed 1)
 
-- Generated 2026-10-25T06:50:27.726Z from commit `460a0df-dirty`.
+- Generated 2026-10-25T07:16:52.558Z from commit `22bd815`.
 - Provider: FakeFaceProvider (deterministic synthetic similarity model, no AWS calls), face model fake.
 - Dataset: 120 photos (13 without any volunteer), 24 volunteers (2 in no photo), 334 labelled appearances, 72 selfies.
 - Grid: index long edge 1600, 2400, 3500 px; QualityFilter LOW, MEDIUM; tiling never, signal, always; expansion seeds 0, 2; selfies 1, 3; FACE_STRONG 80–99; FACE_MAYBE 70–95.
