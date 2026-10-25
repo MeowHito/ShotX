@@ -2,10 +2,10 @@
 
 ## สรุปสั้น
 
-- **ทำเสร็จและ commit แล้ว:** Phase 1 (foundations), Phase 2 (Drive) และ Phase 3 (แชร์ + สแกนหน้า + ดาวน์โหลด) ทุกรอบผ่าน reviewer แบบ GO
-- **ค้างอยู่:** "wave 5" = แก้ข้อ major ของ Phase 3 + Phase 4 (Billing)
-  - contracts ทำเสร็จแล้ว (ยังไม่ commit อยู่ใน main tree)
-  - api / worker / web / infra เพิ่งเริ่มก็ชน **เพดานการใช้งานรายสัปดาห์** (รีเซ็ต 30 ต.ค. 08:00) จึงหยุด
+- **ทำเสร็จและ commit แล้ว:** Phase 1 (foundations), Phase 2 (Drive), Phase 3 (แชร์ + สแกนหน้า + ดาวน์โหลด) และ Phase 4 (Billing) พร้อมแก้ข้อ major ของ Phase 3 ทุกรอบผ่าน reviewer แบบ GO
+- **หยุดที่ Phase 4 ตามที่สั่ง** ไม่ทำ Phase 5, 6 และ E2E
+- **Phase 4 ยังมี major 2 ข้อที่ต้องแก้ก่อนถือว่าเสร็จและก่อนใช้ gateway จริง** (ดูหัวข้อผล reviewer)
+- wave 5 เคยหยุดเพราะชนเพดานการใช้งาน แล้วทำต่อจนจบหลังเปลี่ยนบัญชี
 - **Phase 0 ยังไม่ผ่าน:** ผลความแม่นมาจากข้อมูลจำลองเท่านั้น face search จึงปิดอยู่ด้วย `FACE_SEARCH_ENABLED=false`
 - **ไม่ได้ทำตามที่สั่ง:** ไม่ push, ไม่ deploy, ไม่เรียก AWS / Rekognition / payment gateway จริง
 
@@ -17,7 +17,7 @@
 | 1 Foundations                       | monorepo, CDK 7 stacks, CI, shared + db                                            | `22bd815`, `22cd327`, `1c12eb2` |
 | 2 Drive                             | api drive/upload, worker media/purge/quota, web /studio + Uppy                     | `d0ed8cc`                       |
 | 3 Sharing + face search + downloads | ครบทุกฟีเจอร์ ปิด face search ด้วย flag                                            | `73171d0`                       |
-| 3 (review fixes) + 4 Billing        | contracts เสร็จ (uncommitted), apps ยังไม่ได้ทำ                                    | –                               |
+| 3 (review fixes) + 4 Billing        | ครบ ใช้ fake gateway / fake email; มี major 2 ข้อที่ต้องแก้ก่อน sign-off           | `c5f95ee`                       |
 | 5, 6, E2E                           | ไม่ทำตามที่สั่งเปลี่ยนแผน                                                          | –                               |
 
 ## Commit ที่ทำ (ทั้งหมดอยู่ในเครื่อง ยังไม่ push ยกเว้น 3 ตัวแรกที่ push ก่อนเริ่มทำข้ามคืน)
@@ -30,30 +30,33 @@
 - `1c12eb2` wave 2: fix majors + contracts — **ไม่ได้ push**
 - `d0ed8cc` wave 3: phase 2 drive — **ไม่ได้ push**
 - `73171d0` wave 4: phase 3 sharing + face search + downloads — **ไม่ได้ push**
+- `48ae915` docs: overnight report and wave 5 contract notes — **ไม่ได้ push**
+- `c5f95ee` wave 5: phase 3 fixes + phase 4 billing — **ไม่ได้ push**
 
 ทุก commit ผ่านการสแกนว่าไม่มี `.env`, key จริง, รูปภาพ หรือไฟล์ binary ข้อความ "PRIVATE KEY" ที่เจอใน `1c12eb2` เป็น fixture ปลอมใน test (ตัดสั้น ใช้ไม่ได้จริง)
 
-## ผล reviewer ล่าสุด (Phase 3, `73171d0`)
+## ผล reviewer ล่าสุด (wave 5, `c5f95ee`)
 
-**GO** ไม่มี blocker แต่มี major 2 ข้อที่ต้องแก้ก่อน deploy (อยู่ใน wave 5 ที่ค้าง):
+**GO** ทั้ง repo ผ่าน 30/30 สองรอบ (test ที่ใช้ Postgres/Redis/LocalStack จริงถูกข้ามเพราะ Docker ปิด ส่วนชุด PGlite รันครบ) ข้อ major 2 ข้อของ Phase 3 แก้แล้ว แต่ Phase 4 มี major ใหม่ 2 ข้อ ต้องแก้ก่อนถือว่า Phase 4 เสร็จและก่อนใช้ gateway จริง:
 
-1. rate limit ต่อ IP และ `ip_hash` ใช้ไม่ได้หลัง CloudFront (origin request policy ของ `/api/*` ไม่ส่ง `CloudFront-Viewer-Address`) → ทุกคนนับเป็น IP เดียวกัน
-2. การ "ขอลบใบหน้าของฉัน" ถูกบล็อกเมื่อปิด flag หรือแชร์หมดอายุ ซึ่งขัดกับสิทธิ์ตาม PDPA
+1. **ต่ออายุระหว่าง purge:** purge บัญชีที่ใหญ่ทำหลายวัน ถ้าช่างภาพจ่ายต่ออายุกลางทาง purge จะหยุด แต่ไฟล์ที่ลบไปแล้วไม่กลับมา บัญชี active จะมีไฟล์เสีย → ต้องมี `purge_started_at` (หรือสถานะ `purging`) และถือว่าบัญชีถูก purge แล้วตั้งแต่เริ่มลบ
+2. **webhook มาก่อนแถว payment ของการต่ออายุอัตโนมัติ:** ถ้าการตัดบัตรเป็น pending แล้ว webhook "paid" มาถึงก่อน worker บันทึก payment ระบบจะเก็บ event ไว้แต่ไม่ apply และ gateway จะไม่ส่งซ้ำ → ตัดเงินแล้วแต่ subscription หมดอายุ ต้องให้การบันทึก payment ไปหยิบ event ที่ค้างมา apply และมี sweep ตรวจ payment ที่ pending นาน
 
-minor: bot ที่ดึง preview ลิงก์นับเป็น view, สแกนพร้อมกันอาจทำผลหาย, ลบใบหน้าคนอื่นได้ถ้ามีรูปเขา (ไม่มี liveness — บันทึกเป็นความเสี่ยงที่ยอมรับใน ADR 0007), ADR 0006 ยัง Proposed
+minor: ระบบรู้ว่าเป็น production จากชื่อ stage `prod` เท่านั้น (ถ้าตั้งชื่ออื่นจะใช้ fake ได้), บัตรถูกปฏิเสธแสดงเป็น "gateway error" (ควรมี `PAYMENT_FAILED`), api ยังไม่มี `@aws-sdk/client-sesv2` (ใบเสร็จจะไปกับรอบ worker รายวันแทน)
 
-## งานที่ค้างใน working tree (ยังไม่ commit)
+CCR ที่ reviewer รับ: เพิ่มราคา/สถานะแพ็กเกจใน `GET /billing/subscription` (หรือให้ API บอกประเภทการเปลี่ยนแพ็กเกจเอง), เพิ่มโหมดแชร์ในข้อมูลหน้าขอลบใบหน้า, เพิ่ม `PAYMENT_FAILED`, เพิ่ม SESv2 ใน api
 
-- **main tree:** contracts ของ wave 5 (packages/shared, packages/db migration `0004_phase3_fixes_billing`, ADR 0007) และการแก้ test ของ face-eval ที่ล้มแบบสุ่ม
-  - ตอนนี้ api / web / infra จะ **typecheck/test ไม่ผ่าน** บน working tree เพราะ contract เปลี่ยนแต่ apps ยังไม่ได้อัปเดต — HEAD (`73171d0`) ยังผ่านครบ 30/30
-  - รายละเอียด contract ทั้งหมด: `docs/reports/wave5-contracts.md` และ patch สำหรับ worktree: `docs/reports/wave5-contracts.patch`
-- **worktree 4 ตัว** ใน `.claude/worktrees/agent-*` มีแค่ patch ของ contracts ยังไม่มีโค้ดของ agent เก็บไว้เพื่อให้สั่งทำต่อได้
+## งานที่ค้างใน working tree
 
-## วิธีทำต่อหลัง 30 ต.ค.
+- ไม่มีงานโค้ดค้าง (ทุกอย่าง commit แล้ว)
+- `docs/reports/wave5-contracts.patch` เป็นไฟล์ช่วยตอนทำ wave 5 ลบทิ้งได้
+- `.claude/skills/photo-platform/SKILL.md` มีแค่ช่องว่างท้ายบรรทัดที่ IDE ลบ
 
-1. สั่ง agent 4 ตัว (api, worker, web, infra) ทำต่อจากจุดเดิม หรือเริ่มใหม่ด้วย patch ของ contracts
-2. รวมงาน → `pnpm turbo run lint typecheck test build --force` 2 รอบ → reviewer → แก้ได้ 2 รอบ → commit "wave 5: phase 3 fixes + phase 4 billing"
-3. หยุดที่ Phase 4 ตามที่สั่ง
+## ขั้นถัดไป (ถ้าจะทำต่อ)
+
+1. รอบแก้ Phase 4: major 2 ข้อ + CCR 4 ข้อ + การตรวจ production ที่รัดกุมขึ้น (contracts → api/worker/web/infra → reviewer → commit)
+2. ทำ adapter ของ payment gateway จริง (Omise หรือ 2C2P) และทดสอบกับ sandbox ของ gateway — ตอนนี้ production ใช้ billing ไม่ได้เพราะมีแต่ fake
+3. Phase 5, 6 และ E2E (ยังไม่ทำตามที่สั่ง)
 
 ## สมมติฐานที่ตัดสินใจเอง
 
@@ -103,11 +106,12 @@ minor: bot ที่ดึง preview ลิงก์นับเป็น view,
 - [ ] ทดสอบเปิด MP4 ในแท็บใหม่บน Safari/iOS และ Firefox
 - [ ] load test หน้าสแกนหน้าช่วงคนสแกนพร้อมกันหลังจบงาน และกฎ WAF กับ CGNAT
 - [ ] ตรวจสอบเซิร์ฟเวอร์ prototype เก่า (`157.245.145.47`, ใช้ InsightFace และเก็บ selfie) ว่าปิดแล้ว และลบ selfie/embedding ที่เหลือ
-- [ ] ตัดสินใจ push commit ที่ค้าง (`1c12eb2` ถึง `73171d0`)
+- [ ] ตัดสินใจ push commit ที่ค้าง (`1c12eb2` ถึง `c5f95ee`)
 
 ### งานโค้ดที่ยังเหลือ
 
-- [ ] wave 5: แก้ major 2 ข้อของ Phase 3 + Phase 4 Billing ทั้ง api / worker / web / infra (contracts เสร็จแล้ว)
+- [ ] รอบแก้ Phase 4: purge กับการต่ออายุชนกัน, webhook มาก่อนแถว payment, การตรวจ production จากชื่อ stage, `PAYMENT_FAILED`, SESv2 ใน api, ราคาแพ็กเกจใน subscription view, โหมดแชร์ในหน้าขอลบใบหน้า
+- [ ] adapter ของ payment gateway จริง (Omise/2C2P) + ทดสอบกับ sandbox
 - [ ] Phase 5 Admin: rollup dashboard, ECharts, moderation, audit log (ไม่ได้ทำตามที่สั่ง)
 - [ ] Phase 6: watermark, `face_only` + Face Liveness, ขายรูปรายใบ, ใบกำกับภาษีเต็มรูป
 - [ ] E2E Playwright แบบ mobile: อัปโหลด → แชร์ → consent → สแกน → ดาวน์โหลด และซื้อแพ็กเกจ
