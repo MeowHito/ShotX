@@ -2,14 +2,21 @@ import {
   ACTIVITY_SOURCES,
   ACTIVITY_TYPES,
   AUTH_POOLS,
+  BILLING_ACTORS,
   BILLING_MODES,
+  CHECKOUT_CHANGE_TYPES,
+  CHECKOUT_STATUSES,
+  CONSENT_PURPOSES,
   DOWNLOAD_SIZES,
   FACE_FEEDBACK_VERDICTS,
   FILE_STATUSES,
+  PAYMENT_EVENT_TYPES,
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
   SHARE_MODES,
   SHARE_TARGET_TYPES,
+  SUBSCRIPTION_EVENT_TYPES,
+  SUBSCRIPTION_NOTICE_KINDS,
   SUBSCRIPTION_STATUSES,
   USER_ROLES,
   ZIP_JOB_STATUSES,
@@ -32,3 +39,11 @@ export const faceFeedbackVerdict = pgEnum('face_feedback_verdict', FACE_FEEDBACK
 export const activityType = pgEnum('activity_type', ACTIVITY_TYPES);
 export const activitySource = pgEnum('activity_source', ACTIVITY_SOURCES);
 export const zipJobStatus = pgEnum('zip_job_status', ZIP_JOB_STATUSES);
+// Migration 0004.
+export const consentPurpose = pgEnum('consent_purpose', CONSENT_PURPOSES);
+export const checkoutChangeType = pgEnum('checkout_change_type', CHECKOUT_CHANGE_TYPES);
+export const checkoutStatus = pgEnum('checkout_status', CHECKOUT_STATUSES);
+export const paymentEventType = pgEnum('payment_event_type', PAYMENT_EVENT_TYPES);
+export const subscriptionEventType = pgEnum('subscription_event_type', SUBSCRIPTION_EVENT_TYPES);
+export const subscriptionNoticeKind = pgEnum('subscription_notice_kind', SUBSCRIPTION_NOTICE_KINDS);
+export const billingActor = pgEnum('billing_actor', BILLING_ACTORS);

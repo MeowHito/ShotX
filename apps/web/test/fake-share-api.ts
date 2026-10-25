@@ -46,7 +46,16 @@ export interface PublicShareFixture {
   /** SHARE_EXPIRED with this reason when set. */
   expiredReason: ShareUnavailableReason | null;
   unlocked: boolean;
+  /** A current `face_search` consent of this browser. */
   consented: boolean;
+  /** A current `face_deletion` consent of this browser. */
+  deletionConsented: boolean;
+  /** CONSENT_POLICY_VERSION of the API; a consent of another version is a mismatch. */
+  serverPolicyVersion: string;
+  /** The next consent POST answers CONSENT_VERSION_MISMATCH whatever its version. */
+  consentMismatchOnce: boolean;
+  /** The next face search answers CONSENT_VERSION_MISMATCH (the policy changed after consent). */
+  searchConsentStale: boolean;
   /** What face search finds (ids of `items`). */
   faceMatches: { strong: string[]; maybe: string[] };
   /** The viewer's face-search result (the face_only grant). */
@@ -98,6 +107,10 @@ export function createPublicShare(
     expiredReason: null,
     unlocked: false,
     consented: false,
+    deletionConsented: false,
+    serverPolicyVersion: CONSENT_POLICY_VERSIONS[CONSENT_POLICY_VERSIONS.length - 1] as string,
+    consentMismatchOnce: false,
+    searchConsentStale: false,
     faceMatches: { strong: [], maybe: [] },
     grant: new Set(),
     noFace: false,
@@ -175,7 +188,11 @@ function faceGate(share: PublicShareFixture) {
 function selfies(api: FakeApi, form: FormData | undefined, kind: 'search' | 'deletion') {
   const names = [...(form?.keys() ?? [])];
   const parts = form?.getAll(SELFIE_FIELD_NAME) ?? [];
-  if (parts.length < 1 || parts.length > 3 || names.some((n) => n !== SELFIE_FIELD_NAME)) {
+  if (
+    parts.length < 1 ||
+    parts.length > api.options.maxSelfies ||
+    names.some((n) => n !== SELFIE_FIELD_NAME)
+  ) {
     throw new Fail('VALIDATION_FAILED');
   }
   const blobs = parts.filter((p): p is File => typeof p !== 'string');
@@ -355,7 +372,23 @@ export function handlePhase3(
           available: share.faceSearchAvailable,
           policyVersion: share.faceSearchAvailable ? CONSENT_POLICY_VERSIONS[0] : null,
           consented: share.consented,
+          maxSelfies: api.options.maxSelfies,
+          selfieLongEdge: api.options.selfieLongEdge,
+          selfieJpegQuality: api.options.selfieJpegQuality,
+          resultTtlSeconds: api.options.resultTtlSeconds,
         },
+        zip: { maxFiles: api.options.zipMaxFiles },
+      };
+    }
+    case PUBLIC_SHARE_ROUTES.faceDeletionInfo: {
+      // Token lookup only: expired, revoked, locked shares and the flag off all answer.
+      const share = publicShareOrFail(api, params.token);
+      return {
+        policyVersion: CONSENT_POLICY_VERSIONS[0],
+        consented: share.deletionConsented,
+        maxSelfies: api.options.maxSelfies,
+        selfieLongEdge: api.options.selfieLongEdge,
+        selfieJpegQuality: api.options.selfieJpegQuality,
       };
     }
     case PUBLIC_SHARE_ROUTES.items: {
@@ -376,15 +409,25 @@ export function handlePhase3(
     }
     case PUBLIC_SHARE_ROUTES.giveConsent: {
       const share = publicShareOrFail(api, params.token);
-      gate(api, share);
-      if (!share.faceSearchAvailable) throw new Fail('FEATURE_DISABLED', FEATURE_OFF);
-      share.consented = true;
-      return { policyVersion: (body as { policyVersion: string }).policyVersion, acceptedAt: NOW };
+      const b = body as { purpose: 'face_search' | 'face_deletion'; policyVersion: string };
+      // CONSENT_PURPOSE_GATES: face_deletion checks the token only.
+      if (b.purpose === 'face_search') {
+        gate(api, share);
+        if (!share.faceSearchAvailable) throw new Fail('FEATURE_DISABLED', FEATURE_OFF);
+      }
+      if (share.consentMismatchOnce || b.policyVersion !== share.serverPolicyVersion) {
+        share.consentMismatchOnce = false;
+        throw new Fail('CONSENT_VERSION_MISMATCH', { policyVersion: share.serverPolicyVersion });
+      }
+      if (b.purpose === 'face_search') share.consented = true;
+      else share.deletionConsented = true;
+      return { purpose: b.purpose, policyVersion: b.policyVersion, acceptedAt: NOW };
     }
     case PUBLIC_SHARE_ROUTES.withdrawConsent: {
-      // Token lookup only: withdrawal always works.
+      // Token lookup only: withdrawal always works, for every purpose.
       const share = publicShareOrFail(api, params.token);
       share.consented = false;
+      share.deletionConsented = false;
       share.grant.clear();
       return undefined;
     }
@@ -392,6 +435,11 @@ export function handlePhase3(
       const share = publicShareOrFail(api, params.token);
       gate(api, share);
       faceGate(share);
+      if (share.searchConsentStale) {
+        share.searchConsentStale = false;
+        share.consented = false;
+        throw new Fail('CONSENT_VERSION_MISMATCH', { policyVersion: share.serverPolicyVersion });
+      }
       const count = selfies(api, extra.form, 'search');
       if (share.noFace) {
         throw new Fail('NO_FACE_DETECTED', { selfies: count, selfiesWithoutFace: count });
@@ -408,9 +456,12 @@ export function handlePhase3(
       };
     }
     case PUBLIC_SHARE_ROUTES.faceDeletion: {
+      // Token plus a face_deletion consent only: never SHARE_EXPIRED, LOGIN_REQUIRED,
+      // PASSWORD_REQUIRED or FEATURE_DISABLED.
       const share = publicShareOrFail(api, params.token);
-      gate(api, share);
-      faceGate(share);
+      if (!share.deletionConsented) {
+        throw new Fail('CONSENT_REQUIRED', { policyVersion: share.serverPolicyVersion });
+      }
       const count = selfies(api, extra.form, 'deletion');
       if (share.noFace) {
         throw new Fail('NO_FACE_DETECTED', { selfies: count, selfiesWithoutFace: count });
@@ -444,10 +495,10 @@ export function handlePhase3(
           issues: [{ path: ['headers', 'idempotency-key'], message: 'required' }],
         });
       }
-      if (ids.length > api.options.zipMaxFiles) {
+      if (ids.length > api.options.zipMaxFiles || ids.length * 1000 > api.options.zipMaxBytes) {
         throw new Fail('ZIP_TOO_LARGE', {
           maxFiles: api.options.zipMaxFiles,
-          maxBytes: 2 * 1024 ** 3,
+          maxBytes: api.options.zipMaxBytes,
           files: ids.length,
           bytes: ids.length * 1000,
         });
@@ -473,9 +524,11 @@ export function handlePhase3(
       return { kind: 'zip', job };
     }
     case PUBLIC_SHARE_ROUTES.zipJob: {
+      // Looked up by id AND the token's share; the share's gates apply.
+      const share = publicShareOrFail(api, params.token);
+      gate(api, share);
       const entry = api.zipJobs.get(params.id ?? '');
-      if (entry === undefined) throw new Fail('NOT_FOUND');
-      gate(api, publicShareOrFail(api, entry.token));
+      if (entry === undefined || entry.token !== share.token) throw new Fail('NOT_FOUND');
       entry.polls++;
       if (entry.polls < api.options.zipPollsUntilDone) {
         entry.job = { ...entry.job, status: 'running' };

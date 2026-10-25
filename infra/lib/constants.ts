@@ -1,4 +1,4 @@
-import { S3_PREFIXES } from '@shotx/shared';
+import { PAYMENT_GATEWAY_SECRET_NAMES, S3_PREFIXES } from '@shotx/shared';
 
 /**
  * Fixed platform facts. These are decisions from the platform spec, not tunables: changing one
@@ -11,6 +11,9 @@ export const PRIMARY_REGION = 'ap-southeast-1';
 
 /** CloudFront-scoped WAF web ACLs, CloudFront ACM certificates and PricingPlanManager live here. */
 export const EDGE_REGION = 'us-east-1';
+
+/** The production stage: payments and email must be real there (no `fake` adapters). */
+export const PRODUCTION_STAGE = 'prod';
 
 /** Context key that holds the platform configuration object. */
 export const CONTEXT_KEY = 'shotx';
@@ -30,6 +33,14 @@ export const PATHS = {
  * distributions apart. CloudFront overwrites any viewer-supplied header with the same name.
  */
 export const APP_ROUTING_HEADER = 'X-ShotX-App';
+
+/**
+ * The client address (`ip:port`) CloudFront adds to origin requests when the origin request policy
+ * asks for it. CloudFront sets it from the TCP connection, never from a viewer-supplied header, and
+ * the ALB only accepts CloudFront (origin-facing prefix list) plus the web and admin tasks. The
+ * api reads it in apps/api/src/http/client.ts.
+ */
+export const VIEWER_ADDRESS_HEADER = 'CloudFront-Viewer-Address';
 
 /** ECS services. web, admin and api sit behind the ALB; worker consumes SQS. */
 export const ALB_SERVICES = ['web', 'admin', 'api'] as const;
@@ -84,4 +95,9 @@ export const INFRA_OWNED_ENV = [
   'CONSENT_POLICY_VERSION',
   'IP_HASH_SECRET',
   'MEDIA_BUCKET',
+  'PAYMENT_GATEWAY',
+  ...PAYMENT_GATEWAY_SECRET_NAMES,
+  'EMAIL_PROVIDER',
+  'EMAIL_FROM_ADDRESS',
+  'EMAIL_FROM_NAME',
 ] as const;

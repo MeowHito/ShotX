@@ -18,12 +18,17 @@ export interface SubscriptionInfo {
  * The live subscription (trial, active or grace), or else the latest one (expired or purged),
  * or null when the photographer never had one. Status is maintained by the daily
  * `subscriptions.transition.daily` job and trusted here.
+ *
+ * `lock: 'share'` (inside a transaction) locks the subscription row FOR SHARE, so a quota read for
+ * an upload reservation serialises with a plan change (checkout and webhook transactions lock it
+ * FOR UPDATE): the reservation sees either the old or the new quota, never a change halfway.
  */
 export async function currentSubscription(
   q: Queryable,
   ownerId: string,
+  options: { lock?: 'share' } = {},
 ): Promise<SubscriptionInfo | null> {
-  const [row] = await q
+  const query = q
     .select({
       status: subscriptions.status,
       periodEnd: subscriptions.periodEnd,
@@ -36,6 +41,9 @@ export async function currentSubscription(
     .where(eq(subscriptions.photographerId, ownerId))
     .orderBy(desc(LIVE), desc(subscriptions.createdAt), desc(subscriptions.id))
     .limit(1);
+  const [row] = await (options.lock === 'share'
+    ? query.for('share', { of: subscriptions })
+    : query);
   if (row === undefined) return null;
   return {
     status: row.status,

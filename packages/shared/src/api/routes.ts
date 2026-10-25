@@ -1,5 +1,16 @@
 import type { z } from 'zod';
+import type { ActivityType } from '../domain';
 import { ErrorCode } from '../errors';
+import {
+  checkoutHeadersSchema,
+  checkoutResponseSchema,
+  createCheckoutBodySchema,
+  paymentViewSchema,
+  plansResponseSchema,
+  subscriptionResponseSchema,
+  webhookParamsSchema,
+  webhookResponseSchema,
+} from './billing';
 import { API_PREFIX, idParamsSchema } from './common';
 import {
   createFolderBodySchema,
@@ -27,6 +38,7 @@ import {
   createDownloadBodySchema,
   createDownloadResponseSchema,
   downloadsHeadersSchema,
+  faceDeletionInfoResponseSchema,
   faceDeletionResponseSchema,
   faceFeedbackBodySchema,
   faceSearchResponseSchema,
@@ -37,6 +49,7 @@ import {
   shareItemsResponseSchema,
   shareMetaResponseSchema,
   shareTokenParamsSchema,
+  shareZipJobParamsSchema,
   unlockShareBodySchema,
   zipJobResponseSchema,
 } from './share-page';
@@ -70,9 +83,12 @@ export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
  *   the WAF, not through the BFF. The viewer is resolved as described in share/viewer (optional
  *   bearer token, viewer-session cookie, anon cookie). State-changing public requests from another
  *   origin (Origin header) are FORBIDDEN.
+ * - `webhook`: server-to-server calls from a payment gateway. No token, no cookies, no Origin
+ *   check, not behind the WAF's share rules; the body is read raw and the gateway adapter verifies
+ *   its signature before anything is parsed (WEBHOOK_SIGNATURE_INVALID).
  * Admins (admins-pool tokens) use only `/admin/*` routes; anywhere else they are UNAUTHENTICATED.
  */
-export type RouteAuth = 'photographer' | 'user' | 'public';
+export type RouteAuth = 'photographer' | 'user' | 'public' | 'webhook';
 
 /** A multipart/form-data request body of file parts only. */
 export interface MultipartSpec {
@@ -104,6 +120,11 @@ export interface RouteContract {
   body?: z.ZodType;
   /** Instead of `body`: a multipart/form-data body. */
   multipart?: MultipartSpec;
+  /**
+   * Instead of `body`: the exact request bytes, unparsed (signature verification). At most
+   * API_JSON_BODY_MAX_BYTES (PAYLOAD_TOO_LARGE).
+   */
+  rawBody?: true;
   /** Absent for 204. */
   response?: z.ZodType;
   /** Every error code the route can return. */
@@ -440,8 +461,8 @@ const SELFIE_UPLOAD: MultipartSpec = {
   mimeTypes: SELFIE_MIME_TYPES,
   maxFilesConfigKey: 'FACE_MAX_SELFIES',
 };
-const FACE_ERRORS = [
-  ErrorCode.FEATURE_DISABLED,
+/** Errors of a selfie scan, whatever its purpose. */
+const SELFIE_SCAN_ERRORS = [
   ErrorCode.CONSENT_REQUIRED,
   ErrorCode.NO_FACE_DETECTED,
   ErrorCode.PAYLOAD_TOO_LARGE,
@@ -480,6 +501,11 @@ export const PUBLIC_SHARE_ROUTES = {
     body: unlockShareBodySchema,
     errors: errors(...SHARE_LOOKUP_ERRORS, ErrorCode.LOGIN_REQUIRED, ErrorCode.PASSWORD_INCORRECT),
   },
+  /**
+   * Give consent. The gates depend on `purpose` (CONSENT_PURPOSE_GATES): `face_search` has every
+   * share gate and FEATURE_DISABLED; `face_deletion` checks the token only. The error list is the
+   * union.
+   */
   giveConsent: {
     method: 'POST',
     path: '/s/:token/consent',
@@ -514,7 +540,12 @@ export const PUBLIC_SHARE_ROUTES = {
     params: shareTokenParamsSchema,
     multipart: SELFIE_UPLOAD,
     response: faceSearchResponseSchema,
-    errors: errors(...SHARE_GATE_ERRORS, ...FACE_ERRORS, ErrorCode.FACE_SEARCH_UNAVAILABLE),
+    errors: errors(
+      ...SHARE_GATE_ERRORS,
+      ErrorCode.FEATURE_DISABLED,
+      ...SELFIE_SCAN_ERRORS,
+      ErrorCode.FACE_SEARCH_UNAVAILABLE,
+    ),
   },
   /** "ไม่ใช่ฉัน". */
   feedback: {
@@ -526,7 +557,23 @@ export const PUBLIC_SHARE_ROUTES = {
     body: faceFeedbackBodySchema,
     errors: errors(...SHARE_GATE_ERRORS, ErrorCode.FEATURE_DISABLED),
   },
-  /** "ขอลบใบหน้าของฉัน". */
+  /**
+   * Added (Phase 3 review): what the "ขอลบใบหน้าของฉัน" page needs. Token lookup only, so it works
+   * on revoked or expired shares, without unlocking or signing in, and with the flag off.
+   */
+  faceDeletionInfo: {
+    method: 'GET',
+    path: '/s/:token/face-deletion',
+    status: 200,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    response: faceDeletionInfoResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND),
+  },
+  /**
+   * "ขอลบใบหน้าของฉัน". Token lookup plus a current `face_deletion` consent only: never
+   * SHARE_EXPIRED, LOGIN_REQUIRED, PASSWORD_REQUIRED or FEATURE_DISABLED (PDPA; ADR 0007).
+   */
   faceDeletion: {
     method: 'POST',
     path: '/s/:token/face-deletion',
@@ -535,7 +582,7 @@ export const PUBLIC_SHARE_ROUTES = {
     params: shareTokenParamsSchema,
     multipart: SELFIE_UPLOAD,
     response: faceDeletionResponseSchema,
-    errors: errors(...SHARE_GATE_ERRORS, ...FACE_ERRORS),
+    errors: errors(ErrorCode.NOT_FOUND, ...SELFIE_SCAN_ERRORS),
   },
   /** One file: a signed URL; several: a zip job (Idempotency-Key required). */
   downloads: {
@@ -554,14 +601,126 @@ export const PUBLIC_SHARE_ROUTES = {
       ErrorCode.IDEMPOTENCY_KEY_REUSED,
     ),
   },
+  /**
+   * Poll a zip job. Moved from `/zip-jobs/:id` (Phase 3 review) so the share's unlock cookie
+   * (Path `/api/s/{token}`) reaches it and the normal share gates apply.
+   */
   zipJob: {
     method: 'GET',
-    path: '/zip-jobs/:id',
+    path: '/s/:token/zip-jobs/:id',
     status: 200,
     auth: 'public',
-    params: idParamsSchema,
+    params: shareZipJobParamsSchema,
     response: zipJobResponseSchema,
     errors: errors(...SHARE_GATE_ERRORS),
+  },
+} as const satisfies Record<string, RouteContract>;
+
+/**
+ * The activity events each public share route may write (see share/activity). A route not listed
+ * with a type never writes it. In particular `meta` (`GET /s/:token`) writes nothing, although it
+ * issues the cover URL: it is fetched by SSR and by link unfurlers (LINE, Facebook), not only by
+ * people, so counting it would inflate visitors. Views come only from what the browser fetches
+ * for the grid (`items` pages) and from face-search results.
+ * - `downloads` writes `download` for a single file only; a zip job writes nothing until
+ *   `zipJob` first issues the archive's URL (`zip`, once per job).
+ * - `faceSearch` writes one `scan` and one `view` (its response issues view URLs).
+ * - `faceDeletion` writes nothing (`face_deletions` holds its counts).
+ */
+export const PUBLIC_SHARE_ROUTE_ACTIVITY = {
+  meta: [],
+  items: ['view'],
+  unlock: [],
+  giveConsent: [],
+  withdrawConsent: [],
+  faceSearch: ['scan', 'view'],
+  feedback: [],
+  faceDeletionInfo: [],
+  faceDeletion: [],
+  downloads: ['download'],
+  zipJob: ['zip'],
+} as const satisfies Record<keyof typeof PUBLIC_SHARE_ROUTES, readonly ActivityType[]>;
+
+/** True when the public share route `route` may write activity events of `type`. */
+export function publicShareRouteWritesActivity(
+  route: keyof typeof PUBLIC_SHARE_ROUTES,
+  type: ActivityType,
+): boolean {
+  return (PUBLIC_SHARE_ROUTE_ACTIVITY[route] as readonly ActivityType[]).includes(type);
+}
+
+/** Billing routes (Phase 4); see api/billing and billing/subscription for the rules. */
+export const BILLING_ROUTES = {
+  /** Public price list: active plans except the trial. */
+  plans: {
+    method: 'GET',
+    path: '/plans',
+    status: 200,
+    auth: 'public',
+    response: plansResponseSchema,
+    errors: errors(),
+  },
+  /** Start a purchase (Idempotency-Key required). */
+  checkout: {
+    method: 'POST',
+    path: '/billing/checkout',
+    status: 201,
+    auth: 'photographer',
+    headers: checkoutHeadersSchema,
+    body: createCheckoutBodySchema,
+    response: checkoutResponseSchema,
+    errors: errors(
+      ErrorCode.PLAN_NOT_FOUND,
+      ErrorCode.PLAN_CHANGE_INVALID,
+      ErrorCode.CHECKOUT_PENDING,
+      ErrorCode.CHECKOUT_EXPIRED,
+      ErrorCode.IDEMPOTENCY_KEY_REUSED,
+      ErrorCode.PAYMENT_GATEWAY_ERROR,
+    ),
+  },
+  /** Poll a payment until it is final. */
+  payment: {
+    method: 'GET',
+    path: '/billing/payments/:id',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    response: paymentViewSchema,
+    errors: errors(ErrorCode.NOT_FOUND),
+  },
+  subscription: {
+    method: 'GET',
+    path: '/billing/subscription',
+    status: 200,
+    auth: 'photographer',
+    response: subscriptionResponseSchema,
+    errors: errors(),
+  },
+  /** Auto-renew off at period end (idempotent; a prepaid subscription is returned unchanged). */
+  cancelSubscription: {
+    method: 'POST',
+    path: '/billing/subscription/cancel',
+    status: 200,
+    auth: 'photographer',
+    response: subscriptionResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.PAYMENT_GATEWAY_ERROR),
+  },
+  /** Gateway webhooks: verify, store, apply in one transaction, answer 2xx. */
+  webhook: {
+    method: 'POST',
+    path: '/billing/webhooks/:gateway',
+    status: 200,
+    auth: 'webhook',
+    params: webhookParamsSchema,
+    rawBody: true,
+    response: webhookResponseSchema,
+    errors: [
+      ErrorCode.VALIDATION_FAILED,
+      ErrorCode.NOT_FOUND,
+      ErrorCode.WEBHOOK_SIGNATURE_INVALID,
+      ErrorCode.PAYLOAD_TOO_LARGE,
+      ErrorCode.INTERNAL_ERROR,
+    ],
   },
 } as const satisfies Record<string, RouteContract>;
 
@@ -572,6 +731,7 @@ export const API_ROUTES = {
   me: ME_ROUTES,
   shares: SHARE_ROUTES,
   publicShare: PUBLIC_SHARE_ROUTES,
+  billing: BILLING_ROUTES,
 } as const;
 
 /** Every route as a flat list, e.g. for OpenAPI generation. */

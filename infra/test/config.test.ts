@@ -1,8 +1,10 @@
+import { TMP_LIFECYCLE_MAX_DAYS } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
 import { facesQueueWorstCase, parseConfig, resolveRawConfig, zipLifetime } from '../lib/config';
 import { CONTEXT_KEY } from '../lib/constants';
 import { facesJobWorstCase, serviceFaceConfig } from '../lib/face-limits';
 import {
+  minReconcileExpirationDays,
   minZipExpirationDays,
   serviceShareConfig,
   serviceWorkerSettings,
@@ -54,23 +56,23 @@ describe('cdk.json config', () => {
     });
 
     it('follows ZIP_RESULT_TTL_SECONDS from either api or worker', () => {
-      // 3 days of TTL: 7200 + 259200 + 600 + 300 = 267300 s -> 4 days.
+      // The 2-day maximum TTL: 7200 + 172800 + 600 + 300 = 180900 s -> 3 days.
       for (const group of ['backend', 'api', 'worker', 'common']) {
-        const env = { [group]: { ZIP_RESULT_TTL_SECONDS: '259200' } };
-        expect(() => parseConfig(withZips(3, env)), group).toThrow(/must be >= 4 days/);
-        expect(() => parseConfig(withZips(4, env)), group).not.toThrow();
+        const env = { [group]: { ZIP_RESULT_TTL_SECONDS: '172800' } };
+        expect(() => parseConfig(withZips(2, env)), group).toThrow(/must be >= 3 days/);
+        expect(() => parseConfig(withZips(3, env)), group).not.toThrow();
       }
     });
 
     it('follows the worker zip cap and the download URL settings', () => {
-      // 7200 + 230000 + 900 = 238100 s -> 3 days; with an 11 h cap 270500 s -> 4 days.
-      const ttl = { ZIP_RESULT_TTL_SECONDS: '230000' };
-      expect(() => parseConfig(withZips(3, { backend: ttl }))).not.toThrow();
+      // 7200 + 160000 + 900 = 168100 s -> 2 days; with an 11 h cap 200500 s -> 3 days.
+      const ttl = { ZIP_RESULT_TTL_SECONDS: '160000' };
+      expect(() => parseConfig(withZips(2, { backend: ttl }))).not.toThrow();
       expect(() =>
         parseConfig(
-          withZips(3, { backend: ttl, worker: { WORKER_ZIP_MAX_PROCESSING_SECONDS: '39600' } }),
+          withZips(2, { backend: ttl, worker: { WORKER_ZIP_MAX_PROCESSING_SECONDS: '39600' } }),
         ),
-      ).toThrow(/must be >= 4 days[\s\S]*at storage\.tmpZipsExpirationDays/);
+      ).toThrow(/must be >= 3 days[\s\S]*at storage\.tmpZipsExpirationDays/);
       expect(() =>
         parseConfig(
           withZips(2, {
@@ -83,11 +85,86 @@ describe('cdk.json config', () => {
       ).toThrow(/must be >= 3 days/);
     });
 
+    it('never needs more than 3 days: shared rejects a zip lifetime beyond the tmp/ ceiling', () => {
+      // Every allowed setting fits a 3-day rule even at the 11 h worker cap (ADR 0006).
+      const worst = {
+        ZIP_RESULT_TTL_SECONDS: '172800',
+        SIGNED_URL_VIEW_TTL_SECONDS: '604800',
+        SIGNED_URL_DOWNLOAD_TTL_SECONDS: '45900',
+        SIGNED_URL_EXPIRY_BUCKET_SECONDS: '900',
+      };
+      const config = parseConfig(
+        withEdit((x) => {
+          Object.assign(at(x, 'services', 'env', 'backend'), worst);
+          Object.assign(at(x, 'services', 'env', 'worker'), {
+            WORKER_ZIP_MAX_PROCESSING_SECONDS: '39600',
+          });
+          at(x, 'storage').tmpZipsExpirationDays = 3;
+          at(x, 'queues', 'zip').retentionDays = 2;
+        }),
+      );
+      expect(zipLifetime(config).seconds).toBe(TMP_LIFECYCLE_MAX_DAYS * 86_400);
+      expect(minZipExpirationDays(zipLifetime(config))).toBe(TMP_LIFECYCLE_MAX_DAYS);
+      // One second more is refused by loadShareConfig, before infra's own check.
+      expect(() =>
+        parseConfig(
+          withZips(3, { backend: { ...worst, SIGNED_URL_DOWNLOAD_TTL_SECONDS: '45901' } }),
+        ),
+      ).toThrow(/tmp\/ lifecycle ceiling/);
+      expect(() =>
+        parseConfig(withZips(3, { backend: { ZIP_RESULT_TTL_SECONDS: '259200' } })),
+      ).toThrow(/ZIP_RESULT_TTL_SECONDS/);
+    });
+
     it('keeps the tmp/ catch-all at least as long as every per-prefix rule', () => {
       const c = withEdit((x) => {
         at(x, 'storage').tmpOtherExpirationDays = 2;
       });
-      expect(() => parseConfig(c)).toThrow(/must be >= 7[\s\S]*at storage\.tmpOtherExpirationDays/);
+      expect(() => parseConfig(c)).toThrow(/must be >= 3[\s\S]*at storage\.tmpOtherExpirationDays/);
+    });
+  });
+
+  describe('tmp/ rules stay within the spec’s 1-3 days (ADR 0006)', () => {
+    for (const key of [
+      'tmpIndexExpirationDays',
+      'tmpZipsExpirationDays',
+      'tmpReconcileExpirationDays',
+      'tmpOtherExpirationDays',
+    ]) {
+      it(`rejects storage.${key} above 3 days or below 1`, () => {
+        for (const days of [0, 4, 7]) {
+          const c = withEdit((x) => {
+            at(x, 'storage')[key] = days;
+          });
+          expect(() => parseConfig(c), `${key}=${days}`).toThrow(new RegExp(key));
+        }
+      });
+    }
+
+    it('uses 1 day for tmp/index/, 2 for tmp/zips/ and 3 for tmp/reconcile/ and the rest', () => {
+      expect(parseConfig(rawConfig()).storage).toMatchObject({
+        tmpIndexExpirationDays: 1,
+        tmpZipsExpirationDays: 2,
+        tmpReconcileExpirationDays: 3,
+        tmpOtherExpirationDays: 3,
+      });
+    });
+
+    it('keeps reconciliation scans for one orphan grace plus one daily run', () => {
+      const withReconcile = (days: number, grace?: string) =>
+        withEdit((x) => {
+          at(x, 'storage').tmpReconcileExpirationDays = days;
+          if (grace !== undefined) at(x, 'services', 'env', 'worker').FACE_ORPHAN_GRACE_MS = grace;
+        });
+      // 3 h grace + 1 day -> 2 days.
+      expect(minReconcileExpirationDays(10_800_000)).toBe(2);
+      expect(() => parseConfig(withReconcile(1))).toThrow(
+        /must be >= 2 days: a reconciliation scan[\s\S]*at storage\.tmpReconcileExpirationDays/,
+      );
+      expect(() => parseConfig(withReconcile(2))).not.toThrow();
+      // The longest grace FACE_ORPHAN_GRACE_MS allows (1 day) still fits in 2 days.
+      expect(minReconcileExpirationDays(86_400_000)).toBe(2);
+      expect(() => parseConfig(withReconcile(2, '86400000'))).not.toThrow();
     });
   });
 

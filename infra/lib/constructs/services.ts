@@ -1,12 +1,13 @@
 import {
   COGNITO_ENV,
+  PAYMENT_GATEWAY_SECRET_ENV,
   QUEUE_NAMES,
   QUEUE_URL_ENV,
   QUEUE_VISIBILITY_TIMEOUT_ENV,
   type QueueName,
   S3_PREFIXES,
 } from '@shotx/shared';
-import { Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import { Annotations, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import * as appscaling from 'aws-cdk-lib/aws-applicationautoscaling';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -84,6 +85,13 @@ export class Services extends Construct {
   readonly taskRoles: Record<ServiceName, iam.IRole>;
   /** IP_HASH_SECRET (api): HMAC key of consents.ip_hash. */
   readonly ipHashSecret: secretsmanager.Secret;
+  /**
+   * The selected gateway's secrets (api and worker), one JSON key per
+   * PAYMENT_GATEWAY_SECRET_ENV[billing.paymentGateway] name. Generated for `fake`; created by the
+   * operator (billing.gatewaySecretName) for a real gateway.
+   */
+  readonly paymentGatewaySecret: secretsmanager.ISecret;
+  readonly logGroups: Record<ServiceName, logs.LogGroup>;
 
   constructor(scope: Construct, id: string, props: ServicesProps) {
     super(scope, id);
@@ -205,6 +213,54 @@ export class Services extends Construct {
         includeSpace: false,
       },
     });
+    // Payments and email (api and worker: the worker charges auto-renewals and sends reminders).
+    const gateway = config.billing.paymentGateway;
+    this.paymentGatewaySecret =
+      gateway === 'fake'
+        ? new secretsmanager.Secret(this, 'PaymentGatewaySecret', {
+            secretName: `${prefix}/payment-gateway-fake`,
+            description: 'PAYMENT_FAKE_WEBHOOK_SECRET: HMAC key of fake gateway webhooks',
+            generateSecretString: {
+              secretStringTemplate: '{}',
+              generateStringKey: PAYMENT_GATEWAY_SECRET_ENV.fake[0],
+              passwordLength: config.billing.fakeWebhookSecretLength,
+              excludePunctuation: true,
+              includeSpace: false,
+            },
+          })
+        : secretsmanager.Secret.fromSecretNameV2(
+            this,
+            'PaymentGatewaySecret',
+            config.billing.gatewaySecretName,
+          );
+    const paymentSecrets: Record<string, ecs.Secret> = Object.fromEntries(
+      PAYMENT_GATEWAY_SECRET_ENV[gateway].map((name) => [
+        name,
+        ecs.Secret.fromSecretsManager(this.paymentGatewaySecret, name),
+      ]),
+    );
+    const billing = {
+      PAYMENT_GATEWAY: gateway,
+      EMAIL_PROVIDER: config.email.provider,
+      EMAIL_FROM_ADDRESS: config.email.fromAddress,
+      EMAIL_FROM_NAME: config.email.fromName,
+    };
+    // Every ECS service runs with NODE_ENV=production, where the shared loaders refuse the fake
+    // adapters (loadPaymentGatewayConfig, loadEmailConfig). Synth refuses them on the prod stage;
+    // elsewhere it warns, because api and worker will not start.
+    for (const [what, value] of [
+      ['billing.paymentGateway', gateway],
+      ['email.provider', config.email.provider],
+    ] as const) {
+      if (value === 'fake') {
+        Annotations.of(this).addWarningV2(
+          '@shotx/infra:fake-adapter',
+          `${what} is fake: api and worker run with NODE_ENV=production, where the shared ` +
+            `loaders refuse fake adapters, so they will fail to start on AWS`,
+        );
+      }
+    }
+
     // Typed context values; services.env can't set these (config validation).
     const features = { FACE_SEARCH_ENABLED: String(config.features.faceSearchEnabled) };
     const consent = { CONSENT_POLICY_VERSION: config.consent.policyVersion };
@@ -243,6 +299,7 @@ export class Services extends Construct {
         ...apiDerived,
         ...features,
         ...consent,
+        ...billing,
       },
       worker: {
         ...base,
@@ -252,6 +309,7 @@ export class Services extends Construct {
         ...extra.worker,
         ...workerDerived,
         ...features,
+        ...billing,
       },
     };
     const secrets: Record<ServiceName, Record<string, ecs.Secret>> = {
@@ -261,14 +319,16 @@ export class Services extends Construct {
         ...backendSecrets,
         CLOUDFRONT_PRIVATE_KEY: ecs.Secret.fromSecretsManager(signingKey),
         IP_HASH_SECRET: ecs.Secret.fromSecretsManager(this.ipHashSecret),
+        ...paymentSecrets,
       },
-      worker: backendSecrets,
+      worker: { ...backendSecrets, ...paymentSecrets },
     };
 
     // --- Services ----------------------------------------------------------------------------
     const services = {} as Record<ServiceName, ecs.FargateService>;
     const taskRoles = {} as Record<ServiceName, iam.IRole>;
     const securityGroups = {} as Record<ServiceName, ec2.SecurityGroup>;
+    const logGroups = {} as Record<ServiceName, logs.LogGroup>;
 
     const createService = (
       name: ServiceName,
@@ -290,6 +350,7 @@ export class Services extends Construct {
         retention: svc.logRetentionDays,
         removalPolicy: RemovalPolicy.RETAIN,
       });
+      logGroups[name] = logGroup;
       taskDefinition.addContainer(name, {
         image: ecs.ContainerImage.fromEcrRepository(props.repositories[name], svc.imageTag),
         logging: ecs.LogDrivers.awsLogs({ streamPrefix: name, logGroup }),
@@ -552,5 +613,6 @@ export class Services extends Construct {
 
     this.services = services;
     this.taskRoles = taskRoles;
+    this.logGroups = logGroups;
   }
 }

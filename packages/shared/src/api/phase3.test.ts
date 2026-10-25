@@ -47,10 +47,10 @@ describe('Phase 3 routes', () => {
     for (const route of [
       PUBLIC_SHARE_ROUTES.items,
       PUBLIC_SHARE_ROUTES.faceSearch,
-      PUBLIC_SHARE_ROUTES.faceDeletion,
       PUBLIC_SHARE_ROUTES.downloads,
       PUBLIC_SHARE_ROUTES.feedback,
       PUBLIC_SHARE_ROUTES.giveConsent,
+      PUBLIC_SHARE_ROUTES.zipJob,
     ]) {
       expect(route.errors).toEqual(
         expect.arrayContaining([
@@ -66,13 +66,26 @@ describe('Phase 3 routes', () => {
     expect(PUBLIC_SHARE_ROUTES.withdrawConsent.errors).not.toContain('FEATURE_DISABLED');
     for (const route of [
       PUBLIC_SHARE_ROUTES.faceSearch,
-      PUBLIC_SHARE_ROUTES.faceDeletion,
       PUBLIC_SHARE_ROUTES.giveConsent,
       PUBLIC_SHARE_ROUTES.feedback,
       DRIVE_ROUTES.updateFaceIndex,
     ]) {
       expect(route.errors).toContain('FEATURE_DISABLED');
     }
+    // Face deletion is a PDPA right: token lookup and consent only (ADR 0007).
+    for (const route of [PUBLIC_SHARE_ROUTES.faceDeletion, PUBLIC_SHARE_ROUTES.faceDeletionInfo]) {
+      for (const code of [
+        'SHARE_EXPIRED',
+        'LOGIN_REQUIRED',
+        'PASSWORD_REQUIRED',
+        'FEATURE_DISABLED',
+        'FACE_SEARCH_UNAVAILABLE',
+      ]) {
+        expect(route.errors).not.toContain(code);
+      }
+      expect(route.errors).toContain('NOT_FOUND');
+    }
+    expect(PUBLIC_SHARE_ROUTES.faceDeletion.errors).toContain('CONSENT_REQUIRED');
     expect(PUBLIC_SHARE_ROUTES.faceSearch.errors).toEqual(
       expect.arrayContaining(['CONSENT_REQUIRED', 'NO_FACE_DETECTED', 'FACE_SEARCH_UNAVAILABLE']),
     );
@@ -94,7 +107,9 @@ describe('Phase 3 routes', () => {
 
   it('builds share paths', () => {
     expect(apiPath(PUBLIC_SHARE_ROUTES.faceSearch, { token })).toBe(`/api/s/${token}/face-search`);
-    expect(apiPath(PUBLIC_SHARE_ROUTES.zipJob, { id })).toBe(`/api/zip-jobs/${id}`);
+    expect(apiPath(PUBLIC_SHARE_ROUTES.zipJob, { token, id })).toBe(
+      `/api/s/${token}/zip-jobs/${id}`,
+    );
     expect(apiPath(SHARE_ROUTES.stats, { id }, { prefix: false })).toBe(`/shares/${id}/stats`);
     expect(shareTokenParamsSchema.safeParse({ token: 'short' }).success).toBe(false);
   });
@@ -211,7 +226,16 @@ describe('public share schemas', () => {
       expiresAt: null,
       access: { loginRequired: false, locked: true },
       details: null,
-      faceSearch: { available: false, policyVersion: null, consented: false },
+      faceSearch: {
+        available: false,
+        policyVersion: null,
+        consented: false,
+        maxSelfies: 3,
+        selfieLongEdge: 1280,
+        selfieJpegQuality: 90,
+        resultTtlSeconds: 86_400,
+      },
+      zip: { maxFiles: 500 },
     };
     expect(shareMetaResponseSchema.parse(meta)).toEqual(meta);
   });
@@ -229,22 +253,43 @@ describe('public share schemas', () => {
     expect(parsed.strong[0]).not.toHaveProperty('bbox');
   });
 
-  it('accepts only the current consent shape', () => {
+  it('accepts any well-formed version, so the service can answer CONSENT_VERSION_MISMATCH', () => {
     expect(
-      giveConsentBodySchema.safeParse({
-        policyVersion: LATEST_CONSENT_POLICY_VERSION,
-        accepted: true,
-      }).success,
-    ).toBe(true);
+      giveConsentBodySchema.parse({ policyVersion: LATEST_CONSENT_POLICY_VERSION, accepted: true }),
+    ).toEqual({
+      purpose: 'face_search',
+      policyVersion: LATEST_CONSENT_POLICY_VERSION,
+      accepted: true,
+    });
     expect(
       giveConsentBodySchema.safeParse({
         policyVersion: LATEST_CONSENT_POLICY_VERSION,
         accepted: false,
       }).success,
     ).toBe(false);
-    expect(giveConsentBodySchema.safeParse({ policyVersion: 'v0', accepted: true }).success).toBe(
-      false,
-    );
+    // Outdated or unknown but well-formed: reaches the service (409, not 400).
+    for (const policyVersion of ['v0', '2025-01-01', 'draft.2']) {
+      expect(giveConsentBodySchema.safeParse({ policyVersion, accepted: true }).success).toBe(true);
+    }
+    for (const policyVersion of ['', '-x', 'has space', 'x'.repeat(33), '../etc']) {
+      expect(giveConsentBodySchema.safeParse({ policyVersion, accepted: true }).success).toBe(
+        false,
+      );
+    }
+    expect(
+      giveConsentBodySchema.parse({
+        purpose: 'face_deletion',
+        policyVersion: LATEST_CONSENT_POLICY_VERSION,
+        accepted: true,
+      }).purpose,
+    ).toBe('face_deletion');
+    expect(
+      giveConsentBodySchema.safeParse({
+        purpose: 'marketing',
+        policyVersion: LATEST_CONSENT_POLICY_VERSION,
+        accepted: true,
+      }).success,
+    ).toBe(false);
   });
 
   it('validates downloads', () => {

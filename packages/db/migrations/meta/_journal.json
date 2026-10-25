@@ -29,6 +29,13 @@
       "when": 1792946096370,
       "tag": "0003_sharing_face_search",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792963492986,
+      "tag": "0004_phase3_fixes_billing",
+      "breakpoints": true
     }
   ]
 }

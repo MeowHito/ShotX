@@ -12,14 +12,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { createdAt, id, timestamptz } from './columns';
-import {
-  authPool,
-  billingMode,
-  paymentMethod,
-  paymentStatus,
-  subscriptionStatus,
-  userRole,
-} from './enums';
+import { authPool, billingMode, subscriptionStatus, userRole } from './enums';
 
 /**
  * Everyone who signs in: photographers, viewers (role `user`) and admins.
@@ -81,7 +74,16 @@ export const plans = pgTable(
 
 /**
  * A photographer's subscription. At most one is live (trial, active or grace) per photographer;
- * expired and purged rows stay as history.
+ * expired and purged rows stay as history. A `new` checkout reuses the latest row unless it is
+ * purged (then it inserts a new one). The lifecycle rules are in @shotx/shared billing/subscription.
+ *
+ * Migration 0004 (billing):
+ * - `period_start`: start of the current paid period (trial: onboarding time);
+ * - `pending_plan_id` / `pending_plan_effective_at`: a scheduled downgrade, set together;
+ * - auto-renew: `billing = 'auto_renew'` exactly when `payment_method_ref` (the gateway's id of
+ *   the saved card, never card data), `payment_method_gateway` and `auto_renew_months` (1 or 12)
+ *   are set. Cancelling auto-renew clears them and sets `cancel_at_period_end`;
+ * - `updated_at`: set by every change (the api and worker write it; no trigger).
  */
 export const subscriptions = pgTable(
   'subscriptions',
@@ -95,9 +97,16 @@ export const subscriptions = pgTable(
       .references(() => plans.id),
     status: subscriptionStatus('status').notNull(),
     billing: billingMode('billing').notNull().default('prepaid'),
+    periodStart: timestamptz('period_start').notNull().defaultNow(),
     periodEnd: timestamptz('period_end').notNull(),
     cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
+    autoRenewMonths: integer('auto_renew_months'),
+    paymentMethodGateway: text('payment_method_gateway'),
+    paymentMethodRef: text('payment_method_ref'),
+    pendingPlanId: uuid('pending_plan_id').references(() => plans.id),
+    pendingPlanEffectiveAt: timestamptz('pending_plan_effective_at'),
     createdAt: createdAt(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex('subscriptions_one_live_per_photographer')
@@ -105,42 +114,27 @@ export const subscriptions = pgTable(
       .where(sql`${t.status} IN ('trial', 'active', 'grace')`),
     index('subscriptions_photographer_idx').on(t.photographerId),
     index('subscriptions_status_period_end_idx').on(t.status, t.periodEnd),
-  ],
-);
-
-/**
- * Gateway payments. Webhooks upsert by (gateway, gateway_ref), which makes them idempotent.
- * `amount_satang` is the VAT-inclusive total and `vat_satang` the VAT part of it.
- */
-export const payments = pgTable(
-  'payments',
-  {
-    id: id(),
-    subscriptionId: uuid('subscription_id')
-      .notNull()
-      .references(() => subscriptions.id),
-    amountSatang: integer('amount_satang').notNull(),
-    vatSatang: integer('vat_satang').notNull(),
-    method: paymentMethod('method').notNull(),
-    /** Gateway name, e.g. `omise`, `2c2p`, `stripe`. */
-    gateway: text('gateway').notNull(),
-    /** The gateway's id for the charge. */
-    gatewayRef: text('gateway_ref').notNull(),
-    status: paymentStatus('status').notNull().default('pending'),
-    paidAt: timestamptz('paid_at'),
-    createdAt: createdAt(),
-  },
-  (t) => [
-    unique('payments_gateway_ref_unique').on(t.gateway, t.gatewayRef),
-    index('payments_subscription_idx').on(t.subscriptionId),
-    check('payments_amount_nonnegative', sql`${t.amountSatang} >= 0`),
+    // The daily job's pending downgrades.
+    index('subscriptions_pending_plan_idx')
+      .on(t.pendingPlanEffectiveAt)
+      .where(sql`${t.pendingPlanId} IS NOT NULL`),
+    check('subscriptions_period_order', sql`${t.periodStart} <= ${t.periodEnd}`),
     check(
-      'payments_vat_within_amount',
-      sql`${t.vatSatang} >= 0 AND ${t.vatSatang} <= ${t.amountSatang}`,
+      'subscriptions_auto_renew_has_method',
+      sql`(${t.billing} = 'auto_renew') = (${t.paymentMethodRef} IS NOT NULL) AND (${t.paymentMethodRef} IS NULL) = (${t.paymentMethodGateway} IS NULL) AND (${t.billing} = 'auto_renew') = (${t.autoRenewMonths} IS NOT NULL)`,
     ),
-    check('payments_paid_has_paid_at', sql`${t.status} <> 'paid' OR ${t.paidAt} IS NOT NULL`),
-    check('payments_gateway_format', sql`${t.gateway} ~ '^[a-z0-9_]{1,32}$'`),
-    check('payments_gateway_ref_not_empty', sql`length(${t.gatewayRef}) > 0`),
+    check(
+      'subscriptions_auto_renew_months_valid',
+      sql`${t.autoRenewMonths} IS NULL OR ${t.autoRenewMonths} IN (1, 12)`,
+    ),
+    check(
+      'subscriptions_pending_plan_complete',
+      sql`(${t.pendingPlanId} IS NULL) = (${t.pendingPlanEffectiveAt} IS NULL)`,
+    ),
+    check(
+      'subscriptions_payment_method_ref_valid',
+      sql`${t.paymentMethodRef} IS NULL OR length(${t.paymentMethodRef}) BETWEEN 1 AND 255`,
+    ),
   ],
 );
 

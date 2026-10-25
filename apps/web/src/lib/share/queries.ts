@@ -2,6 +2,8 @@
 
 import {
   type ConsentPolicyVersion,
+  type ConsentPurpose,
+  type FaceDeletionInfoResponse,
   PUBLIC_SHARE_ROUTES,
   SELFIE_FIELD_NAME,
   type ShareItem,
@@ -16,6 +18,7 @@ export const shareKeys = {
   all: (token: string) => ['share', token] as const,
   meta: (token: string) => ['share', token, 'meta'] as const,
   items: (token: string) => ['share', token, 'items'] as const,
+  faceDeletion: (token: string) => ['share', token, 'face-deletion'] as const,
 };
 
 /**
@@ -82,16 +85,37 @@ export function useUnlockShare(token: string) {
   });
 }
 
-export function useGiveConsent(token: string) {
+/**
+ * What "delete my face" needs (GET /s/:token/face-deletion). Token lookup only: it answers on
+ * expired and revoked shares and with face search switched off.
+ */
+export function useFaceDeletionInfo(token: string) {
+  const { api } = useShareApi();
+  return useQuery({
+    queryKey: shareKeys.faceDeletion(token),
+    queryFn: ({ signal }) =>
+      api.call(PUBLIC_SHARE_ROUTES.faceDeletionInfo, { params: { token }, signal }),
+    staleTime: 60_000,
+  });
+}
+
+/** Accepts the consent text of `purpose` in `policyVersion` for this share. */
+export function useGiveConsent(token: string, purpose: ConsentPurpose) {
   const { api } = useShareApi();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (policyVersion: ConsentPolicyVersion) =>
       api.call(PUBLIC_SHARE_ROUTES.giveConsent, {
         params: { token },
-        body: { policyVersion, accepted: true },
+        body: { purpose, policyVersion, accepted: true },
       }),
     onSuccess: () => {
+      if (purpose === 'face_deletion') {
+        queryClient.setQueryData<FaceDeletionInfoResponse>(shareKeys.faceDeletion(token), (info) =>
+          info === undefined ? info : { ...info, consented: true },
+        );
+        return queryClient.invalidateQueries({ queryKey: shareKeys.faceDeletion(token) });
+      }
       queryClient.setQueryData<ShareMetaResponse>(shareKeys.meta(token), (meta) =>
         meta === undefined
           ? meta

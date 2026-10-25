@@ -1,12 +1,19 @@
 import {
+  apiPath,
+  BILLING_ROUTES,
   CONSENT_POLICY_VERSIONS,
   CONTENT_DISPOSITION_QUERY_PARAM,
+  EMAIL_PROVIDERS,
   type FaceConfig,
+  loadEmailConfig,
   loadUploadConfig,
+  PAYMENT_GATEWAY_SECRET_ENV,
+  PAYMENT_GATEWAYS,
   type QueueName,
   S3_PREFIXES,
   SCHEDULED_JOB_TYPES,
   SQS_MAX_VISIBILITY_TIMEOUT_SECONDS,
+  TMP_LIFECYCLE_MAX_DAYS,
   type WorkerSettings,
 } from '@shotx/shared';
 import type { App } from 'aws-cdk-lib';
@@ -17,6 +24,7 @@ import {
   FACES_MIN_VISIBILITY_TIMEOUT_SECONDS,
   INFRA_OWNED_ENV,
   MIN_VISIBILITY_TIMEOUT_SECONDS,
+  PRODUCTION_STAGE,
 } from './constants';
 import {
   type FaceSearchBodyLimits,
@@ -29,6 +37,7 @@ import {
 } from './face-limits';
 import {
   describeZipLifetime,
+  minReconcileExpirationDays,
   minZipExpirationDays,
   serviceShareConfig,
   serviceWorkerSettings,
@@ -65,6 +74,13 @@ const logRetention = z.coerce
     error:
       'must be a CloudWatch Logs retention value (1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, ...)',
   });
+/** Days of a tmp/ lifecycle rule: the spec's 1-3 days (ADR 0006). */
+const tmpDays = int(1, TMP_LIFECYCLE_MAX_DAYS);
+/** Secrets Manager secret names: letters, digits and /_+=.@- (AWS rule). */
+const SECRET_NAME = /^[A-Za-z0-9/_+=.@-]{1,512}$/;
+/** An email address at a lowercase DNS domain, which becomes the SES domain identity. */
+const EMAIL_AT_DNS_DOMAIN =
+  /^[^@\s]+@(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const envMap = z.record(z.string().regex(/^[A-Z][A-Z0-9_]*$/), str);
 /** WAF lowercases the URI path before matching, so configured paths must be lowercase too. */
 const lowercasePath = str.pipe(
@@ -270,19 +286,23 @@ export const configSchema = z
       abortIncompleteMultipartUploadDays: int(1, 7),
       /**
        * tmp/ has one lifecycle rule per prefix (S3 applies the shortest matching expiration, so a
-       * single tmp/ rule would cut zips short). tmp/index/ holds face-index scratch images that
-       * are deleted right after IndexFaces: keep it short.
+       * single tmp/ rule would cut zips short). Every tmp/ rule stays within the spec's 1-3 days
+       * (TMP_LIFECYCLE_MAX_DAYS, ADR 0006). tmp/index/ holds face-index scratch images that are
+       * deleted right after IndexFaces: keep it short.
        */
-      tmpIndexExpirationDays: int(1, 3),
+      tmpIndexExpirationDays: tmpDays,
       /** tmp/zips/: at least ZIP_RESULT_TTL_SECONDS plus the margins in minZipExpirationDays. */
-      tmpZipsExpirationDays: int(1, 30),
-      /** tmp/reconcile/: the worker's reconciliation scan files. */
-      tmpReconcileExpirationDays: int(1, 30),
+      tmpZipsExpirationDays: tmpDays,
+      /**
+       * tmp/reconcile/: the worker's reconciliation scan files. A scan must survive one orphan
+       * grace (FACE_ORPHAN_GRACE_MS) plus one daily run (minReconcileExpirationDays).
+       */
+      tmpReconcileExpirationDays: tmpDays,
       /**
        * Anything else under tmp/. Must be at least every per-prefix value above, or it would
        * expire those objects first.
        */
-      tmpOtherExpirationDays: int(1, 30),
+      tmpOtherExpirationDays: tmpDays,
       originalsIntelligentTieringAfterDays: int(0, 3650),
       uploadCorsMaxAgeSeconds: int(0, 86_400),
       cloudFrontLogExpirationDays: int(1, 3650),
@@ -298,6 +318,13 @@ export const configSchema = z
     alarms: z.object({
       /** Optional email subscribed to the alarm topic. Empty means no subscription. */
       email: str.pipe(z.union([z.literal(''), z.email()])),
+      /**
+       * Period of the alarm on the api's FACE_DELETION_ALERT_EVENT log line (ADR 0007): it fires
+       * when any such line is logged in a period.
+       */
+      faceDeletionAlertPeriodSeconds: z.coerce
+        .number()
+        .pipe(z.union([60, 300, 900, 3600].map((n) => z.literal(n)))),
     }),
 
     services: z.object({
@@ -452,6 +479,17 @@ export const configSchema = z
       }),
       /** AWSManagedRulesCommonRuleSet rules switched to Count (e.g. body size for uploads). */
       commonRuleSetCountOverrides: z.array(nonEmpty),
+      /**
+       * POST /api/billing/webhooks/<PAYMENT_GATEWAY> per IP. Generous: a gateway retries and sends
+       * bursts from a few addresses. The route skips CAPTCHA and the body-inspecting managed rules
+       * (signatures are computed over the raw body).
+       */
+      webhookRateLimit: int(10, 2_000_000_000),
+      /**
+       * The gateway's published webhook source ranges. Empty (the default) accepts any IP: the API
+       * verifies every webhook signature anyway.
+       */
+      webhookAllowedIpv4Cidrs: z.array(cidr),
       adminRateLimit: int(10, 2_000_000_000),
       /** Empty allows any IP (MFA still applies); otherwise only these IPv4 CIDRs reach admin. */
       adminAllowedIpv4Cidrs: z.array(cidr),
@@ -500,6 +538,34 @@ export const configSchema = z
     consent: z.object({
       /** CONSENT_POLICY_VERSION (api): one of CONSENT_POLICY_VERSIONS in packages/shared. */
       policyVersion: z.enum(CONSENT_POLICY_VERSIONS),
+    }),
+
+    /** Payments (api: checkout and webhooks; worker: auto-renew charges). */
+    billing: z.object({
+      /**
+       * PAYMENT_GATEWAY. `fake` (the default, for non-production stages) signs webhooks with a
+       * generated secret; the `prod` stage must name a real gateway.
+       */
+      paymentGateway: z.enum(PAYMENT_GATEWAYS).default('fake'),
+      /**
+       * Secrets Manager secret (ap-southeast-1) the operator creates before deploy: a JSON object
+       * with one key per PAYMENT_GATEWAY_SECRET_ENV[paymentGateway] name, e.g.
+       * {"PAYMENT_OMISE_PUBLIC_KEY": "...", "PAYMENT_OMISE_SECRET_KEY": "...", ...}. Ignored for
+       * `fake`, whose webhook secret infra generates.
+       */
+      gatewaySecretName: str.default(''),
+      /** Length of the generated PAYMENT_FAKE_WEBHOOK_SECRET (fake gateway only). */
+      fakeWebhookSecretLength: int(16, 4096),
+    }),
+
+    /** Transactional email (api and worker): reminders, receipts, grace and purge notices. */
+    email: z.object({
+      /** EMAIL_PROVIDER. `fake` (the default, for non-production stages); `prod` must use `ses`. */
+      provider: z.enum(EMAIL_PROVIDERS).default('fake'),
+      /** EMAIL_FROM_ADDRESS. Infra creates an SES domain identity for its domain. */
+      fromAddress: str,
+      /** EMAIL_FROM_NAME. */
+      fromName: str,
     }),
 
     rekognition: z.object({
@@ -638,7 +704,9 @@ export const configSchema = z
     for (const [group, vars] of Object.entries(groups)) {
       for (const key of Object.keys(vars)) {
         if ((INFRA_OWNED_ENV as readonly string[]).includes(key)) {
-          envIssue(`${group}: ${key} is set by infra (features, consent, secrets, buckets)`);
+          envIssue(
+            `${group}: ${key} is set by infra (features, consent, billing, email, secrets, buckets)`,
+          );
         }
         if (group !== 'common' && readsUploadKey(key)) {
           envIssue(
@@ -730,6 +798,16 @@ export const configSchema = z
             `attempts are cut off`,
         );
       }
+      const minReconcile = minReconcileExpirationDays(workerFace.index.orphanGraceMs);
+      if (c.storage.tmpReconcileExpirationDays < minReconcile) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['storage', 'tmpReconcileExpirationDays'],
+          message:
+            `must be >= ${minReconcile} days: a reconciliation scan must survive ` +
+            `FACE_ORPHAN_GRACE_MS (${workerFace.index.orphanGraceMs} ms) plus one daily run`,
+        });
+      }
       const minGrace = minOrphanGraceMs(worst);
       if (workerFace.index.orphanGraceMs < minGrace) {
         ctx.addIssue({
@@ -745,6 +823,55 @@ export const configSchema = z
     }
     // The api's FACE_* values size the face-search body limit (WAF rule and api env).
     faceConfig('api');
+
+    // Billing and email. The shared loaders refuse `fake` in production; so does synth for the
+    // production stage.
+    if (c.stage === PRODUCTION_STAGE) {
+      if (c.billing.paymentGateway === 'fake') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['billing', 'paymentGateway'],
+          message: `must not be fake on the ${PRODUCTION_STAGE} stage`,
+        });
+      }
+      if (c.email.provider === 'fake') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['email', 'provider'],
+          message: `must not be fake on the ${PRODUCTION_STAGE} stage`,
+        });
+      }
+    }
+    if (c.billing.paymentGateway !== 'fake' && !SECRET_NAME.test(c.billing.gatewaySecretName)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['billing', 'gatewaySecretName'],
+        message:
+          `must name the Secrets Manager secret holding ` +
+          `${PAYMENT_GATEWAY_SECRET_ENV[c.billing.paymentGateway].join(', ')}`,
+      });
+    }
+    // The address and name are parsed exactly as api and worker parse them.
+    try {
+      loadEmailConfig({
+        EMAIL_PROVIDER: c.email.provider,
+        EMAIL_FROM_ADDRESS: c.email.fromAddress,
+        EMAIL_FROM_NAME: c.email.fromName,
+      });
+    } catch (error) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['email'],
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (!EMAIL_AT_DNS_DOMAIN.test(c.email.fromAddress)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['email', 'fromAddress'],
+        message: 'must be an address at a lowercase DNS domain (the SES identity)',
+      });
+    }
   });
 
 export type PlatformConfig = z.output<typeof configSchema>;
@@ -762,6 +889,16 @@ function readsUploadKey(key: string): boolean {
   } catch {
     return true;
   }
+}
+
+/** The webhook path of the configured gateway, e.g. `/api/billing/webhooks/omise`. */
+export function webhookPath(config: PlatformConfig): string {
+  return apiPath(BILLING_ROUTES.webhook, { gateway: config.billing.paymentGateway });
+}
+
+/** The SES domain identity: the domain of `email.fromAddress`. */
+export function emailIdentityDomain(config: PlatformConfig): string {
+  return config.email.fromAddress.slice(config.email.fromAddress.lastIndexOf('@') + 1);
 }
 
 /** The worker's WORKER_* settings for this configuration. */

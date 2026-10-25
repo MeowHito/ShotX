@@ -1,10 +1,15 @@
-import { loadFaceConfig, REKOGNITION_INLINE_IMAGE_MAX_BYTES } from '@shotx/shared';
+import {
+  apiPath,
+  BILLING_ROUTES,
+  loadFaceConfig,
+  REKOGNITION_INLINE_IMAGE_MAX_BYTES,
+} from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
-import { faceSearchLimits } from '../lib/config';
+import { faceSearchLimits, webhookPath } from '../lib/config';
 import { decimalGreaterThanRegex } from '../lib/constructs/waf-rules';
 import { faceSearchBodyLimits } from '../lib/face-limits';
 import { synthPlatform, type Synthesized } from './helpers';
-import { matches, ruleApplies, scopeDown, type WafRequest } from './waf-eval';
+import { matches, registerIpSets, ruleApplies, scopeDown, type WafRequest } from './waf-eval';
 
 type Json = Record<string, unknown>;
 
@@ -421,6 +426,153 @@ describe('WAF rate rules on unlock and downloads', () => {
   it('gives every main ACL rule a unique priority', () => {
     const priorities = mainRules.map((x) => x.Priority);
     expect(new Set(priorities).size).toBe(priorities.length);
+  });
+});
+
+describe('WAF and payment webhooks (POST /api/billing/webhooks/:gateway)', () => {
+  const gateway = s.config.billing.paymentGateway;
+  const canonical = `/api/billing/webhooks/${gateway}`;
+  const variants: Record<string, string> = {
+    canonical,
+    'upper case': canonical.toUpperCase(),
+    'trailing slash': `${canonical}/`,
+    'percent-encoded letter': canonical.replace('webhooks', '%77ebhooks'),
+    'percent-encoded trailing slash': `${canonical}%2F`,
+  };
+  /** A signed JSON body that looks like an attack to the body rules (URLs, HTML, Java). */
+  const json = {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': '4096',
+  };
+  const bodyRuleGroups = ['AWSManagedRulesCommonRuleSet', 'AWSManagedRulesKnownBadInputsRuleSet'];
+  const rate = rule(mainRules, 'webhook-rate-block');
+
+  it('is the shared BILLING_ROUTES.webhook path for the configured gateway', () => {
+    expect(webhookPath(s.config)).toBe(apiPath(BILLING_ROUTES.webhook, { gateway }));
+    expect(gateway).toBe('omise');
+  });
+
+  for (const name of bodyRuleGroups) {
+    it(`skips ${name}, so the raw body reaches signature verification`, () => {
+      for (const [label, path] of Object.entries(variants)) {
+        expect(ruleApplies(rule(mainRules, `aws-${name}`), post(path, json)), label).toBe(false);
+      }
+    });
+
+    it(`keeps ${name} on other gateways, other methods and other billing routes`, () => {
+      for (const req of [
+        post('/api/billing/webhooks/2c2p', json),
+        post(`${canonical}/extra`, json),
+        get(canonical),
+        post('/api/billing/checkout', json),
+      ]) {
+        expect(ruleApplies(rule(mainRules, `aws-${name}`), req), `${req.method} ${req.path}`).toBe(
+          true,
+        );
+      }
+    });
+  }
+
+  it('is never challenged with CAPTCHA or counted as a share page', () => {
+    const captcha = mainRules.filter((r) => r.Action !== undefined && action(r) === 'Captcha');
+    expect(captcha.length).toBeGreaterThan(0);
+    for (const r of [...captcha, rule(mainRules, 'share-rate-block')]) {
+      for (const [label, path] of Object.entries(variants)) {
+        expect(ruleApplies(r, post(path, json)), `${String(r.Name)} ${label}`).toBe(false);
+      }
+    }
+  });
+
+  it('has its own generous per-IP rate rule (429), on every spelling', () => {
+    expect(rate.Action).toEqual({
+      Block: { CustomResponse: { ResponseCode: 429, CustomResponseBodyKey: 'rate_limited' } },
+    });
+    const r = (rate.Statement as Json).RateBasedStatement as Json;
+    expect(r.Limit).toBe(s.config.waf.webhookRateLimit);
+    expect(r.AggregateKeyType).toBe('IP');
+    expect(s.config.waf.webhookRateLimit).toBeGreaterThan(s.config.waf.downloadsBlockRateLimit);
+    for (const [label, path] of Object.entries(variants)) {
+      expect(ruleApplies(rate, post(path, json)), label).toBe(true);
+    }
+    expect(ruleApplies(rate, get(canonical))).toBe(false);
+    expect(ruleApplies(rate, post('/api/billing/checkout', json))).toBe(false);
+  });
+
+  it('keeps IP reputation and the global rate limit', () => {
+    for (const name of ['aws-AWSManagedRulesAmazonIpReputationList', 'global-rate-block']) {
+      expect(scopeDown(rule(mainRules, name)), name).toBeUndefined();
+    }
+  });
+
+  it('has no source IP allowlist by default', () => {
+    expect(s.config.waf.webhookAllowedIpv4Cidrs).toEqual([]);
+    expect(mainRules.some((r) => r.Name === 'webhook-ip-allowlist')).toBe(false);
+  });
+
+  describe('with waf.webhookAllowedIpv4Cidrs', () => {
+    const allowed = synthPlatform((c) => {
+      (c.waf as Json).webhookAllowedIpv4Cidrs = ['203.0.113.0/24', '198.51.100.7/32'];
+    });
+    registerIpSets(
+      allowed
+        .template(allowed.platform.edge)
+        .findResources('AWS::WAFv2::IPSet', { Properties: { Name: 'shotx-prod-webhook-allow' } }),
+    );
+    const rules = aclRules(allowed, 'shotx-prod-main');
+    const allowList = rule(rules, 'webhook-ip-allowlist');
+    const from = (ip: string, req: WafRequest): WafRequest => ({ ...req, ip });
+
+    it('blocks webhooks from other addresses, on every spelling', () => {
+      expect(action(allowList)).toBe('Block');
+      for (const [label, path] of Object.entries(variants)) {
+        expect(
+          matches(allowList.Statement as Json, from('192.0.2.1', post(path, json))),
+          label,
+        ).toBe(true);
+        expect(
+          matches(allowList.Statement as Json, from('203.0.113.200', post(path, json))),
+          label,
+        ).toBe(false);
+        expect(
+          matches(allowList.Statement as Json, from('198.51.100.7', post(path, json))),
+          label,
+        ).toBe(false);
+      }
+    });
+
+    it('leaves every other route alone', () => {
+      for (const req of [
+        get('/'),
+        post('/api/billing/checkout', json),
+        post(`/api/s/${TOKEN}/unlock`),
+      ]) {
+        expect(matches(allowList.Statement as Json, from('192.0.2.1', req)), req.path).toBe(false);
+      }
+    });
+
+    it('runs before the rate rules', () => {
+      expect(allowList.Priority as number).toBeLessThan(
+        rule(rules, 'global-rate-block').Priority as number,
+      );
+      const priorities = rules.map((x) => x.Priority);
+      expect(new Set(priorities).size).toBe(priorities.length);
+    });
+  });
+});
+
+describe('WAF on the Phase 3 routes behind the share path', () => {
+  it('rate-limits GET and POST /api/s/:token/face-deletion and GET /api/s/:token/zip-jobs/:id', () => {
+    const shareBlock = rule(mainRules, 'share-rate-block');
+    const shareCaptcha = rule(mainRules, 'share-rate-captcha');
+    for (const req of [
+      get(`/api/s/${TOKEN}/face-deletion`),
+      post(`/api/s/${TOKEN}/face-deletion`),
+      get(`/api/s/${TOKEN}/zip-jobs/0b9f1c2e-6a57-4d2b-9a43-3c8d2f7e1a90`),
+      get(`/API/S/${TOKEN}/ZIP-JOBS/x`),
+    ]) {
+      expect(ruleApplies(shareBlock, req), `${req.method} ${req.path}`).toBe(true);
+      expect(ruleApplies(shareCaptcha, req), `${req.method} ${req.path}`).toBe(true);
+    }
   });
 });
 

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, type LoggerService } from '@nestjs/common';
 import {
   type FaceProvider,
   faceCollectionId,
@@ -10,13 +10,16 @@ import {
 } from '@shotx/face';
 import { faceDeletions, faceFeedback, faces, files, searchableFaceSql } from '@shotx/db';
 import {
+  type ConsentPurpose,
+  FACE_DELETION_ALERT_EVENT,
+  faceDeletionAlertDue,
   type FaceDeletionResponse,
   type FaceSearchResponse,
   faceScanResultKey,
   mergeFaceScanResult,
   viewerKey,
 } from '@shotx/shared';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, gt, inArray, sql } from 'drizzle-orm';
 import type { Request } from 'express';
 import { recordActivity, shareEventSource } from '../activity/activity';
 import type { PublicContext } from '../auth/public.guard';
@@ -24,11 +27,16 @@ import type { ApiConfig } from '../config';
 import { type Db, pgErrorInfo, SQLSTATE } from '../db/db';
 import { ApiError } from '../http/api-error';
 import { readSelfies } from '../http/multipart';
+import type { EventLog } from '../infra/events';
 import { SignedUrls } from '../media/signed-urls';
 import { type LoadedShare, ShareAccess } from '../share/share-access';
 import {
   API_CONFIG,
+  API_LOGGER,
+  CLOCK,
+  type Clock,
   DATABASE,
+  EVENT_LOG,
   FACE_PROVIDER,
   KEY_VALUE_STORE,
   type KeyValueStore,
@@ -72,11 +80,21 @@ export class FaceService {
     @Inject(ShareAccess) private readonly access: ShareAccess,
     @Inject(SharePageService) private readonly page: SharePageService,
     @Inject(SignedUrls) private readonly urls: SignedUrls,
+    @Inject(CLOCK) private readonly clock: Clock,
+    @Inject(API_LOGGER) private readonly logger: LoggerService,
+    @Inject(EVENT_LOG) private readonly events: EventLog,
   ) {}
 
-  /** CONSENT_REQUIRED unless the viewer consented to the current version for this share. */
-  private async requireConsent(share: LoadedShare, ctx: PublicContext): Promise<void> {
-    if (!(await this.page.hasConsent(share, ctx.viewer))) {
+  /**
+   * CONSENT_REQUIRED unless the viewer consented to the current version for this share, for this
+   * purpose (a face_search consent doesn't allow a deletion, nor the reverse).
+   */
+  private async requireConsent(
+    share: LoadedShare,
+    ctx: PublicContext,
+    purpose: ConsentPurpose,
+  ): Promise<void> {
+    if (!(await this.page.hasConsent(share, ctx.viewer, purpose))) {
       throw new ApiError('CONSENT_REQUIRED', 'Consent is required before a face scan', {
         policyVersion: this.config.consent.policyVersion,
       });
@@ -135,7 +153,7 @@ export class FaceService {
         reason: 'not_indexed',
       });
     }
-    await this.requireConsent(share, ctx);
+    await this.requireConsent(share, ctx, 'face_search');
     await this.rateLimit(share, ctx);
 
     const selfies = await this.readSelfies(req);
@@ -169,13 +187,13 @@ export class FaceService {
       this.config.face.thresholds,
     );
 
-    // Merge into the viewer's result (the face_only grant) and reset its TTL, in one MULTI.
-    const key = faceScanResultKey(share.id, ctx.viewer);
-    const existing = await this.store.hashGetAll(key);
-    await this.store.hashSetWithTtl(
-      key,
+    // Merge into the viewer's result (the face_only grant) and reset its TTL in one atomic step
+    // (a Lua script in Redis): each file keeps its best similarity, so concurrent scans of the
+    // same viewer never lose each other's matches.
+    await this.store.hashMergeMaxWithTtl(
+      faceScanResultKey(share.id, ctx.viewer),
       mergeFaceScanResult(
-        existing,
+        {},
         hits.map((h) => ({ fileId: h.fileId, similarity: h.similarity })),
       ),
       this.config.share.faceOnlyGrantTtlSeconds,
@@ -249,23 +267,37 @@ export class FaceService {
   // --- POST /s/:token/face-deletion ----------------------------------------------------------------
 
   /**
-   * "ขอลบใบหน้าของฉัน": direct matches of the selfies at or above FACE_DELETION_THRESHOLD (no
-   * expansion) anywhere in the share owner's collection are hidden from search at once
-   * (faces.deletion_id, in one transaction with the face_deletions row) and deleted by the worker
-   * (`delete.faces`). If the job can't be sent, the marking is undone and the request fails, so a
-   * retry starts clean.
+   * "ขอลบใบหน้าของฉัน" (ADR 0007): gated on the token and a current `face_deletion` consent only
+   * (consentGates('face_deletion')), so it works on revoked, expired and unavailable shares,
+   * behind login and password, and with FACE_SEARCH_ENABLED=false. The face-search request limits
+   * apply. Direct matches of the selfies at or above FACE_DELETION_THRESHOLD (no expansion)
+   * anywhere in the share owner's collection are hidden from search at once (faces.deletion_id,
+   * in one transaction with the face_deletions row) and deleted by the worker (`delete.faces`).
+   * If the job can't be sent, the marking is undone and the request fails, so a retry starts
+   * clean. An owner without searchable faces (no collection, or nothing left) answers 0 without
+   * any Rekognition call. Afterwards the share's deletions within FACE_DELETION_ALERT_WINDOW_SECONDS
+   * are counted, and FACE_DELETION_ALERT_EVENT is logged when faceDeletionAlertDue.
    */
   async faceDeletion(
     token: string,
     ctx: PublicContext,
     req: Request,
   ): Promise<FaceDeletionResponse> {
-    const share = await this.access.open(token, ctx);
-    if (!this.config.features.faceSearch) throw faceSearchDisabled();
-    await this.requireConsent(share, ctx);
+    const share = await this.access.byToken(token);
+    await this.requireConsent(share, ctx, 'face_deletion');
     await this.rateLimit(share, ctx);
 
     const selfies = await this.readSelfies(req);
+    const [anyFace] = await this.db
+      .select({ id: faces.id })
+      .from(faces)
+      .where(and(eq(faces.ownerId, share.ownerId), searchableFaceSql()))
+      .limit(1);
+    if (anyFace === undefined) {
+      for (const selfie of selfies) selfie.fill(0);
+      return { facesMatched: 0 };
+    }
+
     const threshold = this.config.face.deletion.threshold;
     const result = await this.search(selfies, {
       ...selfieSearchOptions(this.config.face, faceCollectionId(share.ownerId)),
@@ -277,6 +309,7 @@ export class FaceService {
     ];
     if (faceIds.length === 0) return { facesMatched: 0 };
 
+    const now = this.clock.now();
     const marked = await this.db.transaction(async (tx) => {
       const rowIds: string[] = [];
       for (const ids of chunks(faceIds, FACE_ID_CHUNK)) {
@@ -296,7 +329,12 @@ export class FaceService {
       if (rowIds.length === 0) return null;
       const [deletion] = await tx
         .insert(faceDeletions)
-        .values({ photographerId: share.ownerId, shareId: share.id, facesMatched: rowIds.length })
+        .values({
+          photographerId: share.ownerId,
+          shareId: share.id,
+          facesMatched: rowIds.length,
+          createdAt: now,
+        })
         .returning({ id: faceDeletions.id });
       if (deletion === undefined) throw new Error('face_deletions insert returned no row');
       for (const ids of chunks(rowIds, FACE_ID_CHUNK)) {
@@ -321,6 +359,43 @@ export class FaceService {
       });
       throw error;
     }
+    await this.alertOnDeletions(share, now);
     return { facesMatched: marked.count };
+  }
+
+  /**
+   * ADR 0007's per-share alert: counts the share's face_deletions within the alert window
+   * (including the one just recorded) and writes one structured event, a JSON line with a
+   * top-level `event: "face_deletion.alert"` and ids and the count only (no biometrics, no
+   * viewer), which infra's metric filter alarms on.
+   * A failure here never fails the deletion itself.
+   */
+  private async alertOnDeletions(share: LoadedShare, now: Date): Promise<void> {
+    const alert = this.config.face.deletion.alert;
+    try {
+      const since = new Date(now.getTime() - alert.windowSeconds * 1000);
+      const [row] = await this.db
+        .select({ n: sql<number>`count(*)`.mapWith(Number) })
+        .from(faceDeletions)
+        .where(
+          and(
+            eq(faceDeletions.shareId, share.id),
+            eq(faceDeletions.photographerId, share.ownerId),
+            gt(faceDeletions.createdAt, since),
+          ),
+        );
+      const count = row?.n ?? 0;
+      if (faceDeletionAlertDue(count, alert)) {
+        this.events.warn(FACE_DELETION_ALERT_EVENT, {
+          shareId: share.id,
+          ownerId: share.ownerId,
+          count,
+          threshold: alert.perShare,
+          windowSeconds: alert.windowSeconds,
+        });
+      }
+    } catch {
+      this.logger.warn('face deletion alert count failed', 'FaceService');
+    }
   }
 }

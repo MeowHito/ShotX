@@ -14,9 +14,16 @@ import { NestFactory } from '@nestjs/core';
 import { ExpressAdapter } from '@nestjs/platform-express';
 import express from 'express';
 import type { FaceProvider } from '@shotx/face';
+import type { EmailProvider, PaymentGatewayAdapter } from '@shotx/shared';
 import { PhotographerGuard, UserGuard } from './auth/photographer.guard';
 import { OriginGuard, PublicGuard } from './auth/public.guard';
+import { BillingController } from './billing/billing.controller';
+import { BillingService } from './billing/billing.service';
+import { createEmailProvider } from './billing/email';
+import { createPaymentGateway } from './billing/gateways';
+import { WebhookService } from './billing/webhook.service';
 import type { ApiConfig } from './config';
+import { type EventLog, StdoutEventLog } from './infra/events';
 import type { Db } from './db/db';
 import { DriveController } from './drive/drive.controller';
 import { DriveService } from './drive/drive.service';
@@ -36,9 +43,12 @@ import { SharesController } from './share/shares.controller';
 import { SharesService } from './share/shares.service';
 import {
   API_CONFIG,
+  API_LOGGER,
   CLOCK,
   type Clock,
   DATABASE,
+  EMAIL_PROVIDER,
+  EVENT_LOG,
   FACE_PROVIDER,
   KEY_VALUE_STORE,
   type KeyValueStore,
@@ -46,6 +56,7 @@ import {
   type MediaUrlSigner,
   OBJECT_STORAGE,
   type ObjectStorage,
+  PAYMENT_GATEWAY,
   QUEUE_SENDER,
   type QueueSender,
   RATE_LIMITER,
@@ -70,11 +81,23 @@ export interface ApiDeps {
   queue: QueueSender;
   /** Rekognition (interactive profile) in production; FakeFaceProvider in tests. */
   faceProvider: FaceProvider;
+  /** The PAYMENT_GATEWAY adapter; default createPaymentGateway(config). Tests pass the fake. */
+  paymentGateway?: PaymentGatewayAdapter;
+  /** The EMAIL_PROVIDER adapter; default createEmailProvider(config). Tests pass the fake. */
+  email?: EmailProvider;
+  /** Structured alert events; default StdoutEventLog. Tests pass a MemoryEventLog. */
+  events?: EventLog;
   /** Closes pools and clients when the app shuts down. */
   onShutdown?: () => Promise<void>;
 }
 
 const SHUTDOWN = Symbol('SHUTDOWN');
+
+const SILENT_LOGGER: LoggerService = {
+  log: () => undefined,
+  error: () => undefined,
+  warn: () => undefined,
+};
 
 @Controller()
 class HealthController {
@@ -96,7 +119,7 @@ class ShutdownHook implements OnApplicationShutdown {
 
 @Module({})
 export class AppModule {
-  static forRoot(deps: ApiDeps): DynamicModule {
+  static forRoot(deps: ApiDeps, logger: LoggerService = SILENT_LOGGER): DynamicModule {
     return {
       module: AppModule,
       controllers: [
@@ -106,6 +129,7 @@ export class AppModule {
         MeController,
         SharesController,
         PublicShareController,
+        BillingController,
       ],
       providers: [
         { provide: API_CONFIG, useValue: deps.config },
@@ -118,6 +142,17 @@ export class AppModule {
         { provide: KEY_VALUE_STORE, useValue: deps.store },
         { provide: QUEUE_SENDER, useValue: deps.queue },
         { provide: FACE_PROVIDER, useValue: deps.faceProvider },
+        { provide: API_LOGGER, useValue: logger },
+        {
+          provide: EVENT_LOG,
+          useValue: deps.events ?? new StdoutEventLog(() => deps.clock.now()),
+        },
+        {
+          provide: PAYMENT_GATEWAY,
+          useValue:
+            deps.paymentGateway ?? createPaymentGateway(deps.config.paymentGateway, deps.clock),
+        },
+        { provide: EMAIL_PROVIDER, useValue: deps.email ?? createEmailProvider(deps.config.email) },
         { provide: SHUTDOWN, useValue: deps.onShutdown ?? (() => Promise.resolve()) },
         ShutdownHook,
         PhotographerGuard,
@@ -134,6 +169,8 @@ export class AppModule {
         SharePageService,
         FaceService,
         DownloadsService,
+        BillingService,
+        WebhookService,
       ],
     };
   }
@@ -154,15 +191,14 @@ export async function createApiApp(
   server.disable('x-powered-by');
   server.use(jsonBodyMiddleware(deps.config.limits));
 
-  const app = await NestFactory.create(AppModule.forRoot(deps), new ExpressAdapter(server), {
-    bodyParser: false,
-    logger,
-  });
+  const appLogger: LoggerService = logger === false ? SILENT_LOGGER : logger;
+  const app = await NestFactory.create(
+    AppModule.forRoot(deps, appLogger),
+    new ExpressAdapter(server),
+    { bodyParser: false, logger },
+  );
   app.setGlobalPrefix('api');
-  const filterLogger: LoggerService =
-    logger === false
-      ? { log: () => undefined, error: () => undefined, warn: () => undefined }
-      : logger;
+  const filterLogger = appLogger;
   app.useGlobalFilters(new ApiExceptionFilter(filterLogger));
   await app.init();
   // Nest's not-found handler only covers `/api/*`; everything else gets the same JSON 404

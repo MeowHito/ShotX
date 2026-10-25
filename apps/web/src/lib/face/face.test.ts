@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canUseLiveCamera, isInAppBrowser, isIOS } from './camera';
-import type { ClientFaceConfig } from './config';
+import type { ClientFaceConfig, SelfieLimits } from './config';
 import { createMediaPipeDetectorLoader } from './detector';
 import { evaluateSelfie, type FaceBox, meanLuma, type SelfieGateConfig } from './quality-gate';
 import { type CanvasOps, fitLongEdge, processSelfie } from './selfie';
@@ -81,7 +81,7 @@ describe('selfie quality gate', () => {
 });
 
 describe('selfie processing (downscale, gate, JPEG)', () => {
-  const config: Pick<ClientFaceConfig, 'selfie' | 'gate'> = {
+  const config: Pick<SelfieLimits, 'selfie'> & Pick<ClientFaceConfig, 'gate'> = {
     selfie: { longEdge: 1280, jpegQuality: 90 },
     gate: GATE,
   };

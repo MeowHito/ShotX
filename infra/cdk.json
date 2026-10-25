@@ -78,8 +78,8 @@
         "abortIncompleteMultipartUploadDays": 2,
         "tmpIndexExpirationDays": 1,
         "tmpZipsExpirationDays": 2,
-        "tmpReconcileExpirationDays": 7,
-        "tmpOtherExpirationDays": 7,
+        "tmpReconcileExpirationDays": 3,
+        "tmpOtherExpirationDays": 3,
         "originalsIntelligentTieringAfterDays": 0,
         "uploadCorsMaxAgeSeconds": 3000,
         "cloudFrontLogExpirationDays": 400
@@ -143,7 +143,8 @@
         }
       },
       "alarms": {
-        "email": ""
+        "email": "",
+        "faceDeletionAlertPeriodSeconds": 300
       },
       "services": {
         "imageTag": "bootstrap",
@@ -276,6 +277,8 @@
           "multipartOverheadBytes": 65536
         },
         "commonRuleSetCountOverrides": ["SizeRestrictions_BODY"],
+        "webhookRateLimit": 2000,
+        "webhookAllowedIpv4Cidrs": [],
         "adminRateLimit": 1000,
         "adminAllowedIpv4Cidrs": [],
         "logRetentionDays": 30
@@ -316,6 +319,16 @@
       },
       "consent": {
         "policyVersion": "2026-10-25"
+      },
+      "billing": {
+        "paymentGateway": "omise",
+        "gatewaySecretName": "shotx/prod/payment-gateway",
+        "fakeWebhookSecretLength": 64
+      },
+      "email": {
+        "provider": "ses",
+        "fromAddress": "no-reply@photos.example.com",
+        "fromName": "ShotX"
       },
       "rekognition": {
         "collectionPrefix": "pg-"

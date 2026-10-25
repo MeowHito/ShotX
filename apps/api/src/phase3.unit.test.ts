@@ -10,12 +10,12 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { hashPassword, verifyPassword } from './auth/password';
 import { profileClaims } from './auth/cognito-verifier';
 import { DriveFileMapper } from './drive/media-urls';
-import { clientIp, ipHash } from './http/client';
+import { cameThroughCloudFront, clientIp, cloudFrontOriginHeaders, ipHash } from './http/client';
 import { describeError, scrubMessage } from './http/exception.filter';
 import { ApiExceptionFilter } from './http/exception.filter';
 import { selfieMagicMatches } from './http/multipart';
 import { CloudFrontMediaUrlSigner } from './infra/cloudfront-signer';
-import { MemoryKeyValueStore, RedisKeyValueStore } from './infra/redis';
+import { HASH_MERGE_MAX_SCRIPT, MemoryKeyValueStore, RedisKeyValueStore } from './infra/redis';
 import { MemoryQueueSender, SqsQueueSender } from './infra/sqs-queue';
 import { SignedUrls } from './media/signed-urls';
 import { openPglite } from './testing/database';
@@ -173,18 +173,63 @@ describe('passwords', () => {
     // A corrupt row can't make the API burn memory.
     expect(await verifyPassword('1234', a.replace('m=19456', 'm=9999999'))).toBe(false);
   });
+
+  it('hashes with the configured parameters and verifies whatever the config allows', async () => {
+    // t=1 needs 47104 KiB (OWASP); the shared loader accepts it, so the verifier must too.
+    const config = testConfig({
+      SHARE_PASSWORD_ARGON2_MEMORY_KIB: '47104',
+      SHARE_PASSWORD_ARGON2_TIME_COST: '1',
+    });
+    const t1 = await hashPassword('pin', config.password.argon2id);
+    expect(t1).toMatch(/^\$argon2id\$v=19\$m=47104,t=1,p=1\$/);
+    expect(await verifyPassword('pin', t1)).toBe(true);
+    // t=3 with 12288 KiB, 2 lanes.
+    const t3 = await hashPassword('pin', { memoryKiB: 12_288, timeCost: 3, parallelism: 2 });
+    expect(await verifyPassword('pin', t3)).toBe(true);
+    // Below OWASP's minimum for the time cost: refused for hashing and never verifies.
+    await expect(
+      hashPassword('pin', { memoryKiB: 19_456, timeCost: 1, parallelism: 1 }),
+    ).rejects.toThrow(RangeError);
+    expect(await verifyPassword('pin', t1.replace('m=47104,t=1', 'm=19456,t=1'))).toBe(false);
+    expect(await verifyPassword('pin', t1.replace('t=1', 't=11'))).toBe(false);
+  });
 });
 
 describe('client address and ip_hash', () => {
   const req = (headers: Record<string, string>, remote = '10.0.0.9') =>
     ({ headers, socket: { remoteAddress: remote } }) as unknown as Request;
 
-  it('reads CloudFront-Viewer-Address, else the socket', () => {
-    expect(clientIp(req({ 'cloudfront-viewer-address': '203.0.113.10:51234' }))).toBe(
-      '203.0.113.10',
+  const viaCloudFront = (address: string) => cloudFrontOriginHeaders(address);
+
+  it('reads CloudFront-Viewer-Address on requests that came through CloudFront', () => {
+    expect(clientIp(req(viaCloudFront('203.0.113.10:51234')))).toBe('203.0.113.10');
+    expect(clientIp(req(viaCloudFront('2001:db8::1:443')))).toBe('2001:db8::1');
+    expect(clientIp(req(viaCloudFront('[2001:db8::2]:443')))).toBe('2001:db8::2');
+    // Malformed header: the socket.
+    expect(clientIp(req(viaCloudFront('garbage')))).toBe('10.0.0.9');
+  });
+
+  it('never trusts the header on a request without CloudFront markers', () => {
+    // A caller the ALB admits without CloudFront (the web/admin tasks' SSR) passing a header on.
+    expect(clientIp(req({ 'cloudfront-viewer-address': '203.0.113.10:1' }))).toBe('10.0.0.9');
+    // Only one of the two markers, or a Via of another proxy.
+    const { via, ...noVia } = viaCloudFront('203.0.113.10:1');
+    expect(via).toContain('CloudFront');
+    expect(clientIp(req(noVia))).toBe('10.0.0.9');
+    const noId: Record<string, string> = { ...viaCloudFront('203.0.113.10:1') };
+    delete noId['x-amz-cf-id'];
+    expect(clientIp(req(noId))).toBe('10.0.0.9');
+    expect(
+      clientIp(req({ ...viaCloudFront('203.0.113.10:1'), via: '1.1 squid.example (squid)' })),
+    ).toBe('10.0.0.9');
+    expect(cameThroughCloudFront(req({ 'x-amz-cf-id': ' ', via: '1.1 x.cloudfront.net' }))).toBe(
+      false,
     );
-    expect(clientIp(req({ 'cloudfront-viewer-address': '2001:db8::1:443' }))).toBe('2001:db8::1');
+    // X-Forwarded-For is never read, CloudFront or not.
     expect(clientIp(req({ 'x-forwarded-for': '1.2.3.4' }))).toBe('10.0.0.9');
+    const markersOnly: Record<string, string> = { ...viaCloudFront('x') };
+    delete markersOnly['cloudfront-viewer-address'];
+    expect(clientIp(req({ ...markersOnly, 'x-forwarded-for': '1.2.3.4' }))).toBe('10.0.0.9');
   });
 
   it('is a keyed v1 hash of the normalized address', () => {
@@ -276,6 +321,50 @@ describe('key-value stores', () => {
     await expect(store.hashGetAll('x')).rejects.toThrow('down');
   });
 
+  it('merges face-scan results keeping the max, atomically, also when scans race', async () => {
+    let now = 0;
+    const store = new MemoryKeyValueStore(() => now);
+    await store.hashMergeMaxWithTtl('r', { a: '90.0', b: '96.0' }, 100);
+    // Concurrent merges: none loses a field, each field keeps its maximum.
+    await Promise.all([
+      store.hashMergeMaxWithTtl('r', { a: '88.0', c: '91.0' }, 100),
+      store.hashMergeMaxWithTtl('r', { a: '97.5', d: '86.0' }, 100),
+      store.hashMergeMaxWithTtl('r', { b: '95.0', c: '92.5' }, 100),
+    ]);
+    expect(await store.hashGetAll('r')).toEqual({ a: '97.5', b: '96.0', c: '92.5', d: '86.0' });
+    expect(store.ttlSeconds('r')).toBe(100);
+    // An empty merge resets nothing on a missing key and never creates one.
+    await store.hashMergeMaxWithTtl('empty', {}, 100);
+    expect(store.keys()).not.toContain('empty');
+    now = 100_000;
+    expect(await store.hashGetAll('r')).toEqual({});
+    await expect(store.hashMergeMaxWithTtl('r', { a: 'NaN' }, 10)).rejects.toThrow(RangeError);
+  });
+
+  it('RedisKeyValueStore merges with one Lua script call (HSET new or bigger, then EXPIRE)', async () => {
+    const calls: unknown[][] = [];
+    const client = {
+      eval: (...a: unknown[]) => (calls.push(a), Promise.resolve(1)),
+    };
+    const store = new RedisKeyValueStore(client as never, 'p:');
+    await store.hashMergeMaxWithTtl('face-scan:s:a', { f: '96.0', g: '88.5' }, 86400);
+    expect(calls).toEqual([
+      [HASH_MERGE_MAX_SCRIPT, 1, 'p:face-scan:s:a', '86400', 'f', '96.0', 'g', '88.5'],
+    ]);
+    // The script compares numerically and only then writes; EXPIRE runs in the same script.
+    expect(HASH_MERGE_MAX_SCRIPT).toMatch(/tonumber\(value\) > tonumber\(current\)/);
+    expect(HASH_MERGE_MAX_SCRIPT).toMatch(/EXPIRE/);
+    expect(HASH_MERGE_MAX_SCRIPT).not.toMatch(/HGETALL|MULTI/);
+    // Huge merges are split into several atomic calls (merge-max commutes, so nothing is lost).
+    calls.length = 0;
+    const many = Object.fromEntries(
+      Array.from({ length: 1200 }, (_, i) => [`f${i}`, '90.0'] as const),
+    );
+    await store.hashMergeMaxWithTtl('k', many, 60);
+    expect(calls).toHaveLength(3);
+    expect(calls.map((c) => (c.length - 4) / 2)).toEqual([500, 500, 200]);
+  });
+
   const redisUrl = process.env.TEST_REDIS_URL ?? '';
   describe.skipIf(redisUrl === '')('RedisKeyValueStore on a real Redis (TEST_REDIS_URL)', () => {
     const redis = new Redis(redisUrl, { lazyConnect: true });
@@ -292,6 +381,21 @@ describe('key-value stores', () => {
       expect(await redis.ttl(`${prefix}a`)).toBeGreaterThan(0);
       expect(await redis.ttl(`${prefix}h`)).toBeGreaterThan(0);
       await store.del('a', 'h');
+    });
+
+    it('merge-max is atomic under concurrent scans', async () => {
+      const prefix = `shotx:test-${Date.now()}:api:`;
+      const store = new RedisKeyValueStore(redis, prefix);
+      await Promise.all(
+        Array.from({ length: 20 }, (_, i) =>
+          store.hashMergeMaxWithTtl('r', { shared: `${80 + i}.0`, [`own${i}`]: '90.0' }, 60),
+        ),
+      );
+      const all = await store.hashGetAll('r');
+      expect(all.shared).toBe('99.0');
+      expect(Object.keys(all)).toHaveLength(21);
+      expect(await redis.ttl(`${prefix}r`)).toBeGreaterThan(0);
+      await store.del('r');
     });
   });
 });

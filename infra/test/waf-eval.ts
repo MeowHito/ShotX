@@ -14,6 +14,34 @@ export interface WafRequest {
   readonly path: string;
   /** Header names in lowercase. */
   readonly headers?: Readonly<Record<string, string>>;
+  /** Client IPv4 address, for IP set statements. */
+  readonly ip?: string;
+}
+
+/**
+ * Addresses of the IP sets a web ACL references, by the logical id in the IP set's
+ * `Fn::GetAtt` ARN. Tests register them from the template with {@link registerIpSets}.
+ */
+const ipSets = new Map<string, readonly string[]>();
+
+export function registerIpSets(resources: Record<string, Json>): void {
+  for (const [id, r] of Object.entries(resources)) {
+    ipSets.set(id, (r.Properties as Json).Addresses as string[]);
+  }
+}
+
+function ipv4ToInt(ip: string): number {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) {
+    throw new Error(`not an IPv4 address: ${ip}`);
+  }
+  return parts.reduce((n, p) => n * 256 + p, 0);
+}
+
+function inCidr(ip: string, cidr: string): boolean {
+  const [base, bits] = cidr.split('/') as [string, string];
+  const size = 2 ** (32 - Number(bits));
+  return Math.floor(ipv4ToInt(ip) / size) === Math.floor(ipv4ToInt(base) / size);
 }
 
 /** WAF URL_DECODE: decodes %XX escapes; malformed escapes stay as they are. */
@@ -85,6 +113,14 @@ export function matches(statement: Json, req: WafRequest): boolean {
         default:
           throw new Error(`unsupported positional constraint ${String(body.PositionalConstraint)}`);
       }
+    }
+    case 'IPSetReferenceStatement': {
+      const arn = body.Arn as Json;
+      const getAtt = arn['Fn::GetAtt'] as [string, string] | undefined;
+      const addresses = getAtt === undefined ? undefined : ipSets.get(getAtt[0]);
+      if (addresses === undefined) throw new Error(`unknown IP set ${JSON.stringify(arn)}`);
+      if (req.ip === undefined) throw new Error('IP set statement needs a request ip');
+      return addresses.some((cidr) => inCidr(req.ip as string, cidr));
     }
     case 'RegexMatchStatement': {
       const raw = field(body.FieldToMatch as Json, req);

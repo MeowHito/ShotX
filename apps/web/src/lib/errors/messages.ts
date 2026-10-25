@@ -1,6 +1,9 @@
 import {
+  type BillingNotice,
+  checkoutPendingDetailsSchema,
   ErrorCode,
   faceSearchUnavailableDetailsSchema,
+  planChangeInvalidDetailsSchema,
   fileTooLargeDetailsSchema,
   folderDepthExceededDetailsSchema,
   nameTakenDetailsSchema,
@@ -11,6 +14,7 @@ import {
   unsupportedFileTypeDetailsSchema,
   zipTooLargeDetailsSchema,
 } from '@shotx/shared';
+import { TIME_ZONE } from '../../i18n/config';
 import type { Messages } from '../../messages/th';
 import { ApiError, ContractError, NetworkError } from '../api/errors';
 import { formatBytes } from '../format';
@@ -29,6 +33,8 @@ export type ErrorMessageKey =
   | `codes.${keyof Errors['codes']}`
   | `hints.${keyof Errors['hints']}`
   | `details.${keyof Errors['details']}`
+  | `planChange.${keyof Errors['planChange']}`
+  | `notices.${keyof Errors['notices']}`
   | `client.${keyof Errors['client']}`;
 
 export interface ErrorMessage {
@@ -160,10 +166,42 @@ export function messageForCode(
       }
       break;
     }
+    case ErrorCode.PLAN_CHANGE_INVALID: {
+      const d = planChangeInvalidDetailsSchema.safeParse(details);
+      if (d.success) return { key: `planChange.${d.data.reason}` };
+      break;
+    }
+    case ErrorCode.CHECKOUT_PENDING: {
+      const d = checkoutPendingDetailsSchema.safeParse(details);
+      if (d.success) {
+        return {
+          key: 'details.checkoutPending',
+          values: {
+            time: new Intl.DateTimeFormat('th-TH', {
+              timeStyle: 'short',
+              timeZone: TIME_ZONE,
+            }).format(new Date(d.data.expiresAt)),
+          },
+        };
+      }
+      break;
+    }
     default:
       break;
   }
   return { key: `codes.${code}` };
+}
+
+/** The Thai text key of an informational billing notice (DOWNGRADE_EXCEEDS_QUOTA). */
+export function messageForNotice(notice: BillingNotice): ErrorMessage {
+  return {
+    key: `notices.${notice.code}`,
+    values: {
+      quota: formatBytes(notice.details.quotaBytes),
+      used: formatBytes(notice.details.usedBytes + notice.details.reservedBytes),
+      over: formatBytes(notice.details.overBytes),
+    },
+  };
 }
 
 /** The message for anything thrown by the API client, the uploader or a local check. */

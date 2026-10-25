@@ -2,15 +2,20 @@ import { type DatabaseConfig, loadDatabaseConfig } from '@shotx/db';
 import {
   type AppConfig,
   type AwsConfig,
+  type BillingConfig,
+  type EmailConfig,
   type Env,
   type FaceConfig,
   type FeatureFlags,
   loadAppConfig,
   loadAwsConfig,
+  loadBillingConfig,
+  loadEmailConfig,
   loadFaceConfig,
   loadFeatureFlags,
   loadMediaConfig,
   loadMediaStorageConfig,
+  loadPaymentGatewayConfig,
   loadQueueUrls,
   loadQueueVisibilityTimeouts,
   loadRedisConfig,
@@ -20,6 +25,7 @@ import {
   loadWorkerSettings,
   type MediaConfig,
   type MediaStorageConfig,
+  type PaymentGatewayConfig,
   QUEUE_NAMES,
   type QueueName,
   type RedisConfig,
@@ -53,6 +59,14 @@ export interface WorkerConfig {
   multipartPartBytes: number;
   /** WORKER_* settings and LOG_LEVEL (loadWorkerSettings in @shotx/shared). */
   worker: WorkerSettings;
+  /** Billing tunables (auto-renew attempts and lead, VAT) for subscriptions.transition.daily. */
+  billing: BillingConfig;
+  /** EMAIL_PROVIDER and the sender (lifecycle emails and receipts). */
+  email: EmailConfig;
+  /**
+   * PAYMENT_GATEWAY and its secrets, for auto-renew charges. Secret: never log this object.
+   */
+  paymentGateway: PaymentGatewayConfig;
 }
 
 /** Everything the worker reads from the environment, validated at start-up. */
@@ -81,5 +95,8 @@ export function loadWorkerConfig(env: Env): WorkerConfig {
     zip: loadShareConfig(env).zip,
     multipartPartBytes: loadUploadConfig(env).partBytes,
     worker: loadWorkerSettings(env),
+    billing: loadBillingConfig(env),
+    email: loadEmailConfig(env),
+    paymentGateway: loadPaymentGatewayConfig(env),
   };
 }

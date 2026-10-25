@@ -15,7 +15,7 @@ import { DATABASE_BACKENDS, type TestDatabase } from '../testing/database';
 import { TestApi } from '../testing/harness';
 
 const downloads = (token: string) => apiPath(P.downloads, { token });
-const zipJob = (id: string) => apiPath(P.zipJob, { id });
+const zipJob = (token: string, id: string) => apiPath(P.zipJob, { token, id });
 const KEY = 'idempotency-key';
 
 for (const backend of DATABASE_BACKENDS) {
@@ -271,11 +271,11 @@ for (const backend of DATABASE_BACKENDS) {
         );
         if (created.kind !== 'zip') throw new Error('expected a zip');
         const id = created.job.id;
-        expect((await b.request('GET', zipJob(id))).body).toMatchObject({
+        expect((await b.request('GET', zipJob(share.token, id))).body).toMatchObject({
           status: 'queued',
           download: null,
         });
-        expect((await api.browser().request('GET', zipJob(id))).status).toBe(404);
+        expect((await api.browser().request('GET', zipJob(share.token, id))).status).toBe(404);
 
         // The worker finishes it.
         const now = api.clock.now();
@@ -290,11 +290,13 @@ for (const backend of DATABASE_BACKENDS) {
             expiresAt: new Date(now.getTime() + 86_400_000),
           })
           .where(eq(zipJobs.id, id));
-        const ready = zipJobResponseSchema.parse((await b.request('GET', zipJob(id))).body);
+        const ready = zipJobResponseSchema.parse(
+          (await b.request('GET', zipJob(share.token, id))).body,
+        );
         expect(ready.status).toBe('ready');
         expect(ready.download?.fileName).toBe('งานวิ่ง.zip');
         expect(new URL(ready.download?.url ?? '').pathname).toBe(`/media/tmp/zips/${id}.zip`);
-        await b.request('GET', zipJob(id));
+        await b.request('GET', zipJob(share.token, id));
         const events = await api.db
           .select()
           .from(activityEvents)
@@ -304,7 +306,9 @@ for (const backend of DATABASE_BACKENDS) {
 
         // Past expires_at the archive is gone.
         api.clock.advance(2 * 86_400_000);
-        const expired = zipJobResponseSchema.parse((await b.request('GET', zipJob(id))).body);
+        const expired = zipJobResponseSchema.parse(
+          (await b.request('GET', zipJob(share.token, id))).body,
+        );
         expect(expired).toMatchObject({ status: 'expired', download: null, availableUntil: null });
         api.clock.advance(-2 * 86_400_000);
       });
@@ -325,10 +329,48 @@ for (const backend of DATABASE_BACKENDS) {
           token: owner.token,
         });
         expect(revoke.status).toBe(204);
-        expect((await b.request('GET', zipJob(created.job.id))).body).toMatchObject({
+        expect((await b.request('GET', zipJob(share.token, created.job.id))).body).toMatchObject({
           code: 'SHARE_EXPIRED',
           details: { reason: 'revoked' },
         });
+      });
+
+      it('polls under the share path: another token is NOT_FOUND, the gates apply', async () => {
+        const { share, owner, files: list } = await shared({ password: 'zip-pin-1234' });
+        const b = api.browser();
+        expect(
+          (
+            await b.request('POST', apiPath(P.unlock, { token: share.token }), {
+              body: { password: 'zip-pin-1234' },
+            })
+          ).status,
+        ).toBe(204);
+        const created = createDownloadResponseSchema.parse(
+          (
+            await b.request('POST', downloads(share.token), {
+              body: { fileIds: [list[0]?.id, list[1]?.id] },
+              headers: { [KEY]: 'path' },
+            })
+          ).body,
+        );
+        if (created.kind !== 'zip') throw new Error('expected a zip');
+        const id = created.job.id;
+        // The unlock cookie (Path=/api/s/{token}) reaches the poll route.
+        expect((await b.request('GET', zipJob(share.token, id))).status).toBe(200);
+        // The same job through another share's token (same owner, same browser): NOT_FOUND.
+        const otherRoot = await api.folder(owner.id);
+        const other = await api.share(owner.id, { folderId: otherRoot.id });
+        expect((await b.request('GET', zipJob(other.token, id))).body).toMatchObject({
+          code: 'NOT_FOUND',
+        });
+        // Without the unlock cookie: PASSWORD_REQUIRED, before the job is looked at.
+        const stranger = api.browser();
+        stranger.setCookie(ANON_ID_COOKIE, b.cookie(ANON_ID_COOKIE) ?? '');
+        expect((await stranger.request('GET', zipJob(share.token, id))).body).toMatchObject({
+          code: 'PASSWORD_REQUIRED',
+        });
+        // An unknown token: NOT_FOUND.
+        expect((await b.request('GET', zipJob('A'.repeat(22), id))).status).toBe(404);
       });
 
       it('rate-limits new zip jobs per viewer, not replays', async () => {

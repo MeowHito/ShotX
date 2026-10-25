@@ -12,3 +12,13 @@ export function formatBytes(bytes: number, locale = 'th-TH'): string {
   const number = new Intl.NumberFormat(locale, { maximumFractionDigits: digits }).format(value);
   return `${number} ${UNITS[unit]}`;
 }
+
+/** Integer satang as Thai baht (THB currency format, satang only when not whole). */
+export function formatSatang(satang: number, locale = 'th-TH'): string {
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: 'THB',
+    minimumFractionDigits: satang % 100 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(satang / 100);
+}

@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { resolve } from 'node:path';
 import { loadFaceConfig } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
@@ -45,19 +45,56 @@ describe('createProvider', () => {
   });
 });
 
+/**
+ * Spawning tsx compiles the CLI first, which takes well under a second alone but several seconds
+ * when the whole monorepo's tests run in parallel. These tests get a generous explicit timeout,
+ * and the child is spawned asynchronously (not spawnSync) so it never blocks the test runner and
+ * is killed if it hangs.
+ */
+const CLI_TEST_TIMEOUT_MS = 60_000;
+const CLI_KILL_AFTER_MS = 50_000;
+
+interface CliRun {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+function runCli(tsx: string, args: string[]): Promise<CliRun> {
+  return new Promise((done) => {
+    execFile(
+      tsx,
+      args,
+      { encoding: 'utf8', timeout: CLI_KILL_AFTER_MS },
+      (error, stdout, stderr) => {
+        const code = error && typeof error.code === 'number' ? error.code : error ? null : 0;
+        done({ status: code, stdout, stderr });
+      },
+    );
+  });
+}
+
 describe('cli', () => {
   const tsx = resolve(PACKAGE_DIR, '../../node_modules/.bin/tsx');
   const cli = resolve(PACKAGE_DIR, 'src/cli.ts');
 
-  it('exits with an error when Rekognition is requested without the flag', () => {
-    const run = spawnSync(tsx, [cli, 'run', '--provider', 'rekognition'], { encoding: 'utf8' });
-    expect(run.status).toBe(1);
-    expect(run.stderr).toContain(`--${AWS_ACKNOWLEDGEMENT}`);
-  });
+  it(
+    'exits with an error when Rekognition is requested without the flag',
+    async () => {
+      const run = await runCli(tsx, [cli, 'run', '--provider', 'rekognition']);
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain(`--${AWS_ACKNOWLEDGEMENT}`);
+    },
+    CLI_TEST_TIMEOUT_MS,
+  );
 
-  it('prints usage', () => {
-    const run = spawnSync(tsx, [cli, 'help'], { encoding: 'utf8' });
-    expect(run.status).toBe(0);
-    expect(run.stdout).toContain('pnpm face-eval synth');
-  });
+  it(
+    'prints usage',
+    async () => {
+      const run = await runCli(tsx, [cli, 'help']);
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain('pnpm face-eval synth');
+    },
+    CLI_TEST_TIMEOUT_MS,
+  );
 });

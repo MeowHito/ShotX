@@ -61,7 +61,7 @@ function zipFileName(share: LoadedShare): string {
 /**
  * Share downloads: one file is a signed URL (Content-Disposition attachment, download TTL, one
  * `download` event); several are a zip job (zip_jobs + zip_job_entries in one transaction, then
- * `zip.create` on the zip queue), polled with GET /zip-jobs/:id.
+ * `zip.create` on the zip queue), polled with GET /s/:token/zip-jobs/:id.
  */
 @Injectable()
 export class DownloadsService {
@@ -273,27 +273,25 @@ export class DownloadsService {
     return { kind: 'zip', job: await this.view(share, ctx, existing) };
   }
 
-  // --- GET /zip-jobs/:id ---------------------------------------------------------------------------
+  // --- GET /s/:token/zip-jobs/:id -------------------------------------------------------------------
 
   /**
-   * A zip job of this browser (anyone else's: NOT_FOUND). The share's availability and login gate
-   * are checked again; the password gate is satisfied by the job itself (it was created after the
-   * unlock, and the share's unlock cookie is scoped to `/api/s/{token}`, so it never reaches this
-   * path). In face_only mode every entry must still be in the viewer's grant. The first response
-   * that issues the archive's URL writes the job's one `zip` event.
+   * A zip job of this share and this browser. The token's share passes the normal gates first
+   * (NOT_FOUND, SHARE_EXPIRED, LOGIN_REQUIRED, PASSWORD_REQUIRED: the unlock cookie's path
+   * `/api/s/{token}` covers this route); then the job is looked up by id AND the token's share AND
+   * this browser's identities, so another share's or another viewer's job is NOT_FOUND. In
+   * face_only mode every entry must still be in the viewer's grant. The first response that issues
+   * the archive's URL writes the job's one `zip` event.
    */
-  async job(id: string, ctx: PublicContext): Promise<ZipJobView> {
+  async job(token: string, id: string, ctx: PublicContext): Promise<ZipJobView> {
+    const share = await this.access.open(token, ctx);
     const [job] = await this.db
       .select()
       .from(zipJobs)
-      .where(and(eq(zipJobs.id, id), jobOfViewers(browserViewers(ctx))));
+      .where(
+        and(eq(zipJobs.id, id), eq(zipJobs.shareId, share.id), jobOfViewers(browserViewers(ctx))),
+      );
     if (job === undefined) throw notFound('Zip job');
-    const share = await this.access.byId(job.shareId);
-    if (share === null) throw notFound('Zip job');
-    this.access.assertAvailable(share);
-    if (share.requireLogin && ctx.viewer.kind !== 'user') {
-      throw new ApiError('LOGIN_REQUIRED', 'Sign in to open this share');
-    }
     if (share.mode === 'face_only') {
       const grant = await this.access.grant(share, ctx.viewer);
       const entries = await this.db

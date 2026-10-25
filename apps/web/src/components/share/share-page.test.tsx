@@ -69,6 +69,11 @@ describe('share page: states', () => {
       renderSharePage(fake, share.token);
       expect(await screen.findByRole('heading', { name: 'ลิงก์นี้หมดอายุ' })).toBeInTheDocument();
       expect(screen.getByText(th.share.unavailable.reasons[reason])).toBeInTheDocument();
+      // The PDPA deletion request outlives the share.
+      expect(screen.getByRole('link', { name: th.share.deleteMyFace })).toHaveAttribute(
+        'href',
+        `/s/${share.token}/delete-my-face`,
+      );
     },
   );
 
@@ -124,14 +129,17 @@ describe('share page: states', () => {
     expect(screen.queryByRole('list', { name: th.share.galleryLabel })).not.toBeInTheDocument();
   });
 
-  it('flag off: no scan, no "ขอลบใบหน้าของฉัน", no consent links anywhere', async () => {
+  it('flag off: no scan or consent links, but "ขอลบใบหน้าของฉัน" is still offered', async () => {
     const fake = new FakeApi({ faceSearch: false });
     const share = fake.addPublicShare({ faceSearchAvailable: false });
     renderSharePage(fake, share.token);
     await screen.findByRole('list', { name: th.share.galleryLabel });
     expect(screen.queryByRole('button', { name: th.share.scan })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: th.share.deleteMyFace })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: th.share.withdraw })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: th.share.deleteMyFace })).toHaveAttribute(
+      'href',
+      `/s/${share.token}/delete-my-face`,
+    );
     // face_only without face search can't show anything; it says so instead of offering a scan.
     const faceOnly = fake.addPublicShare({ mode: 'face_only', faceSearchAvailable: false });
     renderSharePage(fake, faceOnly.token);

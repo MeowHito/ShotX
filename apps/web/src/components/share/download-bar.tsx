@@ -87,7 +87,7 @@ export function DownloadBar({
         selection.map((i) => i.id),
         newIdempotencyKey(),
       );
-      const ready = await pollZipJob(api, job, {
+      const ready = await pollZipJob(api, token, job, {
         intervalMs: config.zipPollIntervalMs,
         timeoutMs: config.zipPollTimeoutMs,
         signal: controller.signal,

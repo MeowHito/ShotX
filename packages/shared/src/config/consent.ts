@@ -2,14 +2,28 @@ import { z } from 'zod';
 import { type Env, parseEnv } from './env';
 
 /**
- * Every face-search consent text that exists, oldest first. The Thai text of each version lives in
- * the web app's i18n messages, keyed by this string (`satisfies Record<ConsentPolicyVersion, …>`,
- * so a new version fails web's typecheck until it has text); the API records the version in
- * `consents.policy_version`. A version's text never changes once it is here: changing the text
- * means adding a version. The DPO or legal team approves every version before launch.
+ * Every consent policy version that exists, oldest first. A version has one Thai text per
+ * consent purpose (CONSENT_PURPOSES: `face_search`, `face_deletion`). The texts live in the web
+ * app's i18n messages, keyed by purpose and version
+ * (`satisfies Record<ConsentPurpose, Record<ConsentPolicyVersion, …>>`, so a new version or
+ * purpose fails web's typecheck until it has text); the API records the version and purpose in
+ * `consents`. A version's texts never change once it is here: changing a text means adding a
+ * version, which makes earlier consents of both purposes stale. The DPO or legal team approves
+ * every version before launch.
  */
 export const CONSENT_POLICY_VERSIONS = ['2026-10-25'] as const;
 export type ConsentPolicyVersion = (typeof CONSENT_POLICY_VERSIONS)[number];
+
+/**
+ * A well-formed policy version string as a client may send it: 1–32 characters from
+ * `[0-9A-Za-z._-]`, starting with a letter or digit. Request bodies use this instead of the enum
+ * of known versions, so an outdated or unknown version reaches the service, which answers 409
+ * CONSENT_VERSION_MISMATCH with the current version (instead of a 400 that tells the page
+ * nothing).
+ */
+export const consentPolicyVersionSchema = z
+  .string()
+  .regex(/^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$/, { error: 'must be a policy version string' });
 
 /** The newest known version, the default of CONSENT_POLICY_VERSION. */
 export const LATEST_CONSENT_POLICY_VERSION: ConsentPolicyVersion = CONSENT_POLICY_VERSIONS[

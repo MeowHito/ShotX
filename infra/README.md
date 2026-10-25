@@ -65,11 +65,15 @@ Placeholders to replace before the first deploy: `account`, `domain.*`, `cdn.sig
 | `FACE_SEARCH_ENABLED`                                                                   |     |       |  x  |   x    | `features.faceSearchEnabled` (false)        |
 | `CONSENT_POLICY_VERSION`                                                                |     |       |  x  |        | `consent.policyVersion`                     |
 | `IP_HASH_SECRET`                                                                        |     |       |  x  |        | generated secret; ECS secret                |
+| `PAYMENT_GATEWAY`                                                                       |     |       |  x  |   x    | `billing.paymentGateway`                    |
+| the gateway's secrets (`PAYMENT_GATEWAY_SECRET_ENV`, e.g. `PAYMENT_OMISE_SECRET_KEY`)   |     |       |  x  |   x    | Secrets Manager JSON keys; ECS secrets      |
+| `EMAIL_PROVIDER`, `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`                               |     |       |  x  |   x    | `email.*`                                   |
 
 Extra variables go in `services.env.{common,backend,web,admin,api,worker}`. Derived variables
-(face-search limits, queue visibility timeouts, feature flag, consent version) are set after them
-and can't be overridden; synth rejects `FACE_SEARCH_ENABLED`, `CONSENT_POLICY_VERSION`,
-`IP_HASH_SECRET` and `MEDIA_BUCKET` in any group. `UPLOAD_*` keys that `loadUploadConfig` reads
+(face-search limits, queue visibility timeouts, feature flag, consent version, billing and email)
+are set after them and can't be overridden; synth rejects `FACE_SEARCH_ENABLED`,
+`CONSENT_POLICY_VERSION`, `IP_HASH_SECRET`, `MEDIA_BUCKET`, `PAYMENT_GATEWAY`, every gateway
+secret name and `EMAIL_*` in any group. `UPLOAD_*` keys that `loadUploadConfig` reads
 (part size, size limits, concurrency) are accepted in `services.env.common` only, so web's
 Uppy and the API presigner always agree.
 `services.env.backend` sets the `FACE_REKOGNITION_TPS_*` placeholders; `FACE_ORPHAN_GRACE_MS`
@@ -90,13 +94,22 @@ the CloudFront origin-facing prefix list (and web/admin tasks calling the API).
 
 | Distribution | Path              | Target                                                      |
 | ------------ | ----------------- | ----------------------------------------------------------- |
-| main         | `/api/*`          | api (no cache, all viewer headers/cookies/query forwarded)  |
+| main         | `/api/*`          | api (no cache, viewer headers/cookies/query + client IP)    |
 | main         | `/media/*`        | S3 via OAC, signed URLs, `/media` stripped by a CF Function |
 | main         | `/_next/static/*` | web (cached)                                                |
 | main         | default           | web (no cache)                                              |
 | admin        | `/api/*`          | api                                                         |
 | admin        | `/_next/static/*` | admin (cached)                                              |
 | admin        | default           | admin                                                       |
+
+Dynamic behaviours (`/api/*` and default, both distributions) use the origin request policy
+`shotx-<stage>-dynamic`: every viewer header, cookie and query string plus
+`CloudFront-Viewer-Address` (`ip:port`). CloudFront sets that header from the connection, so a
+viewer can't choose it, and only CloudFront (origin-facing prefix list) and the web and admin
+tasks can reach the ALB. The api takes the client IP from it (rate limits, `consents.ip_hash`)
+and never from `X-Forwarded-For`. Web's server-side API calls arrive from the web tasks without
+it unless web forwards the header it received.
+Request bodies pass through unchanged, so payment webhook signatures over the raw body verify.
 
 The ALB routes `/api` and `/api/*` to api, then on the `X-ShotX-App` header (`web`/`admin`) that
 each distribution sets on its origin requests (CloudFront overwrites any viewer value). Anything
@@ -182,6 +195,14 @@ headers):
   (`waf.unlockBlockRateLimit`, `waf.downloadsBlockRateLimit`), evaluated before the general share
   rules. The API's per-share and per-viewer limits stay the fine-grained ones; these are the
   coarse per-IP backstop. Mobile carriers in Thailand use CGNAT, so keep them generous.
+- **Payment webhooks** (`POST /api/billing/webhooks/<billing.paymentGateway>`, the shared
+  `BILLING_ROUTES.webhook` path) skip the body-inspecting managed groups like face-search uploads:
+  the gateway signs the raw body, and a JSON payload with a URL or HTML in it must still reach
+  signature verification. The path is outside the share prefixes, so no CAPTCHA (a gateway can't
+  solve one). It has its own per-IP rate rule, `waf.webhookRateLimit` (generous: gateways retry in
+  bursts), plus IP reputation and the global rule. `waf.webhookAllowedIpv4Cidrs` (empty by
+  default) blocks webhooks from any other address when set to the gateway's published ranges.
+  Only the configured gateway's path is exempt; the others get every rule and the API answers 404.
 - **Face-search uploads.** Multipart `POST`s to face search skip `AWSManagedRulesCommonRuleSet`
   and `AWSManagedRulesKnownBadInputsRuleSet` (scope-down), whose body rules (XSS, LFI, RFI, SSRF,
   size, Java/Log4j payloads) would read selfie JPEG bytes as text and block real scans. Every
@@ -292,8 +313,12 @@ a single `tmp/` rule would cut zips short.
 | ---------------- | ---: | ------------------------------------ | --------------------------------------------------- |
 | `tmp/index/`     |    1 | `storage.tmpIndexExpirationDays`     | face-index scratch images, deleted after IndexFaces |
 | `tmp/zips/`      |    2 | `storage.tmpZipsExpirationDays`      | must outlive the zip download window (below)        |
-| `tmp/reconcile/` |    7 | `storage.tmpReconcileExpirationDays` | worker reconciliation scan files                    |
-| `tmp/` (rest)    |    7 | `storage.tmpOtherExpirationDays`     | catch-all; must be ≥ every rule above (checked)     |
+| `tmp/reconcile/` |    3 | `storage.tmpReconcileExpirationDays` | worker reconciliation scan files                    |
+| `tmp/` (rest)    |    3 | `storage.tmpOtherExpirationDays`     | catch-all; must be ≥ every rule above (checked)     |
+
+Every rule must be 1–3 days (the spec's range, `TMP_LIFECYCLE_MAX_DAYS`); synth rejects anything
+else. `tmp/reconcile/` must also cover one `FACE_ORPHAN_GRACE_MS` plus one daily run (2 days at
+the 3 h default, and at the 1-day maximum grace).
 
 Synth fails unless `tmpZipsExpirationDays` days cover the oldest age at which a zip can still be
 downloaded. S3 dates a multipart object from its initiation, so:
@@ -303,7 +328,9 @@ WORKER_ZIP_MAX_PROCESSING_SECONDS (7200) + ZIP_RESULT_TTL_SECONDS (86400)
   + SIGNED_URL_DOWNLOAD_TTL_SECONDS (600) + SIGNED_URL_EXPIRY_BUCKET_SECONDS (300) = 94500 s -> 2 days
 ```
 
-Each value is the larger of the api's and the worker's.
+Each value is the larger of the api's and the worker's. `loadShareConfig` refuses settings that
+would need more than 3 days even at the 11 h worker cap (`ZIP_RESULT_TTL_SECONDS` is at most 2
+days), so a valid configuration always fits a 3-day rule.
 
 ## Redis
 
@@ -337,6 +364,12 @@ alarm `shotx-<stage>-redis-memory` fires when the fullest node's `DatabaseMemory
    - CloudFront signing private key. Generate the pair with
      `openssl genrsa -out key.pem 2048 && openssl rsa -pubout -in key.pem -out pub.pem`; put
      `pub.pem` in `cdn.signingPublicKeyPem` and the private key in the secret.
+   - Payment gateway (`billing.gatewaySecretName`, unless `billing.paymentGateway` is `fake`): a
+     JSON object with one key per `PAYMENT_GATEWAY_SECRET_ENV[<gateway>]` name, each at least 16
+     characters. Omise: `PAYMENT_OMISE_PUBLIC_KEY`, `PAYMENT_OMISE_SECRET_KEY`,
+     `PAYMENT_OMISE_WEBHOOK_SECRET`; 2C2P: `PAYMENT_2C2P_MERCHANT_ID`, `PAYMENT_2C2P_SECRET_KEY`.
+     api and worker read each key as an ECS secret. For `fake` infra generates
+     `shotx-<stage>/payment-gateway-fake` with `PAYMENT_FAKE_WEBHOOK_SECRET`.
 3. Verify the CloudFront origin-facing prefix list id in ap-southeast-1:
    `aws ec2 describe-managed-prefix-lists --region ap-southeast-1 --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing`.
    The list has ~55 entries and counts against the ALB security group's rule quota.
@@ -346,6 +379,11 @@ alarm `shotx-<stage>-redis-memory` fires when the fullest node's `DatabaseMemory
    `https://<auth.domainPrefix>.auth.ap-southeast-1.amazoncognito.com/oauth2/idpresponse` and
    apply for the email permission. Google Cloud console: the same callback URL.
 6. Cognito sends email with its default sender (low daily limit). Configure SES before launch.
+7. Payments and email. The `prod` stage refuses `fake` for `billing.paymentGateway` and
+   `email.provider` at synth. Other stages default to `fake`, but every ECS service runs with
+   `NODE_ENV=production`, where the shared loaders refuse fake adapters too: synth warns, and api
+   and worker won't start until a real gateway and `ses` are configured. Register the webhook URL
+   `https://<domain.main>/api/billing/webhooks/<gateway>` in the gateway's dashboard.
 
 ## After deploy
 
@@ -371,5 +409,14 @@ alarm `shotx-<stage>-redis-memory` fires when the fullest node's `DatabaseMemory
   Then load-test face search for the post-event spike. Keep `services.worker.maxCapacity` in line
   with the IndexFaces quota: extra workers only wait for rate-limit tokens.
 - **Alarms.** Set `alarms.email` or subscribe the `AlarmTopicArn` topic to your paging tool.
+  `shotx-<stage>-face-deletion-alert` fires on any `{"event": "face_deletion.alert"}` line the api
+  logs (ADR 0007), so the api must log JSON with a top-level `event` field.
+- **SES sandbox.** New SES accounts are in the sandbox in ap-southeast-1: mail only reaches
+  verified addresses, at 200 messages a day. Request production access (SES console, Account
+  dashboard) before launch, after the domain identity for `email.fromAddress` is verified (DKIM
+  records are automatic when that domain is the Route 53 zone; otherwise add the three CNAMEs
+  shown on the identity). Mail goes out through the `shotx-<stage>-email` configuration set
+  (the identity's default): reputation metrics, TLS required, bounces and complaints suppressed.
+  api and worker may call `ses:SendEmail` on that identity and configuration set only.
 - **WAF thresholds.** Venues share IPs (carrier NAT, venue Wi-Fi). Tune `waf.*RateLimit` with
   real traffic; the CAPTCHA tiers trigger before the block tiers.

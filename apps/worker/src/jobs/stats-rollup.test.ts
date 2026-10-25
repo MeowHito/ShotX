@@ -11,6 +11,7 @@ import {
   openTestDatabase,
   type TestDatabase,
 } from '../testing/database';
+import { testSubscriptionDeps } from '../testing/billing';
 import { MemoryObjectStore } from '../testing/memory-aws';
 import type { JobContext } from './context';
 import { createJobsHandler } from './handler';
@@ -203,6 +204,7 @@ describe('stats.rollup.hourly', () => {
       orphanGraceMs: 3_600_000,
       ledger: new MemoryJobRunLedger(),
       trashRetentionDays: 30,
+      subscriptions: testSubscriptionDeps(),
       batchSize: 100,
       maxRuntimeMs: 3_600_000,
     });

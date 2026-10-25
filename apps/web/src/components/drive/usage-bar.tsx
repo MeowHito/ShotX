@@ -2,7 +2,9 @@
 
 import type { DriveUsageResponse } from '@shotx/shared';
 import { Alert, Progress } from '@shotx/ui';
+import Link from 'next/link';
 import { useFormatter, useTranslations } from 'next-intl';
+import { BILLING_HREF } from '@/components/drive/paths';
 import { useDriveUsage } from '@/lib/drive/queries';
 import { formatBytes } from '@/lib/format';
 
@@ -19,6 +21,9 @@ export function UsageSummary({ usage }: { usage: DriveUsageResponse }) {
         <span className="text-muted-foreground">
           {t('summary', { used: formatBytes(used), quota: formatBytes(usage.quotaBytes) })}
         </span>
+        <Link href={BILLING_HREF} className="text-primary underline-offset-4 hover:underline">
+          {t('manage')}
+        </Link>
       </div>
       <Progress
         value={percent}

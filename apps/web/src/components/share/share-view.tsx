@@ -10,6 +10,7 @@ import {
 import { Alert, Button } from '@shotx/ui';
 import { useQuery } from '@tanstack/react-query';
 import { ScanFaceIcon } from 'lucide-react';
+import Link from 'next/link';
 import { useFormatter, useTranslations } from 'next-intl';
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
 import { DriveGrid } from '@/components/drive/drive-grid';
@@ -28,8 +29,8 @@ import {
 import { ShareApiProvider, useShareApi } from '@/lib/share/share-api';
 import { DownloadBar, useSingleDownload } from './download-bar';
 import { FaceToolsProvider, type FaceTools } from './scan/face-tools';
-import { type ScanPurpose, ScanFlow } from './scan/scan-flow';
-import { LoginRequired, PasswordForm, ShareUnavailable } from './share-gates';
+import { ScanFlow } from './scan/scan-flow';
+import { faceDeletionHref, LoginRequired, PasswordForm, ShareUnavailable } from './share-gates';
 import { type ShareRuntime, ShareRuntimeContext, defaultShareRuntime } from './share-runtime';
 import { ShareTile } from './share-tile';
 import { useLightbox } from './use-lightbox';
@@ -91,7 +92,9 @@ function ShareGate({ token, initialMeta, shareConfig }: SharePageProps) {
   if (meta.isError) {
     if (isApiError(meta.error, ErrorCode.SHARE_EXPIRED)) {
       const details = shareExpiredDetailsSchema.safeParse(meta.error.details);
-      return <ShareUnavailable reason={details.success ? details.data.reason : null} />;
+      return (
+        <ShareUnavailable token={token} reason={details.success ? details.data.reason : null} />
+      );
     }
     return (
       <Alert variant="destructive" className="flex items-center justify-between gap-2">
@@ -166,7 +169,8 @@ function ShareContent({
   const describe = useErrorMessage();
   const faceOnly = meta.mode === 'face_only';
   const scanAvailable = meta.faceSearch.available;
-  const [panel, setPanel] = useState<ScanPurpose | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const maxSelection = meta.zip.maxFiles;
   const [results, setResults] = useState<FaceSearchResponse | null>(null);
   const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const [selected, setSelected] = useState<ReadonlyMap<string, ShareItem>>(new Map());
@@ -187,11 +191,11 @@ function ShareContent({
       setSelected((prev) => {
         const next = new Map(prev);
         if (next.has(item.id)) next.delete(item.id);
-        else if (next.size < shareConfig.maxSelection) next.set(item.id, item);
+        else if (next.size < maxSelection) next.set(item.id, item);
         return next;
       });
     },
-    [shareConfig.maxSelection],
+    [maxSelection],
   );
   const selection = useMemo(() => [...selected.values()], [selected]);
 
@@ -236,7 +240,7 @@ function ShareContent({
     try {
       await withdraw.mutateAsync();
       setResults(null);
-      setPanel(null);
+      setScanning(false);
       setSelected(new Map());
       setNotice({ kind: 'info', text: t('share.withdrawn') });
     } catch (err) {
@@ -245,8 +249,8 @@ function ShareContent({
   }
 
   const scanButton =
-    scanAvailable && panel === null ? (
-      <Button size="lg" className="w-full sm:w-auto" onClick={() => setPanel('search')}>
+    scanAvailable && !scanning ? (
+      <Button size="lg" className="w-full sm:w-auto" onClick={() => setScanning(true)}>
         <ScanFaceIcon aria-hidden />
         {results === null ? t('share.scan') : t('share.scanAgain')}
       </Button>
@@ -275,18 +279,29 @@ function ShareContent({
         </Alert>
       ) : null}
 
-      {panel !== null && scanAvailable ? (
+      {scanning && scanAvailable ? (
         <ScanFlow
-          key={panel}
           token={token}
-          meta={meta}
-          purpose={panel}
+          purpose="search"
+          consent={{
+            policyVersion: meta.faceSearch.policyVersion,
+            consented: meta.faceSearch.consented,
+            resultTtlSeconds: meta.faceSearch.resultTtlSeconds,
+          }}
+          limits={{
+            maxSelfies: meta.faceSearch.maxSelfies,
+            selfie: {
+              longEdge: meta.faceSearch.selfieLongEdge,
+              jpegQuality: meta.faceSearch.selfieJpegQuality,
+            },
+          }}
+          allowGallery={meta.mode === 'gallery'}
           onResults={(r) => {
             setResults(r);
-            setPanel(null);
+            setScanning(false);
             setNotice(null);
           }}
-          onClose={() => setPanel(null)}
+          onClose={() => setScanning(false)}
         />
       ) : null}
 
@@ -304,23 +319,25 @@ function ShareContent({
         />
       )}
 
-      {scanAvailable ? (
-        <footer className="flex flex-col items-start gap-1 border-t pt-4 text-sm">
-          <Button variant="link" className="h-auto p-0" onClick={() => setPanel('delete')}>
-            {t('share.deleteMyFace')}
+      {/* "delete my face" is a PDPA right: offered whether or not face search is on. */}
+      <footer className="flex flex-col items-start gap-1 border-t pt-4 text-sm">
+        <Link
+          href={faceDeletionHref(token)}
+          className="text-primary underline-offset-4 hover:underline"
+        >
+          {t('share.deleteMyFace')}
+        </Link>
+        {meta.faceSearch.consented ? (
+          <Button
+            variant="link"
+            className="h-auto p-0 text-muted-foreground"
+            onClick={() => void withdrawConsent()}
+            disabled={withdraw.isPending}
+          >
+            {t('share.withdraw')}
           </Button>
-          {meta.faceSearch.consented ? (
-            <Button
-              variant="link"
-              className="h-auto p-0 text-muted-foreground"
-              onClick={() => void withdrawConsent()}
-              disabled={withdraw.isPending}
-            >
-              {t('share.withdraw')}
-            </Button>
-          ) : null}
-        </footer>
-      ) : null}
+        ) : null}
+      </footer>
 
       {meta.allowDownload ? (
         <DownloadBar

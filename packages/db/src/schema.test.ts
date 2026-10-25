@@ -1,14 +1,21 @@
 import {
   ACTIVITY_TYPES,
   AUTH_POOLS,
+  BILLING_ACTORS,
   BILLING_MODES,
+  CHECKOUT_CHANGE_TYPES,
+  CHECKOUT_STATUSES,
+  CONSENT_PURPOSES,
   DOWNLOAD_SIZES,
   FACE_FEEDBACK_VERDICTS,
   FILE_STATUSES,
+  PAYMENT_EVENT_TYPES,
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
   SHARE_MODES,
   SHARE_TARGET_TYPES,
+  SUBSCRIPTION_EVENT_TYPES,
+  SUBSCRIPTION_NOTICE_KINDS,
   SUBSCRIPTION_STATUSES,
   USER_ROLES,
   ZIP_JOB_STATUSES,
@@ -54,6 +61,10 @@ describe('schema', () => {
         'zip_job_entries',
         'face_deletions',
         'share_daily_stats',
+        'checkout_sessions',
+        'payment_webhook_events',
+        'subscription_notices',
+        'subscription_events',
       ].sort(),
     );
   });
@@ -210,6 +221,79 @@ describe('schema', () => {
     expect(schema.faceFeedbackVerdict.enumValues).toEqual([...FACE_FEEDBACK_VERDICTS]);
     expect(schema.activityType.enumValues).toEqual([...ACTIVITY_TYPES]);
     expect(schema.zipJobStatus.enumValues).toEqual([...ZIP_JOB_STATUSES]);
+    expect(schema.consentPurpose.enumValues).toEqual([...CONSENT_PURPOSES]);
+    expect(schema.checkoutChangeType.enumValues).toEqual([...CHECKOUT_CHANGE_TYPES]);
+    expect(schema.checkoutStatus.enumValues).toEqual([...CHECKOUT_STATUSES]);
+    expect(schema.paymentEventType.enumValues).toEqual([...PAYMENT_EVENT_TYPES]);
+    expect(schema.subscriptionEventType.enumValues).toEqual([...SUBSCRIPTION_EVENT_TYPES]);
+    expect(schema.subscriptionNoticeKind.enumValues).toEqual([...SUBSCRIPTION_NOTICE_KINDS]);
+    expect(schema.billingActor.enumValues).toEqual([...BILLING_ACTORS]);
+  });
+
+  it('has the billing columns, checks and unique keys of migration 0004', () => {
+    const names = (table: string) => config(table).columns.map((c) => c.name);
+    expect(names('subscriptions')).toEqual(
+      expect.arrayContaining([
+        'period_start',
+        'auto_renew_months',
+        'payment_method_gateway',
+        'payment_method_ref',
+        'pending_plan_id',
+        'pending_plan_effective_at',
+        'updated_at',
+      ]),
+    );
+    // Never card data: only the gateway's reference to a saved method.
+    for (const table of ['subscriptions', 'payments', 'checkout_sessions']) {
+      expect(
+        names(table).filter((n) => /card|pan|cvv|last4|expiry_month/.test(n)),
+        table,
+      ).toEqual([]);
+    }
+    expect(column('payments', 'photographer_id').notNull).toBe(true);
+    expect(column('payments', 'subscription_id').notNull).toBe(false);
+    expect(column('consents', 'purpose').notNull).toBe(true);
+    for (const [table, name] of [
+      ['checkout_sessions', 'amount_satang'],
+      ['checkout_sessions', 'vat_satang'],
+      ['checkout_sessions', 'proration_satang'],
+      ['payment_webhook_events', 'amount_satang'],
+    ] as const) {
+      expect(column(table, name).getSQLType(), `${table}.${name}`).toBe('integer');
+    }
+    const uniques = (table: string) =>
+      config(table).uniqueConstraints.map((u) => [u.name, u.columns.map((c) => c.name)]);
+    expect(uniques('checkout_sessions')).toContainEqual([
+      'checkout_sessions_idempotency_unique',
+      ['photographer_id', 'idempotency_key'],
+    ]);
+    expect(uniques('payment_webhook_events')).toContainEqual([
+      'payment_webhook_events_event_unique',
+      ['gateway', 'event_ref'],
+    ]);
+    const uniqueIndex = (table: string, name: string) =>
+      config(table).indexes.find((i) => i.config.name === name)?.config.unique;
+    expect(uniqueIndex('checkout_sessions', 'checkout_sessions_one_pending_per_photographer')).toBe(
+      true,
+    );
+    expect(uniqueIndex('payments', 'payments_one_open_renewal')).toBe(true);
+    expect(uniqueIndex('payments', 'payments_checkout_unique')).toBe(true);
+    const consentIndex = config('consents').indexes.find(
+      (i) => i.config.name === 'consents_current_anon_unique',
+    );
+    expect(consentIndex?.config.columns.map((c) => ('name' in c ? c.name : null))).toEqual([
+      'share_id',
+      'anon_id',
+      'purpose',
+      'policy_version',
+    ]);
+    expect(config('subscriptions').checks.map((c) => c.name)).toEqual(
+      expect.arrayContaining([
+        'subscriptions_auto_renew_has_method',
+        'subscriptions_pending_plan_complete',
+        'subscriptions_period_order',
+      ]),
+    );
   });
 
   it('uses bigint for byte counts and integer satang for money', () => {
@@ -228,6 +312,7 @@ describe('schema', () => {
       ['plans', 'price_year_satang'],
       ['payments', 'amount_satang'],
       ['payments', 'vat_satang'],
+      ['checkout_sessions', 'amount_satang'],
     ] as const) {
       expect(column(table, name).getSQLType(), `${table}.${name}`).toBe('integer');
     }

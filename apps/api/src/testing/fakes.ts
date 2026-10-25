@@ -27,6 +27,9 @@ export const TEST_CLIENT_IDS: Record<AuthPool, string> = {
   admins: 'adminclient456',
 };
 
+/** PAYMENT_FAKE_WEBHOOK_SECRET of the tests (signs fake gateway webhooks). */
+export const TEST_FAKE_WEBHOOK_SECRET = 'test-fake-webhook-secret-0123456789';
+
 /** A complete API environment with test values, parsed by the real shared loaders. */
 export function testEnv(overrides: Env = {}): Env {
   return {
@@ -55,6 +58,10 @@ export function testEnv(overrides: Env = {}): Env {
     FACE_SEARCH_MAX_BODY_BYTES: String(3 * 1024 * 1024 + 64 * 1024),
     FACES_QUEUE_URL: 'https://sqs.ap-southeast-1.amazonaws.com/000000000000/shotx-test-faces',
     ZIP_QUEUE_URL: 'https://sqs.ap-southeast-1.amazonaws.com/000000000000/shotx-test-zip',
+    PAYMENT_GATEWAY: 'fake',
+    PAYMENT_FAKE_WEBHOOK_SECRET: TEST_FAKE_WEBHOOK_SECRET,
+    EMAIL_PROVIDER: 'fake',
+    EMAIL_FROM_ADDRESS: 'no-reply@photos.example.com',
     ...overrides,
   };
 }

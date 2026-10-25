@@ -80,6 +80,31 @@ if value then redis.call('HDEL', KEYS[1], ARGV[1]) end
 return value
 `;
 
+/**
+ * Merge-max of a hash, atomically: ARGV[1] is the TTL, then field/value pairs. Each field is set
+ * only when missing or smaller (numeric compare), then the key gets its TTL (only when it exists,
+ * so an empty merge never creates a key without fields). Returns the number of fields written.
+ */
+export const HASH_MERGE_MAX_SCRIPT = `
+local written = 0
+for i = 2, #ARGV, 2 do
+  local field = ARGV[i]
+  local value = ARGV[i + 1]
+  local current = redis.call('HGET', KEYS[1], field)
+  if (not current) or (tonumber(value) > tonumber(current)) then
+    redis.call('HSET', KEYS[1], field, value)
+    written = written + 1
+  end
+end
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return written
+`;
+
+/** The most fields one merge script call carries (Lua's unpack and argument limits). */
+const MERGE_FIELDS_PER_CALL = 500;
+
 type RedisStoreClient = Pick<Redis, 'get' | 'set' | 'del' | 'hgetall' | 'multi' | 'eval'>;
 
 /**
@@ -124,6 +149,25 @@ export class RedisKeyValueStore implements KeyValueStore {
     // exec() resolves null when the transaction was discarded; each entry carries its own error.
     if (results === null) throw new Error('Redis transaction was discarded');
     for (const [error] of results) if (error) throw error;
+  }
+
+  async hashMergeMaxWithTtl(
+    key: string,
+    fields: Record<string, string>,
+    ttlSeconds: number,
+  ): Promise<void> {
+    const entries = Object.entries(fields);
+    for (const [field, value] of entries) {
+      if (!Number.isFinite(Number(value))) throw new RangeError(`${field} is not a number`);
+    }
+    // Each call is atomic on its own and a merge-max is commutative, so splitting a very large
+    // merge into several calls can't lose a field either.
+    let i = 0;
+    do {
+      const batch = entries.slice(i, i + MERGE_FIELDS_PER_CALL).flat();
+      await this.redis.eval(HASH_MERGE_MAX_SCRIPT, 1, this.k(key), String(ttlSeconds), ...batch);
+      i += MERGE_FIELDS_PER_CALL;
+    } while (i < entries.length);
   }
 
   async hashTake(key: string, field: string): Promise<string | null> {
@@ -198,6 +242,25 @@ export class MemoryKeyValueStore implements KeyValueStore {
     const current = this.live(key)?.value;
     const hash = current instanceof Map ? current : new Map<string, string>();
     for (const [field, value] of Object.entries(fields)) hash.set(field, value);
+    if (hash.size > 0) {
+      this.data.set(key, { value: hash, expiresAt: this.now() + ttlSeconds * 1000 });
+    }
+  }
+
+  /** Same semantics as the Lua script; synchronous after the check, so it is atomic here too. */
+  async hashMergeMaxWithTtl(
+    key: string,
+    fields: Record<string, string>,
+    ttlSeconds: number,
+  ): Promise<void> {
+    await this.check();
+    const current = this.live(key)?.value;
+    const hash = current instanceof Map ? current : new Map<string, string>();
+    for (const [field, value] of Object.entries(fields)) {
+      if (!Number.isFinite(Number(value))) throw new RangeError(`${field} is not a number`);
+      const existing = hash.get(field);
+      if (existing === undefined || Number(value) > Number(existing)) hash.set(field, value);
+    }
     if (hash.size > 0) {
       this.data.set(key, { value: hash, expiresAt: this.now() + ttlSeconds * 1000 });
     }

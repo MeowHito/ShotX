@@ -1,9 +1,12 @@
-import { QUEUE_NAMES, QUEUE_URL_ENV, S3_PREFIXES } from '@shotx/shared';
-import { Stack, type StackProps, CfnOutput } from 'aws-cdk-lib';
+import { FACE_DELETION_ALERT_EVENT, QUEUE_NAMES, QUEUE_URL_ENV, S3_PREFIXES } from '@shotx/shared';
+import { Duration, Stack, type StackProps, CfnOutput } from 'aws-cdk-lib';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import type * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import type * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type * as ecr from 'aws-cdk-lib/aws-ecr';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as sns from 'aws-cdk-lib/aws-sns';
@@ -12,6 +15,7 @@ import type { Construct } from 'constructs';
 import type { PlatformConfig } from '../config';
 import { PATHS, type ServiceName } from '../constants';
 import { Cdn } from '../constructs/cdn';
+import { Email } from '../constructs/email';
 import { JobQueues } from '../constructs/job-queues';
 import { MediaStorage } from '../constructs/media-storage';
 import { RedisAlarms } from '../constructs/redis-alarms';
@@ -119,6 +123,37 @@ export class AppStack extends Stack {
 
     new Schedules(this, 'Schedules', { config, jobs: queues.queues.jobs });
 
+    // Transactional email: SES identity and configuration set, SendEmail for api and worker.
+    const email = new Email(this, 'Email', {
+      config,
+      senders: [services.taskRoles.api, services.taskRoles.worker],
+    });
+
+    // ADR 0007: the api logs a JSON line with `"event": FACE_DELETION_ALERT_EVENT` when one share
+    // collects many "ขอลบใบหน้าของฉัน" deletions. Any such line alarms.
+    const faceDeletionAlerts = new logs.MetricFilter(this, 'FaceDeletionAlertFilter', {
+      logGroup: services.logGroups.api,
+      filterPattern: logs.FilterPattern.stringValue('$.event', '=', FACE_DELETION_ALERT_EVENT),
+      metricNamespace: `ShotX/${config.stage}`,
+      metricName: 'FaceDeletionAlerts',
+      metricValue: '1',
+      defaultValue: 0,
+    });
+    new cloudwatch.Alarm(this, 'FaceDeletionAlertAlarm', {
+      alarmName: `${prefix}-face-deletion-alert`,
+      alarmDescription:
+        'A share passed FACE_DELETION_ALERT_PER_SHARE face deletions within ' +
+        'FACE_DELETION_ALERT_WINDOW_SECONDS (ADR 0007): check face_deletions for abuse',
+      metric: faceDeletionAlerts.metric({
+        statistic: 'Sum',
+        period: Duration.seconds(config.alarms.faceDeletionAlertPeriodSeconds),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    }).addAlarmAction(new cwActions.SnsAction(alarmTopic));
+
     this.mediaBucket = storage.bucket;
     this.mainDistributionArn = cdn.mainDistribution.distributionArn;
 
@@ -149,5 +184,9 @@ export class AppStack extends Stack {
     out('ALARM_TOPIC_ARN', alarmTopic.topicArn);
     // ARN only: the api gets the value as the ECS secret IP_HASH_SECRET.
     out('IP_HASH_SECRET_ARN', services.ipHashSecret.secretArn);
+    // ARN only: api and worker get its keys as ECS secrets (PAYMENT_GATEWAY_SECRET_ENV).
+    out('PAYMENT_GATEWAY_SECRET_ARN', services.paymentGatewaySecret.secretArn);
+    out('SES_IDENTITY_ARN', email.identityArn);
+    out('SES_CONFIGURATION_SET', email.configurationSet.configurationSetName);
   }
 }

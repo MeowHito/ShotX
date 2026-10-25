@@ -8,7 +8,7 @@ import * as targets from 'aws-cdk-lib/aws-route53-targets';
 import type * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import type { PlatformConfig } from '../config';
-import { APP_ROUTING_HEADER, PATHS } from '../constants';
+import { APP_ROUTING_HEADER, PATHS, VIEWER_ADDRESS_HEADER } from '../constants';
 import { PrefixScopedOacOrigin } from './prefix-scoped-oac-origin';
 import { ROUTING_HEADER_VALUES } from './services';
 
@@ -28,7 +28,9 @@ export interface CdnProps {
  * Two distributions:
  *
  * main (flat-rate plan, see PricingPlanStack)
- *   /api/*            -> ALB (api), no caching, all viewer headers/cookies/query forwarded
+ *   /api/*            -> ALB (api), no caching, all viewer headers/cookies/query forwarded,
+ *                        plus CloudFront-Viewer-Address (the client IP for rate limits and
+ *                        consents.ip_hash); request bodies (webhook signatures) pass unchanged
  *   /media/*          -> S3 via OAC, signed URLs (key group), long cache, /media prefix stripped,
  *                        nosniff + sandboxing CSP + HSTS + referrer policy + CORS (no credentials)
  *   /_next/static/*   -> ALB (web), cached
@@ -69,11 +71,23 @@ export class Cdn extends Construct {
         customHeaders: { [APP_ROUTING_HEADER]: ROUTING_HEADER_VALUES[app] },
       });
 
+    // Dynamic routes (API and SSR) get every viewer header, cookie and query string, plus the
+    // client address CloudFront reports. CloudFront sets CloudFront-Viewer-Address itself from
+    // the connection, so a viewer can't choose it; with ALL_VIEWER alone it is absent, and the
+    // API would see only the ALB's address. The web app may forward it on its server-side API
+    // calls (the ALB admits web and admin tasks besides CloudFront).
+    const dynamicOriginRequest = new cloudfront.OriginRequestPolicy(this, 'DynamicOriginRequest', {
+      originRequestPolicyName: `${prefix}-dynamic`,
+      comment: `All viewer headers, cookies and query strings plus ${VIEWER_ADDRESS_HEADER}`,
+      headerBehavior: cloudfront.OriginRequestHeaderBehavior.all(VIEWER_ADDRESS_HEADER),
+      cookieBehavior: cloudfront.OriginRequestCookieBehavior.all(),
+      queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.all(),
+    });
     const dynamic: Omit<cloudfront.BehaviorOptions, 'origin'> = {
       viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
       cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-      originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+      originRequestPolicy: dynamicOriginRequest,
       responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
       compress: true,
     };

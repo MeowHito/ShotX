@@ -201,8 +201,25 @@ describe('loadRetentionConfig', () => {
     expect(loadRetentionConfig({})).toEqual({
       trashRetentionDays: 30,
       faceIndexExpiryDays: 90,
-      subscription: { graceDays: 14, purgeAfterExpiryDays: 45, reminderDays: [14, 7, 1] },
+      subscription: {
+        graceDays: 14,
+        purgeAfterExpiryDays: 45,
+        reminderDays: [14, 7, 1],
+        purgeWarningDays: 7,
+      },
     });
+  });
+
+  it('keeps the purge warning before the purge', () => {
+    expect(
+      loadRetentionConfig({ SUBSCRIPTION_PURGE_WARNING_DAYS: '29' }).subscription.purgeWarningDays,
+    ).toBe(29);
+    expect(() =>
+      loadRetentionConfig({
+        SUBSCRIPTION_PURGE_AFTER_EXPIRY_DAYS: '30',
+        SUBSCRIPTION_PURGE_WARNING_DAYS: '30',
+      }),
+    ).toThrow(/SUBSCRIPTION_PURGE_WARNING_DAYS/);
   });
 
   it('accepts a purge delay from 30 to 60 days only', () => {
@@ -247,6 +264,11 @@ describe('loadBillingConfig', () => {
       prepaidMonths: [1, 3, 6, 12],
       vatRateBasisPoints: 700,
       egressAnomalyMultiplier: 20,
+      egressAnomalyMinBytes: 10 * GiB,
+      checkoutExpirySeconds: 900,
+      minChargeSatang: 2_000,
+      prorationDaysPerMonth: 30,
+      renewal: { maxAttempts: 3, leadSeconds: 86_400 },
     });
   });
 
@@ -257,13 +279,20 @@ describe('loadBillingConfig', () => {
         VAT_RATE_BASIS_POINTS: '1000',
         EGRESS_ANOMALY_MULTIPLIER: '12.5',
       }),
-    ).toEqual({ prepaidMonths: [1, 12], vatRateBasisPoints: 1000, egressAnomalyMultiplier: 12.5 });
+    ).toMatchObject({
+      prepaidMonths: [1, 12],
+      vatRateBasisPoints: 1000,
+      egressAnomalyMultiplier: 12.5,
+    });
   });
 
   it.each([
     ['BILLING_PREPAID_MONTHS', '0'],
     ['VAT_RATE_BASIS_POINTS', '7.5'],
     ['EGRESS_ANOMALY_MULTIPLIER', '0'],
+    ['BILLING_CHECKOUT_EXPIRY_SECONDS', '60'],
+    ['BILLING_PRORATION_DAYS_PER_MONTH', '27'],
+    ['BILLING_RENEWAL_MAX_ATTEMPTS', '0'],
   ])('rejects %s=%s', (key, value) => {
     expect(() => loadBillingConfig({ [key]: value })).toThrow(new RegExp(`at ${key}\\b`));
   });

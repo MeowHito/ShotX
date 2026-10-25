@@ -2,12 +2,14 @@ import {
   ALL_ROUTES,
   apiErrorBodySchema,
   ErrorCode,
+  IDEMPOTENCY_KEY_HEADER,
+  idempotencyKeySchema,
   ME_ROUTES,
   type RouteContract,
   VIEWER_SESSION_COOKIE,
 } from '@shotx/shared';
 import { type AuthDeps, isSameOrigin, resolveSession } from '../auth/handlers';
-import { BFF_PREFIX } from './constants';
+import { BFF_PREFIX, VIEWER_ADDRESS_HEADER, viewerAddressHeader } from './constants';
 
 /**
  * Backend-for-frontend: the browser calls `/bff/<route path>` with its httpOnly session cookie;
@@ -87,6 +89,21 @@ export function forwardableSetCookies(route: RouteContract, upstream: Headers): 
   });
 }
 
+/**
+ * The request headers the BFF passes on: only those a route's contract declares, which today is
+ * `Idempotency-Key` (POST /billing/checkout), and only when well-formed. Nothing else from the
+ * browser reaches the API.
+ */
+export function forwardableRequestHeaders(
+  route: RouteContract,
+  headers: Headers,
+): Record<string, string> {
+  if (route.headers === undefined) return {};
+  const key = headers.get(IDEMPOTENCY_KEY_HEADER);
+  if (key === null || !idempotencyKeySchema.safeParse(key).success) return {};
+  return { [IDEMPOTENCY_KEY_HEADER]: key };
+}
+
 export interface BffDeps {
   auth: AuthDeps;
   /** API origin, e.g. the internal ALB (API_INTERNAL_URL). Routes are under `/api` on it. */
@@ -119,7 +136,8 @@ export async function handleBffRequest(request: Request, deps: BffDeps): Promise
   }
   const path = url.pathname.slice(BFF_PREFIX.length);
   const route = matchRoute(request.method, path);
-  if (route === null || route.auth === 'public') {
+  // Public routes go to /api directly; gateway webhooks are server-to-server, never via a browser.
+  if (route === null || route.auth === 'public' || route.auth === 'webhook') {
     return errorResponse(404, ErrorCode.NOT_FOUND, 'Unknown route');
   }
 
@@ -150,6 +168,8 @@ export async function handleBffRequest(request: Request, deps: BffDeps): Promise
         accept: 'application/json',
         authorization: `Bearer ${session.accessToken}`,
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+        ...forwardableRequestHeaders(route, request.headers),
+        ...viewerAddressHeader(request.headers.get(VIEWER_ADDRESS_HEADER)),
       },
       body,
       cache: 'no-store',

@@ -12,7 +12,10 @@ describe('loadFaceConfig', () => {
     expect(config.index.qualityFilter).toBe('LOW');
     expect(config.index.tileEdgeEpsilon).toBe(0.01);
     expect(config.rekognition.region).toBe('ap-southeast-1');
-    expect(config.deletion).toEqual({ threshold: 95 });
+    expect(config.deletion).toEqual({
+      threshold: 95,
+      alert: { perShare: 20, windowSeconds: 86_400 },
+    });
   });
 
   it('reads the deletion threshold and keeps it at or above FACE_MAYBE', () => {

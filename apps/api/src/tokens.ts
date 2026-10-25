@@ -15,6 +15,12 @@ export const CLOCK = Symbol('CLOCK');
 export const KEY_VALUE_STORE = Symbol('KEY_VALUE_STORE');
 export const QUEUE_SENDER = Symbol('QUEUE_SENDER');
 export const FACE_PROVIDER = Symbol('FACE_PROVIDER');
+/** The app's LoggerService, for structured warnings (alerts infra turns into alarms). */
+export const API_LOGGER = Symbol('API_LOGGER');
+export const PAYMENT_GATEWAY = Symbol('PAYMENT_GATEWAY');
+/** Structured operational events (infra/events): JSON lines with a top-level `event`. */
+export const EVENT_LOG = Symbol('EVENT_LOG');
+export const EMAIL_PROVIDER = Symbol('EMAIL_PROVIDER');
 
 export interface Clock {
   now(): Date;
@@ -107,6 +113,17 @@ export interface KeyValueStore {
   hashGetAll(key: string): Promise<Record<string, string>>;
   /** HSET the fields (if any) and EXPIRE the key, atomically (MULTI). */
   hashSetWithTtl(key: string, fields: Record<string, string>, ttlSeconds: number): Promise<void>;
+  /**
+   * Atomically (one Lua script in Redis): for each field, HSET it only when the key lacks it or
+   * holds a smaller number (values are decimal numbers, e.g. similarities), then EXPIRE the key.
+   * Concurrent merges into the same key never lose each other's fields, and each field keeps the
+   * maximum. With no fields only the TTL is reset, and only when the key exists.
+   */
+  hashMergeMaxWithTtl(
+    key: string,
+    fields: Record<string, string>,
+    ttlSeconds: number,
+  ): Promise<void>;
   /** HGET and HDEL one field atomically; null when the field (or key) doesn't exist. */
   hashTake(key: string, field: string): Promise<string | null>;
 }

@@ -1,6 +1,7 @@
 import {
   ERROR_CODES,
   ErrorCode,
+  PLAN_CHANGE_INVALID_REASONS,
   REJECTED_FILE_TYPE_HINTS,
   SHARE_UNAVAILABLE_REASONS,
 } from '@shotx/shared';
@@ -8,7 +9,13 @@ import { createTranslator } from 'next-intl';
 import { describe, expect, it } from 'vitest';
 import { th } from '../../messages/th';
 import { ApiError, ContractError, NetworkError } from '../api/errors';
-import { ClientError, describeError, type ErrorMessage, messageForCode } from './messages';
+import {
+  ClientError,
+  describeError,
+  type ErrorMessage,
+  messageForCode,
+  messageForNotice,
+} from './messages';
 
 const t = createTranslator({ locale: 'th', messages: th, namespace: 'errors' });
 const render = (m: ErrorMessage) => t(m.key, m.values as never);
@@ -97,6 +104,51 @@ describe('error message map', () => {
     expect(render(messageForCode(ErrorCode.PASSWORD_INCORRECT, undefined))).toBe(
       'รหัสผ่านไม่ถูกต้อง',
     );
+  });
+
+  it('gives the billing codes Thai messages, with reasons and pending details', () => {
+    for (const code of [
+      ErrorCode.PLAN_NOT_FOUND,
+      ErrorCode.PLAN_CHANGE_INVALID,
+      ErrorCode.CHECKOUT_PENDING,
+      ErrorCode.CHECKOUT_EXPIRED,
+      ErrorCode.WEBHOOK_SIGNATURE_INVALID,
+      ErrorCode.PAYMENT_GATEWAY_ERROR,
+    ]) {
+      expect(render(messageForCode(code, undefined)), code).toMatch(/[฀-๿]/);
+    }
+    for (const reason of PLAN_CHANGE_INVALID_REASONS) {
+      const m = messageForCode(ErrorCode.PLAN_CHANGE_INVALID, {
+        reason,
+        expectedChangeType: 'new',
+      });
+      expect(m.key).toBe(`planChange.${reason}`);
+      expect(render(m)).toBe(th.errors.planChange[reason]);
+    }
+    expect(
+      render(
+        messageForCode(ErrorCode.CHECKOUT_PENDING, {
+          paymentId: null,
+          expiresAt: '2026-10-25T05:15:00.000Z',
+        }),
+      ),
+    ).toContain('หมดเวลา 12:15');
+  });
+
+  it('maps the DOWNGRADE_EXCEEDS_QUOTA notice', () => {
+    const m = messageForNotice({
+      code: 'DOWNGRADE_EXCEEDS_QUOTA',
+      details: {
+        quotaBytes: 10 * 1024 ** 3,
+        usedBytes: 18 * 1024 ** 3,
+        reservedBytes: 2 * 1024 ** 3,
+        overBytes: 10 * 1024 ** 3,
+      },
+    });
+    expect(render(m)).toContain(
+      'แพ็กเกจใหม่มีพื้นที่ 10 GB แต่ตอนนี้คุณใช้อยู่ 20 GB (เกิน 10 GB)',
+    );
+    expect(render(m)).toContain('ระบบจะไม่ลบไฟล์ของคุณ');
   });
 
   it('gives HEIC and RAW their hint messages', () => {

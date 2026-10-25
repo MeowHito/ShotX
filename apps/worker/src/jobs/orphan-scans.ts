@@ -7,9 +7,9 @@ import type { ObjectStore } from '../aws/object-store';
  * Where `faces.reconcile.daily` keeps each collection's OrphanScan between runs (two-job mode,
  * packages/face README rule 6).
  *
- * Interim storage: S3 JSON under `tmp/reconcile/{photographerId}.json` (infra: a 7-day lifecycle
- * rule on exactly this prefix, and Get/Put/Delete for the worker), well over the daily schedule's
- * 24 h. A lost scan only delays deletion by a day: the next run scans again. CONTRACT CHANGE REQUEST: a
+ * Interim storage: S3 JSON under `tmp/reconcile/{photographerId}.json` (infra: a 3-day lifecycle
+ * rule on exactly this prefix, within TMP_LIFECYCLE_MAX_DAYS, and Get/Put/Delete for the worker),
+ * over the daily schedule's 24 h. A lost scan only delays deletion by a day: the next run scans again. CONTRACT CHANGE REQUEST: a
  * `face_orphan_scans` table in packages/db (or, if S3 stays, a `reconcileScanKey` builder and a
  * `reconcile` kind in parseS3Key in packages/shared). Until then this is the worker's only
  * hand-built key; it uses the shared `tmp/` prefix and the shared segment rules.

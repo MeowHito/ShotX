@@ -14,7 +14,13 @@ import {
 import { users } from './accounts';
 import { createdAt, id, timestamptz } from './columns';
 import { files, folders } from './drive';
-import { downloadSize, faceFeedbackVerdict, shareMode, shareTargetType } from './enums';
+import {
+  consentPurpose,
+  downloadSize,
+  faceFeedbackVerdict,
+  shareMode,
+  shareTargetType,
+} from './enums';
 
 /**
  * Share links, `/s/{token}`. The token is 128 random bits in base62 (~22 characters).
@@ -80,15 +86,17 @@ export const shares = pgTable(
 );
 
 /**
- * Face-search consent per share and viewer (logged in) or anonymous session (`anon_id` cookie),
- * for one policy version. A scan needs a row for the current version that is not withdrawn.
+ * Consent per share, purpose and viewer (logged in) or anonymous session (`anon_id` cookie), for
+ * one policy version. A scan needs a row of its purpose for the current version that is not
+ * withdrawn: `face_search` before a face search, `face_deletion` before "ขอลบใบหน้าของฉัน"
+ * (migration 0004; existing rows are `face_search`). See CONSENT_PURPOSE_GATES in @shotx/shared.
  * `ip_hash` is a keyed hash, never the address (`v1:` + HMAC, see IP_HASH_VERSION).
  *
  * Exactly one of `viewer_id` and `anon_id` is set (viewerColumns in @shotx/shared). At most one
- * current (not withdrawn) consent exists per share, viewer or session, and version, so giving
- * consent is an idempotent upsert: `INSERT ... ON CONFLICT DO NOTHING` on the partial unique
- * index, then select. Withdrawal sets `withdrawn_at` on every current row of the viewer or session
- * for the share; a later consent inserts a new row, so the history stays.
+ * current (not withdrawn) consent exists per share, viewer or session, purpose and version, so
+ * giving consent is an idempotent upsert: `INSERT ... ON CONFLICT DO NOTHING` on the partial
+ * unique index, then select. Withdrawal sets `withdrawn_at` on every current row of the viewer or
+ * session for the share (every purpose); a later consent inserts a new row, so the history stays.
  */
 export const consents = pgTable(
   'consents',
@@ -99,6 +107,7 @@ export const consents = pgTable(
       .references(() => shares.id),
     viewerId: uuid('viewer_id').references(() => users.id),
     anonId: uuid('anon_id'),
+    purpose: consentPurpose('purpose').notNull().default('face_search'),
     policyVersion: text('policy_version').notNull(),
     ipHash: text('ip_hash').notNull(),
     acceptedAt: timestamptz('accepted_at').notNull().defaultNow(),
@@ -108,10 +117,10 @@ export const consents = pgTable(
     index('consents_share_viewer_idx').on(t.shareId, t.viewerId),
     index('consents_share_anon_idx').on(t.shareId, t.anonId),
     uniqueIndex('consents_current_viewer_unique')
-      .on(t.shareId, t.viewerId, t.policyVersion)
+      .on(t.shareId, t.viewerId, t.purpose, t.policyVersion)
       .where(sql`${t.withdrawnAt} IS NULL AND ${t.viewerId} IS NOT NULL`),
     uniqueIndex('consents_current_anon_unique')
-      .on(t.shareId, t.anonId, t.policyVersion)
+      .on(t.shareId, t.anonId, t.purpose, t.policyVersion)
       .where(sql`${t.withdrawnAt} IS NULL AND ${t.anonId} IS NOT NULL`),
     check('consents_viewer_or_anon', sql`num_nonnulls(${t.viewerId}, ${t.anonId}) = 1`),
     check(

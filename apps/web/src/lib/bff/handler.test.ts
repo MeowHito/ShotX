@@ -1,10 +1,11 @@
 // @vitest-environment node
-import { DRIVE_ROUTES, ME_ROUTES, UPLOAD_ROUTES } from '@shotx/shared';
+import { BILLING_ROUTES, DRIVE_ROUTES, ME_ROUTES, UPLOAD_ROUTES } from '@shotx/shared';
 import { describe, expect, it, vi } from 'vitest';
 import type { AuthProvider } from '../auth/provider';
 import { cookieNames, encodeJsonCookie } from '../auth/session';
 import {
   type BffDeps,
+  forwardableRequestHeaders,
   forwardableSetCookies,
   handleBffRequest,
   matchRoute,
@@ -229,5 +230,58 @@ describe('BFF', () => {
     // Any other route drops upstream cookies.
     expect(forwardableSetCookies(DRIVE_ROUTES.usage, upstreamHeaders())).toEqual([]);
     expect(forwardableSetCookies(ME_ROUTES.createViewerSession, upstreamHeaders())).toHaveLength(1);
+  });
+
+  it('forwards Idempotency-Key only for routes that declare it, and the viewer address', async () => {
+    const fetch = upstream();
+    const key = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+    await handleBffRequest(
+      new Request(`${BASE}/bff/billing/checkout`, {
+        method: 'POST',
+        headers: {
+          origin: BASE,
+          cookie: `${names.session}=${session}`,
+          'content-type': 'application/json',
+          'idempotency-key': key,
+          'cloudfront-viewer-address': '203.0.113.10:51234',
+          'x-forwarded-for': '198.51.100.1',
+        },
+        body: JSON.stringify({
+          planCode: 'pro',
+          changeType: 'new',
+          payment: { method: 'promptpay', months: 1 },
+        }),
+      }),
+      deps(fetch),
+    );
+    expect(fetch.mock.calls[0]?.[0]).toBe('http://internal-alb/api/billing/checkout');
+    expect(fetch.mock.calls[0]?.[1]?.headers).toEqual({
+      accept: 'application/json',
+      authorization: 'Bearer access-token',
+      'content-type': 'application/json',
+      'idempotency-key': key,
+      'cloudfront-viewer-address': '203.0.113.10:51234',
+    });
+
+    expect(
+      forwardableRequestHeaders(BILLING_ROUTES.checkout, new Headers({ 'idempotency-key': 'a b' })),
+    ).toEqual({});
+    expect(
+      forwardableRequestHeaders(DRIVE_ROUTES.createFolder, new Headers({ 'idempotency-key': key })),
+    ).toEqual({});
+  });
+
+  it('never forwards gateway webhooks', async () => {
+    const fetch = upstream();
+    const response = await handleBffRequest(
+      new Request(`${BASE}/bff/billing/webhooks/fake`, {
+        method: 'POST',
+        headers: { origin: BASE, cookie: `${names.session}=${session}` },
+        body: '{}',
+      }),
+      deps(fetch),
+    );
+    expect(response.status).toBe(404);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

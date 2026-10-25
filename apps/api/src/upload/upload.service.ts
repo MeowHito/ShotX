@@ -162,7 +162,9 @@ export class UploadService {
           }
         }
 
-        const subscription = await currentSubscription(tx, ownerId);
+        // FOR SHARE: a plan change (FOR UPDATE in the billing transactions) and this
+        // reservation serialise, so the quota read below is the one the reservation runs under.
+        const subscription = await currentSubscription(tx, ownerId, { lock: 'share' });
         if (!subscriptionAllowsUploads(subscription?.status ?? null)) {
           throw new ApiError('SUBSCRIPTION_INACTIVE', 'Uploads need an active subscription', {
             status: subscription?.status ?? null,

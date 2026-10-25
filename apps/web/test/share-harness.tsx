@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import { FaceDeletionPage } from '@/components/share/face-deletion-page';
 import { SharePage } from '@/components/share/share-view';
 import { createPublicApiClient } from '@/lib/api/client';
 import type { ClientFaceConfig, ClientShareConfig } from '@/lib/face/config';
@@ -8,8 +9,6 @@ import type { FakeApi } from './fake-api';
 import { apiClientFor, renderWithProviders } from './render';
 
 export const FACE_CONFIG: ClientFaceConfig = {
-  selfie: { longEdge: 1280, jpegQuality: 90 },
-  maxSelfies: 3,
   gate: {
     minFaceWidthRatio: 0.18,
     minScore: 0.6,
@@ -23,7 +22,6 @@ export const FACE_CONFIG: ClientFaceConfig = {
 export const SHARE_CONFIG: ClientShareConfig = {
   zipPollIntervalMs: 1000,
   zipPollTimeoutMs: 60_000,
-  maxSelection: 500,
   iosShareMaxFiles: 20,
 };
 
@@ -77,6 +75,66 @@ export function fakeNavigator(
   return { nav, getUserMedia, stop, share };
 }
 
+/** Fake canvas and MediaPipe driven by a scenario, with spies on what the scan flow asks. */
+function faceHarness(partial: Partial<FaceScenario> | undefined) {
+  const scenario: FaceScenario = {
+    faces: [goodFace()],
+    luma: 128,
+    detectorAvailable: true,
+    ...partial,
+  };
+  const rendered: { width: number; height: number }[] = [];
+  const toJpeg = vi.fn((_quality: number) =>
+    Promise.resolve(new Blob(['jpeg-bytes'], { type: 'image/jpeg' })),
+  );
+  const canvas: CanvasOps = {
+    decode: () => Promise.resolve({ source: {} as CanvasImageSource, width: 3000, height: 4000 }),
+    render: (_source, width, height) => {
+      rendered.push({ width, height });
+      return {
+        surface: {} as CanvasImageSource,
+        pixels: {
+          data: new Uint8ClampedArray(width * height * 4).fill(scenario.luma),
+          width,
+          height,
+        },
+        toJpeg,
+      };
+    },
+  };
+  const detect = vi.fn(() => scenario.faces);
+  const loadDetector = vi.fn(() => Promise.resolve(scenario.detectorAvailable ? { detect } : null));
+  return { scenario, canvas, detect, loadDetector, rendered, toJpeg };
+}
+
+/** The "ขอลบใบหน้าของฉัน" page against the fake API. */
+export function renderFaceDeletionPage(
+  fake: FakeApi,
+  token: string,
+  options: { nav?: Navigator; scenario?: Partial<FaceScenario> } = {},
+) {
+  const face = faceHarness(options.scenario);
+  const onClose = vi.fn();
+  const view = renderWithProviders(
+    <FaceDeletionPage
+      token={token}
+      signedIn={false}
+      faceConfig={FACE_CONFIG}
+      testing={{
+        publicApi: createPublicApiClient({ fetch: fake.fetch }),
+        faceTools: {
+          canvas: face.canvas,
+          loadDetector: face.loadDetector,
+          navigator: options.nav ?? fakeNavigator().nav,
+        },
+        onClose,
+      }}
+    />,
+    { api: apiClientFor(fake.fetch) },
+  );
+  return { ...view, ...face, onClose };
+}
+
 export function renderSharePage(
   fake: FakeApi,
   token: string,
@@ -87,26 +145,9 @@ export function renderSharePage(
     faceConfig?: ClientFaceConfig;
   } = {},
 ) {
-  const scenario: FaceScenario = {
-    faces: [goodFace()],
-    luma: 128,
-    detectorAvailable: true,
-    ...options.scenario,
-  };
-  const canvas: CanvasOps = {
-    decode: () => Promise.resolve({ source: {} as CanvasImageSource, width: 3000, height: 4000 }),
-    render: (_source, width, height) => ({
-      surface: {} as CanvasImageSource,
-      pixels: {
-        data: new Uint8ClampedArray(width * height * 4).fill(scenario.luma),
-        width,
-        height,
-      },
-      toJpeg: () => Promise.resolve(new Blob(['jpeg-bytes'], { type: 'image/jpeg' })),
-    }),
-  };
-  const detect = vi.fn(() => scenario.faces);
-  const loadDetector = vi.fn(() => Promise.resolve(scenario.detectorAvailable ? { detect } : null));
+  const { scenario, canvas, detect, loadDetector, rendered, toJpeg } = faceHarness(
+    options.scenario,
+  );
   const startDownload = vi.fn();
   const mediaFetch = vi.fn<typeof fetch>(() =>
     Promise.resolve(new Response(new Blob(['photo'], { type: 'image/jpeg' }))),
@@ -131,5 +172,5 @@ export function renderSharePage(
     />,
     { api: apiClientFor(fake.fetch) },
   );
-  return { ...view, scenario, detect, loadDetector, startDownload, mediaFetch };
+  return { ...view, scenario, detect, loadDetector, startDownload, mediaFetch, rendered, toJpeg };
 }

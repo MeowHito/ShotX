@@ -142,7 +142,10 @@ export class SharesService {
   async create(ownerId: string, body: CreateBody): Promise<OwnerShare> {
     if (body.mode === 'face_only' && !this.config.features.faceSearch) throw featureDisabled();
     const expiresAt = this.expiry(body.expiresAt, ['body', 'expiresAt']);
-    const passwordHash = body.password === null ? null : await hashPassword(body.password);
+    const passwordHash =
+      body.password === null
+        ? null
+        : await hashPassword(body.password, this.config.password.argon2id);
     return this.db.transaction(async (tx) => {
       const subscription = await currentSubscription(tx, ownerId);
       if (!subscriptionAllowsSharing(subscription?.status ?? null)) {
@@ -255,7 +258,7 @@ export class SharesService {
         ? undefined
         : body.password === null
           ? null
-          : await hashPassword(body.password);
+          : await hashPassword(body.password, this.config.password.argon2id);
     return this.db.transaction(async (tx) => {
       const [share] = await tx
         .select()

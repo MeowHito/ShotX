@@ -1,4 +1,5 @@
 import { S3Client } from '@aws-sdk/client-s3';
+import { SESv2Client } from '@aws-sdk/client-sesv2';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { createDb, createPool } from '@shotx/db';
 import {
@@ -10,6 +11,8 @@ import type { QueueName } from '@shotx/shared';
 import { Redis } from 'ioredis';
 import { S3ObjectStore } from './aws/object-store';
 import { SqsQueueClient } from './aws/queue-client';
+import { createEmailProvider } from './billing/email';
+import { createRenewalGateway } from './billing/gateway';
 import { CONSUMED_QUEUES, loadWorkerConfig } from './config';
 import { checkFacesBudget } from './faces/budget';
 import { CollectionRegistry } from './faces/deps';
@@ -116,6 +119,13 @@ async function main(): Promise<void> {
         worker.jobDedupeTtlSeconds,
       ),
       trashRetentionDays: config.retention.trashRetentionDays,
+      subscriptions: {
+        gateway: createRenewalGateway(config.paymentGateway),
+        email: createEmailProvider(config.email, () => new SESv2Client(aws)),
+        billing: config.billing,
+        lifecycle: config.retention.subscription,
+        publicBaseUrl: config.app.publicBaseUrl,
+      },
       batchSize: worker.jobBatchSize,
       maxRuntimeMs: worker.maxProcessingMs.jobs,
     }),

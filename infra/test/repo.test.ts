@@ -3,12 +3,19 @@ import {
   type Env,
   LATEST_CONSENT_POLICY_VERSION,
   loadApiLimitsConfig,
+  loadBillingConfig,
   loadDriveConfig,
+  loadEmailConfig,
   loadFaceConfig,
   loadFeatureFlags,
+  loadPaymentGatewayConfig,
+  loadRetentionConfig,
   loadShareConfig,
+  loadSharePasswordHashConfig,
   loadUploadConfig,
   loadWorkerSettings,
+  PAYMENT_GATEWAY_SECRET_ENV,
+  PAYMENT_GATEWAY_SECRET_NAMES,
   QUEUE_NAMES,
   QUEUE_VISIBILITY_TIMEOUT_ENV,
   SCHEDULED_JOB_TYPES,
@@ -149,6 +156,15 @@ describe('.env.example', () => {
     'share.ts': loadShareConfig,
     'upload.ts': loadUploadConfig,
     'drive.ts': loadDriveConfig,
+    'password.ts': loadSharePasswordHashConfig,
+    'retention.ts': loadRetentionConfig,
+    // Billing tunables, the gateway selection and email. The gateway secrets and the sender
+    // address have no default; the same placeholders go into both sides of the comparison.
+    'billing.ts': (e) => ({
+      billing: loadBillingConfig(e),
+      gateway: loadPaymentGatewayConfig({ PAYMENT_FAKE_WEBHOOK_SECRET: 'x'.repeat(16), ...e }),
+      email: loadEmailConfig({ EMAIL_FROM_ADDRESS: 'no-reply@shotx.test', ...e }),
+    }),
   };
 
   for (const [file, load] of Object.entries(loaderFiles)) {
@@ -169,6 +185,31 @@ describe('.env.example', () => {
     expect(env.CONSENT_POLICY_VERSION).toBe(LATEST_CONSENT_POLICY_VERSION);
     // A local placeholder that loadConsentConfig accepts; on AWS it is a generated secret.
     expect(env.IP_HASH_SECRET?.length).toBeGreaterThanOrEqual(32);
+  });
+
+  it('lists the face deletion alert keys at their code defaults (ADR 0007)', () => {
+    expect(env.FACE_DELETION_ALERT_PER_SHARE).toBe('20');
+    expect(env.FACE_DELETION_ALERT_WINDOW_SECONDS).toBe('86400');
+    const deletion = loadFaceConfig(faceEnv).deletion;
+    expect(deletion).toEqual(loadFaceConfig({}).deletion);
+  });
+
+  it('selects the fake gateway and email locally, with placeholder secrets only', () => {
+    expect(env.PAYMENT_GATEWAY).toBe('fake');
+    expect(env.EMAIL_PROVIDER).toBe('fake');
+    expect(env.NODE_ENV).toBe('development');
+    // Every gateway secret is listed; only the fake one has a (local placeholder) value.
+    for (const name of PAYMENT_GATEWAY_SECRET_NAMES) expect(listed.has(name), name).toBe(true);
+    for (const name of PAYMENT_GATEWAY_SECRET_NAMES) {
+      if (name === PAYMENT_GATEWAY_SECRET_ENV.fake[0]) continue;
+      expect(env, name).not.toHaveProperty(name);
+    }
+    expect(env.PAYMENT_FAKE_WEBHOOK_SECRET).toMatch(/^local-dev-only-/);
+    expect(() => loadPaymentGatewayConfig(env)).not.toThrow();
+    expect(loadEmailConfig(env)).toEqual({
+      provider: 'fake',
+      from: { address: 'no-reply@shotx.test', name: 'ShotX' },
+    });
   });
 
   it('documents the face deletion threshold right above it', () => {

@@ -1,16 +1,17 @@
 'use client';
 
-import { ErrorCode, type FaceSearchResponse, type ShareMetaResponse } from '@shotx/shared';
+import { type ConsentPolicyVersion, ErrorCode, type FaceSearchResponse } from '@shotx/shared';
 import { Alert, Button } from '@shotx/ui';
 import { XIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { isApiError } from '@/lib/api/errors';
+import type { SelfieLimits } from '@/lib/face/config';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { SELFIE_ANGLES, type SelfieIssue } from '@/lib/face/quality-gate';
 import { processSelfie, type SelfieSource } from '@/lib/face/selfie';
 import { useFaceDeletion, useFaceSearch, useInvalidateShare } from '@/lib/share/queries';
-import { ConsentScreen } from './consent-screen';
+import { ConsentScreen, knownPolicyVersion } from './consent-screen';
 import { useFaceTools } from './face-tools';
 import { SelfieCapture } from './selfie-capture';
 
@@ -22,22 +23,39 @@ interface Selfie {
   url: string;
 }
 
+/** The consent state the API reported (share meta, or face-deletion info). */
+export interface ScanConsent {
+  /** The text version to show; null when the API offers none (face search unavailable). */
+  policyVersion: ConsentPolicyVersion | null;
+  consented: boolean;
+  /** face_search only: how long results are kept (stated in the consent text). */
+  resultTtlSeconds: number | null;
+}
+
 /**
  * Consent, then one to FACE_MAX_SELFIES selfies (front, slightly left, slightly right), each
  * checked by the client-side quality gate, then one multipart upload: face search ("search") or
- * the "delete my face" request ("delete"). Selfies live only in this component's memory and are dropped
- * after the request; nothing is written to storage or logged.
+ * the "delete my face" request ("delete"). The selfie limits come from the API (`limits`), the
+ * gate from the web config. Selfies live only in this component's memory and are dropped after
+ * the request; nothing is written to storage or logged.
+ *
+ * A scan answered with CONSENT_REQUIRED or CONSENT_VERSION_MISMATCH brings the consent screen
+ * back with the version from the error details.
  */
 export function ScanFlow({
   token,
-  meta,
   purpose,
+  consent,
+  limits,
+  allowGallery,
   onResults,
   onClose,
 }: {
   token: string;
-  meta: ShareMetaResponse;
   purpose: ScanPurpose;
+  consent: ScanConsent;
+  limits: SelfieLimits;
+  allowGallery: boolean;
   onResults?: (results: FaceSearchResponse) => void;
   onClose: () => void;
 }) {
@@ -48,6 +66,8 @@ export function ScanFlow({
   const search = useFaceSearch(token);
   const deletion = useFaceDeletion(token);
 
+  const [consentNeeded, setConsentNeeded] = useState(!consent.consented);
+  const [consentVersion, setConsentVersion] = useState(consent.policyVersion);
   const [selfies, setSelfies] = useState<Selfie[]>([]);
   const [adding, setAdding] = useState(true);
   const [checking, setChecking] = useState(false);
@@ -62,9 +82,16 @@ export function ScanFlow({
   // Drop every selfie (and its object URL) when the flow closes.
   useEffect(() => () => selfiesRef.current.forEach((s) => URL.revokeObjectURL(s.url)), []);
 
-  const maxAngles = Math.min(tools.config.maxSelfies, SELFIE_ANGLES.length);
+  const processor = useMemo(
+    () => ({
+      canvas: tools.canvas,
+      loadDetector: tools.loadDetector,
+      config: { gate: tools.config.gate, selfie: limits.selfie },
+    }),
+    [tools, limits.selfie],
+  );
+  const maxAngles = Math.min(limits.maxSelfies, SELFIE_ANGLES.length);
   const angle = SELFIE_ANGLES[Math.min(selfies.length, SELFIE_ANGLES.length - 1)] ?? 'front';
-  const policyVersion = meta.faceSearch.policyVersion;
   const busy = checking || search.isPending || deletion.isPending;
 
   function dropSelfies() {
@@ -79,7 +106,7 @@ export function ScanFlow({
     setIssue(null);
     setError(null);
     try {
-      const result = await processSelfie(source, angle, tools);
+      const result = await processSelfie(source, angle, processor);
       if (!result.ok) {
         setIssue(result.issue);
         return;
@@ -116,16 +143,24 @@ export function ScanFlow({
         setDeleted(res.facesMatched);
       }
     } catch (err) {
+      // The selfies were looked at by the server either way; never keep them for a retry
+      // unless the request never got through.
+      if (!(err instanceof Error && err.name === 'NetworkError')) dropSelfies();
       if (
         isApiError(err, ErrorCode.CONSENT_REQUIRED) ||
         isApiError(err, ErrorCode.CONSENT_VERSION_MISMATCH)
       ) {
-        // Consent is missing or stale: the meta refetch brings the consent screen back.
+        // Consent is missing or stale: show the current text and ask again.
+        const current = knownPolicyVersion(err.details);
         void invalidate();
+        if (current !== null) {
+          setConsentVersion(current);
+          setConsentNeeded(true);
+        } else {
+          setError(t('errors.client.consentVersionUnknown'));
+          return;
+        }
       }
-      // The selfies were looked at by the server either way; never keep them for a retry
-      // unless the request never got through.
-      if (!(err instanceof Error && err.name === 'NetworkError')) dropSelfies();
       setError(describe(err));
     }
   }
@@ -133,14 +168,24 @@ export function ScanFlow({
   const title = purpose === 'search' ? t('capture.title') : t('faceDeletion.title');
 
   let body;
-  if (!meta.faceSearch.consented && policyVersion !== null) {
+  if (consentNeeded && consentVersion !== null) {
     body = (
-      <ConsentScreen
-        token={token}
-        policyVersion={policyVersion}
-        onAccepted={() => setError(null)}
-        onDecline={onClose}
-      />
+      <div className="space-y-4">
+        {error !== null ? <Alert variant="warning">{error}</Alert> : null}
+        <ConsentScreen
+          key={consentVersion}
+          token={token}
+          purpose={purpose === 'search' ? 'face_search' : 'face_deletion'}
+          policyVersion={consentVersion}
+          resultTtlSeconds={consent.resultTtlSeconds}
+          onAccepted={(version) => {
+            setConsentVersion(version);
+            setConsentNeeded(false);
+            setError(null);
+          }}
+          onDecline={onClose}
+        />
+      </div>
     );
   } else if (deleted !== null) {
     body = (
@@ -194,7 +239,7 @@ export function ScanFlow({
             ) : null}
             <SelfieCapture
               onCaptured={(s) => void onCaptured(s)}
-              allowGallery={meta.mode === 'gallery'}
+              allowGallery={allowGallery}
               busy={busy}
             />
           </>

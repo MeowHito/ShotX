@@ -1,4 +1,4 @@
-import type { ClientFaceConfig } from './config';
+import type { ClientFaceConfig, SelfieLimits } from './config';
 import type { DetectorLoader } from './detector';
 import { evaluateSelfie, meanLuma, type SelfieAngle, type SelfieIssue } from './quality-gate';
 
@@ -38,7 +38,8 @@ export type ProcessedSelfie =
   { ok: true; blob: Blob; width: number; height: number } | { ok: false; issue: SelfieIssue };
 
 export interface SelfieProcessorDeps {
-  config: Pick<ClientFaceConfig, 'selfie' | 'gate'>;
+  /** `selfie` comes from the API (share meta), `gate` from the web config. */
+  config: Pick<SelfieLimits, 'selfie'> & Pick<ClientFaceConfig, 'gate'>;
   canvas: CanvasOps;
   loadDetector: DetectorLoader;
 }

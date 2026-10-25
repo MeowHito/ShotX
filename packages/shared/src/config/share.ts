@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { type Env, parseEnv } from './env';
 import type { RateLimitRule } from './face';
 import { GiB, int, MiB, SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE } from './fields';
+import { WORKER_MAX_PROCESSING_SECONDS_LIMIT } from './worker';
 
 /** Upper bound of ZIP_MAX_FILES; queue message schemas use it as their hard ceiling. */
 export const ZIP_MAX_FILES_LIMIT = 10_000;
@@ -12,8 +13,32 @@ export const SHARE_PAGE_SIZE_LIMIT = 500;
 /** Longest SIGNED_URL_EXPIRY_BUCKET_SECONDS. */
 export const SIGNED_URL_EXPIRY_BUCKET_MAX_SECONDS = SECONDS_PER_HOUR;
 
-/** Longest ZIP_RESULT_TTL_SECONDS: the bucket's tmp/ lifecycle rule expires objects after 1–3 days. */
-export const ZIP_RESULT_TTL_MAX_SECONDS = 3 * SECONDS_PER_DAY;
+/**
+ * Ceiling of every tmp/ lifecycle rule in the media bucket, in days (spec: 1–3 days; ADR 0006 as
+ * amended in the Phase 3 review). infra keeps `storage.tmp*ExpirationDays` at or below it.
+ */
+export const TMP_LIFECYCLE_MAX_DAYS = 3;
+
+/**
+ * Longest ZIP_RESULT_TTL_SECONDS: 2 days. A zip object must outlive, counted from when the worker
+ * starts writing it (S3 dates a multipart object from its initiation), the processing time
+ * (WORKER_ZIP_MAX_PROCESSING_SECONDS, at most WORKER_MAX_PROCESSING_SECONDS_LIMIT = 11 h) +
+ * ZIP_RESULT_TTL_SECONDS + SIGNED_URL_DOWNLOAD_TTL_SECONDS + SIGNED_URL_EXPIRY_BUCKET_SECONDS,
+ * which infra's synth checks against the tmp/zips/ rule (minZipExpirationDays). With the 3-day
+ * ceiling, 2 days leaves 1 day for the rest: 11 h of processing plus up to 13 h of download TTL
+ * and bucket, which loadShareConfig enforces (see ZIP_OBJECT_MAX_AGE_SECONDS). At the defaults
+ * (24 h TTL, 2 h processing, 10 min URL, 5 min bucket) a zip needs 94,500 s, inside a 2-day rule.
+ */
+export const ZIP_RESULT_TTL_MAX_SECONDS = 2 * SECONDS_PER_DAY;
+
+/**
+ * The oldest a zip object may get while it can still be downloaded, at the worst allowed worker
+ * setting: TMP_LIFECYCLE_MAX_DAYS. loadShareConfig rejects a ZIP_RESULT_TTL_SECONDS +
+ * SIGNED_URL_DOWNLOAD_TTL_SECONDS + SIGNED_URL_EXPIRY_BUCKET_SECONDS that would not fit in it
+ * together with WORKER_MAX_PROCESSING_SECONDS_LIMIT, so no allowed configuration needs a tmp/zips/
+ * rule longer than the ceiling.
+ */
+export const ZIP_OBJECT_MAX_AGE_SECONDS = TMP_LIFECYCLE_MAX_DAYS * SECONDS_PER_DAY;
 
 const ttl = int(60, 7 * SECONDS_PER_DAY);
 const requests = int(1, 1_000_000);
@@ -56,7 +81,8 @@ const shareEnvSchema = z
     ZIP_MAX_BYTES: int(1 * MiB, 50 * GiB).default(2 * GiB),
     /**
      * How long a finished zip can be downloaded (`zip_jobs.expires_at - completed_at`). The
-     * tmp/ lifecycle rule must keep objects at least this long. Assumption: 24 h.
+     * tmp/zips/ lifecycle rule must keep objects at least this long plus the margins (see
+     * ZIP_RESULT_TTL_MAX_SECONDS). Assumption: 24 h; at most 2 days.
      */
     ZIP_RESULT_TTL_SECONDS: int(10 * SECONDS_PER_MINUTE, ZIP_RESULT_TTL_MAX_SECONDS).default(
       SECONDS_PER_DAY,
@@ -83,7 +109,18 @@ const shareEnvSchema = z
   .refine((e) => e.SIGNED_URL_EXPIRY_BUCKET_SECONDS <= e.SIGNED_URL_DOWNLOAD_TTL_SECONDS, {
     error:
       'SIGNED_URL_EXPIRY_BUCKET_SECONDS must be less than or equal to SIGNED_URL_DOWNLOAD_TTL_SECONDS',
-  });
+  })
+  .refine(
+    (e) =>
+      WORKER_MAX_PROCESSING_SECONDS_LIMIT +
+        e.ZIP_RESULT_TTL_SECONDS +
+        e.SIGNED_URL_DOWNLOAD_TTL_SECONDS +
+        e.SIGNED_URL_EXPIRY_BUCKET_SECONDS <=
+      ZIP_OBJECT_MAX_AGE_SECONDS,
+    {
+      error: `ZIP_RESULT_TTL_SECONDS + SIGNED_URL_DOWNLOAD_TTL_SECONDS + SIGNED_URL_EXPIRY_BUCKET_SECONDS must leave ${WORKER_MAX_PROCESSING_SECONDS_LIMIT} s of zip processing within the ${TMP_LIFECYCLE_MAX_DAYS}-day tmp/ lifecycle ceiling`,
+    },
+  );
 
 export interface ShareConfig {
   signedUrlTtlSeconds: { view: number; download: number };

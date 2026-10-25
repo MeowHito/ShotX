@@ -1,6 +1,7 @@
 // drizzle-kit reads every table and enum exported from this module.
 export * from './enums';
 export * from './accounts';
+export * from './billing';
 export * from './drive';
 export * from './sharing';
 export * from './downloads';

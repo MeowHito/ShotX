@@ -15,6 +15,9 @@ export default async function HomePage() {
         <Link href="/login" className={buttonVariants({ variant: 'outline' })}>
           {t('login')}
         </Link>
+        <Link href="/pricing" className={buttonVariants({ variant: 'link' })}>
+          {t('pricing')}
+        </Link>
       </div>
     </main>
   );

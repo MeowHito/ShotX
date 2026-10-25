@@ -91,9 +91,13 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-/** Polls GET /zip-jobs/:id until the job is ready; the ready job has its download URL. */
+/**
+ * Polls GET /s/:token/zip-jobs/:id until the job is ready; the ready job has its download URL.
+ * The route lives under the share's path so the share's unlock cookie reaches it.
+ */
 export async function pollZipJob(
   api: ApiClient,
+  token: string,
   job: ZipJobView,
   options: PollOptions,
 ): Promise<ZipJobView & { download: NonNullable<ZipJobView['download']> }> {
@@ -111,7 +115,7 @@ export async function pollZipJob(
     if (now() >= deadline) throw new ClientError('client.zipTimeout');
     await sleep(options.intervalMs, options.signal);
     current = await api.call(PUBLIC_SHARE_ROUTES.zipJob, {
-      params: { id: current.id },
+      params: { token, id: current.id },
       signal: options.signal,
     });
   }

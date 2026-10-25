@@ -18,6 +18,7 @@ import { openPglite, type TestDatabase } from '../testing/database';
 import { emptyPhoto, eventPhoto, indexPhoto, selfie, testWorld } from '../testing/faces';
 import { type Browser, TestApi } from '../testing/harness';
 import { encodeForm, rawPost } from '../testing/raw-http';
+import { cloudFrontOriginHeaders } from '../http/client';
 
 const world = testWorld();
 const VERSION = '2026-10-25';
@@ -55,7 +56,7 @@ describe('face search with FACE_SEARCH_ENABLED=false', () => {
     await database?.close();
   });
 
-  it('answers FEATURE_DISABLED for consent, search, feedback, deletion and enabling an index', async () => {
+  it('answers FEATURE_DISABLED for face-search consent, search, feedback and enabling an index', async () => {
     const owner = await api.photographer();
     const root = await api.folder(owner.id, { faceIndex: true });
     const s = await api.share(owner.id, { folderId: root.id });
@@ -73,9 +74,20 @@ describe('face search with FACE_SEARCH_ENABLED=false', () => {
     expect(await api.request('POST', search(s.token), { form: form({ bytes: me }) })).toMatchObject(
       disabled,
     );
+    // Face deletion is a PDPA right: never FEATURE_DISABLED, but it still needs its own consent.
+    const b = api.browser();
+    expect(await b.request('POST', deletion(s.token), { form: form({ bytes: me }) })).toMatchObject(
+      { status: 403, body: { code: 'CONSENT_REQUIRED' } },
+    );
     expect(
-      await api.request('POST', deletion(s.token), { form: form({ bytes: me }) }),
-    ).toMatchObject(disabled);
+      await b.request('POST', consent(s.token), {
+        body: { purpose: 'face_deletion', policyVersion: VERSION, accepted: true },
+      }),
+    ).toMatchObject({ status: 200, body: { purpose: 'face_deletion', policyVersion: VERSION } });
+    // The owner has no searchable faces: 0 without any Rekognition call.
+    expect(await b.request('POST', deletion(s.token), { form: form({ bytes: me }) })).toMatchObject(
+      { status: 202, body: { facesMatched: 0 } },
+    );
     expect(
       await api.request('POST', feedback(s.token), { body: { fileId: root.id } }),
     ).toMatchObject(disabled);
@@ -111,7 +123,16 @@ describe('face search with FACE_SEARCH_ENABLED=false', () => {
     const meta = shareMetaResponseSchema.parse(
       (await api.request('GET', apiPath(P.meta, { token: s.token }))).body,
     );
-    expect(meta.faceSearch).toEqual({ available: false, policyVersion: null, consented: false });
+    expect(meta.faceSearch).toEqual({
+      available: false,
+      policyVersion: null,
+      consented: false,
+      maxSelfies: api.config.face.search.maxSelfies,
+      selfieLongEdge: api.config.face.selfie.longEdge,
+      selfieJpegQuality: api.config.face.selfie.jpegQuality,
+      resultTtlSeconds: api.config.share.faceOnlyGrantTtlSeconds,
+    });
+    expect(meta.zip).toEqual({ maxFiles: api.config.share.zip.maxFiles });
     const me = await api.request('GET', apiPath(ME_ROUTES.get), { token: owner.token });
     expect(me.body).toMatchObject({ features: { faceSearch: false } });
   });
@@ -195,18 +216,27 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
   }
 
   let ip = 1;
-  /** A browser with its own client address (CloudFront-Viewer-Address), so per-IP limits stay apart. */
+  /**
+   * A browser with its own client address (CloudFront-Viewer-Address, trusted because the request
+   * carries CloudFront's markers), so per-IP limits stay apart.
+   */
   function browser(address = `198.51.100.${ip++}`): Browser {
     const b = api.browser();
-    b.headers['cloudfront-viewer-address'] = `${address}:443`;
+    Object.assign(b.headers, cloudFrontOriginHeaders(`${address}:443`));
     return b;
   }
 
-  async function consented(token: string, b: Browser = browser()): Promise<Browser> {
-    const res = await b.request('POST', consent(token), {
-      body: { policyVersion: VERSION, accepted: true },
-    });
-    expect(res.status).toBe(200);
+  async function consented(
+    token: string,
+    b: Browser = browser(),
+    purposes: readonly ('face_search' | 'face_deletion')[] = ['face_search'],
+  ): Promise<Browser> {
+    for (const purpose of purposes) {
+      const res = await b.request('POST', consent(token), {
+        body: { purpose, policyVersion: VERSION, accepted: true },
+      });
+      expect(res.status).toBe(200);
+    }
     return b;
   }
 
@@ -221,10 +251,19 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
       body: { code: 'CONSENT_REQUIRED', details: { policyVersion: VERSION } },
     });
     expect(provider.calls.searchFacesByImage).toBe(before);
+    // A well-formed but stale version: 409 with the current one. A malformed one: 400.
     const old = await api.request('POST', consent(share.token), {
       body: { policyVersion: '2020-01-01', accepted: true },
     });
-    expect(old).toMatchObject({ status: 400, body: { code: 'VALIDATION_FAILED' } });
+    expect(old).toMatchObject({
+      status: 409,
+      body: { code: 'CONSENT_VERSION_MISMATCH', details: { policyVersion: VERSION } },
+    });
+    const malformed = await api.request('POST', consent(share.token), {
+      body: { policyVersion: '../v1', accepted: true },
+    });
+    expect(malformed).toMatchObject({ status: 400, body: { code: 'VALIDATION_FAILED' } });
+    expect(await api.db.select().from(consents).where(eq(consents.shareId, share.id))).toEqual([]);
   });
 
   it('records consent idempotently with an ip_hash, never the address', async () => {
@@ -233,15 +272,20 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
     const again = await b.request('POST', consent(share.token), {
       body: { policyVersion: VERSION, accepted: true },
     });
-    expect(again.body).toMatchObject({ policyVersion: VERSION });
+    expect(again.body).toMatchObject({ purpose: 'face_search', policyVersion: VERSION });
     const rows = await api.db.select().from(consents).where(eq(consents.shareId, share.id));
     expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ purpose: 'face_search', policyVersion: VERSION });
     expect(rows[0]?.ipHash).toMatch(/^v1:[A-Za-z0-9_-]{43}$/);
     expect(JSON.stringify(rows)).not.toContain('127.0.0.1');
     const meta = shareMetaResponseSchema.parse(
       (await b.request('GET', apiPath(P.meta, { token: share.token }))).body,
     );
-    expect(meta.faceSearch).toEqual({ available: true, policyVersion: VERSION, consented: true });
+    expect(meta.faceSearch).toMatchObject({
+      available: true,
+      policyVersion: VERSION,
+      consented: true,
+    });
   });
 
   it('buckets matches into strong and maybe, within the share scope only', async () => {
@@ -390,7 +434,7 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
 
   it('marks matched faces for deletion across the whole collection and enqueues delete.faces', async () => {
     const { share, owner, out, f1 } = await event();
-    const b = await consented(share.token);
+    const b = await consented(share.token, browser(), ['face_search', 'face_deletion']);
     const res = await b.request('POST', deletion(share.token), {
       form: form({ bytes: await selfie(world, 'alice') }),
     });
@@ -425,7 +469,7 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
 
   it('undoes the marking when delete.faces cannot be sent', async () => {
     const { share, owner } = await event();
-    const b = await consented(share.token);
+    const b = await consented(share.token, browser(), ['face_deletion']);
     api.queue.failing = true;
     try {
       const res = await b.request('POST', deletion(share.token), {
@@ -568,7 +612,7 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
     const s = await selfie(world, 'bob');
     const statuses: number[] = [];
     for (let i = 0; i < 3; i++) {
-      const b = await consented(share.token, browser(address));
+      const b = await consented(share.token, browser(address), ['face_search', 'face_deletion']);
       for (let j = 0; j < 3; j++) {
         const path = j === 2 ? deletion(share.token) : search(share.token);
         statuses.push((await b.request('POST', path, { form: form({ bytes: s }) })).status);

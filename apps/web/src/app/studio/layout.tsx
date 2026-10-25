@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getTranslations } from 'next-intl/server';
 import type { ReactNode } from 'react';
-import { SHARES_HREF, TRASH_HREF } from '@/components/drive/paths';
+import { SubscriptionBanner } from '@/components/billing/subscription-banner';
+import { BILLING_HREF, SHARES_HREF, TRASH_HREF } from '@/components/drive/paths';
 import { UsageBar } from '@/components/drive/usage-bar';
 import { LogoutButton } from '@/components/studio/logout-button';
 import { StudioGate } from '@/components/studio/studio-gate';
@@ -34,6 +35,9 @@ export default async function StudioLayout({ children }: { children: ReactNode }
             <Link href={TRASH_HREF} className="rounded-md px-2 py-1 hover:bg-accent">
               {t('trash')}
             </Link>
+            <Link href={BILLING_HREF} className="rounded-md px-2 py-1 hover:bg-accent">
+              {t('billing')}
+            </Link>
           </nav>
           <div className="ml-auto flex min-w-0 items-center gap-2">
             {viewer.user?.name || viewer.user?.email ? (
@@ -49,6 +53,7 @@ export default async function StudioLayout({ children }: { children: ReactNode }
       <StudioGate>
         <UploadProvider config={clientUploadConfig()}>
           <main className="mx-auto max-w-6xl space-y-6 px-4 py-4 pb-40">
+            <SubscriptionBanner />
             <UsageBar />
             {children}
           </main>

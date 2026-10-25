@@ -11,13 +11,20 @@ import type { JobRunLedger } from './ledger';
 import type { OrphanScanStore } from './orphan-scans';
 import { runQuotaReconcile } from './quota-reconcile';
 import { runStatsRollup } from './stats-rollup';
+import type { SubscriptionJobDeps } from './subscriptions/common';
+import { runSubscriptionTransitions } from './subscriptions/run';
 import { runTrashPurge } from './trash-purge';
 
 export interface JobsHandlerDeps {
   db: Db;
   store: ObjectStore;
-  /** DeleteFaces for purge and expiry, ListFaces for reconciliation. */
+  /**
+   * DeleteFaces for purge and expiry, ListFaces for reconciliation, DeleteCollection for the
+   * account purge.
+   */
   faces: FaceProvider;
+  /** subscriptions.transition.daily: gateway, email, billing and lifecycle settings. */
+  subscriptions: Omit<SubscriptionJobDeps, 'faces'>;
   /** Where faces.reconcile.daily keeps scans between runs. */
   orphanScans: OrphanScanStore;
   /** FACE_ORPHAN_GRACE_MS. */
@@ -31,9 +38,9 @@ export interface JobsHandlerDeps {
 }
 
 /**
- * Job types this phase implements. Subscription transitions (Phase 4) arrive from their schedule
- * already and are acknowledged with a warning: sending them to the DLQ would only page someone
- * every day for work that doesn't exist yet, and the schedule keeps firing, so nothing is lost.
+ * Every scheduled job type. A type added to SCHEDULED_JOB_TYPES before the worker implements it
+ * is acknowledged with a warning: the DLQ would only page someone every day for work that doesn't
+ * exist yet, and the schedule keeps firing, so nothing is lost.
  */
 const IMPLEMENTED = new Set<ScheduledJobType>([
   'trash.purge.daily',
@@ -41,6 +48,7 @@ const IMPLEMENTED = new Set<ScheduledJobType>([
   'faces.expire.daily',
   'faces.reconcile.daily',
   'stats.rollup.hourly',
+  'subscriptions.transition.daily',
 ]);
 
 /** Consumer of the `jobs` queue (EventBridge Scheduler), deduped on (type, scheduledTime). */
@@ -51,7 +59,7 @@ export function createJobsHandler(deps: JobsHandlerDeps): MessageHandler {
     const log = context.log.child({ jobType: job.type, scheduledTime: job.scheduledTime });
 
     if (!IMPLEMENTED.has(job.type)) {
-      log.warn('scheduled job not implemented before Phase 4; acknowledged without running');
+      log.warn('scheduled job type not implemented; acknowledged without running');
       return;
     }
 
@@ -98,6 +106,11 @@ export function createJobsHandler(deps: JobsHandlerDeps): MessageHandler {
         break;
       case 'stats.rollup.hourly':
         result = { ...(await runStatsRollup(ctx)) };
+        break;
+      case 'subscriptions.transition.daily':
+        result = {
+          ...(await runSubscriptionTransitions(ctx, { ...deps.subscriptions, faces: deps.faces })),
+        };
         break;
       default:
         return;

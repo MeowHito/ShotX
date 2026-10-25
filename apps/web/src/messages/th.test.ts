@@ -1,8 +1,14 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import {
+  BILLING_MODES,
+  BILLING_NOTICE_CODES,
+  CHECKOUT_CHANGE_TYPES,
   CONSENT_POLICY_VERSIONS,
+  CONSENT_PURPOSES,
   DOWNLOAD_SIZES,
+  PAYMENT_STATUSES,
+  PLAN_CHANGE_INVALID_REASONS,
   FILE_STATUSES,
   LATEST_CONSENT_POLICY_VERSION,
   SHARE_MODES,
@@ -80,19 +86,42 @@ describe('Thai messages', () => {
     same(th.share.unavailable.reasons, SHARE_UNAVAILABLE_REASONS);
     same(th.capture.issues, SELFIE_ISSUES);
     same(th.capture.angles, SELFIE_ANGLES);
+    same(th.billing.checkout.changeTypes, CHECKOUT_CHANGE_TYPES);
+    same(th.billing.checkout.explain, CHECKOUT_CHANGE_TYPES);
+    same(th.billing.payment.status, PAYMENT_STATUSES);
+    same(th.billing.current.modes, BILLING_MODES);
+    same(th.errors.planChange, PLAN_CHANGE_INVALID_REASONS);
+    same(th.errors.notices, BILLING_NOTICE_CODES);
   });
 
-  it('have consent text for every consent policy version, in Thai', () => {
-    expect(Object.keys(th.consent.policies).sort()).toEqual([...CONSENT_POLICY_VERSIONS].sort());
-    for (const version of CONSENT_POLICY_VERSIONS) {
-      for (const [key, text] of leaves(th.consent.policies[version])) {
-        expect(text, `${version}.${key}`).toMatch(/[฀-๿]/);
+  it('have the billing wording the spec requires', () => {
+    expect(th.billing.banners.grace).toContain('ต่ออายุภายใน');
+    expect(th.billing.checkout.explain.upgrade).toContain('ทันที');
+    expect(th.billing.checkout.explain.downgrade).toContain('ครบรอบ');
+    expect(th.billing.checkout.explain.downgrade).toContain('ระบบจะไม่ลบไฟล์');
+    expect(th.pricing.vatIncluded).toContain('รวมภาษีมูลค่าเพิ่ม');
+  });
+
+  it('have consent text for every purpose and policy version, in Thai', () => {
+    expect(Object.keys(th.consent.policies).sort()).toEqual([...CONSENT_PURPOSES].sort());
+    for (const purpose of CONSENT_PURPOSES) {
+      expect(Object.keys(th.consent.policies[purpose]).sort()).toEqual(
+        [...CONSENT_POLICY_VERSIONS].sort(),
+      );
+      for (const version of CONSENT_POLICY_VERSIONS) {
+        for (const [key, text] of leaves(th.consent.policies[purpose][version])) {
+          expect(text, `${purpose}.${version}.${key}`).toMatch(/[฀-๿]/);
+        }
+        // Every text names PDPA's sensitive-data section and the no-storage promise.
+        const policy = th.consent.policies[purpose][version];
+        expect(policy.intro).toContain('มาตรา 26');
+        expect(policy.points.noStorage).toContain('ไม่มีการบันทึกภาพเซลฟี');
       }
     }
-    // The current version names PDPA's sensitive-data section and the no-storage promise.
-    const latest = th.consent.policies[LATEST_CONSENT_POLICY_VERSION];
-    expect(latest.intro).toContain('มาตรา 26');
-    expect(latest.points.noStorage).toContain('ไม่มีการบันทึกภาพเซลฟี');
+    // The face-search text states the API's result TTL instead of a literal.
+    const search = th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION];
+    expect(search.points.results).toContain('{ttl}');
+    expect(search.points.results).not.toMatch(/\d+ ชั่วโมง/);
   });
 
   it('have the scan UI wording the spec requires', () => {

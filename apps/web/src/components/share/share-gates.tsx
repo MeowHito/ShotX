@@ -3,21 +3,46 @@
 import type { ShareUnavailableReason } from '@shotx/shared';
 import { Alert, Button, buttonVariants, cn, Input, Label } from '@shotx/ui';
 import { LockIcon, LogInIcon, TimerOffIcon } from 'lucide-react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { type FormEvent, useId, useState } from 'react';
 import { AUTH_PATHS } from '@/lib/auth/handlers';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useUnlockShare } from '@/lib/share/queries';
 
-/** The "link expired" page for every SHARE_EXPIRED reason (revoked, expired, unavailable). */
-export function ShareUnavailable({ reason }: { reason: ShareUnavailableReason | null }) {
+/** The "delete my face" page of a share (works on expired and revoked shares too). */
+export function faceDeletionHref(token: string): string {
+  return `/s/${token}/delete-my-face`;
+}
+
+/**
+ * The "link expired" page for every SHARE_EXPIRED reason (revoked, expired, unavailable). It
+ * still offers "delete my face": a PDPA right that outlives the share.
+ */
+export function ShareUnavailable({
+  token,
+  reason,
+}: {
+  token: string;
+  reason: ShareUnavailableReason | null;
+}) {
   const tu = useTranslations('share.unavailable');
+  const ts = useTranslations('share');
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-3 py-16 text-center">
       <TimerOffIcon className="size-12 text-muted-foreground" aria-hidden />
       <h1 className="text-2xl font-bold">{tu('title')}</h1>
       {reason !== null ? <p className="text-muted-foreground">{tu(`reasons.${reason}`)}</p> : null}
       <p className="text-sm text-muted-foreground">{tu('body')}</p>
+      <div className="mt-6 space-y-2 border-t pt-6 text-sm">
+        <p className="text-muted-foreground">{tu('deleteHint')}</p>
+        <Link
+          href={faceDeletionHref(token)}
+          className={buttonVariants({ variant: 'outline', size: 'lg' })}
+        >
+          {ts('deleteMyFace')}
+        </Link>
+      </div>
     </div>
   );
 }

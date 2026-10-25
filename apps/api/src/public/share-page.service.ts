@@ -1,10 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { consents, files, shareFaceSearchAvailableSql } from '@shotx/db';
 import {
+  type ConsentPurpose,
   type ConsentResponse,
+  consentGates,
   decodeOpaqueCursor,
   encodeOpaqueCursor,
   faceScanResultKey,
+  type FaceDeletionInfoResponse,
   generateOpaqueToken,
   type ShareItemsResponse,
   shareItemsCursorSchema,
@@ -102,20 +105,38 @@ export class SharePageService {
     return row?.ok === true;
   }
 
-  /** A current (not withdrawn) consent of this viewer for the share and the current version. */
-  async hasConsent(share: { id: string }, viewer: Viewer): Promise<boolean> {
+  /**
+   * A current (not withdrawn) consent of this viewer for the share, the current version and
+   * `purpose`. A consent covers only its own purpose (a face_search consent never allows a face
+   * deletion, and the reverse).
+   */
+  async hasConsent(
+    share: { id: string },
+    viewer: Viewer,
+    purpose: ConsentPurpose = 'face_search',
+  ): Promise<boolean> {
     const [row] = await this.db
       .select({ id: consents.id })
       .from(consents)
       .where(
         and(
           consentOf(share.id, viewer),
+          eq(consents.purpose, purpose),
           eq(consents.policyVersion, this.config.consent.policyVersion),
           isNull(consents.withdrawnAt),
         ),
       )
       .limit(1);
     return row !== undefined;
+  }
+
+  /** FACE_MAX_SELFIES, FACE_SELFIE_LONG_EDGE and FACE_SELFIE_JPEG_QUALITY for the client. */
+  private selfieSettings() {
+    return {
+      maxSelfies: this.config.face.search.maxSelfies,
+      selfieLongEdge: this.config.face.selfie.longEdge,
+      selfieJpegQuality: this.config.face.selfie.jpegQuality,
+    };
   }
 
   // --- GET /s/:token -------------------------------------------------------------------------------
@@ -145,14 +166,8 @@ export class SharePageService {
           .orderBy(asc(ITEM_KEY), asc(files.id))
           .limit(1);
         if (first?.previewKey != null) {
-          // The cover is an issued view URL: one `view` event.
-          await recordActivity(this.db, {
-            type: 'view',
-            ...shareEventSource(share, ctx.viewer),
-            fileId: null,
-            bytes: 0,
-            meta: { items: 1 },
-          });
+          // No `view` event (PUBLIC_SHARE_ROUTE_ACTIVITY.meta is empty): SSR and link unfurlers
+          // call this route, so views come only from items pages and face-search results.
           cover = {
             previewUrl: this.urls.view(first.previewKey, this.urls.viewExpiry()),
             width: first.width,
@@ -178,8 +193,11 @@ export class SharePageService {
       faceSearch: {
         available,
         policyVersion: available ? this.config.consent.policyVersion : null,
-        consented: available && (await this.hasConsent(share, ctx.viewer)),
+        consented: available && (await this.hasConsent(share, ctx.viewer, 'face_search')),
+        ...this.selfieSettings(),
+        resultTtlSeconds: this.config.share.faceOnlyGrantTtlSeconds,
       },
+      zip: { maxFiles: this.config.share.zip.maxFiles },
     };
   }
 
@@ -291,19 +309,26 @@ export class SharePageService {
   // --- POST /s/:token/consent ----------------------------------------------------------------------
 
   /**
-   * Records consent to the current policy version for this viewer or session (idempotent: INSERT
-   * ON CONFLICT DO NOTHING on the partial unique index, then SELECT). Stores ip_hash, never the
-   * address.
+   * Records consent of `purpose` to the current policy version for this viewer or session. The
+   * gates follow the purpose (consentGates): `face_search` needs an open share (availability,
+   * login, password) and FACE_SEARCH_ENABLED; `face_deletion` only the token, so the PDPA
+   * deletion flow works on revoked or expired shares, without unlocking and with the flag off.
+   * Then a well-formed but other version is CONSENT_VERSION_MISMATCH with the current one.
+   * Idempotent per purpose: INSERT ON CONFLICT DO NOTHING on the partial unique indexes (share,
+   * viewer|anon, purpose, version), then SELECT. Stores ip_hash, never the address.
    */
   async giveConsent(
     token: string,
     ctx: PublicContext,
-    policyVersion: string,
+    body: { purpose: ConsentPurpose; policyVersion: string },
   ): Promise<ConsentResponse> {
-    const share = await this.access.open(token, ctx);
-    if (!this.config.features.faceSearch) throw faceSearchDisabled();
+    const gates = consentGates(body.purpose);
+    const share = await this.access.byToken(token);
+    if (gates.availability) this.access.assertAvailable(share);
+    if (gates.access) await this.access.assertAccess(share, ctx);
+    if (gates.featureFlag && !this.config.features.faceSearch) throw faceSearchDisabled();
     const current = this.config.consent.policyVersion;
-    if (policyVersion !== current) {
+    if (body.policyVersion !== current) {
       throw new ApiError('CONSENT_VERSION_MISMATCH', 'The consent text has a newer version', {
         policyVersion: current,
       });
@@ -313,6 +338,7 @@ export class SharePageService {
       .values({
         shareId: share.id,
         ...viewerColumns(ctx.viewer),
+        purpose: body.purpose,
         policyVersion: current,
         ipHash: ctx.ipHash,
         acceptedAt: this.clock.now(),
@@ -324,19 +350,40 @@ export class SharePageService {
       .where(
         and(
           consentOf(share.id, ctx.viewer),
+          eq(consents.purpose, body.purpose),
           eq(consents.policyVersion, current),
           isNull(consents.withdrawnAt),
         ),
       )
       .limit(1);
     if (row === undefined) throw new Error('Consent vanished after insert');
-    return { policyVersion: current, acceptedAt: row.acceptedAt.toISOString() };
+    return {
+      purpose: body.purpose,
+      policyVersion: current,
+      acceptedAt: row.acceptedAt.toISOString(),
+    };
+  }
+
+  // --- GET /s/:token/face-deletion -----------------------------------------------------------------
+
+  /**
+   * What the "ขอลบใบหน้าของฉัน" page needs. Token lookup only (consentGates('face_deletion')): it
+   * answers on revoked, expired and unavailable shares, behind login and password, and with
+   * FACE_SEARCH_ENABLED=false. Writes no activity event.
+   */
+  async faceDeletionInfo(token: string, ctx: PublicContext): Promise<FaceDeletionInfoResponse> {
+    const share = await this.access.byToken(token);
+    return {
+      policyVersion: this.config.consent.policyVersion,
+      consented: await this.hasConsent(share, ctx.viewer, 'face_deletion'),
+      ...this.selfieSettings(),
+    };
   }
 
   // --- DELETE /s/:token/consent --------------------------------------------------------------------
 
   /**
-   * Withdraws every current consent of this browser (the viewer and, when signed in, its anon
+   * Withdraws every current consent, of every purpose, of this browser (the viewer and, when signed in, its anon
    * session) for the share and deletes their face-search results (the face_only grant). Works on
    * revoked or expired shares and while face search is disabled; only the token must exist.
    */

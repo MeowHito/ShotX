@@ -82,6 +82,125 @@ export type ShareStatus = (typeof SHARE_STATUSES)[number];
 export const FACE_MATCH_BUCKETS = ['strong', 'maybe'] as const;
 export type FaceMatchBucket = (typeof FACE_MATCH_BUCKETS)[number];
 
+/**
+ * What a consent (`consents.purpose`, migration 0004) allows. Each purpose has its own Thai text
+ * per policy version, and a consent covers only its own purpose:
+ * - `face_search`: scanning a selfie to find the viewer's photos in the share
+ *   (`POST /s/:token/face-search`). Needs FACE_SEARCH_ENABLED and an open share.
+ * - `face_deletion`: scanning a selfie to delete the person's faces from the share owner's
+ *   collection ("ขอลบใบหน้าของฉัน", `POST /s/:token/face-deletion`). A PDPA data-subject right, so
+ *   it works with the feature flag off and on revoked or expired shares (see CONSENT_PURPOSE_GATES).
+ */
+export const CONSENT_PURPOSES = ['face_search', 'face_deletion'] as const;
+export type ConsentPurpose = (typeof CONSENT_PURPOSES)[number];
+
 /** Features behind a flag. The value appears in FEATURE_DISABLED details. */
 export const FEATURES = ['face_search'] as const;
 export type Feature = (typeof FEATURES)[number];
+
+// --- Billing (Phase 4) ---------------------------------------------------------------------------
+
+/**
+ * Payment gateways (`payments.gateway`, `checkout_sessions.gateway`, webhook `:gateway`). `fake`
+ * is for development, tests and non-prod stages only (refused when APP_STAGE=prod); `omise` and `2c2p` are
+ * placeholders until their adapters exist in the api.
+ */
+export const PAYMENT_GATEWAYS = ['fake', 'omise', '2c2p'] as const;
+export type PaymentGateway = (typeof PAYMENT_GATEWAYS)[number];
+
+/**
+ * What a checkout does to the subscription. The client declares it and the API checks it against
+ * classifyCheckout (else PLAN_CHANGE_INVALID):
+ * - `new`: start a paid plan now (from trial, expired or purged, from grace with another plan, or
+ *   with no subscription);
+ * - `renew`: same plan, more months, appended to `period_end` (active, grace) or from now
+ *   (expired);
+ * - `upgrade`: a bigger plan, effective at once, prorated charge (active only);
+ * - `downgrade`: a smaller plan from `period_end` (active only); never deletes files.
+ */
+export const CHECKOUT_CHANGE_TYPES = ['new', 'renew', 'upgrade', 'downgrade'] as const;
+export type CheckoutChangeType = (typeof CHECKOUT_CHANGE_TYPES)[number];
+
+/**
+ * `checkout_sessions.status`: `pending` until its payment is final; `completed` when it was paid
+ * and applied, or applied without a payment; `failed` when the payment failed or could not be
+ * applied any more (`error_code`); `expired` when nobody paid before `expires_at`.
+ */
+export const CHECKOUT_STATUSES = ['pending', 'completed', 'failed', 'expired'] as const;
+export type CheckoutStatus = (typeof CHECKOUT_STATUSES)[number];
+
+/** Normalized payment webhook event types (parseWebhookEvent). */
+export const PAYMENT_EVENT_TYPES = ['paid', 'failed', 'expired', 'refunded'] as const;
+export type PaymentEventType = (typeof PAYMENT_EVENT_TYPES)[number];
+
+/** Auto-renew intervals a card subscription may use, in months. */
+export const AUTO_RENEW_MONTHS = [1, 12] as const;
+export type AutoRenewMonths = (typeof AUTO_RENEW_MONTHS)[number];
+
+/**
+ * `subscription_events.type`: the audit trail of every subscription change. One row per change,
+ * written in the transaction that makes it.
+ */
+export const SUBSCRIPTION_EVENT_TYPES = [
+  /** A subscription row was created (trial onboarding, or `new` after purge / without one). */
+  'created',
+  /** A `new` checkout moved trial, grace or expired to active with the chosen plan. */
+  'activated',
+  'renewed',
+  'upgraded',
+  /** A downgrade was paid or scheduled; it applies at `pending_plan_effective_at`. */
+  'downgrade_scheduled',
+  /** The daily job applied the pending plan. */
+  'downgrade_applied',
+  'auto_renew_enabled',
+  'auto_renew_canceled',
+  /** An auto-renew charge failed (the daily job retries during grace). */
+  'renewal_failed',
+  'grace_started',
+  'expired',
+  'purged',
+  /** A paid payment could not be applied (the state changed); an admin refunds it. */
+  'payment_unapplied',
+  /** A payment was refunded at the gateway; the subscription is not changed automatically. */
+  'payment_refunded',
+] as const;
+export type SubscriptionEventType = (typeof SUBSCRIPTION_EVENT_TYPES)[number];
+
+/** Who caused a subscription event. */
+export const BILLING_ACTORS = ['photographer', 'gateway', 'system', 'admin'] as const;
+export type BillingActor = (typeof BILLING_ACTORS)[number];
+
+/**
+ * Lifecycle emails logged in `subscription_notices` (unique per subscription, kind, period end and
+ * day), so the daily job sends each at most once. Receipts are logged on the payment instead
+ * (`payments.receipt_sent_at`).
+ */
+export const SUBSCRIPTION_NOTICE_KINDS = [
+  'renewal_reminder',
+  'grace_started',
+  'expired',
+  'purge_warning',
+] as const;
+export type SubscriptionNoticeKind = (typeof SUBSCRIPTION_NOTICE_KINDS)[number];
+
+/**
+ * Why a checkout is refused with PLAN_CHANGE_INVALID (details.reason):
+ * - `change_type_mismatch`: the declared changeType isn't classifyCheckout's (details.expected);
+ * - `pending_change_exists`: a downgrade is scheduled; no other change until it applies;
+ * - `auto_renew_active`: card renew while auto-renew is on (it renews by itself);
+ * - `card_downgrade_needs_auto_renew`: a card downgrade only reschedules an auto-renew
+ *   subscription; prepaid subscriptions downgrade with PromptPay;
+ * - `months_required` / `months_not_allowed`: PromptPay months must be given for new, renew and
+ *   downgrade, and must be absent for upgrade (it charges proration only);
+ * - `months_not_offered`: months not in BILLING_PREPAID_MONTHS.
+ */
+export const PLAN_CHANGE_INVALID_REASONS = [
+  'change_type_mismatch',
+  'pending_change_exists',
+  'auto_renew_active',
+  'card_downgrade_needs_auto_renew',
+  'months_required',
+  'months_not_allowed',
+  'months_not_offered',
+] as const;
+export type PlanChangeInvalidReason = (typeof PLAN_CHANGE_INVALID_REASONS)[number];

@@ -44,6 +44,12 @@ const faceEnvSchema = z
      * Assumption: the FACE_STRONG default, so a deletion rarely removes someone else's face.
      */
     FACE_DELETION_THRESHOLD: percent.default(95),
+    /**
+     * Alert (ADR 0007) when one share gets at least this many face deletions within
+     * FACE_DELETION_ALERT_WINDOW_SECONDS. Assumption: 20 per day; tune after launch.
+     */
+    FACE_DELETION_ALERT_PER_SHARE: requests.default(20),
+    FACE_DELETION_ALERT_WINDOW_SECONDS: windowSeconds.default(SECONDS_PER_DAY),
     FACE_SEARCH_MAX_FACES: int(1, 4096).default(1000),
     FACE_SEARCH_QUALITY_FILTER: z.enum(QUALITY_FILTERS).default('AUTO'),
     FACE_SELFIE_LONG_EDGE: int(320, 4096).default(1280),
@@ -149,7 +155,16 @@ export interface FaceConfig {
    * with FaceMatchThreshold = `threshold`, no expansion. It uses `search.maxFaces`,
    * `search.qualityFilter` and the face-search request limits.
    */
-  deletion: { threshold: number };
+  deletion: {
+    threshold: number;
+    /**
+     * ADR 0007 mitigation: after recording a deletion, the API counts the share's
+     * `face_deletions` rows created within `windowSeconds` and, when the count is at least
+     * `perShare` (faceDeletionAlertDue), logs the structured warning FACE_DELETION_ALERT_EVENT
+     * (share id, owner id, count; no biometrics), which infra turns into a CloudWatch alarm.
+     */
+    alert: { perShare: number; windowSeconds: number };
+  };
   /**
    * Request limits for face search, enforced by the API before any Rekognition call. One request
    * counts once however many selfies it carries. Face deletion requests count against the same
@@ -254,7 +269,13 @@ export function loadFaceConfig(env: Env): FaceConfig {
       maxFaces: e.FACE_SEARCH_MAX_FACES,
       qualityFilter: e.FACE_SEARCH_QUALITY_FILTER,
     },
-    deletion: { threshold: e.FACE_DELETION_THRESHOLD },
+    deletion: {
+      threshold: e.FACE_DELETION_THRESHOLD,
+      alert: {
+        perShare: e.FACE_DELETION_ALERT_PER_SHARE,
+        windowSeconds: e.FACE_DELETION_ALERT_WINDOW_SECONDS,
+      },
+    },
     searchRateLimits: {
       perIp: {
         limit: e.FACE_SEARCH_RATE_PER_IP,
@@ -319,6 +340,20 @@ export function loadFaceConfig(env: Env): FaceConfig {
       },
     },
   };
+}
+
+/** `event` field of the structured log line the API writes when faceDeletionAlertDue is true. */
+export const FACE_DELETION_ALERT_EVENT = 'face_deletion.alert';
+
+/**
+ * True when `deletionsInWindow` (face_deletions of one share created within the alert window,
+ * including the one just recorded) reaches the alert threshold.
+ */
+export function faceDeletionAlertDue(
+  deletionsInWindow: number,
+  alert: FaceConfig['deletion']['alert'],
+): boolean {
+  return deletionsInWindow >= alert.perShare;
 }
 
 /** Rekognition's limit on an image passed as bytes (SearchFacesByImage with a selfie). */

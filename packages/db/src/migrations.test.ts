@@ -65,6 +65,28 @@ describe('migrations', () => {
     expect(list[at('"activity_events_source_share"')]).not.toContain('"activity_events"."');
   });
 
+  it('0004 is phase3_fixes_billing and backfills before the checks that need them', () => {
+    expect(journal.entries[4]?.tag).toBe('0004_phase3_fixes_billing');
+    const list = statements(sqlOf('0004_phase3_fixes_billing'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    expect(at('ADD COLUMN "photographer_id" uuid;')).toBeGreaterThan(-1);
+    expect(at('UPDATE "payments" AS "p" SET "photographer_id"')).toBeGreaterThan(
+      at('ADD COLUMN "photographer_id"'),
+    );
+    expect(at('ALTER COLUMN "photographer_id" SET NOT NULL')).toBeGreaterThan(
+      at('UPDATE "payments" AS "p" SET "photographer_id"'),
+    );
+    expect(at('SET "period_start" = LEAST')).toBeLessThan(at('"subscriptions_period_order"'));
+    expect(at(`SET "billing" = 'prepaid'`)).toBeLessThan(
+      at('"subscriptions_auto_renew_has_method"'),
+    );
+    expect(at('SET "refunded_at"')).toBeLessThan(at('"payments_refunded_has_refunded_at"'));
+    expect(at('DROP INDEX "consents_current_anon_unique"')).toBeLessThan(
+      at('CREATE UNIQUE INDEX "consents_current_anon_unique"'),
+    );
+    expect(list[at('CREATE UNIQUE INDEX "consents_current_anon_unique"')]).toContain('"purpose"');
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

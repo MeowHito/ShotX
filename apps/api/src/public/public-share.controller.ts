@@ -82,10 +82,7 @@ export class PublicShareController {
     @Param('token') token: string,
     @Body(new ZodPipe(R.giveConsent.body, 'body')) body: Out<typeof R.giveConsent.body>,
   ) {
-    return respond(
-      R.giveConsent.response,
-      await this.page.giveConsent(token, ctx, body.policyVersion),
-    );
+    return respond(R.giveConsent.response, await this.page.giveConsent(token, ctx, body));
   }
 
   @Delete(R.withdrawConsent.path)
@@ -116,6 +113,12 @@ export class PublicShareController {
     @Body(new ZodPipe(R.feedback.body, 'body')) body: Out<typeof R.feedback.body>,
   ): Promise<void> {
     await this.face.feedback(token, ctx, body.fileId);
+  }
+
+  @Get(R.faceDeletionInfo.path)
+  @HttpCode(R.faceDeletionInfo.status)
+  async faceDeletionInfo(@CurrentPublic() ctx: PublicContext, @Param('token') token: string) {
+    return respond(R.faceDeletionInfo.response, await this.page.faceDeletionInfo(token, ctx));
   }
 
   @Post(R.faceDeletion.path)
@@ -151,6 +154,6 @@ export class PublicShareController {
     @CurrentPublic() ctx: PublicContext,
     @Param(new ZodPipe(R.zipJob.params, 'params')) params: Out<typeof R.zipJob.params>,
   ) {
-    return respond(R.zipJob.response, await this.downloads.job(params.id, ctx));
+    return respond(R.zipJob.response, await this.downloads.job(params.token, params.id, ctx));
   }
 }

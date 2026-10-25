@@ -14,20 +14,33 @@ import {
 } from '@shotx/db';
 import type { FaceProvider } from '@shotx/face';
 import { FakeFaceProvider } from '@shotx/face/testing';
-import type { Env, SubscriptionStatus } from '@shotx/shared';
-import { generateShareToken } from '@shotx/shared';
+import type { Env, FakeWebhookBody, SubscriptionStatus } from '@shotx/shared';
+import {
+  FAKE_WEBHOOK_SIGNATURE_HEADER,
+  fakeWebhookSignatureHeader,
+  generateShareToken,
+} from '@shotx/shared';
 import { eq } from 'drizzle-orm';
 import { createApiApp } from '../app';
+import { FakeEmailProvider } from '../billing/email';
+import { FakePaymentGateway } from '../billing/gateways';
 import { hashPassword } from '../auth/password';
 import type { ApiConfig, ApiLimits } from '../config';
 import type { Db } from '../db/db';
 import { newId } from '../drive/folders';
 import { CloudFrontMediaUrlSigner } from '../infra/cloudfront-signer';
+import { MemoryEventLog } from '../infra/events';
 import { MemoryKeyValueStore, MemoryRateLimiter } from '../infra/redis';
 import { MemoryQueueSender } from '../infra/sqs-queue';
 import type { RateLimiter } from '../tokens';
 import { testWorld } from './faces';
-import { FakeObjectStorage, TestAuth, TestClock, testConfig } from './fakes';
+import {
+  FakeObjectStorage,
+  TEST_FAKE_WEBHOOK_SECRET,
+  TestAuth,
+  TestClock,
+  testConfig,
+} from './fakes';
 import { insertReadyFile } from './seed';
 
 export interface TestResponse<T = unknown> {
@@ -86,6 +99,9 @@ export class TestApi {
     readonly queue: MemoryQueueSender,
     readonly faceProvider: FaceProvider,
     readonly logger: CapturingLogger,
+    readonly gateway: FakePaymentGateway,
+    readonly email: FakeEmailProvider,
+    readonly events: MemoryEventLog,
   ) {}
 
   static async start(
@@ -105,6 +121,13 @@ export class TestApi {
     const queue = new MemoryQueueSender();
     const faceProvider = options.faceProvider ?? new FakeFaceProvider(testWorld());
     const logger = new CapturingLogger();
+    const gateway = new FakePaymentGateway(
+      TEST_FAKE_WEBHOOK_SECRET,
+      config.paymentGateway.webhookToleranceSeconds,
+      clock,
+    );
+    const email = new FakeEmailProvider();
+    const events = new MemoryEventLog(() => clock.now());
     await seedPlans(db);
     const app = await createApiApp(
       {
@@ -118,6 +141,9 @@ export class TestApi {
         store,
         queue,
         faceProvider,
+        paymentGateway: gateway,
+        email,
+        events,
       },
       logger,
     );
@@ -135,6 +161,9 @@ export class TestApi {
       queue,
       faceProvider,
       logger,
+      gateway,
+      email,
+      events,
     );
   }
 
@@ -202,6 +231,8 @@ export class TestApi {
         quotaBytes: options.quotaBytes ?? 1024 * 1024 * 1024,
         priceMonthSatang: 0,
         priceYearSatang: 0,
+        // A private test plan: never listed by GET /plans or purchasable.
+        isActive: false,
       })
       .returning({ id: plans.id });
     if (plan === undefined) throw new Error('no plan');
@@ -212,6 +243,77 @@ export class TestApi {
       periodEnd: new Date('2027-01-01T00:00:00Z'),
     });
     return { id: user.id, sub, token: await this.auth.token('users', sub) };
+  }
+
+  /**
+   * A photographer on a seed plan (`starter`, `standard`, `pro`, `studio`, `trial`), with the
+   * subscription shaped by `options`. Returns the ids and a token.
+   */
+  async photographerOn(
+    planCode: string,
+    options: {
+      status?: SubscriptionStatus;
+      periodStart?: Date;
+      periodEnd?: Date;
+      card?: { ref: string; months: 1 | 12 } | null;
+      email?: string | null;
+      noSubscription?: boolean;
+    } = {},
+  ): Promise<{ id: string; sub: string; token: string; subscriptionId: string | null }> {
+    const sub = randomUUID();
+    const [user] = await this.db
+      .insert(users)
+      .values({
+        cognitoPool: 'users',
+        cognitoSub: sub,
+        role: 'photographer',
+        email: options.email === undefined ? `p-${sub.slice(0, 8)}@example.com` : options.email,
+      })
+      .returning({ id: users.id });
+    if (user === undefined) throw new Error('no user');
+    let subscriptionId: string | null = null;
+    if (options.noSubscription !== true) {
+      const [plan] = await this.db.select().from(plans).where(eq(plans.code, planCode));
+      if (plan === undefined) throw new Error(`no plan ${planCode}`);
+      const now = this.clock.now();
+      const card = options.card ?? null;
+      const [row] = await this.db
+        .insert(subscriptions)
+        .values({
+          photographerId: user.id,
+          planId: plan.id,
+          status: options.status ?? 'active',
+          periodStart: options.periodStart ?? now,
+          periodEnd: options.periodEnd ?? new Date(now.getTime() + 30 * 86_400_000),
+          billing: card === null ? 'prepaid' : 'auto_renew',
+          autoRenewMonths: card?.months ?? null,
+          paymentMethodGateway: card === null ? null : 'fake',
+          paymentMethodRef: card?.ref ?? null,
+        })
+        .returning({ id: subscriptions.id });
+      subscriptionId = row?.id ?? null;
+    }
+    return { id: user.id, sub, token: await this.auth.token('users', sub), subscriptionId };
+  }
+
+  /** POSTs a fake-gateway webhook, signed with the test secret at the test clock (or `signedAt`). */
+  async webhook(
+    body: FakeWebhookBody,
+    options: { secret?: string; signedAt?: Date; header?: string; raw?: string } = {},
+  ): Promise<TestResponse> {
+    const raw = options.raw ?? JSON.stringify(body);
+    const at = Math.floor((options.signedAt ?? this.clock.now()).getTime() / 1000);
+    const header =
+      options.header ??
+      (await fakeWebhookSignatureHeader(
+        options.secret ?? TEST_FAKE_WEBHOOK_SECRET,
+        at,
+        new TextEncoder().encode(raw),
+      ));
+    return this.request('POST', '/api/billing/webhooks/fake', {
+      rawBody: raw,
+      headers: { [FAKE_WEBHOOK_SIGNATURE_HEADER]: header },
+    });
   }
 
   /** A users-pool viewer (role user); the row is created like the guard would. */

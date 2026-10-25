@@ -5,6 +5,7 @@ import {
   QUEUE_VISIBILITY_TIMEOUT_ENV,
   SCHEDULED_JOB_TYPES,
   SQS_MAX_VISIBILITY_TIMEOUT_SECONDS,
+  TMP_LIFECYCLE_MAX_DAYS,
 } from '@shotx/shared';
 import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
@@ -167,9 +168,23 @@ describe('S3 lifecycle rules', () => {
     expect(expiry('tmp/zips/')).toBeGreaterThanOrEqual(minZipExpirationDays(lifetime));
   });
 
-  it('expires tmp/reconcile/ (reconciliation scan files) after 7 days', () => {
+  it('expires tmp/reconcile/ (reconciliation scan files) after 3 days', () => {
     expect(TMP_RECONCILE_PREFIX).toBe('tmp/reconcile/');
-    expect(expiry('tmp/reconcile/')).toBe(7);
+    expect(expiry('tmp/reconcile/')).toBe(3);
+  });
+
+  it('expires everything under tmp/ within the spec’s 1-3 days (ADR 0006)', () => {
+    const tmpRules = rules.filter(
+      (r) => typeof r.Prefix === 'string' && r.Prefix.startsWith('tmp/'),
+    );
+    expect(tmpRules).toHaveLength(4);
+    for (const r of tmpRules) {
+      expect(r.ExpirationInDays as number, String(r.Prefix)).toBeGreaterThanOrEqual(1);
+      expect(r.ExpirationInDays as number, String(r.Prefix)).toBeLessThanOrEqual(
+        TMP_LIFECYCLE_MAX_DAYS,
+      );
+    }
+    expect(TMP_LIFECYCLE_MAX_DAYS).toBe(3);
   });
 
   it('has no tmp/ rule shorter than a more specific one (S3 applies the shortest match)', () => {
@@ -272,6 +287,68 @@ describe('CloudFront', () => {
     expect(defaultOrigin?.OriginCustomHeaders).toEqual([
       { HeaderName: 'X-ShotX-App', HeaderValue: 'web' },
     ]);
+  });
+
+  describe('client address (CloudFront-Viewer-Address)', () => {
+    const distributions = Object.values(app.findResources('AWS::CloudFront::Distribution')).map(
+      (d) => (d.Properties as Json).DistributionConfig as Json,
+    );
+    const policyConfig = (id: unknown): Json => {
+      const [ref] = collect(id, 'Ref') as string[];
+      const policy = app.findResources('AWS::CloudFront::OriginRequestPolicy')[ref as string];
+      if (policy === undefined) throw new Error(`no origin request policy ${JSON.stringify(id)}`);
+      return (policy.Properties as Json).OriginRequestPolicyConfig as Json;
+    };
+    const dynamicBehaviours = distributions.flatMap((d) => [
+      ['default', d.DefaultCacheBehavior as Json] as const,
+      [
+        '/api/*',
+        (d.CacheBehaviors as Json[]).find((b) => b.PathPattern === '/api/*') as Json,
+      ] as const,
+    ]);
+
+    it('forwards it to the API and the apps, on both distributions', () => {
+      expect(distributions).toHaveLength(2);
+      expect(dynamicBehaviours).toHaveLength(4);
+      for (const [label, b] of dynamicBehaviours) {
+        const config = policyConfig(b.OriginRequestPolicyId);
+        expect(config.HeadersConfig, label).toEqual({
+          HeaderBehavior: 'allViewerAndWhitelistCloudFront',
+          Headers: ['CloudFront-Viewer-Address'],
+        });
+        // Still every viewer cookie and query string, as with ALL_VIEWER.
+        expect(config.CookiesConfig, label).toEqual({ CookieBehavior: 'all' });
+        expect(config.QueryStringsConfig, label).toEqual({ QueryStringBehavior: 'all' });
+      }
+    });
+
+    it('no longer uses the managed ALL_VIEWER policy, which omits it', () => {
+      const ALL_VIEWER = '216adef6-5c7f-47e4-b989-5492eafa07d3';
+      expect(JSON.stringify(app.toJSON())).not.toContain(ALL_VIEWER);
+      expect(behaviour('/api/*').CachePolicyId).toBe(CACHING_DISABLED);
+    });
+
+    it('reaches the API only through CloudFront or the web and admin tasks', () => {
+      const [albSgId] = Object.keys(
+        app.findResources('AWS::EC2::SecurityGroup', {
+          Properties: { GroupDescription: Match.stringLikeRegexp('Internal ALB') },
+        }),
+      );
+      const sources = Object.values(app.findResources('AWS::EC2::SecurityGroupIngress'))
+        .map((r) => r.Properties as Json)
+        .filter((p) => JSON.stringify(p.GroupId).includes(`"${albSgId}"`))
+        .map((p) =>
+          p.SourcePrefixListId !== undefined
+            ? `prefix-list ${p.SourcePrefixListId as string}`
+            : `sg ${String(collect(p.SourceSecurityGroupId, 'Fn::GetAtt')[0]).split(',')[0]}`,
+        )
+        .sort();
+      expect(sources).toEqual([
+        `prefix-list ${s.config.network.cloudFrontOriginFacingPrefixListId}`,
+        expect.stringMatching(/^sg ServicesadminSg/),
+        expect.stringMatching(/^sg ServiceswebSg/),
+      ]);
+    });
   });
 
   it('only uses flat-rate compatible features', () => {

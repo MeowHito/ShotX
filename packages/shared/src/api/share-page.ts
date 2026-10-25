@@ -1,8 +1,14 @@
 import { z } from 'zod';
-import { CONSENT_POLICY_VERSIONS } from '../config/consent';
+import { CONSENT_POLICY_VERSIONS, consentPolicyVersionSchema } from '../config/consent';
 import { SHARE_PAGE_SIZE_LIMIT, ZIP_MAX_FILES_LIMIT } from '../config/share';
 import { CURSOR_MAX_LENGTH } from '../cursor-codec';
-import { DOWNLOAD_SIZES, SHARE_MODES, SHARE_TARGET_TYPES, ZIP_JOB_STATUSES } from '../domain';
+import {
+  CONSENT_PURPOSES,
+  DOWNLOAD_SIZES,
+  SHARE_MODES,
+  SHARE_TARGET_TYPES,
+  ZIP_JOB_STATUSES,
+} from '../domain';
 import { ERROR_CODES, type ErrorCode } from '../errors';
 import { MEDIA_KINDS } from '../media-types';
 import { shareTokenSchema } from '../share/token';
@@ -10,17 +16,21 @@ import { byteCountSchema, idSchema, isoDateTimeSchema, signedUrlSchema } from '.
 import { signedDownloadSchema } from './drive';
 
 /**
- * Public share routes (`/api/s/:token/...`, `/api/zip-jobs/:id`). The browser calls them directly
- * through CloudFront, where WAF rate rules and CAPTCHA protect them; see share/viewer for how the
- * viewer is identified (bearer token, viewer-session cookie, anon cookie) and which cookies the
- * API sets. Every route checks, in order: token (unknown or malformed: NOT_FOUND), availability
- * (SHARE_EXPIRED with a reason), require_login (LOGIN_REQUIRED), password (PASSWORD_REQUIRED),
- * then its own rules. `GET /s/:token` is the exception: it reports the login and password gates as
- * flags so the page can render them.
+ * Public share routes (`/api/s/:token/...`, all under the share's path so its unlock cookie,
+ * `Path=/api/s/{token}`, reaches every one). The browser calls them directly through CloudFront,
+ * where WAF rate rules and CAPTCHA protect them; see share/viewer for how the viewer is identified
+ * (bearer token, viewer-session cookie, anon cookie) and which cookies the API sets. Every route
+ * checks, in order: token (unknown or malformed: NOT_FOUND), availability (SHARE_EXPIRED with a
+ * reason), require_login (LOGIN_REQUIRED), password (PASSWORD_REQUIRED), then its own rules.
+ * Exceptions:
+ * - `GET /s/:token` reports the login and password gates as flags so the page can render them;
+ * - consent withdrawal and everything of "ขอลบใบหน้าของฉัน" (the `face_deletion` consent,
+ *   `GET` and `POST /s/:token/face-deletion`) check the token only (CONSENT_PURPOSE_GATES).
  *
  * Responses never contain face ids, bounding boxes, similarity scores, S3 URLs or data of other
  * shares. Signed URLs use bucketedExpiry (view TTL for thumbnails and previews, download TTL for
- * downloads), and every response that issues URLs writes an activity event.
+ * downloads). Which routes write which activity events is fixed by PUBLIC_SHARE_ROUTE_ACTIVITY;
+ * `GET /s/:token` writes none, although it issues the cover URL.
  */
 
 export const shareTokenParamsSchema = z.object({ token: shareTokenSchema });
@@ -90,16 +100,39 @@ export const shareMetaResponseSchema = z.object({
         .nullable(),
     })
     .nullable(),
+  /**
+   * Face search on this share, plus the API's face settings the scan flow needs. Web reads these
+   * from here, never from its own environment, so the client can't disagree with the API.
+   */
   faceSearch: z.object({
     /**
      * FACE_SEARCH_ENABLED and the share supports it (faceSearchUnavailableReason is null). When
-     * false the page hides scanning and "ขอลบใบหน้าของฉัน".
+     * false the page hides scanning. "ขอลบใบหน้าของฉัน" does not depend on it: the page always
+     * offers it (see GET /s/:token/face-deletion).
      */
     available: z.boolean(),
-    /** The consent text version to show (web i18n key); null when not available. */
+    /** The `face_search` consent text version to show (web i18n key); null when not available. */
     policyVersion: z.enum(CONSENT_POLICY_VERSIONS).nullable(),
-    /** This viewer or session has a current, not withdrawn consent for this share. */
+    /**
+     * This viewer or session has a current, not withdrawn `face_search` consent for this share.
+     */
     consented: z.boolean(),
+    /** FACE_MAX_SELFIES: angles the client collects at most. */
+    maxSelfies: z.number().int().positive(),
+    /** FACE_SELFIE_LONG_EDGE: the client downscales each selfie to at most this long edge. */
+    selfieLongEdge: z.number().int().positive(),
+    /** FACE_SELFIE_JPEG_QUALITY: JPEG quality (1–100) of the downscaled selfie. */
+    selfieJpegQuality: z.number().int().min(1).max(100),
+    /**
+     * SHARE_FACE_ONLY_GRANT_TTL_SECONDS: how long a scan's result (the face_only grant) is kept.
+     * The consent text states it.
+     */
+    resultTtlSeconds: z.number().int().positive(),
+  }),
+  /** Zip limits of `POST /s/:token/downloads`. */
+  zip: z.object({
+    /** ZIP_MAX_FILES: the most files one selection may download. */
+    maxFiles: z.number().int().positive(),
   }),
 });
 export type ShareMetaResponse = z.output<typeof shareMetaResponseSchema>;
@@ -150,21 +183,28 @@ export type UnlockShareBody = z.input<typeof unlockShareBodySchema>;
 // --- POST /s/:token/consent, DELETE /s/:token/consent -------------------------------------------
 
 /**
- * Accept the face-search consent text of `policyVersion` for this share, as this viewer or
- * session. A version other than CONSENT_POLICY_VERSION is CONSENT_VERSION_MISMATCH. Idempotent:
- * an existing current consent is returned as is. Stores `ip_hash`, never the address.
+ * Accept the consent text of `purpose` (default `face_search`) and `policyVersion` for this share,
+ * as this viewer or session. Gates depend on the purpose (CONSENT_PURPOSE_GATES):
+ * - `face_search`: token, availability, login, password, then FACE_SEARCH_ENABLED
+ *   (FEATURE_DISABLED);
+ * - `face_deletion`: token only. Works on revoked or expired shares and with the flag off.
+ * Then any well-formed version other than CONSENT_POLICY_VERSION is 409 CONSENT_VERSION_MISMATCH
+ * with the current version in details. Idempotent per purpose: an existing current consent is
+ * returned as is. Stores `ip_hash`, never the address.
  *
- * DELETE withdraws (204): sets `withdrawn_at` on this viewer's or session's consents for the share
- * and deletes their face-search result (and so the face_only grant). Idempotent. Withdrawal does
- * not need FACE_SEARCH_ENABLED: it always works.
+ * DELETE withdraws (204): sets `withdrawn_at` on this viewer's or session's consents of every
+ * purpose for the share and deletes their face-search result (and so the face_only grant).
+ * Idempotent. Token lookup only: it works on revoked or expired shares and with the flag off.
  */
 export const giveConsentBodySchema = z.strictObject({
-  policyVersion: z.enum(CONSENT_POLICY_VERSIONS),
+  purpose: z.enum(CONSENT_PURPOSES).default('face_search'),
+  policyVersion: consentPolicyVersionSchema,
   accepted: z.literal(true),
 });
 export type GiveConsentBody = z.input<typeof giveConsentBodySchema>;
 
 export const consentResponseSchema = z.object({
+  purpose: z.enum(CONSENT_PURPOSES),
   policyVersion: z.enum(CONSENT_POLICY_VERSIONS),
   acceptedAt: isoDateTimeSchema,
 });
@@ -202,17 +242,41 @@ export const faceSearchResponseSchema = z.object({
 export type FaceSearchResponse = z.output<typeof faceSearchResponseSchema>;
 
 /**
- * "ขอลบใบหน้าของฉัน" (202). Same multipart form, gates and rate limits as face search, but not
- * FACE_SEARCH_UNAVAILABLE: it searches the share owner's whole collection, not the share's scope.
- * Faces matching any selfie at or above FACE_DELETION_THRESHOLD (direct matches only) are marked
- * for deletion at once (hidden from every search), recorded in `face_deletions` (counts only), and
- * deleted from the collection and the database by the worker (`delete.faces`). The answer is a
- * count only; nothing about the matched photos is returned.
+ * "ขอลบใบหน้าของฉัน" (202). Same multipart form and request limits as face search. Gated only on
+ * the token (unknown: NOT_FOUND) and a current `face_deletion` consent of this viewer or session
+ * for this share (CONSENT_REQUIRED with the current version): never SHARE_EXPIRED, LOGIN_REQUIRED,
+ * PASSWORD_REQUIRED, FEATURE_DISABLED or FACE_SEARCH_UNAVAILABLE, so it works on revoked and
+ * expired shares and with FACE_SEARCH_ENABLED=false (PDPA data-subject right; ADR 0007). It
+ * searches the share owner's whole collection, not the share's scope. Faces matching any selfie at
+ * or above FACE_DELETION_THRESHOLD (direct matches only) are marked for deletion at once (hidden
+ * from every search), recorded in `face_deletions` (counts only), and deleted from the collection
+ * and the database by the worker (`delete.faces`). The answer is a count only; nothing about the
+ * matched photos is returned. An owner without a collection answers `facesMatched: 0` without a
+ * Rekognition call.
  */
 export const faceDeletionResponseSchema = z.object({
   facesMatched: z.number().int().nonnegative(),
 });
 export type FaceDeletionResponse = z.output<typeof faceDeletionResponseSchema>;
+
+// --- GET /s/:token/face-deletion ----------------------------------------------------------------
+
+/**
+ * What the "ขอลบใบหน้าของฉัน" page needs, gated on the token only, so it works where
+ * `GET /s/:token` answers SHARE_EXPIRED or the gates aren't passed. The page is reachable from
+ * every share page, including the "ลิงก์นี้หมดอายุ" page.
+ */
+export const faceDeletionInfoResponseSchema = z.object({
+  /** The `face_deletion` consent text version to show (CONSENT_POLICY_VERSION). */
+  policyVersion: z.enum(CONSENT_POLICY_VERSIONS),
+  /** This viewer or session has a current `face_deletion` consent for this share. */
+  consented: z.boolean(),
+  /** FACE_MAX_SELFIES, FACE_SELFIE_LONG_EDGE and FACE_SELFIE_JPEG_QUALITY, as in share meta. */
+  maxSelfies: z.number().int().positive(),
+  selfieLongEdge: z.number().int().positive(),
+  selfieJpegQuality: z.number().int().min(1).max(100),
+});
+export type FaceDeletionInfoResponse = z.output<typeof faceDeletionInfoResponseSchema>;
 
 // --- POST /s/:token/feedback --------------------------------------------------------------------
 
@@ -259,7 +323,10 @@ export const createDownloadBodySchema = z.strictObject({
 });
 export type CreateDownloadBody = z.input<typeof createDownloadBodySchema>;
 
-/** Statuses of `GET /zip-jobs/:id`: the job's status, or `expired` once its archive is gone. */
+/**
+ * Statuses of `GET /s/:token/zip-jobs/:id`: the job's status, or `expired` once its archive is
+ * gone.
+ */
 export const ZIP_JOB_VIEW_STATUSES = [...ZIP_JOB_STATUSES, 'expired'] as const;
 export type ZipJobViewStatus = (typeof ZIP_JOB_VIEW_STATUSES)[number];
 
@@ -283,7 +350,7 @@ export type ZipJobView = z.output<typeof zipJobViewSchema>;
  * One file: a signed URL with `Content-Disposition: attachment` (download TTL); a `download`
  * activity event. Several: a zip job (`queued`, or the existing job when the Idempotency-Key was
  * used before by the same viewer with the same files; same key, other files or another viewer:
- * IDEMPOTENCY_KEY_REUSED); poll `GET /zip-jobs/:id` every few seconds. On iOS the web app may
+ * IDEMPOTENCY_KEY_REUSED); poll `GET /s/:token/zip-jobs/:id` every few seconds. On iOS the web app may
  * instead fetch single downloads and use the Web Share API.
  */
 export const createDownloadResponseSchema = z.discriminatedUnion('kind', [
@@ -292,13 +359,20 @@ export const createDownloadResponseSchema = z.discriminatedUnion('kind', [
 ]);
 export type CreateDownloadResponse = z.output<typeof createDownloadResponseSchema>;
 
-// --- GET /zip-jobs/:id ------------------------------------------------------------------------------
+// --- GET /s/:token/zip-jobs/:id -------------------------------------------------------------------
 
 /**
- * A zip job of this viewer or session (anyone else's: NOT_FOUND). The share's availability and
- * gates are checked again. The first response that issues the archive's URL writes the job's one
- * `zip` activity event (`UPDATE zip_jobs SET url_issued_at = now() WHERE url_issued_at IS NULL`
- * decides which), so polling doesn't inflate the stats.
+ * Params of `GET /s/:token/zip-jobs/:id`. The route lives under the share's path (it used to be
+ * `/zip-jobs/:id`) so the share's unlock cookie reaches it and the normal share gates apply.
+ */
+export const shareZipJobParamsSchema = z.object({ token: shareTokenSchema, id: idSchema });
+
+/**
+ * A zip job of this share and this viewer or session (another share's or anyone else's job:
+ * NOT_FOUND; look it up by `id` AND `share_id` of the token). The share's availability and gates
+ * are checked like on every gated route. The first response that issues the archive's URL writes
+ * the job's one `zip` activity event (`UPDATE zip_jobs SET url_issued_at = now() WHERE
+ * url_issued_at IS NULL` decides which), so polling doesn't inflate the stats.
  */
 export const zipJobResponseSchema = zipJobViewSchema;
 export type ZipJobResponse = ZipJobView;

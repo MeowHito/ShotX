@@ -4,9 +4,7 @@ import {
   loadAppConfig,
   loadAwsConfig,
   loadCognitoConfig,
-  loadFaceConfig,
   loadInternalApiConfig,
-  loadShareConfig,
   loadUploadConfig,
   parseEnv,
 } from '@shotx/shared';
@@ -108,18 +106,20 @@ const webShareEnvSchema = z
       .max(60 * 60_000)
       .default(15 * 60_000),
     WEB_IOS_SHARE_MAX_FILES: z.coerce.number().int().min(1).max(100).default(20),
+    /** How often the studio polls GET /billing/payments/:id while a payment is pending. */
+    WEB_BILLING_POLL_INTERVAL_MS: z.coerce.number().int().min(500).max(60_000).default(3000),
   })
   .refine((e) => e.WEB_FACE_GATE_MIN_BRIGHTNESS < e.WEB_FACE_GATE_MAX_BRIGHTNESS, {
     error: 'WEB_FACE_GATE_MIN_BRIGHTNESS must be below WEB_FACE_GATE_MAX_BRIGHTNESS',
   });
 
-/** The scan flow's settings: selfie size from the shared face config, the gate from web env. */
+/**
+ * The scan flow's web-only settings: the quality gate and the self-hosted detector. The selfie
+ * limits (count, size, JPEG quality) come from the API with the share meta, never from web env.
+ */
 export function clientFaceConfig(env: Env = process.env): ClientFaceConfig {
-  const face = loadFaceConfig(env);
   const e = parseEnv(webShareEnvSchema, env, 'web share');
   return {
-    selfie: { longEdge: face.selfie.longEdge, jpegQuality: face.selfie.jpegQuality },
-    maxSelfies: face.search.maxSelfies,
     gate: {
       minFaceWidthRatio: e.WEB_FACE_GATE_MIN_FACE_WIDTH_RATIO,
       minScore: e.WEB_FACE_GATE_MIN_SCORE,
@@ -134,12 +134,22 @@ export function clientFaceConfig(env: Env = process.env): ClientFaceConfig {
   };
 }
 
+/** Download tunables of the share page (ZIP_MAX_FILES comes from share meta). */
 export function clientShareConfig(env: Env = process.env): ClientShareConfig {
   const e = parseEnv(webShareEnvSchema, env, 'web share');
   return {
     zipPollIntervalMs: e.WEB_ZIP_POLL_INTERVAL_MS,
     zipPollTimeoutMs: e.WEB_ZIP_POLL_TIMEOUT_MS,
-    maxSelection: loadShareConfig(env).zip.maxFiles,
     iosShareMaxFiles: e.WEB_IOS_SHARE_MAX_FILES,
   };
+}
+
+/** Studio billing tunables (plans and prices always come from the API). */
+export interface ClientBillingConfig {
+  paymentPollIntervalMs: number;
+}
+
+export function clientBillingConfig(env: Env = process.env): ClientBillingConfig {
+  const e = parseEnv(webShareEnvSchema, env, 'web share');
+  return { paymentPollIntervalMs: e.WEB_BILLING_POLL_INTERVAL_MS };
 }

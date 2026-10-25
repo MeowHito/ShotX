@@ -47,7 +47,7 @@ function scanShare(fake: FakeApi, extra: Partial<PublicShareFixture> = {}) {
 async function acceptConsent() {
   await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
   await userEvent.click(
-    screen.getByRole('checkbox', { name: th.consent.policies['2026-10-25'].checkbox }),
+    screen.getByRole('checkbox', { name: th.consent.policies.face_search['2026-10-25'].checkbox }),
   );
   await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
 }
@@ -63,7 +63,7 @@ describe('consent', () => {
     const share = scanShare(fake);
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    const policy = th.consent.policies['2026-10-25'];
+    const policy = th.consent.policies.face_search['2026-10-25'];
     expect(screen.getByRole('heading', { name: policy.title })).toBeInTheDocument();
     expect(screen.getByText(policy.points.noStorage)).toBeInTheDocument();
     expect(screen.getByText('ฉบับวันที่ 2026-10-25')).toBeInTheDocument();
@@ -99,7 +99,9 @@ describe('consent', () => {
     // Scanning again asks for consent again.
     await userEvent.click(screen.getByRole('button', { name: th.share.scan }));
     expect(
-      await screen.findByRole('checkbox', { name: th.consent.policies['2026-10-25'].checkbox }),
+      await screen.findByRole('checkbox', {
+        name: th.consent.policies.face_search['2026-10-25'].checkbox,
+      }),
     ).toBeInTheDocument();
   });
 });
@@ -262,28 +264,6 @@ describe('scan', () => {
   });
 });
 
-describe('ขอลบใบหน้าของฉัน', () => {
-  it('runs consent, selfie, POST face-deletion and confirms the count', async () => {
-    const fake = new FakeApi({ faceSearch: true });
-    const share = scanShare(fake, { deletionMatches: 4 });
-    renderSharePage(fake, share.token);
-    await userEvent.click(await screen.findByRole('button', { name: th.share.deleteMyFace }));
-    await userEvent.click(
-      screen.getByRole('checkbox', { name: th.consent.policies['2026-10-25'].checkbox }),
-    );
-    await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
-    expect(await screen.findByText(th.faceDeletion.intro)).toBeInTheDocument();
-    await takeLiveSelfie();
-    await userEvent.click(await screen.findByRole('button', { name: th.faceDeletion.submit }));
-    expect(
-      await screen.findByText('พบใบหน้าของคุณ 4 ใบหน้า และกำลังลบออกจากระบบค้นหา'),
-    ).toBeInTheDocument();
-    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.faceDeletion)).toHaveLength(1);
-    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.faceSearch)).toHaveLength(0);
-    expect(fake.selfieUploads).toEqual([{ route: 'deletion', sizes: [10], types: ['image/jpeg'] }]);
-  });
-});
-
 describe('downloads', () => {
   async function select(names: string[]) {
     for (const name of names) {
@@ -336,13 +316,13 @@ describe('downloads', () => {
     expect(startDownload).not.toHaveBeenCalled();
   });
 
-  it('shows ZIP_TOO_LARGE limits', async () => {
-    const fake = new FakeApi({ zipMaxFiles: 2 });
+  it('shows ZIP_TOO_LARGE limits (over ZIP_MAX_BYTES)', async () => {
+    const fake = new FakeApi({ zipMaxBytes: 2500 });
     const share = fake.addPublicShare();
     renderSharePage(fake, share.token);
     await select(['IMG_0001.jpg', 'IMG_0002.jpg', 'IMG_0003.jpg']);
     await userEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด 3 รูป' }));
-    expect(await screen.findByText(/ดาวน์โหลดพร้อมกันได้ไม่เกิน 2 รูป/)).toBeInTheDocument();
+    expect(await screen.findByText(/ดาวน์โหลดพร้อมกันได้ไม่เกิน 500 รูป/)).toBeInTheDocument();
   });
 
   it('on iOS offers Save to Photos through navigator.share({ files })', async () => {

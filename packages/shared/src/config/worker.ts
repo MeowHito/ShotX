@@ -21,7 +21,13 @@ export type LogLevel = (typeof LOG_LEVELS)[number];
 /** SQS allows 1–10 messages per ReceiveMessage call. */
 const batchSize = int(1, 10);
 const concurrency = int(1, 10);
-const runtime = int(60, 11 * SECONDS_PER_HOUR);
+/**
+ * Longest WORKER_*_MAX_PROCESSING_SECONDS and WORKER_JOB_MAX_RUNTIME_SECONDS: under SQS's 12 h
+ * visibility cap with room for the heartbeat.
+ */
+export const WORKER_MAX_PROCESSING_SECONDS_LIMIT = 11 * SECONDS_PER_HOUR;
+
+const runtime = int(60, WORKER_MAX_PROCESSING_SECONDS_LIMIT);
 
 // Worker-only tunables (moved from apps/worker/src/config.ts). Defaults are assumptions; infra
 // doesn't set them, so the defaults apply unless `services.env.worker` overrides one.

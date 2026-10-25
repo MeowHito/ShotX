@@ -27,16 +27,28 @@ const invalid = (message: string) =>
     CLOSE,
   );
 
+/** The longest a refused upload's connection stays open after the answer. */
+const DISCARD_MAX_MS = 5_000;
+
 /**
- * Discards (never buffers) what is left of a refused body, up to `limit` more bytes, then cuts the
- * socket. Closing a socket with unread data makes TCP send a reset, which can destroy the error
- * response before the client reads it; reading a bounded amount lets the answer arrive.
+ * Discards (never buffers) what is left of a refused body, up to `limit` more bytes, and closes the
+ * connection without losing the answer. Node closes a `Connection: close` response's socket at
+ * once (destroySoon); with request bytes still unread, the kernel then sends a reset, which can
+ * destroy the error response before the client reads it. So for this request only, closing just
+ * sends FIN (the HTTP server's sockets are half-open capable), the rest of the body keeps being
+ * read and dropped, and the socket is destroyed when the client finishes or gives up (`end`),
+ * after `limit` more bytes, or after DISCARD_MAX_MS, whichever comes first.
  */
 function discardRest(req: Request, limit: number): void {
+  const socket = req.socket as Request['socket'] & { destroySoon?: () => void };
+  if (typeof socket.destroySoon === 'function') socket.destroySoon = () => socket.end();
+  const destroy = () => socket.destroy();
+  socket.once('end', destroy);
+  setTimeout(destroy, DISCARD_MAX_MS).unref();
   let discarded = 0;
   req.on('data', (chunk: Buffer) => {
     discarded += chunk.length;
-    if (discarded > limit) req.socket.destroy();
+    if (discarded > limit) destroy();
   });
   req.resume();
 }

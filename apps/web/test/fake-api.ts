@@ -18,6 +18,7 @@ import {
   type ZipJobView,
 } from '@shotx/shared';
 import { matchRoute } from '@/lib/bff/handler';
+import { FakeBilling, handleBilling } from './fake-billing-api';
 import {
   createPublicShare,
   handlePhase3,
@@ -66,9 +67,17 @@ export interface FakeApiOptions {
   role?: MeResponse['role'];
   /** FACE_SEARCH_ENABLED as the API reports it (me.features.faceSearch). */
   faceSearch?: boolean;
-  /** ZIP_MAX_FILES. */
+  /** ZIP_MAX_FILES (share meta `zip.maxFiles`). */
   zipMaxFiles?: number;
-  /** Polls of GET /zip-jobs/:id before the job is done. */
+  /** ZIP_MAX_BYTES (each fake file is 1000 bytes). */
+  zipMaxBytes?: number;
+  /** FACE_MAX_SELFIES, FACE_SELFIE_LONG_EDGE, FACE_SELFIE_JPEG_QUALITY (share meta). */
+  maxSelfies?: number;
+  selfieLongEdge?: number;
+  selfieJpegQuality?: number;
+  /** SHARE_FACE_ONLY_GRANT_TTL_SECONDS (share meta `faceSearch.resultTtlSeconds`). */
+  resultTtlSeconds?: number;
+  /** Polls of GET /s/:token/zip-jobs/:id before the job is done. */
   zipPollsUntilDone?: number;
   zipOutcome?: 'ready' | 'failed';
 }
@@ -108,6 +117,8 @@ export class FakeApi {
   selfieUploads: { route: 'search' | 'deletion'; sizes: number[]; types: string[] }[] = [];
   zipJobs = new Map<string, { job: ZipJobView; polls: number; token: string }>();
   zipKeys = new Map<string, { ids: string; jobId: string }>();
+  /** Plans, subscription and payments of the billing routes. */
+  billing = new FakeBilling();
 
   constructor(options: FakeApiOptions = {}) {
     this.options = {
@@ -120,6 +131,11 @@ export class FakeApi {
       role: 'photographer',
       faceSearch: false,
       zipMaxFiles: 500,
+      zipMaxBytes: 2 * 1024 ** 3,
+      maxSelfies: 3,
+      selfieLongEdge: 1280,
+      selfieJpegQuality: 90,
+      resultTtlSeconds: 24 * 3600,
       zipPollsUntilDone: 2,
       zipOutcome: 'ready',
       ...options,
@@ -235,14 +251,17 @@ export class FakeApi {
       const parsedHeaders = route.headers ? parse(route.headers, headers, 'headers') : {};
       if (route.multipart !== undefined && form === undefined) throw new Fail('VALIDATION_FAILED');
       const extra = { headers: parsedHeaders as Record<string, string | undefined>, form };
-      const phase3 = handlePhase3(
+      const billing = handleBilling(
         this,
         route,
         params as Record<string, string>,
-        query,
         parsedBody,
-        extra,
+        extra.headers,
       );
+      const phase3 =
+        billing !== NOT_HANDLED
+          ? billing
+          : handlePhase3(this, route, params as Record<string, string>, query, parsedBody, extra);
       const result =
         phase3 === NOT_HANDLED
           ? this.handle(route, params as Record<string, string>, query, parsedBody)

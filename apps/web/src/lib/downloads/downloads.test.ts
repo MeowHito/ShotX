@@ -19,6 +19,8 @@ const job = (status: ZipJobView['status']): ZipJobView => ({
   errorCode: null,
 });
 
+const TOKEN = 'aB3dE5fG7hJ9kL1mN3pQ5r';
+
 function stubApi(responses: ZipJobView[]): ApiClient {
   return { call: vi.fn(() => Promise.resolve(responses.shift())) } as unknown as ApiClient;
 }
@@ -37,7 +39,7 @@ describe('zip polling', () => {
     };
     const api = stubApi([job('running'), ready]);
     const updates: string[] = [];
-    const result = await pollZipJob(api, job('queued'), {
+    const result = await pollZipJob(api, TOKEN, job('queued'), {
       intervalMs: 2000,
       timeoutMs: 60_000,
       sleep,
@@ -46,18 +48,33 @@ describe('zip polling', () => {
     expect(result.download.url).toBe('https://x/z.zip');
     expect(updates).toEqual(['queued', 'running', 'ready']);
     expect(sleep).toHaveBeenCalledWith(2000, undefined);
+    // Polled under the share's path (GET /s/:token/zip-jobs/:id).
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- a vi.fn, no `this`
+    expect(api.call).toHaveBeenCalledWith(PUBLIC_SHARE_ROUTES.zipJob, {
+      params: { token: TOKEN, id: job('queued').id },
+      signal: undefined,
+    });
+    expect(PUBLIC_SHARE_ROUTES.zipJob.path).toBe('/s/:token/zip-jobs/:id');
   });
 
   it('fails on failed, expired and timeout with Thai-mapped client errors', async () => {
     await expect(
-      pollZipJob(stubApi([job('failed')]), job('queued'), { intervalMs: 1, timeoutMs: 10, sleep }),
+      pollZipJob(stubApi([job('failed')]), TOKEN, job('queued'), {
+        intervalMs: 1,
+        timeoutMs: 10,
+        sleep,
+      }),
     ).rejects.toEqual(new ClientError('client.zipFailed'));
     await expect(
-      pollZipJob(stubApi([job('expired')]), job('queued'), { intervalMs: 1, timeoutMs: 10, sleep }),
+      pollZipJob(stubApi([job('expired')]), TOKEN, job('queued'), {
+        intervalMs: 1,
+        timeoutMs: 10,
+        sleep,
+      }),
     ).rejects.toEqual(new ClientError('client.zipExpired'));
     let now = 0;
     await expect(
-      pollZipJob(stubApi([job('running'), job('running')]), job('queued'), {
+      pollZipJob(stubApi([job('running'), job('running')]), TOKEN, job('queued'), {
         intervalMs: 1,
         timeoutMs: 10,
         sleep: () => {

@@ -1,30 +1,32 @@
 import { argon2, randomBytes, timingSafeEqual } from 'node:crypto';
+import { type Argon2idParams, argon2idParamsAcceptable } from '@shotx/shared';
 
 /**
  * Share passwords are hashed with argon2id (Node's built-in `crypto.argon2`, Node 24.7+) and
  * stored in PHC string format, `$argon2id$v=19$m=<KiB>,t=<passes>,p=<lanes>$<salt>$<hash>`, so the
  * parameters travel with each hash and can be raised later without breaking old hashes.
  *
- * Parameters: OWASP's argon2id baseline (19 MiB, 2 passes, 1 lane), a 16-byte salt from the
- * CSPRNG and a 32-byte tag. They are security parameters rather than product tunables; raising
- * them only affects new hashes.
+ * New hashes use loadSharePasswordHashConfig (SHARE_PASSWORD_ARGON2_*; OWASP's baseline of
+ * 19 MiB, 2 passes, 1 lane by default), a 16-byte salt from the CSPRNG and a 32-byte tag.
+ * Verification accepts exactly the stored parameters argon2idParamsAcceptable allows (the same
+ * bounds the config loader enforces), so every hash any allowed configuration produces verifies,
+ * and a corrupt row can't make the API burn memory or CPU.
  */
-export const ARGON2ID_PARAMS = { memoryKiB: 19_456, passes: 2, parallelism: 1 } as const;
+export const DEFAULT_ARGON2ID_PARAMS: Argon2idParams = {
+  memoryKiB: 19_456,
+  timeCost: 2,
+  parallelism: 1,
+};
 const SALT_BYTES = 16;
 const TAG_BYTES = 32;
 const VERSION = 19;
-
-/** Bounds accepted when verifying, so a corrupt row can't make the API burn memory or CPU. */
-const MAX_MEMORY_KIB = 262_144;
-const MAX_PASSES = 10;
-const MAX_PARALLELISM = 8;
 
 const b64 = (bytes: Buffer) => bytes.toString('base64').replace(/=+$/, '');
 
 function derive(
   password: string,
   salt: Buffer,
-  params: { memoryKiB: number; passes: number; parallelism: number },
+  params: Argon2idParams,
   tagLength: number,
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -36,18 +38,22 @@ function derive(
         parallelism: params.parallelism,
         tagLength,
         memory: params.memoryKiB,
-        passes: params.passes,
+        passes: params.timeCost,
       },
       (error, key) => (error ? reject(error) : resolve(key)),
     );
   });
 }
 
-/** A new argon2id hash of `password` in PHC format. */
-export async function hashPassword(password: string): Promise<string> {
+/** A new argon2id hash of `password` in PHC format, with `params` (the configured ones). */
+export async function hashPassword(
+  password: string,
+  params: Argon2idParams = DEFAULT_ARGON2ID_PARAMS,
+): Promise<string> {
+  if (!argon2idParamsAcceptable(params)) throw new RangeError('argon2id parameters out of bounds');
   const salt = randomBytes(SALT_BYTES);
-  const tag = await derive(password, salt, ARGON2ID_PARAMS, TAG_BYTES);
-  const { memoryKiB: m, passes: t, parallelism: p } = ARGON2ID_PARAMS;
+  const tag = await derive(password, salt, params, TAG_BYTES);
+  const { memoryKiB: m, timeCost: t, parallelism: p } = params;
   return `$argon2id$v=${VERSION}$m=${m},t=${t},p=${p}$${b64(salt)}$${b64(tag)}`;
 }
 
@@ -59,17 +65,12 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   const match = PHC.exec(hash);
   if (match === null) return false;
   const [, m, t, p, salt, tag] = match;
-  const params = { memoryKiB: Number(m), passes: Number(t), parallelism: Number(p) };
-  if (
-    params.memoryKiB > MAX_MEMORY_KIB ||
-    params.passes < 2 ||
-    params.passes > MAX_PASSES ||
-    params.parallelism < 1 ||
-    params.parallelism > MAX_PARALLELISM ||
-    params.memoryKiB < 8 * params.parallelism
-  ) {
-    return false;
-  }
+  const params: Argon2idParams = {
+    memoryKiB: Number(m),
+    timeCost: Number(t),
+    parallelism: Number(p),
+  };
+  if (!argon2idParamsAcceptable(params)) return false;
   const expected = Buffer.from(tag ?? '', 'base64');
   const actual = await derive(password, Buffer.from(salt ?? '', 'base64'), params, expected.length);
   return actual.length === expected.length && timingSafeEqual(actual, expected);

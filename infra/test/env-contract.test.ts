@@ -10,12 +10,14 @@ import {
   loadConsentConfig,
   loadCostConfig,
   loadDriveConfig,
+  loadEmailConfig,
   loadFaceConfig,
   loadFaceSearchUploadConfig,
   loadFeatureFlags,
   loadInternalApiConfig,
   loadMediaConfig,
   loadMediaStorageConfig,
+  loadPaymentGatewayConfig,
   loadQueueUrls,
   loadQueueVisibilityTimeouts,
   loadRedisConfig,
@@ -23,9 +25,12 @@ import {
   loadSentryConfig,
   loadServerConfig,
   loadShareConfig,
+  loadSharePasswordHashConfig,
   loadUploadConfig,
   loadWafCaptchaConfig,
   loadWorkerSettings,
+  PAYMENT_GATEWAY_SECRET_NAMES,
+  PAYMENT_GATEWAYS,
   QUEUE_NAMES,
 } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
@@ -95,6 +100,14 @@ const SAMPLES: Record<string, string> = {
   PGUSER: 'shotx_admin',
   PGPASSWORD: 'secret-from-secrets-manager',
   IP_HASH_SECRET: 'generated-by-secrets-manager-64-characters-long-0123456789abcdef',
+  // A real gateway and SES, as on the prod stage (the loaders refuse fake under production).
+  PAYMENT_GATEWAY: 'omise',
+  EMAIL_PROVIDER: 'ses',
+  EMAIL_FROM_ADDRESS: 'no-reply@photos.example.com',
+  // Every gateway's secrets (ECS secrets from Secrets Manager).
+  ...Object.fromEntries(
+    PAYMENT_GATEWAY_SECRET_NAMES.map((n) => [n, `secret-from-secrets-manager-${n.toLowerCase()}`]),
+  ),
 };
 
 /** What each service loads at startup. */
@@ -132,6 +145,11 @@ const SERVICE_LOADERS: Record<ServiceName, Loader[]> = {
     loadShareConfig,
     loadUploadConfig,
     loadDriveConfig,
+    loadSharePasswordHashConfig,
+    loadRetentionConfig,
+    loadBillingConfig,
+    loadPaymentGatewayConfig,
+    loadEmailConfig,
   ],
   worker: [
     loadAppConfig,
@@ -144,6 +162,11 @@ const SERVICE_LOADERS: Record<ServiceName, Loader[]> = {
     loadWorkerSettings,
     loadFeatureFlags,
     loadShareConfig,
+    // subscriptions.transition.daily: lifecycle, purge, reminders and auto-renew charges.
+    loadRetentionConfig,
+    loadBillingConfig,
+    loadPaymentGatewayConfig,
+    loadEmailConfig,
   ],
 };
 
@@ -163,6 +186,15 @@ const ALL_LOADERS: Loader[] = [
   loadWorkerSettings,
   loadFeatureFlags,
   loadConsentConfig,
+  loadSharePasswordHashConfig,
+  loadEmailConfig,
+  loadPaymentGatewayConfig,
+  // Each gateway's secrets, whichever gateway the env selects.
+  ...PAYMENT_GATEWAYS.map(
+    (gateway): Loader =>
+      (e) =>
+        loadPaymentGatewayConfig({ ...e, NODE_ENV: 'development', PAYMENT_GATEWAY: gateway }),
+  ),
 ];
 
 const throws = (loader: Loader, env: Env) => {
@@ -184,9 +216,12 @@ function readByLoaders(complete: Env, name: string): boolean {
     throw new Error('the complete sample env must satisfy every loader');
   }
   const without = Object.fromEntries(Object.entries(complete).filter(([k]) => k !== name));
+  // Free-text settings (e.g. EMAIL_FROM_NAME) accept the first probe but not a blank or huge one.
+  const invalid = ['\u0000 not a valid value', ' ', 'x'.repeat(10_000)];
   return ALL_LOADERS.some(
     (load) =>
-      throws(load, { ...complete, [name]: '\u0000 not a valid value' }) || throws(load, without),
+      invalid.some((value) => throws(load, { ...complete, [name]: value })) ||
+      throws(load, without),
   );
 }
 

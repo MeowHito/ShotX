@@ -1,6 +1,7 @@
 import type {
   activityEvents,
   auditLog,
+  checkoutSessions,
   consents,
   dailyStats,
   faceDeletions,
@@ -8,11 +9,14 @@ import type {
   faces,
   files,
   folders,
+  paymentWebhookEvents,
   payments,
   plans,
   shareDailyStats,
   shares,
   storageUsage,
+  subscriptionEvents,
+  subscriptionNotices,
   subscriptions,
   users,
   zipJobEntries,
@@ -56,3 +60,11 @@ export type FaceDeletion = typeof faceDeletions.$inferSelect;
 export type NewFaceDeletion = typeof faceDeletions.$inferInsert;
 export type ShareDailyStats = typeof shareDailyStats.$inferSelect;
 export type NewShareDailyStats = typeof shareDailyStats.$inferInsert;
+export type CheckoutSession = typeof checkoutSessions.$inferSelect;
+export type NewCheckoutSession = typeof checkoutSessions.$inferInsert;
+export type PaymentWebhookEvent = typeof paymentWebhookEvents.$inferSelect;
+export type NewPaymentWebhookEvent = typeof paymentWebhookEvents.$inferInsert;
+export type SubscriptionNotice = typeof subscriptionNotices.$inferSelect;
+export type NewSubscriptionNotice = typeof subscriptionNotices.$inferInsert;
+export type SubscriptionEvent = typeof subscriptionEvents.$inferSelect;
+export type NewSubscriptionEvent = typeof subscriptionEvents.$inferInsert;

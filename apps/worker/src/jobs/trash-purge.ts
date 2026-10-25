@@ -192,8 +192,15 @@ interface PurgeFile {
   uploadId: string | null;
 }
 
-/** Deletes shares (and their consents) pointing at the rows, before the rows (FK RESTRICT). */
-async function deleteSharesOf(tx: Db, target: 'file' | 'folder', ids: string[]): Promise<number> {
+/**
+ * Deletes shares (and their consents) pointing at the rows, before the rows (FK RESTRICT). Also
+ * used by the account purge (subscriptions.transition.daily).
+ */
+export async function deleteSharesOf(
+  tx: Db,
+  target: 'file' | 'folder',
+  ids: string[],
+): Promise<number> {
   const column = target === 'file' ? shares.targetFileId : shares.targetFolderId;
   const doomed = await tx.select({ id: shares.id }).from(shares).where(inArray(column, ids));
   if (doomed.length === 0) return 0;

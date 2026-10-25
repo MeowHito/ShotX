@@ -114,6 +114,25 @@ export function minZipExpirationDays(lifetime: ZipObjectLifetime): number {
   return Math.ceil(lifetime.seconds / SECONDS_PER_DAY);
 }
 
+// --- tmp/reconcile/ lifecycle ------------------------------------------------------------------
+
+/**
+ * The orphan-face reconciliation job runs once a day (cdk.json `schedules.jobs`). A scan file it
+ * writes is acted on by a later run once FACE_ORPHAN_GRACE_MS has passed.
+ */
+export const RECONCILE_RUN_INTERVAL_SECONDS = SECONDS_PER_DAY;
+
+/**
+ * Smallest `storage.tmpReconcileExpirationDays`: a scan file must survive one orphan grace plus
+ * one daily run (ADR 0006). S3 expires objects at the first midnight UTC after the rule's age, so
+ * the real lifetime is never shorter than the number of days.
+ */
+export function minReconcileExpirationDays(orphanGraceMs: number): number {
+  return Math.ceil(
+    (orphanGraceMs / MS_PER_SECOND + RECONCILE_RUN_INTERVAL_SECONDS) / SECONDS_PER_DAY,
+  );
+}
+
 export function describeZipLifetime(l: ZipObjectLifetime): string {
   return (
     `WORKER_ZIP_MAX_PROCESSING_SECONDS ${l.maxProcessingSeconds}s (S3 dates a multipart object ` +

@@ -216,7 +216,7 @@ describe('upload schemas', () => {
 });
 
 describe('route table', () => {
-  it('covers every Phase 2 and Phase 3 route of the spec, plus the added ones', () => {
+  it('covers every Phase 2, 3 and 4 route of the spec, plus the added ones', () => {
     const routes = ALL_ROUTES.map((r) => `${r.method} ${r.path}`);
     expect(routes).toEqual([
       'GET /drive/folders/:id/children',
@@ -252,9 +252,16 @@ describe('route table', () => {
       'DELETE /s/:token/consent',
       'POST /s/:token/face-search',
       'POST /s/:token/feedback',
+      'GET /s/:token/face-deletion',
       'POST /s/:token/face-deletion',
       'POST /s/:token/downloads',
-      'GET /zip-jobs/:id',
+      'GET /s/:token/zip-jobs/:id',
+      'GET /plans',
+      'POST /billing/checkout',
+      'GET /billing/payments/:id',
+      'GET /billing/subscription',
+      'POST /billing/subscription/cancel',
+      'POST /billing/webhooks/:gateway',
     ]);
     expect(new Set(routes).size).toBe(routes.length);
   });
@@ -262,7 +269,10 @@ describe('route table', () => {
   it('lists only known error codes, including the common ones', () => {
     for (const route of ALL_ROUTES) {
       for (const code of route.errors) expect(ERROR_CODES).toContain(code);
-      expect(route.errors).toEqual(expect.arrayContaining([...COMMON_ROUTE_ERRORS]));
+      // Webhooks have no token, viewer or Origin: only validation and internal errors are common.
+      if (route.auth !== 'webhook') {
+        expect(route.errors).toEqual(expect.arrayContaining([...COMMON_ROUTE_ERRORS]));
+      }
       expect(new Set(route.errors).size).toBe(route.errors.length);
     }
     expect(UPLOAD_ROUTES.init.errors).toEqual(

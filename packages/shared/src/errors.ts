@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { FEATURES, SHARE_UNAVAILABLE_REASONS, SUBSCRIPTION_STATUSES } from './domain';
+import {
+  CHECKOUT_CHANGE_TYPES,
+  FEATURES,
+  PLAN_CHANGE_INVALID_REASONS,
+  SHARE_UNAVAILABLE_REASONS,
+  SUBSCRIPTION_STATUSES,
+} from './domain';
 
 /** Stable API error codes. The web app maps each code to a Thai message. */
 export const ErrorCode = {
@@ -80,8 +86,10 @@ export const ErrorCode = {
   /** A zip request over ZIP_MAX_FILES or ZIP_MAX_BYTES. Details: ZipTooLargeDetails. */
   ZIP_TOO_LARGE: 'ZIP_TOO_LARGE',
   /**
-   * The feature is switched off by configuration (FACE_SEARCH_ENABLED=false): consent, face
-   * search, face deletion, feedback and enabling face indexing. Details: FeatureDisabledDetails.
+   * The feature is switched off by configuration (FACE_SEARCH_ENABLED=false): face-search consent,
+   * face search, feedback, enabling face indexing and face_only shares. Never for face deletion,
+   * its consent or consent withdrawal (PDPA rights work with the flag off). Details:
+   * FeatureDisabledDetails.
    */
   FEATURE_DISABLED: 'FEATURE_DISABLED',
   /**
@@ -89,6 +97,27 @@ export const ErrorCode = {
    * active face index. Details: FaceSearchUnavailableDetails.
    */
   FACE_SEARCH_UNAVAILABLE: 'FACE_SEARCH_UNAVAILABLE',
+
+  // Billing (Phase 4). Uploads blocked for an unpaid account stay SUBSCRIPTION_INACTIVE (there is
+  // no PAYMENT_REQUIRED code).
+  /** The plan code is unknown, inactive, or the trial (which can't be bought). */
+  PLAN_NOT_FOUND: 'PLAN_NOT_FOUND',
+  /**
+   * The checkout doesn't fit the subscription's state (wrong changeType, a pending downgrade, card
+   * renew while auto-renew is on, ...). Details: PlanChangeInvalidDetails.
+   */
+  PLAN_CHANGE_INVALID: 'PLAN_CHANGE_INVALID',
+  /**
+   * Another checkout of this photographer is still waiting for payment (one at a time). Details:
+   * CheckoutPendingDetails (poll that payment, or wait until it expires).
+   */
+  CHECKOUT_PENDING: 'CHECKOUT_PENDING',
+  /** The Idempotency-Key belongs to a checkout that expired unpaid: start again with a new key. */
+  CHECKOUT_EXPIRED: 'CHECKOUT_EXPIRED',
+  /** A payment webhook whose signature is missing, malformed, wrong or stale. Nothing is stored. */
+  WEBHOOK_SIGNATURE_INVALID: 'WEBHOOK_SIGNATURE_INVALID',
+  /** The payment gateway failed or timed out (creating a checkout, cancelling auto-renew). */
+  PAYMENT_GATEWAY_ERROR: 'PAYMENT_GATEWAY_ERROR',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -129,6 +158,12 @@ export const ERROR_HTTP_STATUS = {
   // clients retry.
   FEATURE_DISABLED: 404,
   FACE_SEARCH_UNAVAILABLE: 409,
+  PLAN_NOT_FOUND: 404,
+  PLAN_CHANGE_INVALID: 409,
+  CHECKOUT_PENDING: 409,
+  CHECKOUT_EXPIRED: 410,
+  WEBHOOK_SIGNATURE_INVALID: 401,
+  PAYMENT_GATEWAY_ERROR: 502,
 } as const satisfies Record<ErrorCode, number>;
 
 /** Body of every API error response. */
@@ -244,6 +279,42 @@ export const faceSearchUnavailableDetailsSchema = z.object({
 });
 export type FaceSearchUnavailableDetails = z.output<typeof faceSearchUnavailableDetailsSchema>;
 
+export const planChangeInvalidDetailsSchema = z.object({
+  reason: z.enum(PLAN_CHANGE_INVALID_REASONS),
+  /** The changeType this plan would be right now (classifyCheckout). */
+  expectedChangeType: z.enum(CHECKOUT_CHANGE_TYPES),
+});
+export type PlanChangeInvalidDetails = z.output<typeof planChangeInvalidDetailsSchema>;
+
+export const checkoutPendingDetailsSchema = z.object({
+  /** The pending checkout's payment (null while it has none yet: retry in a few seconds). */
+  paymentId: z.uuid().nullable(),
+  expiresAt: z.iso.datetime({ offset: true }),
+});
+export type CheckoutPendingDetails = z.output<typeof checkoutPendingDetailsSchema>;
+
+/**
+ * Informational codes in successful billing responses (`notices`), never sent as errors. The web
+ * app maps them to Thai text like error codes.
+ * - `DOWNGRADE_EXCEEDS_QUOTA`: the smaller plan is below what is stored; uploads will be blocked
+ *   from the effective date until it fits. Nothing is deleted. Details: downgradeQuotaNotice.
+ */
+export const BILLING_NOTICE_CODES = ['DOWNGRADE_EXCEEDS_QUOTA'] as const;
+export type BillingNoticeCode = (typeof BILLING_NOTICE_CODES)[number];
+
+export const downgradeExceedsQuotaDetailsSchema = z.object({
+  quotaBytes: z.number().int().nonnegative(),
+  usedBytes: z.number().int().nonnegative(),
+  reservedBytes: z.number().int().nonnegative(),
+  overBytes: z.number().int().positive(),
+});
+
+export const billingNoticeSchema = z.object({
+  code: z.literal('DOWNGRADE_EXCEEDS_QUOTA'),
+  details: downgradeExceedsQuotaDetailsSchema,
+});
+export type BillingNotice = z.output<typeof billingNoticeSchema>;
+
 /** Schema of `details` for the codes that have them. */
 export const ERROR_DETAILS_SCHEMAS = {
   VALIDATION_FAILED: validationFailedDetailsSchema,
@@ -260,6 +331,8 @@ export const ERROR_DETAILS_SCHEMAS = {
   ZIP_TOO_LARGE: zipTooLargeDetailsSchema,
   FEATURE_DISABLED: featureDisabledDetailsSchema,
   FACE_SEARCH_UNAVAILABLE: faceSearchUnavailableDetailsSchema,
+  PLAN_CHANGE_INVALID: planChangeInvalidDetailsSchema,
+  CHECKOUT_PENDING: checkoutPendingDetailsSchema,
 } as const satisfies Partial<Record<ErrorCode, z.ZodType>>;
 
 /**

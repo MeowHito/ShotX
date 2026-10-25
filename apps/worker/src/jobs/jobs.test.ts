@@ -25,6 +25,7 @@ import {
   type TestDatabase,
   usageOf,
 } from '../testing/database';
+import { testSubscriptionDeps } from '../testing/billing';
 import { MemoryObjectStore } from '../testing/memory-aws';
 import type { JobContext } from './context';
 import { createJobsHandler } from './handler';
@@ -73,6 +74,7 @@ async function shareFor(db: Db, ownerId: string, target: { file?: string; folder
   await db.insert(consents).values({
     shareId: share!.id,
     anonId: randomUUID(),
+    purpose: 'face_search',
     policyVersion: '2026-10',
     ipHash: 'h',
   });
@@ -500,6 +502,7 @@ describe('scheduled jobs', () => {
         orphanScans: new S3OrphanScanStore(store),
         orphanGraceMs: 3_600_000,
         trashRetentionDays: 30,
+        subscriptions: testSubscriptionDeps(),
         batchSize: 100,
         maxRuntimeMs: 3_600_000,
       });
@@ -555,6 +558,7 @@ describe('scheduled jobs', () => {
         orphanScans: new S3OrphanScanStore(new MemoryObjectStore()),
         orphanGraceMs: 3_600_000,
         trashRetentionDays: 30,
+        subscriptions: testSubscriptionDeps(),
         batchSize: 100,
         maxRuntimeMs: 3_600_000,
       });
@@ -578,7 +582,7 @@ describe('scheduled jobs', () => {
       expect(failing.markDone).toHaveBeenCalledTimes(1);
     });
 
-    it('acknowledges later-phase job types with a warning and rejects invalid messages', async () => {
+    it('runs subscriptions.transition.daily (Phase 4) and rejects invalid messages', async () => {
       const handler = createJobsHandler({
         db,
         store: new MemoryObjectStore(),
@@ -587,22 +591,22 @@ describe('scheduled jobs', () => {
         orphanScans: new S3OrphanScanStore(new MemoryObjectStore()),
         orphanGraceMs: 3_600_000,
         trashRetentionDays: 30,
+        subscriptions: testSubscriptionDeps(),
         batchSize: 100,
         maxRuntimeMs: 3_600_000,
       });
-      for (const type of ['subscriptions.transition.daily']) {
-        const log = memoryLogger();
-        await handler(
-          JSON.stringify({ type, scheduledTime: '2026-10-25T18:30:00Z' }),
-          context(log),
-        );
-        expect(log.entries).toEqual([
-          expect.objectContaining({
-            level: 'warn',
-            msg: expect.stringMatching(/not implemented before Phase 4/) as unknown,
-          }),
-        ]);
-      }
+      const log = memoryLogger();
+      await handler(
+        JSON.stringify({
+          type: 'subscriptions.transition.daily',
+          scheduledTime: '2026-10-25T18:30:00Z',
+        }),
+        context(log),
+      );
+      expect(log.entries).toContainEqual(
+        expect.objectContaining({ level: 'info', msg: 'scheduled job finished' }),
+      );
+      expect(log.entries.some((e) => /not implemented/.test(e.msg))).toBe(false);
       await expect(handler('{"type":"nope"}', context())).rejects.toBeInstanceOf(QueueMessageError);
     });
   });

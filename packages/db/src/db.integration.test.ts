@@ -301,6 +301,7 @@ for (const backend of backends) {
           .returning(),
       );
       const payment = {
+        photographerId: photographer.id,
         subscriptionId: subscription.id,
         amountSatang: 99_000,
         vatSatang: 6_477,
@@ -337,6 +338,118 @@ for (const backend of backends) {
             .values({ ...payment, gatewayRef: randomUUID(), vatSatang: 100_000 }),
         ),
       ).toEqual({ code: CHECK, constraint: 'payments_vat_within_amount' });
+    });
+
+    it('keeps billing consistent: one pending checkout, one open renewal, auto-renew needs a method', async () => {
+      const photographer = await newUser();
+      const plan = await planId('standard');
+      const subscription = one(
+        await db()
+          .insert(schema.subscriptions)
+          .values({
+            photographerId: photographer.id,
+            planId: plan,
+            status: 'active',
+            periodEnd: new Date('2027-01-01T00:00:00Z'),
+          })
+          .returning(),
+      );
+      const checkout = (key: string) =>
+        db()
+          .insert(schema.checkoutSessions)
+          .values({
+            photographerId: photographer.id,
+            subscriptionId: subscription.id,
+            changeType: 'renew',
+            planId: plan,
+            method: 'promptpay',
+            months: 1,
+            amountSatang: 39_000,
+            vatSatang: 2_551,
+            gateway: 'fake',
+            idempotencyKey: key,
+            requestSha256: 'a'.repeat(64),
+            expiresAt: new Date(Date.now() + 15 * 60_000),
+          })
+          .returning();
+      const first = one(await checkout('k-1'));
+      expect(await pgError(checkout('k-1'))).toEqual({
+        code: UNIQUE,
+        constraint: 'checkout_sessions_idempotency_unique',
+      });
+      expect(await pgError(checkout('k-2'))).toEqual({
+        code: UNIQUE,
+        constraint: 'checkout_sessions_one_pending_per_photographer',
+      });
+      await db()
+        .update(schema.checkoutSessions)
+        .set({ status: 'expired', finishedAt: new Date() })
+        .where(eq(schema.checkoutSessions.id, first.id));
+      one(await checkout('k-2'));
+
+      const renewal = (status: 'pending' | 'failed') =>
+        db()
+          .insert(schema.payments)
+          .values({
+            photographerId: photographer.id,
+            subscriptionId: subscription.id,
+            renewalPeriodEnd: subscription.periodEnd,
+            amountSatang: 39_000,
+            vatSatang: 2_551,
+            method: 'card',
+            gateway: 'fake',
+            gatewayRef: `chrg_${randomUUID()}`,
+            status,
+          });
+      await renewal('failed');
+      await renewal('pending');
+      expect(await pgError(renewal('pending'))).toEqual({
+        code: UNIQUE,
+        constraint: 'payments_one_open_renewal',
+      });
+
+      expect(
+        await pgError(
+          db()
+            .update(schema.subscriptions)
+            .set({ billing: 'auto_renew' })
+            .where(eq(schema.subscriptions.id, subscription.id)),
+        ),
+      ).toEqual({ code: CHECK, constraint: 'subscriptions_auto_renew_has_method' });
+      await db()
+        .update(schema.subscriptions)
+        .set({
+          billing: 'auto_renew',
+          autoRenewMonths: 1,
+          paymentMethodGateway: 'fake',
+          paymentMethodRef: 'card_123',
+        })
+        .where(eq(schema.subscriptions.id, subscription.id));
+      expect(
+        await pgError(
+          db()
+            .update(schema.subscriptions)
+            .set({ pendingPlanId: plan })
+            .where(eq(schema.subscriptions.id, subscription.id)),
+        ),
+      ).toEqual({ code: CHECK, constraint: 'subscriptions_pending_plan_complete' });
+
+      const event = {
+        gateway: 'fake',
+        eventRef: `evt_${randomUUID()}`,
+        gatewayRef: 'chrg_1',
+        type: 'paid' as const,
+        amountSatang: 39_000,
+        payloadSha256: 'b'.repeat(64),
+        verifiedAt: new Date(),
+      };
+      await db().insert(schema.paymentWebhookEvents).values(event);
+      const replay = await db()
+        .insert(schema.paymentWebhookEvents)
+        .values(event)
+        .onConflictDoNothing()
+        .returning();
+      expect(replay).toEqual([]);
     });
 
     it('stores folder paths as ltree and answers scope queries with <@', async () => {
@@ -1333,6 +1446,32 @@ for (const backend of backends) {
       });
     });
 
+    it('keeps one current consent per purpose, so deletion consent coexists with search consent', async () => {
+      const owner = await newUser();
+      const share = one(
+        await db()
+          .insert(schema.shares)
+          .values({
+            ownerId: owner.id,
+            targetType: 'file',
+            targetFileId: (await newFile(owner.id)).id,
+            token: newToken(),
+          })
+          .returning(),
+      );
+      const anonId = randomUUID();
+      const consent = { shareId: share.id, anonId, policyVersion: '2026-10-25', ipHash: 'h' };
+      const inserted = await db().insert(schema.consents).values(consent).returning();
+      expect(one(inserted).purpose).toBe('face_search');
+      await db()
+        .insert(schema.consents)
+        .values({ ...consent, purpose: 'face_deletion' });
+      expect(await pgError(db().insert(schema.consents).values(consent))).toEqual({
+        code: UNIQUE,
+        constraint: 'consents_current_anon_unique',
+      });
+    });
+
     it('requires a viewer or an anonymous session for consent', async () => {
       const owner = await newUser();
       const share = one(
@@ -1617,6 +1756,79 @@ describe('migration 0003 on a database with 0002 and existing rows (PGlite)', ()
         { anon, viewer: null, current: false },
         { anon, viewer: null, current: true },
         { anon: null, viewer, current: true },
+      ]);
+    } finally {
+      await client.close();
+    }
+  }, 120_000);
+});
+
+describe('migration 0004 on a database with 0003 and existing rows (PGlite)', () => {
+  it('backfills payment owners, period starts, legacy auto-renew and consent purposes', async () => {
+    const client = await PGlite.create({ extensions: { ltree } });
+    try {
+      const db = drizzlePglite({ client, schema });
+      const dir = mkdtempSync(join(tmpdir(), 'shotx-migrations-'));
+      mkdirSync(join(dir, 'meta'));
+      const journal = JSON.parse(
+        readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8'),
+      ) as { entries: { tag: string }[] };
+      const entries = journal.entries.slice(0, 4);
+      writeFileSync(join(dir, 'meta', '_journal.json'), JSON.stringify({ ...journal, entries }));
+      for (const { tag } of entries) {
+        copyFileSync(join(MIGRATIONS_FOLDER, `${tag}.sql`), join(dir, `${tag}.sql`));
+      }
+      await migratePglite(db, { migrationsFolder: dir });
+      rmSync(dir, { recursive: true });
+      const exec = (query: SQL) => db.execute(query);
+
+      const owner = randomUUID();
+      await exec(
+        sql`INSERT INTO users (id, cognito_pool, cognito_sub, role) VALUES (${owner}, 'users', ${owner}, 'photographer')`,
+      );
+      const plan = randomUUID();
+      await exec(
+        sql`INSERT INTO plans (id, code, name, quota_bytes, price_month_satang, price_year_satang)
+            VALUES (${plan}, 'legacy', 'Legacy', 1073741824, 14900, 149000)`,
+      );
+      const expired = randomUUID();
+      await exec(
+        sql`INSERT INTO subscriptions (id, photographer_id, plan_id, status, billing, period_end, created_at)
+            VALUES (${expired}, ${owner}, ${plan}, 'expired', 'auto_renew', '2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z')`,
+      );
+      await exec(
+        sql`INSERT INTO payments (subscription_id, amount_satang, vat_satang, method, gateway, gateway_ref, status, paid_at)
+            VALUES (${expired}, 14900, 975, 'promptpay', 'omise', 'chrg_1', 'refunded', '2025-12-01T00:00:00Z')`,
+      );
+      const file = randomUUID();
+      await exec(
+        sql`INSERT INTO files (id, owner_id, name, mime, size_bytes, s3_key)
+            VALUES (${file}, ${owner}, 'a.jpg', 'image/jpeg', 1, ${`originals/${owner}/${file}/a.jpg`})`,
+      );
+      const share = randomUUID();
+      await exec(
+        sql`INSERT INTO shares (id, owner_id, target_type, target_file_id, token) VALUES (${share}, ${owner}, 'file', ${file}, ${newToken()})`,
+      );
+      await exec(
+        sql`INSERT INTO consents (share_id, anon_id, policy_version, ip_hash) VALUES (${share}, ${randomUUID()}, '2026-10-25', 'h')`,
+      );
+
+      await migratePglite(db, { migrationsFolder: MIGRATIONS_FOLDER });
+
+      expect(
+        await rows(
+          db,
+          sql`SELECT photographer_id::text AS owner, refunded_at = paid_at AS refunded FROM payments`,
+        ),
+      ).toEqual([{ owner, refunded: true }]);
+      expect(
+        await rows(
+          db,
+          sql`SELECT billing, period_start = period_end AS clamped FROM subscriptions WHERE id = ${expired}`,
+        ),
+      ).toEqual([{ billing: 'prepaid', clamped: true }]);
+      expect(await rows(db, sql`SELECT purpose FROM consents`)).toEqual([
+        { purpose: 'face_search' },
       ]);
     } finally {
       await client.close();

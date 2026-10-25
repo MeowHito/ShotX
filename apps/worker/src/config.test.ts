@@ -28,6 +28,14 @@ const env = {
   FACES_QUEUE_VISIBILITY_TIMEOUT_SECONDS: '900',
   ZIP_QUEUE_VISIBILITY_TIMEOUT_SECONDS: '300',
   JOBS_QUEUE_VISIBILITY_TIMEOUT_SECONDS: '900',
+  // Phase 4: plain env plus the gateway's ECS secrets (PAYMENT_GATEWAY_SECRET_ENV).
+  PAYMENT_GATEWAY: 'omise',
+  PAYMENT_OMISE_PUBLIC_KEY: 'pkey_test_0123456789abcdef',
+  PAYMENT_OMISE_SECRET_KEY: 'skey_test_0123456789abcdef',
+  PAYMENT_OMISE_WEBHOOK_SECRET: 'whsec_test_0123456789abcdef',
+  EMAIL_PROVIDER: 'ses',
+  EMAIL_FROM_ADDRESS: 'no-reply@shotx.example',
+  EMAIL_FROM_NAME: 'ShotX',
 };
 
 describe('worker config', () => {
@@ -58,6 +66,45 @@ describe('worker config', () => {
       resultTtlSeconds: 86_400,
     });
     expect(config.multipartPartBytes).toBe(16 * 1024 * 1024);
+    expect(config.billing.renewal).toEqual({ maxAttempts: 3, leadSeconds: 86_400 });
+    expect(config.email).toEqual({
+      provider: 'ses',
+      from: { address: 'no-reply@shotx.example', name: 'ShotX' },
+    });
+    expect(config.paymentGateway.gateway).toBe('omise');
+    expect(config.retention.subscription).toEqual({
+      graceDays: 14,
+      purgeAfterExpiryDays: 45,
+      reminderDays: [14, 7, 1],
+      purgeWarningDays: 7,
+    });
+  });
+
+  it('applies the Phase 4 contract limits', () => {
+    // Zip results live at most 2 days now (tmp/ lifecycle ceiling of 3 days).
+    expect(
+      loadWorkerConfig({ ...env, ZIP_RESULT_TTL_SECONDS: '172800' }).zip.resultTtlSeconds,
+    ).toBe(172_800);
+    expect(() => loadWorkerConfig({ ...env, ZIP_RESULT_TTL_SECONDS: '172801' })).toThrow(
+      /ZIP_RESULT_TTL_SECONDS/,
+    );
+    expect(() => loadWorkerConfig({ ...env, ZIP_RESULT_TTL_SECONDS: '259200' })).toThrow();
+    // Fakes are refused on the prod stage only (staging runs NODE_ENV=production with fakes);
+    // secrets are required and never echoed.
+    const prod = { ...env, APP_STAGE: 'prod' };
+    expect(() => loadWorkerConfig({ ...prod, EMAIL_PROVIDER: 'fake' })).toThrow(/fake/);
+    expect(() => loadWorkerConfig({ ...prod, PAYMENT_GATEWAY: 'fake' })).toThrow(/fake/);
+    expect(() => loadWorkerConfig({ ...env, EMAIL_FROM_ADDRESS: undefined })).toThrow(
+      /EMAIL_FROM_ADDRESS/,
+    );
+    let message = '';
+    try {
+      loadWorkerConfig({ ...env, PAYMENT_OMISE_SECRET_KEY: 'short-secret' });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/PAYMENT_OMISE_SECRET_KEY/);
+    expect(message).not.toContain('short-secret');
   });
 
   it('rejects inconsistent worker settings without echoing values', () => {

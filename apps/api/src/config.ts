@@ -3,10 +3,12 @@ import {
   type AppConfig,
   type AuthPool,
   type AwsConfig,
+  type BillingConfig,
   type CloudFrontSigningConfig,
   type CognitoPoolConfig,
   type ConsentConfig,
   type DriveConfig,
+  type EmailConfig,
   type Env,
   type FaceConfig,
   type FaceSearchUploadConfig,
@@ -14,27 +16,33 @@ import {
   loadApiLimitsConfig,
   loadAppConfig,
   loadAwsConfig,
+  loadBillingConfig,
   loadCloudFrontSigningConfig,
   loadCognitoConfig,
   loadConsentConfig,
   loadDriveConfig,
+  loadEmailConfig,
   loadFaceConfig,
   loadFaceSearchUploadConfig,
   loadFeatureFlags,
   loadMediaStorageConfig,
+  loadPaymentGatewayConfig,
   loadQueueUrls,
   loadRedisConfig,
   loadRetentionConfig,
   loadSentryConfig,
   loadServerConfig,
   loadShareConfig,
+  loadSharePasswordHashConfig,
   loadUploadConfig,
   type MediaStorageConfig,
+  type PaymentGatewayConfig,
   type RedisConfig,
   type RetentionConfig,
   type SentryConfig,
   type ServerConfig,
   type ShareConfig,
+  type SharePasswordHashConfig,
   type UploadConfig,
 } from '@shotx/shared';
 
@@ -67,6 +75,13 @@ export interface ApiConfig {
   face: FaceConfig;
   faceUpload: FaceSearchUploadConfig;
   queues: Record<ApiQueue, string>;
+  /** argon2id parameters of new share password hashes. */
+  password: SharePasswordHashConfig;
+  billing: BillingConfig;
+  /** Secret (gateway keys): never log it. `fake` is refused in production by the loader. */
+  paymentGateway: PaymentGatewayConfig;
+  /** `fake` is refused in production by the loader. */
+  email: EmailConfig;
 }
 
 /** Everything the API reads from the environment, through the shared loaders only. */
@@ -90,6 +105,10 @@ export function loadApiConfig(env: Env): ApiConfig {
     face: loadFaceConfig(env),
     faceUpload: loadFaceSearchUploadConfig(env),
     queues: loadQueueUrls(env, API_QUEUES),
+    password: loadSharePasswordHashConfig(env),
+    billing: loadBillingConfig(env),
+    paymentGateway: loadPaymentGatewayConfig(env),
+    email: loadEmailConfig(env),
   };
 }
 

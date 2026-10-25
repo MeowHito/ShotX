@@ -5,7 +5,7 @@ import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import { ArnFormat } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { faceSearchLimits, type PlatformConfig } from '../config';
+import { faceSearchLimits, type PlatformConfig, webhookPath } from '../config';
 import { FACE_SEARCH_CONTENT_TYPE, HTTP_HEADERS } from '../constants';
 import {
   allOf,
@@ -13,6 +13,7 @@ import {
   blockRule,
   blockUnlessIpInSet,
   customResponseBodies,
+  escapeRegex,
   headerIntegerGreaterThan,
   headerStartsWith,
   managedRuleGroup,
@@ -49,6 +50,11 @@ export interface EdgeStackProps extends StackProps {
  * configuration instead. WAF only ever sees the first `waf.bodyInspectionLimit` of a body (16 KB
  * by default, 64 KB at most), less than one selfie, so body inspection can't protect that route
  * anyway; the API enforces the same byte limits while it reads the upload.
+ *
+ * Payment webhooks (POST /api/billing/webhooks/<PAYMENT_GATEWAY>) skip the same managed groups:
+ * the gateway signs the raw body, and a JSON payload with a URL or HTML in it must not be blocked.
+ * They are outside the share paths (no CAPTCHA, which a gateway can't solve), get their own
+ * generous per-IP rate rule, and optionally a source IP allowlist (waf.webhookAllowedIpv4Cidrs).
  */
 export class EdgeStack extends Stack {
   readonly mainCertificate: acm.ICertificate;
@@ -102,13 +108,46 @@ export class EdgeStack extends Stack {
     const unlock = allOf([methodIs('POST'), shareApiPath(waf.unlockPathSuffix)]);
     const downloads = allOf([methodIs('POST'), shareApiPath(waf.downloadsPathSuffix)]);
     const sharePaths = anyOf(waf.sharePathPrefixes.map(uriStartsWith));
+    // POST /api/billing/webhooks/<PAYMENT_GATEWAY>: the gateway signs the raw body, so no rule may
+    // block it for what the body looks like, and a gateway can't solve a CAPTCHA.
+    const webhook = allOf([
+      methodIs('POST'),
+      uriMatches(`^${escapeRegex(webhookPath(config))}/?$`),
+    ]);
     const { maxBodyBytes } = faceSearchLimits(config);
-    // Managed groups with body rules see every request except face-search uploads.
+    // Managed groups with body rules see every request except face-search uploads and payment
+    // webhooks.
     const managed = (name: string, priority: number, countOverrides: string[] = []) =>
-      managedRuleGroup(name, priority, { countOverrides, scopeDown: not(faceSearchUpload) });
+      managedRuleGroup(name, priority, {
+        countOverrides,
+        scopeDown: not(anyOf([faceSearchUpload, webhook])),
+      });
     const associationConfig = {
       requestBody: { CLOUDFRONT: { defaultSizeInspectionLimit: waf.bodyInspectionLimit } },
     };
+
+    const webhookAllowList =
+      waf.webhookAllowedIpv4Cidrs.length === 0
+        ? []
+        : [
+            blockRule(
+              'webhook-ip-allowlist',
+              1,
+              allOf([
+                webhook,
+                not({
+                  ipSetReferenceStatement: {
+                    arn: new wafv2.CfnIPSet(this, 'WebhookAllowList', {
+                      name: `${prefix}-webhook-allow`,
+                      scope: 'CLOUDFRONT',
+                      ipAddressVersion: 'IPV4',
+                      addresses: waf.webhookAllowedIpv4Cidrs,
+                    }).attrArn,
+                  },
+                }),
+              ]),
+            ),
+          ];
 
     const mainAcl = new wafv2.CfnWebACL(this, 'MainWebAcl', {
       name: `${prefix}-main`,
@@ -121,12 +160,21 @@ export class EdgeStack extends Stack {
       associationConfig,
       rules: [
         managedRuleGroup('AWSManagedRulesAmazonIpReputationList', 0),
+        ...webhookAllowList,
         rateRule({
           name: 'global-rate-block',
           priority: 10,
           limit: waf.globalRateLimit,
           evaluationWindowSec: window,
           action: 'block',
+        }),
+        rateRule({
+          name: 'webhook-rate-block',
+          priority: 15,
+          limit: waf.webhookRateLimit,
+          evaluationWindowSec: window,
+          action: 'block',
+          scopeDown: webhook,
         }),
         rateRule({
           name: 'face-search-rate-block',

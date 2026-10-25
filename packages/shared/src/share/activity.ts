@@ -7,12 +7,14 @@ import { ACTIVITY_SOURCES } from '../domain';
  *
  * - `view`: one per `GET /s/:token/items` page (and per face-search response, which also issues
  *   view URLs) with `meta.items` = URLs' files; `file_id` null, `bytes` 0 (the bytes of
- *   thumbnails and previews are not known when signing).
+ *   thumbnails and previews are not known when signing). The share meta route (`GET /s/:token`)
+ *   never writes one, although it issues the cover URL: SSR and link unfurlers call it, so views
+ *   come only from the browser's own item and scan fetches (PUBLIC_SHARE_ROUTE_ACTIVITY).
  * - `scan`: one per face-search request, `meta` = { selfies, strong, maybe }; `file_id` null.
  * - `download`: one per single-file download URL, `file_id` set, `bytes` = the served object's
  *   size: `files.size_bytes` for `original`, `files.web_size_bytes` for `web` (0 when the worker
  *   hasn't recorded it).
- * - `zip`: one per finished-zip URL issued by `GET /zip-jobs/:id`, `meta.files`, `bytes` = the
+ * - `zip`: one per finished-zip URL issued by `GET /s/:token/zip-jobs/:id`, `meta.files`, `bytes` = the
  *   archive size; `file_id` null.
  *
  * `source = 'share'` rows carry the share and the viewer (`viewer_id` or `anon_id`); `source =
