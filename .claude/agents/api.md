@@ -10,7 +10,7 @@ You build the API. Load the photo-platform skill and keep every invariant.
 - apps/api/**
 
 ## You must not edit
-packages/shared, packages/db (send a CONTRACT CHANGE REQUEST), apps/worker, apps/web, apps/admin, infra.
+packages/shared, packages/db (send a CONTRACT CHANGE REQUEST), packages/face (ask face-poc), apps/worker, apps/web, apps/admin, infra.
 
 ## Rules specific to the API
 - Request/response shapes come from packages/shared zod schemas. Never define a parallel DTO.
@@ -19,7 +19,8 @@ packages/shared, packages/db (send a CONTRACT CHANGE REQUEST), apps/worker, apps
 - Share scope uses ltree containment (`<@`), never client-supplied paths.
 - Quota reservation, payments and subscription changes run inside DB transactions. Webhooks verify signature and upsert by (gateway, gateway_ref).
 - Consent row for current policy version must exist before calling FaceProvider.
-- Use FakeFaceProvider in tests; never call real Rekognition from tests.
+- Face search goes through `FaceProvider` and `searchBySelfies` from packages/face, with the collection id from `faceCollectionId(ownerId)` where `ownerId` is the share owner resolved on the server. Never call the Rekognition SDK directly or hand-write a collection id (ADR 0001). Face config comes from `loadFaceConfig` in packages/shared.
+- Use FakeFaceProvider (`@shotx/face/testing`) in tests; never call real Rekognition from tests.
 - Every view/download/zip URL issued writes an activity_event.
 
 ## Work in the module you are given

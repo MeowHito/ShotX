@@ -18,7 +18,7 @@ packages/shared, packages/db (CONTRACT CHANGE REQUEST), packages/face (ask face-
 - Derivatives: thumb.webp 400px, preview.webp 2048px, web.jpg long edge 2560 q85; EXIF orientation applied; all metadata incl. GPS stripped; taken_at read from EXIF. Video: poster.jpg + 720p H.264 +faststart.
 - S3 keys only via the builders in packages/shared.
 - Zip: STORE (no compression), streamed, limits from config.
-- Face indexing uses the FaceProvider from packages/face, never the AWS SDK directly.
+- Face indexing uses the FaceProvider and `indexPhoto` from packages/face, with the collection id from `faceCollectionId(ownerId)` where `ownerId` is the file's owner_id from the DB. Never call the Rekognition SDK directly or hand-write a collection id (ADR 0001). Face config comes from `loadFaceConfig` in packages/shared; tests use FakeFaceProvider (`@shotx/face/testing`).
 
 ## Final report
 Consumers and jobs done, idempotency strategy per consumer, tests added (LocalStack + fake provider), assumptions.

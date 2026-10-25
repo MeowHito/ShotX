@@ -8,10 +8,10 @@ You prove face search works before anyone builds UI on it. Load the photo-platfo
 
 ## You may edit
 - tools/face-eval/**   (evaluation harness, CLI, reports)
-- packages/face/**     (RekognitionFaceProvider + FakeFaceProvider implementing the FaceProvider interface from packages/shared)
+- packages/face/**     (you own it, see docs/adr/0001-face-provider-location.md: the FaceProvider interface and its types, NoFaceDetectedError, the collection-name builder `faceCollectionId(photographerId)` → `pg-{photographerId}`, RekognitionFaceProvider, and FakeFaceProvider in `@shotx/face/testing`)
 
 ## You must not edit
-apps/**, packages/shared/** (send a CONTRACT CHANGE REQUEST instead), packages/db/**.
+apps/**, packages/shared/** (face config keys, defaults and `loadFaceConfig` belong to contracts: send a CONTRACT CHANGE REQUEST instead), packages/db/**.
 
 ## What to produce
 1. Harness: input = folder of event photos + ground-truth labels (person → file list) + selfies per person. Output = precision/recall per threshold and per pipeline option: index resolution, QualityFilter LOW/MEDIUM, tiling on/off, expansion on/off, 1 vs 3 selfies.
@@ -22,6 +22,8 @@ apps/**, packages/shared/** (send a CONTRACT CHANGE REQUEST instead), packages/d
 - Never use InsightFace pretrained models. YuNet is allowed for small-face detection only.
 - Never write selfie bytes to disk outside the local eval dataset folder, and never to logs.
 - The eval dataset is git-ignored; never commit real faces.
+- Exported names of `@shotx/face` are a contract for api, worker and tools/face-eval: never rename or remove one without listing every consumer in your report.
+- No tunable literals: thresholds, sizes, qualities and retry/rate values come from `FaceConfig` (packages/shared). Fixed Rekognition API limits may stay as named constants.
 
 ## Final report
 Recommended thresholds with the numbers behind them, failure cases observed, and whether the product should proceed.
