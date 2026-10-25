@@ -258,6 +258,33 @@ describe('schema', () => {
     expect(uniques('plans')).toContainEqual({ name: 'plans_code_unique', columns: ['code'] });
   });
 
+  it('makes live drive names unique per owner and parent, and indexes children listings', () => {
+    const indexNames = (table: string) => config(table).indexes.map((i) => i.config.name);
+    const unique = (table: string, name: string) =>
+      config(table).indexes.find((i) => i.config.name === name)?.config.unique;
+    expect(unique('folders', 'folders_live_name_unique')).toBe(true);
+    expect(unique('files', 'files_live_name_unique')).toBe(true);
+    expect(unique('zip_job_entries', 'zip_job_entries_name_folded_unique')).toBe(true);
+    expect(indexNames('folders')).toEqual(
+      expect.arrayContaining([
+        'folders_children_name_idx',
+        'folders_children_id_idx',
+        'folders_trash_idx',
+      ]),
+    );
+    expect(indexNames('files')).toEqual(
+      expect.arrayContaining([
+        'files_children_name_idx',
+        'files_children_id_idx',
+        'files_trash_idx',
+        'files_upload_expiry_idx',
+      ]),
+    );
+    expect(config('zip_job_entries').uniqueConstraints.map((u) => u.name)).not.toContain(
+      'zip_job_entries_name_unique',
+    );
+  });
+
   it('keys users on (Cognito pool, sub) and ties admin to the admins pool', () => {
     const users = config('users');
     expect(

@@ -11,10 +11,11 @@ import {
   real,
   text,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { users } from './accounts';
-import { createdAt, id, ltree, timestamptz } from './columns';
+import { createdAt, driveNameKeySql, id, ltree, parentKeySql, timestamptz } from './columns';
 import { fileStatus } from './enums';
 
 /**
@@ -23,6 +24,15 @@ import { fileStatus } from './enums';
  * Moving a folder rewrites the subtree's prefix in one transaction.
  *
  * Parents must belong to the same owner: the foreign key is on (parent_id, owner_id).
+ *
+ * Names: unique among live siblings ignoring ASCII case (`folders_live_name_unique`, see
+ * driveNameSchema in @shotx/shared); the drive root is parent key nil.
+ *
+ * Trash: trashing a folder sets `deleted_at` on it and, with the same timestamp, on every live
+ * folder and file below it, which also get `trashed_via_folder_id` = the trashed folder. Rows with
+ * `deleted_at` set and no `trashed_via_folder_id` are what the user trashed: the trash listing,
+ * restore and the 30-day purge work on those and take their `trashed_via` rows along. Emptying the
+ * trash (or the purge) sets `purge_requested_at`; the worker then deletes the objects and rows.
  */
 export const folders = pgTable(
   'folders',
@@ -37,10 +47,39 @@ export const folders = pgTable(
     faceIndexEnabled: boolean('face_index_enabled').notNull().default(false),
     faceIndexExpiresAt: timestamptz('face_index_expires_at'),
     deletedAt: timestamptz('deleted_at'),
+    /** The trashed ancestor that took this folder to the trash; null if trashed directly. */
+    trashedViaFolderId: uuid('trashed_via_folder_id'),
+    /** Set when the trash was emptied or the trash purge picked the folder up. */
+    purgeRequestedAt: timestamptz('purge_requested_at'),
     createdAt: createdAt(),
   },
   (t) => [
     unique('folders_id_owner_unique').on(t.id, t.ownerId),
+    uniqueIndex('folders_live_name_unique')
+      .on(t.ownerId, parentKeySql(t.parentId), driveNameKeySql(t.name))
+      .where(sql`${t.deletedAt} IS NULL`),
+    // Children listings: ORDER BY name key or id, live rows only.
+    index('folders_children_name_idx')
+      .on(t.ownerId, t.parentId, driveNameKeySql(t.name), t.id)
+      .where(sql`${t.deletedAt} IS NULL`),
+    index('folders_children_id_idx')
+      .on(t.ownerId, t.parentId, t.id)
+      .where(sql`${t.deletedAt} IS NULL`),
+    // The trash listing: what the owner trashed directly and hasn't emptied.
+    index('folders_trash_idx')
+      .on(t.ownerId, t.deletedAt, t.id)
+      .where(
+        sql`${t.deletedAt} IS NOT NULL AND ${t.trashedViaFolderId} IS NULL AND ${t.purgeRequestedAt} IS NULL`,
+      ),
+    index('folders_trashed_via_idx')
+      .on(t.trashedViaFolderId)
+      .where(sql`${t.trashedViaFolderId} IS NOT NULL`),
+    index('folders_trashed_idx')
+      .on(t.deletedAt)
+      .where(sql`${t.deletedAt} IS NOT NULL`),
+    index('folders_purge_requested_idx')
+      .on(t.purgeRequestedAt)
+      .where(sql`${t.purgeRequestedAt} IS NOT NULL`),
     foreignKey({
       name: 'folders_parent_same_owner_fk',
       columns: [t.parentId, t.ownerId],
@@ -61,6 +100,14 @@ export const folders = pgTable(
       sql`subpath(${t.path}, -1) = text2ltree(replace(${t.id}::text, '-', '_'))`,
     ),
     check('folders_root_iff_no_parent', sql`(${t.parentId} IS NULL) = (nlevel(${t.path}) = 1)`),
+    check(
+      'folders_trash_fields_need_deleted',
+      sql`${t.deletedAt} IS NOT NULL OR (${t.trashedViaFolderId} IS NULL AND ${t.purgeRequestedAt} IS NULL)`,
+    ),
+    check(
+      'folders_trashed_via_not_self',
+      sql`${t.trashedViaFolderId} IS NULL OR ${t.trashedViaFolderId} <> ${t.id}`,
+    ),
   ],
 );
 
@@ -69,6 +116,17 @@ export const folders = pgTable(
  * (folder_id, owner_id) keeps a file in its owner's folders. Keys are built with the s3-keys
  * helpers in @shotx/shared: `s3_key` is the original, the others are derivatives (null until the
  * worker writes them).
+ *
+ * Names: unique among live, not-failed siblings ignoring ASCII case (`files_live_name_unique`).
+ * Trash works as for folders (`trashed_via_folder_id`, `purge_requested_at`).
+ *
+ * Upload and quota state (see drive/quota in @shotx/shared for the transitions):
+ *   uploading, upload_id set      multipart upload open until upload_expires_at; bytes reserved
+ *   uploading/processing,         completed by the client (upload_id cleared), waiting for the
+ *     verified_at null            worker; bytes still reserved
+ *   verified_at set               the worker checked size and magic bytes; bytes are used
+ *   failed, verified_at null      bytes rejected; nothing counted
+ *   purge_requested_at set        nothing counted; the worker deletes objects and the row
  */
 export const files = pgTable(
   'files',
@@ -98,11 +156,43 @@ export const files = pgTable(
     faceCount: integer('face_count'),
     /** S3 multipart UploadId while `uploading`; cleared on complete or abort. */
     uploadId: text('upload_id'),
+    /** End of the upload session (`expiresAt` of `POST /uploads/init`). */
+    uploadExpiresAt: timestamptz('upload_expires_at'),
+    /** When the worker verified the object; from then on the bytes are in used_bytes. */
+    verifiedAt: timestamptz('verified_at'),
     deletedAt: timestamptz('deleted_at'),
+    /** The trashed folder that took this file to the trash; null if trashed directly. */
+    trashedViaFolderId: uuid('trashed_via_folder_id'),
+    /** Set when the trash was emptied or the trash purge picked the file up. */
+    purgeRequestedAt: timestamptz('purge_requested_at'),
     createdAt: createdAt(),
   },
   (t) => [
     unique('files_s3_key_unique').on(t.s3Key),
+    uniqueIndex('files_live_name_unique')
+      .on(t.ownerId, parentKeySql(t.folderId), driveNameKeySql(t.name))
+      .where(sql`${t.deletedAt} IS NULL AND ${t.status} <> 'failed'`),
+    index('files_children_name_idx')
+      .on(t.ownerId, t.folderId, driveNameKeySql(t.name), t.id)
+      .where(sql`${t.deletedAt} IS NULL`),
+    index('files_children_id_idx')
+      .on(t.ownerId, t.folderId, t.id)
+      .where(sql`${t.deletedAt} IS NULL`),
+    index('files_trash_idx')
+      .on(t.ownerId, t.deletedAt, t.id)
+      .where(
+        sql`${t.deletedAt} IS NOT NULL AND ${t.trashedViaFolderId} IS NULL AND ${t.purgeRequestedAt} IS NULL`,
+      ),
+    index('files_trashed_via_idx')
+      .on(t.trashedViaFolderId)
+      .where(sql`${t.trashedViaFolderId} IS NOT NULL`),
+    index('files_purge_requested_idx')
+      .on(t.purgeRequestedAt)
+      .where(sql`${t.purgeRequestedAt} IS NOT NULL`),
+    // Expired upload sessions, for the nightly cleanup.
+    index('files_upload_expiry_idx')
+      .on(t.uploadExpiresAt)
+      .where(sql`${t.uploadId} IS NOT NULL`),
     unique('files_id_owner_unique').on(t.id, t.ownerId),
     foreignKey({
       name: 'files_folder_same_owner_fk',
@@ -122,6 +212,14 @@ export const files = pgTable(
       sql`(${t.width} IS NULL OR ${t.width} > 0) AND (${t.height} IS NULL OR ${t.height} > 0)`,
     ),
     check('files_face_count_nonnegative', sql`${t.faceCount} IS NULL OR ${t.faceCount} >= 0`),
+    check(
+      'files_upload_id_while_uploading',
+      sql`${t.uploadId} IS NULL OR (${t.status} = 'uploading' AND ${t.uploadExpiresAt} IS NOT NULL)`,
+    ),
+    check(
+      'files_trash_fields_need_deleted',
+      sql`${t.deletedAt} IS NOT NULL OR (${t.trashedViaFolderId} IS NULL AND ${t.purgeRequestedAt} IS NULL)`,
+    ),
   ],
 );
 

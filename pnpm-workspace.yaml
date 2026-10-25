@@ -6,6 +6,9 @@ packages:
 
 allowBuilds:
   esbuild: true
+  # next-intl pulls these in; both ship prebuilt binaries, so their install scripts are not needed.
+  '@parcel/watcher': false
+  '@swc/core': false
 
 # Supply-chain hygiene: don't install versions published less than 7 days ago.
 minimumReleaseAge: 10080

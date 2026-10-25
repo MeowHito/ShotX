@@ -5,4 +5,4 @@ export * from './drive';
 export * from './sharing';
 export * from './downloads';
 export * from './analytics';
-export { ltree } from './columns';
+export { driveNameKeySql, ltree, NIL_UUID, parentKeySql } from './columns';

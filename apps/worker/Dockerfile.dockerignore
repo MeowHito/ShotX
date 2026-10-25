@@ -1,0 +1,17 @@
+# BuildKit reads this file for apps/worker/Dockerfile (context: the repository root).
+**/node_modules
+**/.turbo
+**/dist
+**/cdk.out
+**/*.test.ts
+.git
+.env
+.env.*
+apps/api
+apps/web
+apps/admin
+infra
+tools
+docs
+data
+runs

@@ -15,6 +15,13 @@
       "when": 1792916789508,
       "tag": "0001_share_targets_zip_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792924430730,
+      "tag": "0002_drive",
+      "breakpoints": true
     }
   ]
 }

@@ -4,6 +4,7 @@ import { loadMediaConfig } from './media';
 import { loadQueueUrls } from './queues';
 import { loadRetentionConfig } from './retention';
 import { loadShareConfig } from './share';
+import { DRIVE_PAGE_SIZE_LIMIT, loadDriveConfig } from './drive';
 import { loadUploadConfig } from './upload';
 
 const MiB = 1024 * 1024;
@@ -16,6 +17,8 @@ describe('loadUploadConfig', () => {
       partBytes: 16 * MiB,
       presignTtlSeconds: 3600,
       partConcurrency: 4,
+      sessionTtlSeconds: 86_400,
+      initPresignedParts: 8,
     });
   });
 
@@ -26,12 +29,16 @@ describe('loadUploadConfig', () => {
       UPLOAD_PART_BYTES: String(64 * MiB),
       UPLOAD_PRESIGN_TTL_SECONDS: '900',
       UPLOAD_PART_CONCURRENCY: '6',
+      UPLOAD_SESSION_TTL_SECONDS: '7200',
+      UPLOAD_INIT_PRESIGNED_PARTS: '0',
     });
     expect(config).toEqual({
       maxBytes: { image: 50 * MiB, video: 20 * GiB },
       partBytes: 64 * MiB,
       presignTtlSeconds: 900,
       partConcurrency: 6,
+      sessionTtlSeconds: 7200,
+      initPresignedParts: 0,
     });
   });
 
@@ -47,8 +54,42 @@ describe('loadUploadConfig', () => {
     ['UPLOAD_MAX_VIDEO_BYTES', '1.5'],
     ['UPLOAD_PRESIGN_TTL_SECONDS', '30'],
     ['UPLOAD_PART_CONCURRENCY', '0'],
+    // The bucket aborts incomplete multipart uploads after 2 days; sessions must end before.
+    ['UPLOAD_SESSION_TTL_SECONDS', String(36 * 3600 + 1)],
+    ['UPLOAD_SESSION_TTL_SECONDS', '600'],
+    ['UPLOAD_INIT_PRESIGNED_PARTS', '101'],
   ])('rejects %s=%s', (key, value) => {
     expect(() => loadUploadConfig({ [key]: value })).toThrow(new RegExp(`at ${key}\\b`));
+  });
+
+  it('rejects part URLs that outlive the upload session', () => {
+    expect(() =>
+      loadUploadConfig({ UPLOAD_PRESIGN_TTL_SECONDS: '7200', UPLOAD_SESSION_TTL_SECONDS: '3600' }),
+    ).toThrow(
+      /UPLOAD_PRESIGN_TTL_SECONDS must be less than or equal to UPLOAD_SESSION_TTL_SECONDS/,
+    );
+  });
+});
+
+describe('loadDriveConfig', () => {
+  it('uses the defaults', () => {
+    expect(loadDriveConfig({})).toEqual({ pageSize: 100, maxFolderDepth: 32 });
+  });
+
+  it('reads overrides', () => {
+    expect(loadDriveConfig({ DRIVE_PAGE_SIZE: '50', DRIVE_MAX_FOLDER_DEPTH: '10' })).toEqual({
+      pageSize: 50,
+      maxFolderDepth: 10,
+    });
+  });
+
+  it.each([
+    ['DRIVE_PAGE_SIZE', '0'],
+    ['DRIVE_PAGE_SIZE', String(DRIVE_PAGE_SIZE_LIMIT + 1)],
+    ['DRIVE_MAX_FOLDER_DEPTH', '0'],
+    ['DRIVE_MAX_FOLDER_DEPTH', '101'],
+  ])('rejects %s=%s', (key, value) => {
+    expect(() => loadDriveConfig({ [key]: value })).toThrow(new RegExp(`at ${key}\\b`));
   });
 });
 

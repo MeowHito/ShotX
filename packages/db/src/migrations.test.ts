@@ -21,11 +21,27 @@ const statements = (sql: string) =>
     .filter((s) => s !== '');
 
 describe('migrations', () => {
-  it('starts with migration 0000_init and then 0001_share_targets_zip_jobs', () => {
-    expect(journal.entries.slice(0, 2).map((e) => [e.idx, e.tag])).toEqual([
+  it('starts with 0000_init, 0001_share_targets_zip_jobs and 0002_drive', () => {
+    expect(journal.entries.slice(0, 3).map((e) => [e.idx, e.tag])).toEqual([
       [0, '0000_init'],
       [1, '0001_share_targets_zip_jobs'],
+      [2, '0002_drive'],
     ]);
+  });
+
+  it('0002 backfills files before adding the checks and unique indexes that need it', () => {
+    const list = statements(sqlOf('0002_drive'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    expect(at('SET "verified_at" = "created_at"')).toBeGreaterThan(at('ADD COLUMN "verified_at"'));
+    expect(at('SET "upload_expires_at"')).toBeGreaterThan(at('ADD COLUMN "upload_expires_at"'));
+    expect(at('SET "upload_id" = NULL')).toBeLessThan(at('"files_upload_id_while_uploading"'));
+    expect(at('SET "upload_expires_at"')).toBeLessThan(at('"files_upload_id_while_uploading"'));
+    expect(at('DROP CONSTRAINT "zip_job_entries_name_unique"')).toBeLessThan(
+      at('"zip_job_entries_name_folded_unique"'),
+    );
+    for (const name of ['folders_live_name_unique', 'files_live_name_unique']) {
+      expect(list[at(`"${name}"`)]).toMatch(/lower\("name" COLLATE "C"\)/);
+    }
   });
 
   it('never edits a committed migration: each snapshot chains to the previous one', () => {

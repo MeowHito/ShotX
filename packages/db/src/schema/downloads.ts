@@ -10,10 +10,11 @@ import {
   primaryKey,
   text,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { users } from './accounts';
-import { createdAt, id, timestamptz } from './columns';
+import { createdAt, driveNameKeySql, id, timestamptz } from './columns';
 import { files } from './drive';
 import { downloadSize, zipJobStatus } from './enums';
 import { shares } from './sharing';
@@ -116,9 +117,12 @@ export const zipJobs = pgTable(
 
 /**
  * The files of a zip job, in archive order. `name` is the name inside the archive: safe (see
- * sanitizeOriginalName) and unique within the job ignoring case (see uniqueZipEntryNames; the
- * database only enforces exact uniqueness). Purging a file removes its entries (ON DELETE
- * CASCADE); `zip_jobs.file_count` lets the worker notice.
+ * sanitizeOriginalName) and unique within the job ignoring case (see uniqueZipEntryNames, which
+ * folds all of Unicode with toLowerCase). The database backs that up with
+ * `zip_job_entries_name_folded_unique` on `lower(name COLLATE "C")`, which folds ASCII only: it
+ * catches the collision that matters (IMG_0001.JPG vs img_0001.jpg), never rejects names the
+ * helper produced, and behaves the same on every PostgreSQL whatever its ctype. Purging a file
+ * removes its entries (ON DELETE CASCADE); `zip_jobs.file_count` lets the worker notice.
  */
 export const zipJobEntries = pgTable(
   'zip_job_entries',
@@ -133,7 +137,7 @@ export const zipJobEntries = pgTable(
   (t) => [
     primaryKey({ name: 'zip_job_entries_pkey', columns: [t.jobId, t.position] }),
     unique('zip_job_entries_file_unique').on(t.jobId, t.fileId),
-    unique('zip_job_entries_name_unique').on(t.jobId, t.name),
+    uniqueIndex('zip_job_entries_name_folded_unique').on(t.jobId, driveNameKeySql(t.name)),
     foreignKey({
       name: 'zip_job_entries_job_same_photographer_fk',
       columns: [t.jobId, t.photographerId],

@@ -91,15 +91,18 @@ function expectGuarantee(options: BucketOptions) {
   expect(maxInWindow(sorted, params.windowUs)).toBeLessThanOrEqual(params.limit);
   expect(maxInWindow(sorted, params.burstWindowUs)).toBeLessThanOrEqual(params.burst);
 
-  // Slots stay in arrival order and never come before the arrival.
+  // Slots stay in arrival order and never come before the arrival. Checked in a plain loop with
+  // one assertion: an expect() per slot made the 1000/s cases (tens of thousands of slots) slow
+  // enough to hit the test timeout on a loaded CI machine.
+  const outOfOrder: number[] = [];
   for (let i = 0; i < slots.length; i++) {
-    expect(slots[i]).toBeGreaterThanOrEqual(arrivals[i]!);
-    if (i > 0) expect(slots[i]).toBeGreaterThanOrEqual(slots[i - 1]!);
+    if (slots[i]! < arrivals[i]! || (i > 0 && slots[i]! < slots[i - 1]!)) outOfOrder.push(i);
   }
+  expect(outOfOrder).toEqual([]);
 
   // And the bucket is not slower than it has to be: an idle bucket lets a burst through at once,
   // and three windows' quota is through within three windows plus one burst window.
-  expect(slots.slice(0, params.burst)).toEqual(new Array<number>(params.burst).fill(0));
+  expect(slots.slice(0, params.burst).every((slot) => slot === 0)).toBe(true);
   expect(slots[params.burst]).toBeGreaterThan(0);
   expect(slots[coldStart - 1]).toBeLessThan(3 * params.windowUs + params.burstWindowUs);
 }

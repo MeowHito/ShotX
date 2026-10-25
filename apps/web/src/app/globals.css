@@ -1,0 +1,5 @@
+@import 'tailwindcss';
+@import '@shotx/ui/styles.css';
+
+/* Generate the utilities used by the shared components. */
+@source '../../../../packages/ui/src';

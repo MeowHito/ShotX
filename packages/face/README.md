@@ -84,12 +84,19 @@ deletes in S3, decoding and encoding, the local detector, database writes). Meas
 add a margin. CreateCollection/DescribeCollection, if the job makes sure the collection exists,
 are two more calls.
 
-**The default `FACE_ORPHAN_GRACE_MS` (3,600,000 ms, 1 hour) is below the smallest grace for the
-default retry settings.** Orphan cleanup stays safe either way (see the rules below), but an
-attempt that runs into the worst case misses its commit deadline and its work is thrown away.
-Either raise `FACE_ORPHAN_GRACE_MS` (2 hours, 7,200,000 ms, covers the re-index case with room
-for processing) or shorten `FACE_REKOGNITION_MAX_WAIT_MS`, `FACE_REKOGNITION_MAX_ATTEMPTS` or
-`FACE_REKOGNITION_REQUEST_TIMEOUT_MS`.
+**Two bounds, one gate.** These numbers (`worst-case.ts`) are the tighter in-process estimate:
+they follow the exact backoff caps and count only the calls `indexPhoto` makes.
+`facesJobWorstCase` in `infra/lib/face-limits.ts` is the stricter bound and **the deployment
+gate**: it charges `retryMaxMs` for every backoff (8 × 40,000 + 7 × 10,000 = 390,000 ms per call),
+counts 10 calls per job (collection calls and DeleteFaces batches included) and adds 60 s of
+processing, so 10 × 390 s + 60 s = **3,960 s** at the defaults. Infra's synth refuses a
+configuration whose `FACE_ORPHAN_GRACE_MS` is below 2 × that (7,920,000 ms).
+
+The default `FACE_ORPHAN_GRACE_MS` is 10,800,000 ms (3 hours), which passes both: above
+infra's 7,920,000 ms and above the 5,481,600 ms re-index estimate here. If you change
+`FACE_REKOGNITION_MAX_WAIT_MS`, `FACE_REKOGNITION_MAX_ATTEMPTS`,
+`FACE_REKOGNITION_REQUEST_TIMEOUT_MS` or the tile settings, infra's check decides whether the
+grace still fits; `indexPhotoWorstCase` is for in-process checks and logs.
 
 ## Deleting orphaned faces safely (worker)
 
@@ -126,8 +133,9 @@ await db.transaction(async (tx) => {
 ### 2. Grace of at least 2 × the longest attempt
 
 `FACE_ORPHAN_GRACE_MS` (`config.index.orphanGraceMs`) must be at least twice the longest
-`indexPhoto` attempt, so a slow but healthy attempt still commits before its deadline. Compute
-it from the configuration rather than by hand, for example at worker start-up:
+`indexPhoto` attempt, so a slow but healthy attempt still commits before its deadline. The
+deployment gate is infra's synth check (2 × `facesJobWorstCase`, see above). The worker can add
+the tighter in-process estimate as a start-up sanity check:
 
 ```ts
 const maxFacesPerFile = (1 + face.index.tileGrid ** 2) * face.index.maxFaces;
@@ -137,8 +145,9 @@ if (face.index.orphanGraceMs < worst.minOrphanGraceMs + 2 * measuredProcessingMs
 }
 ```
 
-The faces queue's visibility timeout needs the same worst case (once, not twice) plus
-processing: see `facesJobWorstCase` in `infra/lib/face-limits.ts`.
+The faces queue's visibility timeout (900 s) is shorter than one worst-case job, so the worker
+heartbeats with ChangeMessageVisibility every timeout/3 while a job runs; `facesJobWorstCase` in
+`infra/lib/face-limits.ts` bounds how long that can go on.
 
 ### 3. Read `knownFaceIds` from the primary
 
@@ -180,9 +189,10 @@ deleting a face that is already gone is a no-op, and `OrphanCleanupError` report
 failed run got.
 
 `reconcileCollection` scans, then **sleeps until the grace after the scan has passed** before
-deleting (only when there are candidates). With a 1-hour grace and the `jobs` queue's 3,600 s
-visibility timeout, that single-job mode outlives the message unless the worker heartbeats with
-ChangeMessageVisibility. The two-job mode avoids the wait:
+deleting (only when there are candidates). With the default 3-hour grace and the `jobs`
+queue's 900 s visibility timeout, that single-job mode holds the message for hours: it works only
+because the worker heartbeats with ChangeMessageVisibility every timeout/3, and it ties up a
+worker slot meanwhile. The two-job mode avoids the wait:
 
 1. `scanCollection(provider, { collectionId, knownFaceIds })` returns an `OrphanScan`
    (serializable: collection id, `listedAtMs`, candidate ids). Store it (database or S3, keyed by

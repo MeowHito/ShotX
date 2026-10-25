@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+**/.turbo
+**/coverage
+.git
+.env
+.env.*
+data
+runs
+infra/cdk.out

@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { derivedKey, originalKey } from '../s3-keys';
 import {
   createdObjects,
+  createdOriginals,
   isS3TestEvent,
   parseQueueMessage,
   QUEUE_MESSAGE_SCHEMAS,
@@ -165,6 +166,40 @@ describe('media queue', () => {
 
   it('rejects bodies that are not JSON', () => {
     expect(() => parseQueueMessage('media', 'not json')).toThrow(/Invalid media queue message/);
+  });
+
+  it('gives the worker the photographer and file of each created original', () => {
+    const key = originalKey({ photographerId, fileId, originalName: 'งานวิ่ง IMG+1 (2).jpg' });
+    const encoded = encodeURIComponent(key).replace(/%2F/g, '/').replace(/%20/g, '+');
+    const message = parseQueueMessage('media', JSON.stringify(s3Event(encoded)));
+    const { originals, ignored } = createdOriginals(message);
+    expect(ignored).toEqual([]);
+    expect(originals).toEqual([
+      expect.objectContaining({
+        key,
+        size: 18_734_112,
+        photographerId,
+        fileId,
+        originalName: 'งานวิ่ง IMG+1 (2).jpg',
+      }),
+    ]);
+  });
+
+  it('ignores created objects that are not originals built by originalKey', () => {
+    const keys = [
+      derivedKey({ photographerId, fileId }, 'thumb'),
+      'originals/../x/a.jpg',
+      `originals/${photographerId}/${fileId}/a/b.jpg`,
+      'something/else.jpg',
+    ];
+    for (const key of keys) {
+      const message = parseQueueMessage('media', JSON.stringify(s3Event(encodeURIComponent(key))));
+      expect(createdOriginals(message)).toMatchObject({ originals: [], ignored: [{ key }] });
+    }
+    expect(createdOriginals(parseQueueMessage('media', JSON.stringify(testEvent)))).toEqual({
+      originals: [],
+      ignored: [],
+    });
   });
 });
 

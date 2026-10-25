@@ -12,9 +12,10 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool } from './client';
 import { loadDatabaseConfig, pgPoolConfig } from './config';
-import { folderPath } from './ltree';
+import { folderPath, folderSubtreeMoveSql, planFolderMove } from './ltree';
 import { MIGRATIONS_FOLDER, migrateDatabase } from './migrate';
-import { zipKey } from '@shotx/shared';
+import { driveNameKey, zipKey } from '@shotx/shared';
+import { driveNameKeySql } from './schema/columns';
 import * as schema from './schema/index';
 import { SEED_PLANS, seedPlans } from './seed';
 import type { NewDriveFile, NewShare, NewUser, NewZipJob } from './types';
@@ -143,7 +144,12 @@ for (const backend of backends) {
           .returning(),
       );
 
-    const newFolder = async (ownerId: string, parent: { id: string; path: string } | null) => {
+    // Names are unique among live siblings (migration 0002), so helpers default to unique ones.
+    const newFolder = async (
+      ownerId: string,
+      parent: { id: string; path: string } | null,
+      name = `งานวิ่ง ${randomUUID()}`,
+    ) => {
       const id = randomUUID();
       return one(
         await db()
@@ -152,7 +158,7 @@ for (const backend of backends) {
             id,
             ownerId,
             parentId: parent?.id ?? null,
-            name: 'งานวิ่ง 2026',
+            name,
             path: folderPath(parent?.path ?? null, id),
           })
           .returning(),
@@ -165,7 +171,7 @@ for (const backend of backends) {
           .insert(schema.files)
           .values({
             ownerId,
-            name: 'IMG_0001.JPG',
+            name: `IMG_${randomUUID()}.JPG`,
             mime: 'image/jpeg',
             sizeBytes: 18_734_112,
             s3Key: `originals/${ownerId}/${randomUUID()}/IMG_0001.JPG`,
@@ -701,7 +707,12 @@ for (const backend of backends) {
         await db().insert(schema.zipJobEntries).values(entry);
         for (const [values, constraint] of [
           [{ position: 1 }, 'zip_job_entries_file_unique'],
-          [{ position: 1, fileId: files[1]?.id ?? '' }, 'zip_job_entries_name_unique'],
+          [{ position: 1, fileId: files[1]?.id ?? '' }, 'zip_job_entries_name_folded_unique'],
+          // Names collide ignoring ASCII case, like uniqueZipEntryNames.
+          [
+            { position: 1, fileId: files[1]?.id ?? '', name: 'A.JPG' },
+            'zip_job_entries_name_folded_unique',
+          ],
         ] as const) {
           expect(
             await pgError(
@@ -764,6 +775,164 @@ for (const backend of backends) {
             .from(schema.zipJobEntries)
             .where(eq(schema.zipJobEntries.jobId, created.id)),
         ).toEqual([]);
+      });
+    });
+
+    describe('drive (migration 0002)', () => {
+      const rename = (id: string, name: string) =>
+        db().update(schema.folders).set({ name }).where(eq(schema.folders.id, id));
+
+      it('makes live folder names unique per parent, ignoring ASCII case only', async () => {
+        const owner = await newUser();
+        const stranger = await newUser();
+        const event = await newFolder(owner.id, null, 'Event');
+        const nested = await newFolder(owner.id, event, 'Event');
+
+        for (const parent of [null, event]) {
+          expect(await pgError(newFolder(owner.id, parent, 'EVENT'))).toEqual({
+            code: UNIQUE,
+            constraint: 'folders_live_name_unique',
+          });
+        }
+        // Another owner, another case-sensitive letter outside ASCII, or Thai: no conflict.
+        await newFolder(stranger.id, null, 'event');
+        await newFolder(owner.id, null, 'Äpfel');
+        await newFolder(owner.id, null, 'äpfel');
+        await newFolder(owner.id, null, 'งานวิ่ง');
+        expect(await pgError(newFolder(owner.id, null, 'งานวิ่ง'))).toMatchObject({ code: UNIQUE });
+
+        // Trashed folders don't hold their name.
+        await db()
+          .update(schema.folders)
+          .set({ deletedAt: new Date() })
+          .where(eq(schema.folders.id, nested.id));
+        await newFolder(owner.id, event, 'event');
+        expect(await pgError(rename(event.id, 'äpfel'))).toEqual({
+          code: UNIQUE,
+          constraint: 'folders_live_name_unique',
+        });
+      });
+
+      it('makes live file names unique per folder and at the root; failed files free theirs', async () => {
+        const owner = await newUser();
+        const folder = await newFolder(owner.id, null, 'IMG_0001.JPG');
+        for (const folderId of [null, folder.id]) {
+          const first = await newFile(owner.id, { folderId, name: 'IMG_0001.JPG' });
+          expect(await pgError(newFile(owner.id, { folderId, name: 'img_0001.jpg' }))).toEqual({
+            code: UNIQUE,
+            constraint: 'files_live_name_unique',
+          });
+          await db()
+            .update(schema.files)
+            .set({ status: 'failed' })
+            .where(eq(schema.files.id, first.id));
+          await newFile(owner.id, { folderId, name: 'img_0001.jpg' });
+        }
+      });
+
+      it('computes the same name key as driveNameKey', async () => {
+        const names = ['IMG_0001.JPG', 'ÄbC', 'İstanbul', 'งานวิ่ง ABC', 'ǅ'];
+        for (const name of names) {
+          const [row] = await rows<{ key: string }>(
+            db(),
+            sql`SELECT ${driveNameKeySql(sql`${name}::text`)} AS key`,
+          );
+          expect(row?.key, name).toBe(driveNameKey(name));
+        }
+      });
+
+      it('moves a subtree, trashed descendants included, with one statement', async () => {
+        const owner = await newUser();
+        const stranger = await newUser();
+        const a = await newFolder(owner.id, null);
+        const b = await newFolder(owner.id, a);
+        const c = await newFolder(owner.id, b);
+        const target = await newFolder(owner.id, null);
+        await db()
+          .update(schema.folders)
+          .set({ deletedAt: new Date() })
+          .where(eq(schema.folders.id, c.id));
+        // Same subtree shape for another owner: must not be touched.
+        const foreign = await newFolder(stranger.id, null);
+
+        const pathsOf = async () =>
+          Object.fromEntries(
+            (
+              await db()
+                .select({
+                  id: schema.folders.id,
+                  path: schema.folders.path,
+                  parentId: schema.folders.parentId,
+                })
+                .from(schema.folders)
+                .where(
+                  sql`${schema.folders.id} IN (${sql.join(
+                    [a.id, b.id, c.id, foreign.id].map((id) => sql`${id}::uuid`),
+                    sql`, `,
+                  )})`,
+                )
+            ).map((f) => [f.id, { path: f.path, parentId: f.parentId }]),
+          );
+
+        const move = (
+          newParent: { id: string; path: string } | null,
+          folder: { id: string; path: string; parentId: string | null },
+        ) => {
+          const result = planFolderMove({ folder, newParent, subtreeMaxDepth: 3, maxDepth: 32 });
+          if (!result.ok) throw new Error(result.code);
+          return db().execute(folderSubtreeMoveSql(owner.id, result.plan));
+        };
+
+        await move(target, b);
+        const moved = await pathsOf();
+        expect(moved[b.id]).toEqual({ path: folderPath(target.path, b.id), parentId: target.id });
+        expect(moved[c.id]).toEqual({
+          path: folderPath(folderPath(target.path, b.id), c.id),
+          parentId: b.id,
+        });
+        expect(moved[a.id]).toEqual({ path: a.path, parentId: null });
+        expect(moved[foreign.id]).toEqual({ path: foreign.path, parentId: null });
+
+        await move(null, { id: b.id, path: folderPath(target.path, b.id), parentId: target.id });
+        const atRoot = await pathsOf();
+        expect(atRoot[b.id]).toEqual({ path: folderPath(null, b.id), parentId: null });
+        expect(atRoot[c.id]).toEqual({
+          path: folderPath(folderPath(null, b.id), c.id),
+          parentId: b.id,
+        });
+      });
+
+      it('keeps trash and upload fields consistent', async () => {
+        const owner = await newUser();
+        const folder = await newFolder(owner.id, null);
+        const setFolder = (values: Partial<typeof schema.folders.$inferInsert>) =>
+          db().update(schema.folders).set(values).where(eq(schema.folders.id, folder.id));
+        expect(await pgError(setFolder({ purgeRequestedAt: new Date() }))).toEqual({
+          code: CHECK,
+          constraint: 'folders_trash_fields_need_deleted',
+        });
+        expect(
+          await pgError(setFolder({ deletedAt: new Date(), trashedViaFolderId: folder.id })),
+        ).toEqual({ code: CHECK, constraint: 'folders_trashed_via_not_self' });
+
+        expect(await pgError(newFile(owner.id, { trashedViaFolderId: folder.id }))).toEqual({
+          code: CHECK,
+          constraint: 'files_trash_fields_need_deleted',
+        });
+        expect(await pgError(newFile(owner.id, { uploadId: 'upload-1' }))).toEqual({
+          code: CHECK,
+          constraint: 'files_upload_id_while_uploading',
+        });
+        expect(
+          await pgError(
+            newFile(owner.id, {
+              uploadId: 'upload-1',
+              uploadExpiresAt: new Date(),
+              status: 'ready',
+            }),
+          ),
+        ).toEqual({ code: CHECK, constraint: 'files_upload_id_while_uploading' });
+        await newFile(owner.id, { uploadId: 'upload-1', uploadExpiresAt: new Date() });
       });
     });
 
