@@ -30,6 +30,11 @@ export class MemoryObjectStore implements ObjectStore {
     uploads: [] as Array<{ key: string; partBytes: number; bytes: number; maxChunk: number }>,
   };
   failDeletes = false;
+  /**
+   * uploadStream fails after reading one chunk, like lib-storage when CreateMultipartUpload or a
+   * part fails: it stops iterating (which destroys the body) and rejects with the S3 error.
+   */
+  failUploads = false;
   /** Chunk size getStream emits objects in, so streaming is observable. */
   streamChunkBytes = 64 * 1024;
   /** Keys whose stream fails after the first chunk. */
@@ -50,7 +55,7 @@ export class MemoryObjectStore implements ObjectStore {
     return Promise.resolve(object === undefined ? null : new Uint8Array(object.body));
   }
 
-  getStream(key: string): Promise<Readable> {
+  getStream(key: string, signal?: AbortSignal): Promise<Readable> {
     const object = this.objects.get(key);
     if (object === undefined)
       return Promise.reject(Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' }));
@@ -81,13 +86,27 @@ export class MemoryObjectStore implements ObjectStore {
       },
     });
     stream.once('close', close);
+    // Like the SDK: aborting the request destroys the body with a socket error.
+    const onAbort = () =>
+      stream.destroy(Object.assign(new Error('aborted'), { code: 'ECONNRESET' }));
+    if (signal !== undefined) {
+      signal.addEventListener('abort', onAbort, { once: true });
+      stream.once('close', () => signal.removeEventListener('abort', onAbort));
+    }
     return Promise.resolve(stream);
   }
 
   async uploadStream(key: string, body: Readable, options: UploadStreamOptions): Promise<void> {
+    // Like @aws-sdk/lib-storage, which rejects anything but a node:stream Readable.
+    if (!(body instanceof Readable)) throw new Error('Body Data is unsupported format');
     const chunks: Buffer[] = [];
     let maxChunk = 0;
     for await (const chunk of body) {
+      if (this.failUploads) {
+        throw Object.assign(new Error('The specified bucket does not exist'), {
+          name: 'NoSuchBucket',
+        });
+      }
       options.signal?.throwIfAborted();
       const buffer = Buffer.from(chunk as Uint8Array);
       maxChunk = Math.max(maxChunk, buffer.length);

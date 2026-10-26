@@ -94,6 +94,54 @@ describe.skipIf(!endpoint)('S3 and SQS adapters against LocalStack', () => {
     expect(uploads.Uploads ?? []).toEqual([]);
   });
 
+  it('aborts cleanly when the signal fires mid-stream: no crash, no object, no parts left', async () => {
+    const photographerId = randomUUID();
+    const fileId = randomUUID();
+    const key = `derived/${photographerId}/${fileId}/web.jpg`;
+    await store.put(key, randomBytes(12 * MiB), 'image/jpeg');
+    const jobId = randomUUID();
+    const abort = new AbortController();
+    const getStream = store.getStream.bind(store);
+    const aborting = Object.create(store) as S3ObjectStore;
+    aborting.getStream = async (k, signal) => {
+      const stream = await getStream(k, signal);
+      stream.once('data', () => setTimeout(() => abort.abort(new Error('lost')), 50));
+      return stream;
+    };
+    await expect(
+      streamZip(
+        aborting,
+        zipKey(jobId),
+        [{ fileId, key, name: 'big.jpg', bytes: 12 * MiB, date: new Date() }],
+        { maxBytes: 20 * MiB, partBytes: 5 * MiB, signal: abort.signal },
+      ),
+    ).rejects.toThrow('lost');
+    expect(await store.head(zipKey(jobId))).toBeNull();
+    const uploads = await s3.send(
+      new ListMultipartUploadsCommand({ Bucket: bucket, Prefix: zipKey(jobId) }),
+    );
+    expect(uploads.Uploads ?? []).toEqual([]);
+  });
+
+  it('reports the S3 error when the upload itself fails', async () => {
+    const photographerId = randomUUID();
+    const fileId = randomUUID();
+    const key = `derived/${photographerId}/${fileId}/web.jpg`;
+    await store.put(key, randomBytes(6 * MiB), 'image/jpeg');
+    // Reads from the real bucket, writes to one that doesn't exist.
+    const broken = Object.create(store) as S3ObjectStore;
+    const missing = new S3ObjectStore(s3, `${bucket}-missing`);
+    broken.uploadStream = missing.uploadStream.bind(missing);
+    await expect(
+      streamZip(
+        broken,
+        zipKey(randomUUID()),
+        [{ fileId, key, name: 'a.jpg', bytes: 6 * MiB, date: new Date() }],
+        { maxBytes: 20 * MiB, partBytes: 5 * MiB, signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ name: 'NoSuchBucket' });
+  });
+
   it('gets small objects whole and reports missing ones as null', async () => {
     await store.put('tmp/reconcile/x.json', Buffer.from('{"a":1}'), 'application/json');
     expect(Buffer.from((await store.get('tmp/reconcile/x.json'))!).toString()).toBe('{"a":1}');

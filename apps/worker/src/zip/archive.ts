@@ -1,4 +1,4 @@
-import { Transform, type TransformCallback } from 'node:stream';
+import { Readable, Transform, type TransformCallback } from 'node:stream';
 import { ErrorCode, type ZipEntry } from '@shotx/shared';
 import { ZipArchive } from 'archiver';
 import type { ObjectStore } from '../aws/object-store';
@@ -83,13 +83,22 @@ export async function streamZip(
   options.signal.addEventListener('abort', onAbort, { once: true });
 
   const limit = new EntryByteLimit(options.maxBytes);
-  const uploading = store.uploadStream(key, archive, {
+  // archiver's stream is a `readable-stream` Readable, not a node:stream one, and
+  // @aws-sdk/lib-storage only accepts the latter (it never starts the upload otherwise). The
+  // wrapper errors when the archive is destroyed, so a failure still ends the upload.
+  const body = Readable.from(archive, { objectMode: false });
+  const uploading = store.uploadStream(key, body, {
     contentType: 'application/zip',
     partBytes: options.partBytes,
     signal,
   });
-  // Keep the upload's rejection from going unhandled while entries are fed.
-  uploading.catch(() => undefined);
+  // An upload failure tears the archive down, so feeding stops instead of waiting forever for
+  // an entry nobody reads (and the rejection is never left unhandled).
+  let uploadError: Error | undefined;
+  uploading.catch((error: unknown) => {
+    uploadError = error instanceof Error ? error : new Error(String(error));
+    fail(uploadError);
+  });
 
   const feeding = (async () => {
     for (const entry of entries) {
@@ -97,10 +106,20 @@ export async function streamZip(
       signal.throwIfAborted();
       const source = await store.getStream(entry.key, signal);
       const counted = limit.counter();
+      // Permanent sinks: after cleanup (or once the shared signal aborts the request) the SDK can
+      // still emit `aborted`/ECONNRESET on a source being torn down. Unhandled, that would crash
+      // the worker; the error that matters has already been recorded by then.
+      const ignore = () => undefined;
+      source.on('error', ignore);
+      counted.on('error', ignore);
       await new Promise<void>((resolve, reject) => {
+        const teardown = () => {
+          source.destroy();
+          counted.destroy();
+        };
         const onError = (error: unknown) => {
           cleanup();
-          source.destroy();
+          teardown();
           reject(error instanceof Error ? error : new Error(String(error)));
         };
         const onEntry = () => {
@@ -108,8 +127,9 @@ export async function streamZip(
           resolve();
         };
         const onClose = () => {
-          // The archive was torn down by another failure.
+          // The archive was torn down by another failure: release the open object stream too.
           cleanup();
+          teardown();
           reject(failure ?? new Error('Archive closed'));
         };
         const cleanup = () => {
@@ -129,7 +149,18 @@ export async function streamZip(
         });
       });
     }
-    await archive.finalize();
+    if (failure !== undefined) return;
+    // finalize() never settles on an archive another failure already destroyed.
+    let onClosed: (() => void) | undefined;
+    const closed = new Promise<never>((_, reject) => {
+      onClosed = () => reject(failure ?? new Error('Archive closed'));
+      archive.once('close', onClosed);
+    });
+    try {
+      await Promise.race([archive.finalize(), closed]);
+    } finally {
+      if (onClosed !== undefined) archive.off('close', onClosed);
+    }
   })();
 
   try {
@@ -144,6 +175,18 @@ export async function streamZip(
   } finally {
     options.signal.removeEventListener('abort', onAbort);
   }
-  if (failure !== undefined) throw failure;
+  if (failure !== undefined) {
+    // When the upload fails on its own (AccessDenied, NoSuchBucket, SlowDown), lib-storage stops
+    // reading and the archive is destroyed with an AbortError that can win the race in fail().
+    // Report the upload's error then; a caller abort keeps its own reason.
+    if (
+      uploadError !== undefined &&
+      failure.name === 'AbortError' &&
+      failure !== options.signal.reason
+    ) {
+      throw uploadError;
+    }
+    throw failure;
+  }
   return archive.pointer();
 }

@@ -36,6 +36,9 @@ export interface UploadStreamOptions {
  */
 export const UPLOAD_STREAM_QUEUE_SIZE = 2;
 
+/** After an abort, how long lib-storage may take to abort its own upload before upload.abort(). */
+export const UPLOAD_ABORT_FALLBACK_MS = 30_000;
+
 /** Objects most DeleteObjects calls may name (S3's limit). */
 export const DELETE_OBJECTS_BATCH = 1000;
 
@@ -139,13 +142,26 @@ export class S3ObjectStore implements ObjectStore {
       // A failed upload is aborted, so no parts linger (the lifecycle rule is only a backstop).
       leavePartsOnError: false,
     });
-    const abort = () => void upload.abort().catch(() => undefined);
+    // On abort, end the body rather than calling upload.abort(): lib-storage's reader then
+    // throws, waits for the parts in flight and aborts its own upload id before done() rejects,
+    // so cleanup is deterministic and never touches another attempt's upload of the same key.
+    // upload.abort() is only a fallback for a part that hangs.
+    let fallback: NodeJS.Timeout | undefined;
+    const abort = () => {
+      body.destroy(options.signal?.reason instanceof Error ? options.signal.reason : undefined);
+      fallback = setTimeout(
+        () => void upload.abort().catch(() => undefined),
+        UPLOAD_ABORT_FALLBACK_MS,
+      );
+      fallback.unref();
+    };
     options.signal?.addEventListener('abort', abort, { once: true });
     try {
       options.signal?.throwIfAborted();
       await upload.done();
     } finally {
       options.signal?.removeEventListener('abort', abort);
+      clearTimeout(fallback);
     }
   }
 

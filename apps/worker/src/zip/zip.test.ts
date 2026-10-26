@@ -272,6 +272,21 @@ describe('zip consumer', () => {
     expect(store.objects.has(zipKey(jobId))).toBe(false);
   });
 
+  it('fails the job instead of hanging when the upload fails', async () => {
+    const { jobId, body } = await job([300_000, 300_000]);
+    store.failUploads = true;
+    try {
+      await handler()(body, context());
+    } finally {
+      store.failUploads = false;
+    }
+    const row = await jobRow(jobId);
+    expect(row).toMatchObject({ status: 'failed', resultKey: null });
+    // The S3 error, not the AbortError of the archive lib-storage stopped reading.
+    expect(row.errorMessage).toBe('Streaming failed: NoSuchBucket');
+    expect(store.objects.has(zipKey(jobId))).toBe(false);
+  }, 10_000);
+
   it('leaves the job to the next delivery when the message is lost or the worker stops', async () => {
     const { jobId, body } = await job();
     const abort = new AbortController();
