@@ -21,6 +21,23 @@ export function bucketedExpiry(now: Date, ttlSeconds: number, bucketSeconds: num
 }
 
 /**
+ * SigV4 signing date (X-Amz-Date) of a presigned media URL issued at `now`:
+ * `floor(now / bucket) * bucket`, on whole seconds (ADR 0008 section 2). The date is part of a
+ * presigned URL, so with {@link bucketedExpiry} every URL for one key issued within one bucket
+ * window is byte-identical. X-Amz-Expires is `bucketedExpiry - bucketedSigningDate` (at most
+ * ttl + 2 x bucket), capped at S3_PRESIGN_MAX_EXPIRES_SECONDS. Use
+ * SIGNED_URL_EXPIRY_BUCKET_SECONDS as the bucket. CloudFront URLs carry no signing date.
+ */
+export function bucketedSigningDate(now: Date, bucketSeconds: number): Date {
+  if (!Number.isInteger(bucketSeconds) || bucketSeconds < 1) {
+    throw new RangeError(`bucketSeconds must be a positive integer, got ${bucketSeconds}`);
+  }
+  const ms = now.getTime();
+  if (!Number.isFinite(ms)) throw new RangeError('now must be a valid date');
+  return new Date(Math.floor(ms / 1000 / bucketSeconds) * bucketSeconds * 1000);
+}
+
+/**
  * The query parameter CloudFront forwards to S3 (through OAC) to set the response's
  * Content-Disposition. infra's `/media/*` behavior must forward it to the origin and include it
  * in the cache key; the API adds it to the URL before signing.

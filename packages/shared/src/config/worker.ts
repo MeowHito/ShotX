@@ -89,6 +89,45 @@ const workerEnvSchema = z
     /** Scratch space for originals, video output and zips (ECS ephemeral storage). */
     WORKER_TMP_DIR: z.string().min(1).optional(),
     LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
+    // --- Sweeps (ADR 0008 section 3, "Lost jobs"; job contracts at SCHEDULED_JOB_TYPES) ---------
+    /**
+     * media.sweep re-sends `original.completed` for a `processing` row this long after its
+     * pipeline was last started. Longer than WORKER_MEDIA_MAX_PROCESSING_SECONDS, so a job that is
+     * still running is not duplicated (duplicates are safe, just wasteful: ffmpeg runs twice).
+     */
+    MEDIA_SWEEP_PROCESSING_AGE_SECONDS: int(15 * 60, 7 * SECONDS_PER_DAY).default(
+      6 * SECONDS_PER_HOUR,
+    ),
+    /**
+     * media.sweep checks `uploading` rows (upload_id set) this long after init for a completed
+     * object whose markCompleted was lost. Assumption: 1 h (an upload of one file rarely takes
+     * longer; a live upload is left alone anyway).
+     */
+    MEDIA_SWEEP_UPLOADING_AGE_SECONDS: int(5 * 60, 36 * SECONDS_PER_HOUR).default(SECONDS_PER_HOUR),
+    /** Most times media.sweep re-sends one file; then the row is left for the operator. */
+    MEDIA_SWEEP_MAX_REQUEUES: int(0, 20).default(3),
+    /** Rows media.sweep handles per run (each kind), bounding the burst it adds to `media`. */
+    MEDIA_SWEEP_BATCH_SIZE: int(1, 10_000).default(500),
+    /** faces.sweep re-sends `delete.faces` for a deletion still open this long after it was asked. */
+    FACES_SWEEP_DELETION_AGE_SECONDS: int(5 * 60, 7 * SECONDS_PER_DAY).default(SECONDS_PER_HOUR),
+    /**
+     * faces.sweep re-sends `index.file` / `index.folder` this long after it was last sent. Longer
+     * than WORKER_FACES_MAX_PROCESSING_SECONDS (a duplicate index costs Rekognition calls).
+     */
+    FACES_SWEEP_INDEX_AGE_SECONDS: int(15 * 60, 7 * SECONDS_PER_DAY).default(6 * SECONDS_PER_HOUR),
+    /** Most times faces.sweep re-sends `index.file` for one file. Deletions have no cap. */
+    FACES_SWEEP_MAX_REQUEUES: int(0, 20).default(3),
+    /** Messages faces.sweep sends per run, per kind. */
+    FACES_SWEEP_BATCH_SIZE: int(1, 10_000).default(500),
+    /** Rows per DELETE of auth.sessions.purge.daily (it runs until done or out of runtime). */
+    AUTH_SESSIONS_PURGE_BATCH_SIZE: int(1, 10_000).default(1_000),
+  })
+  .refine((e) => e.MEDIA_SWEEP_PROCESSING_AGE_SECONDS > e.WORKER_MEDIA_MAX_PROCESSING_SECONDS, {
+    error:
+      'MEDIA_SWEEP_PROCESSING_AGE_SECONDS must be longer than WORKER_MEDIA_MAX_PROCESSING_SECONDS',
+  })
+  .refine((e) => e.FACES_SWEEP_INDEX_AGE_SECONDS > e.WORKER_FACES_MAX_PROCESSING_SECONDS, {
+    error: 'FACES_SWEEP_INDEX_AGE_SECONDS must be longer than WORKER_FACES_MAX_PROCESSING_SECONDS',
   })
   .refine(
     (e) => e.QUEUE_BACKEND === 'bullmq' || e.WORKER_MEDIA_CONCURRENCY <= e.WORKER_MEDIA_BATCH_SIZE,
@@ -132,6 +171,24 @@ export interface WorkerVideoSettings {
   audioBitrateKbps: number;
 }
 
+/** Settings of media.sweep, faces.sweep and auth.sessions.purge.daily (seconds, counts). */
+export interface WorkerSweepSettings {
+  media: {
+    processingAgeSeconds: number;
+    uploadingAgeSeconds: number;
+    maxRequeues: number;
+    batchSize: number;
+  };
+  faces: {
+    deletionAgeSeconds: number;
+    indexAgeSeconds: number;
+    maxRequeues: number;
+    batchSize: number;
+  };
+  /** Rows per DELETE; the retention is RetentionConfig.authSessionRetentionDays. */
+  authSessionsPurgeBatchSize: number;
+}
+
 export interface WorkerSettings {
   consumers: Record<QueueName, WorkerConsumerSettings>;
   receiveWaitSeconds: number;
@@ -146,10 +203,12 @@ export interface WorkerSettings {
   /** Undefined: the operating system's temporary directory. */
   tmpDir: string | undefined;
   logLevel: LogLevel;
+  sweeps: WorkerSweepSettings;
 }
 
 /**
- * Reads the WORKER_* settings and LOG_LEVEL (worker only). Every key has a default. QUEUE_BACKEND
+ * Reads the WORKER_* settings, LOG_LEVEL and the sweep settings (MEDIA_SWEEP_*, FACES_SWEEP_*,
+ * AUTH_SESSIONS_PURGE_BATCH_SIZE) (worker only). Every key has a default. QUEUE_BACKEND
  * (default `sqs`) is read only to skip the concurrency <= batch size rule with `bullmq`.
  */
 export function loadWorkerSettings(env: Env): WorkerSettings {
@@ -181,5 +240,20 @@ export function loadWorkerSettings(env: Env): WorkerSettings {
     },
     tmpDir: e.WORKER_TMP_DIR,
     logLevel: e.LOG_LEVEL,
+    sweeps: {
+      media: {
+        processingAgeSeconds: e.MEDIA_SWEEP_PROCESSING_AGE_SECONDS,
+        uploadingAgeSeconds: e.MEDIA_SWEEP_UPLOADING_AGE_SECONDS,
+        maxRequeues: e.MEDIA_SWEEP_MAX_REQUEUES,
+        batchSize: e.MEDIA_SWEEP_BATCH_SIZE,
+      },
+      faces: {
+        deletionAgeSeconds: e.FACES_SWEEP_DELETION_AGE_SECONDS,
+        indexAgeSeconds: e.FACES_SWEEP_INDEX_AGE_SECONDS,
+        maxRequeues: e.FACES_SWEEP_MAX_REQUEUES,
+        batchSize: e.FACES_SWEEP_BATCH_SIZE,
+      },
+      authSessionsPurgeBatchSize: e.AUTH_SESSIONS_PURGE_BATCH_SIZE,
+    },
   };
 }

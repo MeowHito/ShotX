@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { formActionOrigins, mediaOrigins, uploadOrigins } from '../server/config';
+import { formActionOrigins, mediaBrowserOrigins } from '../server/config';
 import { buildCsp, securityHeaders } from './headers';
 
 function directives(csp: string): Record<string, string> {
@@ -76,13 +76,14 @@ describe('CSP', () => {
     expect(securityHeaders('x', false)['Strict-Transport-Security']).toBeUndefined();
   });
 
-  it('derives upload origins from the bucket, region and LocalStack endpoint', () => {
-    expect(uploadOrigins({ MEDIA_BUCKET: 'shotx-prod-media' })).toEqual([
+  it('derives AWS upload origins from the bucket, region and LocalStack endpoint', () => {
+    expect(mediaBrowserOrigins({ MEDIA_BUCKET: 'shotx-prod-media' }).upload).toEqual([
       'https://shotx-prod-media.s3.ap-southeast-1.amazonaws.com',
     ]);
-    expect(uploadOrigins({})).toEqual(['https://*.s3.ap-southeast-1.amazonaws.com']);
+    expect(mediaBrowserOrigins({}).upload).toEqual(['https://*.s3.ap-southeast-1.amazonaws.com']);
     expect(
-      uploadOrigins({ AWS_ENDPOINT_URL: 'http://localhost:4566', MEDIA_BUCKET: 'b-1' }),
+      mediaBrowserOrigins({ AWS_ENDPOINT_URL: 'http://localhost:4566', MEDIA_BUCKET: 'b-1' })
+        .upload,
     ).toEqual(['https://b-1.s3.ap-southeast-1.amazonaws.com', 'http://localhost:4566']);
   });
 });
@@ -98,9 +99,9 @@ describe('form-action', () => {
   });
 
   it('allows no other origin with API-issued tokens: LINE and Google are reached by links', () => {
-    expect(
-      formActionOrigins({ AUTH_PROVIDER: 'shotx', COGNITO_DOMAIN: cognitoDomain }),
-    ).toEqual([]);
+    expect(formActionOrigins({ AUTH_PROVIDER: 'shotx', COGNITO_DOMAIN: cognitoDomain })).toEqual(
+      [],
+    );
     const csp = directives(
       buildCsp({ nonce: 'n', isDev: false, https: true, uploadOrigins: [], formActionOrigins: [] }),
     );
@@ -111,35 +112,86 @@ describe('form-action', () => {
   });
 });
 
-describe('local media origins', () => {
-  const local = {
-    APP_STAGE: 'local',
-    NODE_ENV: 'development',
+describe('storage origins', () => {
+  const R2 = 'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com';
+  const r2 = {
+    APP_STAGE: 'prod',
+    NODE_ENV: 'production',
     MEDIA_URL_SIGNER: 's3-presign',
-    AWS_REGION: 'ap-southeast-1',
-    AWS_ENDPOINT_URL: 'http://localhost:4566',
-    AWS_ACCESS_KEY_ID: 'test',
-    AWS_SECRET_ACCESS_KEY: 'test',
+    STORAGE_ENDPOINT_URL: R2,
+    STORAGE_REGION: 'auto',
+    S3_FORCE_PATH_STYLE: 'true',
+    MEDIA_BUCKET: 'shotx-prod-media',
   };
+  const csp = (origins: { upload: string[]; media: string[] }) =>
+    directives(
+      buildCsp({
+        nonce: 'n',
+        isDev: false,
+        https: true,
+        publicBaseUrl: 'https://photos.example.com',
+        uploadOrigins: origins.upload,
+        mediaOrigins: origins.media,
+      }),
+    );
 
-  it('adds the LocalStack origin to img-src and media-src only with s3-presign', () => {
-    expect(mediaOrigins({ AWS_REGION: 'ap-southeast-1' })).toEqual([]);
-    const origins = mediaOrigins(local);
-    expect(origins).toEqual(['http://localhost:4566']);
-    const csp = buildCsp({
-      nonce: 'n',
-      isDev: true,
-      https: false,
-      uploadOrigins: [],
-      mediaOrigins: origins,
-    });
-    expect(csp).toMatch(/img-src [^;]*http:\/\/localhost:4566/);
-    expect(csp).toMatch(/media-src [^;]*http:\/\/localhost:4566/);
+  it('R2 (s3-presign on any stage): the endpoint for uploads, views, video and share fetches', () => {
+    // Read without storage keys: web never has them.
+    const origins = mediaBrowserOrigins(r2);
+    expect(origins).toEqual({ upload: [R2], media: [R2] });
+    const d = csp(origins);
+    expect(d['img-src']).toBe(`'self' https://photos.example.com ${R2} blob: data:`);
+    expect(d['media-src']).toBe(`'self' https://photos.example.com ${R2} blob:`);
+    // Once, although it is both the upload and the media origin.
+    expect(d['connect-src']).toBe(`'self' https://photos.example.com ${R2}`);
   });
 
-  it('refuses s3-presign outside APP_STAGE=local', () => {
-    expect(() => mediaOrigins({ ...local, APP_STAGE: 'prod', NODE_ENV: 'production' })).toThrow(
-      /needs APP_STAGE=local/,
+  it('R2 virtual-hosted: uploads go to the bucket host, signed URLs stay path-style', () => {
+    const origins = mediaBrowserOrigins({ ...r2, S3_FORCE_PATH_STYLE: 'false' });
+    expect(origins.upload).toEqual([
+      'https://shotx-prod-media.0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com',
+    ]);
+    expect(origins.media).toEqual([R2]);
+    expect(csp(origins)['connect-src']).toBe(
+      `'self' https://photos.example.com ${origins.upload[0]} ${R2}`,
     );
+  });
+
+  it('cloudfront: media is same-origin /media, so no extra origin anywhere but uploads', () => {
+    const origins = mediaBrowserOrigins({ MEDIA_BUCKET: 'shotx-prod-media' });
+    expect(origins.media).toEqual([]);
+    const d = csp(origins);
+    expect(d['img-src']).toBe("'self' https://photos.example.com blob: data:");
+    expect(d['media-src']).toBe("'self' https://photos.example.com blob:");
+    expect(d['connect-src']).toBe(
+      "'self' https://photos.example.com https://shotx-prod-media.s3.ap-southeast-1.amazonaws.com",
+    );
+  });
+
+  it('local: LocalStack as the storage endpoint over http', () => {
+    const origins = mediaBrowserOrigins({
+      APP_STAGE: 'local',
+      NODE_ENV: 'development',
+      MEDIA_URL_SIGNER: 's3-presign',
+      STORAGE_ENDPOINT_URL: 'http://localhost:4566',
+      STORAGE_REGION: 'ap-southeast-1',
+      S3_FORCE_PATH_STYLE: 'true',
+    });
+    expect(origins).toEqual({
+      upload: ['http://localhost:4566'],
+      media: ['http://localhost:4566'],
+    });
+  });
+
+  it('refuses s3-presign without an endpoint, and a private or plain-http endpoint outside local', () => {
+    expect(() => mediaBrowserOrigins({ MEDIA_URL_SIGNER: 's3-presign' })).toThrow(
+      /STORAGE_ENDPOINT_URL/,
+    );
+    expect(() =>
+      mediaBrowserOrigins({ ...r2, STORAGE_ENDPOINT_URL: 'http://localhost:4566' }),
+    ).toThrow(/STORAGE_ENDPOINT_URL must not be a localhost/);
+    expect(() =>
+      mediaBrowserOrigins({ ...r2, STORAGE_ENDPOINT_URL: 'http://r2.example.com' }),
+    ).toThrow(/must be https/);
   });
 });

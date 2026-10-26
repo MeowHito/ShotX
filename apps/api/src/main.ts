@@ -14,7 +14,7 @@ async function main(): Promise<void> {
   const config = loadApiConfig(env);
   const pool = createPool(loadDatabaseConfig(env));
   const redis = createRedis(config.redis);
-  const s3 = createS3Client(config.aws, config.storage);
+  const s3 = createS3Client(config.storage);
   const queue = queueSender(config);
   // BullMQ: Redis must be reachable before the API takes requests (bounded wait, then exit).
   await queue.start();
@@ -30,8 +30,8 @@ async function main(): Promise<void> {
     {
       config,
       db: createDb(pool),
-      storage: new S3ObjectStorage(s3, config.storage.bucket),
-      signer: mediaUrlSigner(config),
+      storage: new S3ObjectStorage(s3, config.storage.bucket, config.storage.originalsStorageClass),
+      signer: mediaUrlSigner(config, systemClock),
       rateLimiter: new RedisRateLimiter(redis, redisKeyPrefix(config)),
       tokenVerifier: tokenVerifier(config, systemClock),
       clock: systemClock,

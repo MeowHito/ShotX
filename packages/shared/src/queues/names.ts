@@ -1,8 +1,9 @@
 /**
- * Queues (SQS or BullMQ, see QUEUE_BACKENDS). On SQS each has a dead-letter queue. `media` receives S3 ObjectCreated notifications for
- * `originals/`, `faces` and `zip` receive jobs from the API and worker, and `jobs` receives
- * EventBridge Scheduler messages. This is the source of truth; infra imports it from
- * @shotx/shared.
+ * Queues (SQS or BullMQ, see QUEUE_BACKENDS). On SQS each has a dead-letter queue. `media`
+ * receives `original.completed` messages from the API and media.sweep, and on AWS also S3
+ * ObjectCreated notifications for `originals/`; `faces` and `zip` receive jobs from the API and
+ * worker, and `jobs` receives scheduled runs (EventBridge Scheduler on AWS, BullMQ job schedulers
+ * on the VPS). This is the source of truth; infra imports it from @shotx/shared.
  */
 export const QUEUE_NAMES = ['media', 'faces', 'zip', 'jobs'] as const;
 export type QueueName = (typeof QUEUE_NAMES)[number];
@@ -194,5 +195,42 @@ export const SCHEDULED_JOB_TYPES = [
   'faces.reconcile.daily',
   /** Reconcile storage_usage against the objects in S3. */
   'quota.reconcile.nightly',
+  /**
+   * Restart lost media work (ADR 0008 section 3, "Lost jobs"; WorkerSettings.sweeps.media):
+   * - `processing` rows (verified or not) whose pipeline was last started (`media_queued_at`, else
+   *   `created_at`) more than MEDIA_SWEEP_PROCESSING_AGE_SECONDS ago and that were re-sent fewer
+   *   than MEDIA_SWEEP_MAX_REQUEUES times: send `original.completed` again, setting
+   *   `media_queued_at = now()` and `media_requeues + 1` in the same guarded UPDATE first;
+   * - `uploading` rows with `upload_id` set created more than MEDIA_SWEEP_UPLOADING_AGE_SECONDS
+   *   ago whose multipart upload is gone (ListParts: NoSuchUpload) but whose object exists with
+   *   exactly `size_bytes` (HeadObject): the API crashed between CompleteMultipartUpload and
+   *   markCompleted. Complete them as markCompleted does (guarded by the upload id) and send
+   *   `original.completed`. A live upload or a missing object is left alone.
+   * The HeadObject recovery must also run in `quota.reconcile.nightly` before it expires an
+   * abandoned upload (releasing the reservation and deleting the object), so a completed object
+   * never becomes an orphan outside quota. Rows past the requeue cap are left as they are and
+   * logged at error level for the operator. At most MEDIA_SWEEP_BATCH_SIZE rows per run.
+   */
+  'media.sweep',
+  /**
+   * Restart lost faces work (ADR 0008 section 3; WorkerSettings.sweeps.faces):
+   * - `face_deletions` with `completed_at IS NULL` created more than
+   *   FACES_SWEEP_DELETION_AGE_SECONDS ago: send `delete.faces` again, with no cap (a deletion asked
+   *   for under PDPA must happen; nothing else would catch it, because the `faces` rows still
+   *   exist), and log `face_deletion.alert` when one is older than a day;
+   * - files with `faces_queued_at` older than FACES_SWEEP_INDEX_AGE_SECONDS and
+   *   `faces_requeues` below FACES_SWEEP_MAX_REQUEUES: send `index.file` again (bumping both);
+   * - folders with `face_index_queued_at` older than FACES_SWEEP_INDEX_AGE_SECONDS: send
+   *   `index.folder` again (bumping it).
+   * At most FACES_SWEEP_BATCH_SIZE messages of each kind per run.
+   */
+  'faces.sweep',
+  /**
+   * Delete `auth_sessions` rows whose `expires_at` is more than AUTH_SESSION_RETENTION_DAYS in
+   * the past, in batches of AUTH_SESSIONS_PURGE_BATCH_SIZE. Revoked rows go with their family's
+   * expiry, not earlier: a revoked row with a successor is what detects refresh-token reuse, and
+   * every row of a family has the same `expires_at`. No-op on the AWS stacks (Cognito).
+   */
+  'auth.sessions.purge.daily',
 ] as const;
 export type ScheduledJobType = (typeof SCHEDULED_JOB_TYPES)[number];

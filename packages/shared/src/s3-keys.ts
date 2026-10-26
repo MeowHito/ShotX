@@ -3,10 +3,11 @@ import { fileExtension } from './media-types';
 
 /**
  * S3 key layout of the media bucket. Every key that belongs to a photographer contains their id,
- * so storage and bandwidth can be attributed from CloudFront standard logs. Build keys only with
+ * so storage and bandwidth can be attributed (CloudFront standard logs on AWS; activity_events on R2). Build keys only with
  * the functions below; never concatenate them by hand.
  *
- *   originals/{photographerId}/{fileId}/{originalName}     Intelligent-Tiering
+ *   originals/{photographerId}/{fileId}/{originalName}     STORAGE_ORIGINALS_CLASS (Intelligent-
+ *                                                          Tiering on AWS, STANDARD on R2)
  *   derived/{photographerId}/{fileId}/{variant file}       thumb.webp, preview.webp, web.jpg,
  *                                                          poster.jpg, preview.mp4
  *   tmp/index/{fileId}/{attemptId}/{part}.jpg              part: full | t{n}   (ADR 0004)

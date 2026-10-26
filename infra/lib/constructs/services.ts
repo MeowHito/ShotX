@@ -560,6 +560,15 @@ export class Services extends Construct {
     );
     taskRoles.worker.addToPrincipalPolicy(
       new iam.PolicyStatement({
+        sid: 'UploadRecovery',
+        // media.sweep and quota.reconcile.nightly: ListParts tells a finished multipart upload
+        // (NoSuchUpload) from a live one before HeadObject and completing the file row.
+        actions: ['s3:ListMultipartUploadParts'],
+        resources: objects(S3_PREFIXES.originals),
+      }),
+    );
+    taskRoles.worker.addToPrincipalPolicy(
+      new iam.PolicyStatement({
         sid: 'FaceIndexScratch',
         // Rekognition reads the IndexFaces image with the caller's credentials, so the worker
         // must be able to read what it wrote here.
@@ -610,6 +619,8 @@ export class Services extends Construct {
     // Includes sqs:ChangeMessageVisibility, which the worker uses to heartbeat every job.
     for (const q of QUEUE_NAMES) queues[q].queue.grantConsumeMessages(taskRoles.worker);
     queues.faces.queue.grantSendMessages(taskRoles.worker);
+    // media.sweep re-sends `original.completed` for lost media work (ADR 0008 section 3).
+    queues.media.queue.grantSendMessages(taskRoles.worker);
 
     this.services = services;
     this.taskRoles = taskRoles;

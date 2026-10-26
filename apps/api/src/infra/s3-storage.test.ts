@@ -10,6 +10,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { mockClient } from 'aws-sdk-client-mock';
 import { afterEach, describe, expect, it } from 'vitest';
+import { loadMediaStorageConfig } from '@shotx/shared';
 import { createS3Client, S3ObjectStorage } from './s3-storage';
 
 // No test reaches AWS: the client's `send` is mocked, and presigning is local.
@@ -19,12 +20,13 @@ const key = 'originals/p/f/IMG.jpg';
 const noSuchUpload = () =>
   new NoSuchUpload({ message: 'gone', $metadata: { httpStatusCode: 404 } });
 
-function storage() {
-  const client = createS3Client(
-    { region: 'ap-southeast-1', endpointUrl: null },
-    { bucket: 'shotx-test-media', forcePathStyle: false },
-  );
-  return new S3ObjectStorage(client, 'shotx-test-media');
+function storage(storageClass: 'INTELLIGENT_TIERING' | 'STANDARD' = 'INTELLIGENT_TIERING') {
+  const config = loadMediaStorageConfig({
+    MEDIA_BUCKET: 'shotx-test-media',
+    AWS_REGION: 'ap-southeast-1',
+    STORAGE_ORIGINALS_CLASS: storageClass,
+  });
+  return new S3ObjectStorage(createS3Client(config), config.bucket, config.originalsStorageClass);
 }
 
 afterEach(() => s3Mock.reset());
@@ -38,6 +40,34 @@ describe('S3ObjectStorage', () => {
       Key: key,
       ContentType: 'image/jpeg',
       StorageClass: 'INTELLIGENT_TIERING',
+    });
+    s3Mock.reset();
+    s3Mock.on(CreateMultipartUploadCommand).resolves({ UploadId: 'u2' });
+    await storage('STANDARD').createMultipartUpload({ key, contentType: 'image/jpeg' });
+    expect(s3Mock.commandCalls(CreateMultipartUploadCommand)[0]?.args[0].input.StorageClass).toBe(
+      'STANDARD',
+    );
+  });
+
+  it('builds an R2 client with the explicit endpoint and keys, not the AWS chain', async () => {
+    const config = loadMediaStorageConfig({
+      APP_STAGE: 'prod',
+      MEDIA_BUCKET: 'shotx-prod-media',
+      AWS_REGION: 'ap-southeast-1',
+      AWS_ENDPOINT_URL: 'http://localhost:4566',
+      STORAGE_ENDPOINT_URL: 'https://0123456789abcdef.r2.cloudflarestorage.com',
+      STORAGE_REGION: 'auto',
+      STORAGE_ACCESS_KEY_ID: 'r2key',
+      STORAGE_SECRET_ACCESS_KEY: 'r2secret',
+      STORAGE_ORIGINALS_CLASS: 'STANDARD',
+    });
+    const client = createS3Client(config);
+    expect(await client.config.region()).toBe('auto');
+    const endpoint = await client.config.endpoint?.();
+    expect(endpoint?.hostname).toBe('0123456789abcdef.r2.cloudflarestorage.com');
+    expect(await client.config.credentials()).toMatchObject({
+      accessKeyId: 'r2key',
+      secretAccessKey: 'r2secret',
     });
   });
 
@@ -115,7 +145,7 @@ describe('S3ObjectStorage', () => {
       requestChecksumCalculation: 'WHEN_REQUIRED',
     });
     const url = new URL(
-      await new S3ObjectStorage(client, 'shotx-test-media').presignUploadPart({
+      await new S3ObjectStorage(client, 'shotx-test-media', 'STANDARD').presignUploadPart({
         key,
         uploadId: 'u1',
         partNumber: 3,

@@ -2,10 +2,12 @@
  * Security headers of every page and route handler (set in src/proxy.ts).
  *
  * - Scripts: only Next's own, tagged with the per-request nonce ('strict-dynamic').
- * - Images and video: same origin. Media is served by CloudFront under `/media/*` on the main
- *   domain, so signed thumbnail and preview URLs are 'self'; PUBLIC_BASE_URL is listed too for
- *   setups where the app runs on another origin (local development).
- * - connect-src: the BFF ('self') and the S3 upload origin(s) the browser PUTs parts to.
+ * - Images and video: the site ('self', plus PUBLIC_BASE_URL for setups where the app runs on
+ *   another origin) and the media origins: with MEDIA_URL_SIGNER=s3-presign signed URLs point at
+ *   the storage endpoint (R2 on the VPS, LocalStack locally); with `cloudfront` they are
+ *   same-origin `/media/*` and nothing is added (loadMediaBrowserOrigins).
+ * - connect-src: the BFF ('self'), the upload origin(s) the browser PUTs parts to, and the media
+ *   origins (the iOS multi-save fetches signed downloads for navigator.share).
  * - form-action: 'self', plus the Cognito domain with AUTH_PROVIDER=cognito (the logout form
  *   redirects there). With API-issued tokens nothing else: LINE and Google are reached through
  *   links to /auth/login (navigations), never as a form's redirect target (formActionOrigins).
@@ -21,8 +23,9 @@ export interface CspOptions {
   /** Served over https: ask browsers to upgrade any http subresource. */
   https: boolean;
   publicBaseUrl?: string;
+  /** Origins the browser PUTs upload parts to (MediaBrowserOrigins.upload). */
   uploadOrigins: readonly string[];
-  /** Origins of signed media URLs other than the site itself (LocalStack in development). */
+  /** Origins of signed media URLs other than the site itself (MediaBrowserOrigins.media). */
   mediaOrigins?: readonly string[];
   /** Origins a form submission may redirect to besides 'self' (formActionOrigins). */
   formActionOrigins?: readonly string[];
@@ -46,6 +49,7 @@ export function buildCsp(options: CspOptions): string {
     'connect-src': unique([
       ...self,
       ...options.uploadOrigins,
+      ...(options.mediaOrigins ?? []),
       ...(options.isDev ? ['ws:', 'wss:'] : []),
     ]),
     'form-action': unique(["'self'", ...(options.formActionOrigins ?? [])]),

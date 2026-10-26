@@ -111,6 +111,34 @@ describe('migrations', () => {
     expect(at('"users_admin_iff_admins_pool"')).toBe(-1);
   });
 
+  it('0006 is sweeps_outbox: additive columns, partial indexes, set-null successor key', () => {
+    expect(journal.entries[6]?.tag).toBe('0006_sweeps_outbox');
+    const list = statements(sqlOf('0006_sweeps_outbox'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    // Nothing is dropped except the successor foreign key, which is re-added with SET NULL.
+    expect(list.filter((s) => /\bDROP\b/.test(s))).toEqual([
+      'ALTER TABLE "auth_sessions" DROP CONSTRAINT "auth_sessions_replaced_by_id_auth_sessions_id_fk";',
+    ]);
+    expect(list[at('ADD CONSTRAINT "auth_sessions_replaced_by_id_auth_sessions_id_fk"')]).toContain(
+      'ON DELETE set null',
+    );
+    for (const column of ['media_requeues', 'faces_requeues']) {
+      expect(list[at(`ADD COLUMN "${column}"`)], column).toContain('DEFAULT 0 NOT NULL');
+    }
+    for (const column of ['media_queued_at', 'faces_queued_at', 'face_index_queued_at']) {
+      expect(list[at(`ADD COLUMN "${column}"`)], column).not.toContain('NOT NULL');
+    }
+    for (const name of [
+      'files_uploading_created_idx',
+      'files_processing_idx',
+      'files_faces_pending_idx',
+      'folders_face_index_pending_idx',
+    ]) {
+      expect(list[at(`CREATE INDEX "${name}"`)], name).toContain(' WHERE ');
+    }
+    expect(at('"files_requeues_nonnegative"')).toBeGreaterThan(at('ADD COLUMN "faces_requeues"'));
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

@@ -35,6 +35,18 @@ export const SCHEDULED_JOB_ENV = {
     cron: 'SCHEDULE_QUOTA_RECONCILE_NIGHTLY_CRON',
     enabled: 'SCHEDULE_QUOTA_RECONCILE_NIGHTLY_ENABLED',
   },
+  'media.sweep': {
+    cron: 'SCHEDULE_MEDIA_SWEEP_CRON',
+    enabled: 'SCHEDULE_MEDIA_SWEEP_ENABLED',
+  },
+  'faces.sweep': {
+    cron: 'SCHEDULE_FACES_SWEEP_CRON',
+    enabled: 'SCHEDULE_FACES_SWEEP_ENABLED',
+  },
+  'auth.sessions.purge.daily': {
+    cron: 'SCHEDULE_AUTH_SESSIONS_PURGE_DAILY_CRON',
+    enabled: 'SCHEDULE_AUTH_SESSIONS_PURGE_DAILY_ENABLED',
+  },
 } as const satisfies Record<ScheduledJobType, { cron: string; enabled: string }>;
 
 export interface ScheduledJobSchedule {
@@ -45,7 +57,9 @@ export interface ScheduledJobSchedule {
 
 /**
  * Defaults: Asia/Bangkok, and the cron expressions of infra/cdk.json translated from EventBridge
- * `cron(m h dom mon dow year)` to five fields (year dropped, `?` as `*`).
+ * `cron(m h dom mon dow year)` to five fields (year dropped, `?` as `*`). The ADR 0008 types
+ * (media.sweep, faces.sweep, auth.sessions.purge.daily) are scheduled on the AWS stacks too, as
+ * `cron(7,22,37,52 * * * ? *)`, `cron(20 * * * ? *)` and `cron(0 5 * * ? *)`.
  */
 export const SCHEDULED_JOB_DEFAULTS = {
   timezone: 'Asia/Bangkok',
@@ -56,6 +70,10 @@ export const SCHEDULED_JOB_DEFAULTS = {
     'faces.expire.daily': { cron: '0 2 * * *', enabled: true },
     'faces.reconcile.daily': { cron: '30 4 * * *', enabled: true },
     'quota.reconcile.nightly': { cron: '30 3 * * *', enabled: true },
+    // ADR 0008 section 3. Every 15 minutes, off the hourly rollup's minute 5.
+    'media.sweep': { cron: '7,22,37,52 * * * *', enabled: true },
+    'faces.sweep': { cron: '20 * * * *', enabled: true },
+    'auth.sessions.purge.daily': { cron: '0 5 * * *', enabled: true },
   },
 } as const satisfies {
   timezone: string;

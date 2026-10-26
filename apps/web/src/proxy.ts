@@ -2,11 +2,7 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { cookieNames } from './lib/auth/session';
 import { SERVER_CALL_HEADERS } from './lib/bff/client-ip';
 import { buildCsp, securityHeaders } from './lib/security/headers';
-import {
-  processFormActionOrigins,
-  processMediaOrigins,
-  uploadOrigins,
-} from './lib/server/config';
+import { processFormActionOrigins, processMediaBrowserOrigins } from './lib/server/config';
 
 /**
  * Runs before every page and route handler (not static assets or /healthz):
@@ -22,13 +18,14 @@ export function proxy(request: NextRequest) {
   const env = process.env;
   const publicBaseUrl = env.PUBLIC_BASE_URL || undefined;
   const https = (publicBaseUrl ?? request.nextUrl.origin).startsWith('https://');
+  const storage = processMediaBrowserOrigins();
   const csp = buildCsp({
     nonce,
     isDev: env.NODE_ENV === 'development',
     https,
     publicBaseUrl,
-    uploadOrigins: uploadOrigins(env),
-    mediaOrigins: processMediaOrigins(),
+    uploadOrigins: storage.upload,
+    mediaOrigins: storage.media,
     formActionOrigins: processFormActionOrigins(),
     // Only the share page runs the face detector.
     allowWasm: request.nextUrl.pathname.startsWith('/s/'),

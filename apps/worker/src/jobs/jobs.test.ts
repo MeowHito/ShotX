@@ -1,3 +1,4 @@
+import { TEST_DESTINATIONS, testJobQueues } from '../testing/jobs';
 import { randomUUID } from 'node:crypto';
 import {
   consents,
@@ -26,7 +27,7 @@ import {
   usageOf,
 } from '../testing/database';
 import { testSubscriptionDeps } from '../testing/billing';
-import { MemoryObjectStore } from '../testing/memory-aws';
+import { MemoryObjectStore, MemoryQueueClient } from '../testing/memory-aws';
 import type { JobContext } from './context';
 import { createJobsHandler } from './handler';
 import { MemoryJobRunLedger } from './ledger';
@@ -46,6 +47,8 @@ function jobContext(
   return {
     db,
     store,
+    queues: new MemoryQueueClient(),
+    destinations: { ...TEST_DESTINATIONS },
     faces: provider,
     log,
     now: Date.now,
@@ -495,6 +498,7 @@ describe('scheduled jobs', () => {
       const store = new MemoryObjectStore();
       const ledger = new MemoryJobRunLedger();
       const handler = createJobsHandler({
+        ...testJobQueues(),
         db,
         store,
         faces: newProvider(),
@@ -551,6 +555,7 @@ describe('scheduled jobs', () => {
         markDone: vi.fn(() => Promise.resolve()),
       };
       const handler = createJobsHandler({
+        ...testJobQueues(),
         db,
         store: new MemoryObjectStore(),
         faces: newProvider(),
@@ -584,6 +589,7 @@ describe('scheduled jobs', () => {
 
     it('runs subscriptions.transition.daily (Phase 4) and rejects invalid messages', async () => {
       const handler = createJobsHandler({
+        ...testJobQueues(),
         db,
         store: new MemoryObjectStore(),
         faces: newProvider(),

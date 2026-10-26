@@ -8,21 +8,21 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import type { AwsConfig, MediaStorageConfig } from '@shotx/shared';
+import {
+  type MediaStorageConfig,
+  type OriginalsStorageClass,
+  storageS3ClientOptions,
+} from '@shotx/shared';
 import type { ObjectStorage, UploadedPart } from '../tokens';
 
 /**
- * The S3 client for the media bucket. Checksums only when required: otherwise SDK defaults put
- * `x-amz-checksum-*` into presigned part URLs and browsers' PUTs would fail.
+ * The S3 client for the media bucket (R2, LocalStack, MinIO or AWS S3), from the shared
+ * storageS3ClientOptions: an explicit endpoint and keys whenever STORAGE_ENDPOINT_URL is set (never
+ * AWS_ENDPOINT_URL or the default chain there), and checksums only when required (SDK defaults put
+ * `x-amz-checksum-*` into presigned part URLs and browsers' PUTs would fail).
  */
-export function createS3Client(aws: AwsConfig, storage: MediaStorageConfig): S3Client {
-  return new S3Client({
-    region: aws.region,
-    ...(aws.endpointUrl === null ? {} : { endpoint: aws.endpointUrl }),
-    forcePathStyle: storage.forcePathStyle,
-    requestChecksumCalculation: 'WHEN_REQUIRED',
-    responseChecksumValidation: 'WHEN_REQUIRED',
-  });
+export function createS3Client(storage: Pick<MediaStorageConfig, 'client'>): S3Client {
+  return new S3Client(storageS3ClientOptions(storage));
 }
 
 function errorName(error: unknown): string | undefined {
@@ -45,6 +45,8 @@ export class S3ObjectStorage implements ObjectStorage {
   constructor(
     private readonly client: S3Client,
     private readonly bucket: string,
+    /** STORAGE_ORIGINALS_CLASS (R2 accepts only STANDARD and STANDARD_IA). */
+    private readonly originalsStorageClass: OriginalsStorageClass,
   ) {}
 
   async createMultipartUpload(input: { key: string; contentType: string }): Promise<string> {
@@ -53,7 +55,7 @@ export class S3ObjectStorage implements ObjectStorage {
         Bucket: this.bucket,
         Key: input.key,
         ContentType: input.contentType,
-        StorageClass: 'INTELLIGENT_TIERING',
+        StorageClass: this.originalsStorageClass,
       }),
     );
     if (out.UploadId === undefined || out.UploadId === '') {

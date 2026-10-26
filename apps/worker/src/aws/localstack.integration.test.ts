@@ -1,5 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { CreateBucketCommand, ListMultipartUploadsCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  CompleteMultipartUploadCommand,
+  CreateBucketCommand,
+  CreateMultipartUploadCommand,
+  ListMultipartUploadsCommand,
+  S3Client,
+  UploadPartCommand,
+} from '@aws-sdk/client-s3';
 import {
   CreateQueueCommand,
   DeleteQueueCommand,
@@ -146,6 +153,39 @@ describe.skipIf(!endpoint)('S3 and SQS adapters against LocalStack', () => {
     await store.put('tmp/reconcile/x.json', Buffer.from('{"a":1}'), 'application/json');
     expect(Buffer.from((await store.get('tmp/reconcile/x.json'))!).toString()).toBe('{"a":1}');
     expect(await store.get('tmp/reconcile/missing.json')).toBeNull();
+  });
+
+  it('tells an open multipart upload from a completed or aborted one (ListParts)', async () => {
+    const key = `originals/${randomUUID()}/${randomUUID()}/a.jpg`;
+    const open = await s3.send(new CreateMultipartUploadCommand({ Bucket: bucket, Key: key }));
+    expect(await store.multipartUploadExists(key, open.UploadId!)).toBe(true);
+    const part = await s3.send(
+      new UploadPartCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: open.UploadId!,
+        PartNumber: 1,
+        Body: randomBytes(1024),
+      }),
+    );
+    await s3.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: open.UploadId!,
+        MultipartUpload: { Parts: [{ PartNumber: 1, ETag: part.ETag! }] },
+      }),
+    );
+    // Completed: the upload is gone, the object exists with its size (media.sweep's recovery case).
+    expect(await store.multipartUploadExists(key, open.UploadId!)).toBe(false);
+    expect(await store.head(key)).toEqual({ size: 1024 });
+
+    const aborted = await s3.send(
+      new CreateMultipartUploadCommand({ Bucket: bucket, Key: `${key}.b` }),
+    );
+    await store.abortMultipartUpload(`${key}.b`, aborted.UploadId!);
+    expect(await store.multipartUploadExists(`${key}.b`, aborted.UploadId!)).toBe(false);
+    expect(await store.head(`${key}.b`)).toBeNull();
   });
 
   it('sends messages in SendMessageBatch calls of 10', async () => {

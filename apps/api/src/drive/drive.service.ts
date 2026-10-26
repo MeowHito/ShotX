@@ -694,8 +694,8 @@ export class DriveService {
   /**
    * Turns face indexing of a folder subtree on (PDPA: the photographer confirmed attendees were
    * informed; stored as face_index_informed_at) or extends it to max(current, now +
-   * FACE_INDEX_EXPIRY_DAYS), or turns it off. Turning on a folder without an active index sends
-   * `index.folder` after the commit; if the send fails, the change is undone and the request fails,
+   * FACE_INDEX_EXPIRY_DAYS), or turns it off. Turning on a folder without an active index stamps
+   * face_index_queued_at in the same transaction and sends `index.folder` after the commit; if the send fails, the change is undone and the request fails,
    * so a retry sends it again. Turning off always sends `unindex.folder` (idempotent; the daily
    * expiry job also catches anything a failed send left behind).
    */
@@ -711,7 +711,8 @@ export class DriveService {
         if (current === null) throw notFound('Folder');
         const [updated] = await tx
           .update(folders)
-          .set({ faceIndexEnabled: false, faceIndexExpiresAt: null })
+          // No index.folder is outstanding once indexing is off (faces.sweep must not re-send it).
+          .set({ faceIndexEnabled: false, faceIndexExpiresAt: null, faceIndexQueuedAt: null })
           .where(and(eq(folders.id, id), eq(folders.ownerId, ownerId)))
           .returning();
         if (updated === undefined) throw new Error('Folder vanished inside its transaction');
@@ -740,9 +741,17 @@ export class DriveService {
         current.faceIndexExpiresAt !== null && current.faceIndexExpiresAt > target
           ? current.faceIndexExpiresAt
           : target;
+      // Outbox mark (migration 0006): index.folder will be sent after the commit; faces.sweep
+      // re-sends it if the message is lost, the worker clears it when the fan-out is done.
+      const sendsIndex = !isFaceIndexActive(current, now);
       const [updated] = await tx
         .update(folders)
-        .set({ faceIndexEnabled: true, faceIndexInformedAt: now, faceIndexExpiresAt: expiresAt })
+        .set({
+          faceIndexEnabled: true,
+          faceIndexInformedAt: now,
+          faceIndexExpiresAt: expiresAt,
+          ...(sendsIndex ? { faceIndexQueuedAt: now } : {}),
+        })
         .where(and(eq(folders.id, id), eq(folders.ownerId, ownerId)))
         .returning();
       if (updated === undefined) throw new Error('Folder vanished inside its transaction');
@@ -759,6 +768,7 @@ export class DriveService {
             faceIndexEnabled: before.faceIndexEnabled,
             faceIndexInformedAt: before.faceIndexInformedAt,
             faceIndexExpiresAt: before.faceIndexExpiresAt,
+            faceIndexQueuedAt: before.faceIndexQueuedAt,
           })
           .where(
             and(

@@ -1,3 +1,4 @@
+import { testJobQueues } from '../testing/jobs';
 import { randomUUID } from 'node:crypto';
 import { faceDeletions, faces, files, folders, users } from '@shotx/db';
 import { faceCollectionId, IndexPhotoError } from '@shotx/face';
@@ -275,6 +276,7 @@ describe('faces consumer', () => {
         db,
         store,
         faces: provider,
+        ...testJobQueues(queues),
         log: silentLogger,
         now: () => now,
         batchSize: 50,
@@ -363,6 +365,91 @@ describe('faces consumer', () => {
     });
   });
 
+  describe('outbox marks (faces_queued_at, face_index_queued_at)', () => {
+    const marked = (at = new Date(Date.now() - 60_000)) => ({
+      facesQueuedAt: at,
+      facesRequeues: 2,
+    });
+
+    it('index.file clears its mark and requeue counter when it ends, whatever the outcome', async () => {
+      const { file } = await indexedFolderWithPhoto();
+      await db.update(files).set(marked()).where(eq(files.id, file.id));
+      await createFacesHandler(deps())(indexJob(file.id), context());
+      expect(await fileById(db, file.id)).toMatchObject({
+        facesQueuedAt: null,
+        facesRequeues: 0,
+      });
+      expect((await fileById(db, file.id))?.faceCount).not.toBeNull();
+
+      // Skipped outcomes end the job too (here: not covered, root file).
+      const root = await readyPhoto((await fileById(db, file.id))!.ownerId, null);
+      await db.update(files).set(marked()).where(eq(files.id, root.id));
+      await createFacesHandler(deps())(indexJob(root.id), context());
+      expect((await fileById(db, root.id))?.facesQueuedAt).toBeNull();
+    });
+
+    it('keeps the mark when the job fails (a retry or faces.sweep re-sends)', async () => {
+      const { file } = await indexedFolderWithPhoto();
+      await db.update(files).set(marked()).where(eq(files.id, file.id));
+      provider.indexFaces = () => Promise.reject(new Error('Rekognition down'));
+      await expect(createFacesHandler(deps())(indexJob(file.id), context())).rejects.toThrow();
+      expect(await fileById(db, file.id)).toMatchObject({ facesRequeues: 2 });
+      expect((await fileById(db, file.id))?.facesQueuedAt).toBeInstanceOf(Date);
+    });
+
+    it('keeps a newer mark set while the job ran (that send starts its own job)', async () => {
+      const { file } = await indexedFolderWithPhoto();
+      await db.update(files).set(marked()).where(eq(files.id, file.id));
+      const newer = new Date();
+      // A fan-out re-marks the file while this index.file job runs.
+      const collections = new CollectionRegistry(provider);
+      const ensure = collections.ensure.bind(collections);
+      collections.ensure = async (id) => {
+        await db.update(files).set({ facesQueuedAt: newer }).where(eq(files.id, file.id));
+        return ensure(id);
+      };
+      await createFacesHandler(deps({}, { collections }))(indexJob(file.id), context());
+      expect((await fileById(db, file.id))?.faceCount).not.toBeNull();
+      expect((await fileById(db, file.id))?.facesQueuedAt?.getTime()).toBe(newer.getTime());
+    });
+
+    it('index.folder marks the files it sends and clears the folder mark when done', async () => {
+      const { ownerId, folder, file } = await indexedFolderWithPhoto();
+      const second = await readyPhoto(ownerId, folder.id);
+      const third = await readyPhoto(ownerId, folder.id); // batchSize 2: two batches
+      await db
+        .update(folders)
+        .set({ faceIndexQueuedAt: new Date(Date.now() - 60_000) })
+        .where(eq(folders.id, folder.id));
+      const body = serializeQueueMessage('faces', { type: 'index.folder', folderId: folder.id });
+      await createFacesHandler(deps())(body, context());
+      for (const id of [file.id, second.id, third.id]) {
+        expect((await fileById(db, id))?.facesQueuedAt).toBeInstanceOf(Date);
+      }
+      const [row] = await db
+        .select({ queuedAt: folders.faceIndexQueuedAt })
+        .from(folders)
+        .where(eq(folders.id, folder.id));
+      expect(row?.queuedAt).toBeNull();
+    });
+
+    it('index.folder clears the folder mark with the flag off or the folder gone too', async () => {
+      const { folder } = await indexedFolderWithPhoto();
+      await db
+        .update(folders)
+        .set({ faceIndexQueuedAt: new Date(Date.now() - 60_000) })
+        .where(eq(folders.id, folder.id));
+      const body = serializeQueueMessage('faces', { type: 'index.folder', folderId: folder.id });
+      await createFacesHandler(deps({}, { features: { faceSearch: false } }))(body, context());
+      expect(queues.sent).toEqual([]);
+      const [row] = await db
+        .select({ queuedAt: folders.faceIndexQueuedAt })
+        .from(folders)
+        .where(eq(folders.id, folder.id));
+      expect(row?.queuedAt).toBeNull();
+    });
+  });
+
   describe('unindex.folder and faces.expire.daily', () => {
     it('deletes faces no active index covers, even with the flag off, and keeps covered ones', async () => {
       const { ownerId, folder, file } = await indexedFolderWithPhoto(90 * DAY);
@@ -404,6 +491,7 @@ describe('faces consumer', () => {
         db,
         store,
         faces: provider,
+        ...testJobQueues(queues),
         log: silentLogger,
         now: Date.now,
         batchSize: 2,

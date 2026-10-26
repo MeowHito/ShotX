@@ -20,14 +20,27 @@ awslocal s3api put-public-access-block --bucket "${BUCKET}" --public-access-bloc
   BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 awslocal s3api put-bucket-ownership-controls --bucket "${BUCKET}" \
   --ownership-controls 'Rules=[{ObjectOwnership=BucketOwnerEnforced}]'
+# Same rules as the R2 bucket (deploy/r2/rules.ts buildCorsRules), main origin only: PUT for
+# presigned upload parts (Content-Type allowed, ETag exposed) and GET/HEAD for the share sheet's
+# fetch of signed downloads (navigator.share; simple requests, no credentials).
+CORS_MAX_AGE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["context"]["shotx"]["storage"]["uploadCorsMaxAgeSeconds"])' "${CDK_JSON}")
 awslocal s3api put-bucket-cors --bucket "${BUCKET}" --cors-configuration "{
-  \"CORSRules\": [{
-    \"AllowedOrigins\": [\"${WEB_ORIGIN}\"],
-    \"AllowedMethods\": [\"PUT\"],
-    \"AllowedHeaders\": [\"*\"],
-    \"ExposeHeaders\": [\"ETag\"],
-    \"MaxAgeSeconds\": 3000
-  }]
+  \"CORSRules\": [
+    {
+      \"ID\": \"upload-parts\",
+      \"AllowedOrigins\": [\"${WEB_ORIGIN}\"],
+      \"AllowedMethods\": [\"PUT\"],
+      \"AllowedHeaders\": [\"content-type\"],
+      \"ExposeHeaders\": [\"ETag\"],
+      \"MaxAgeSeconds\": ${CORS_MAX_AGE}
+    },
+    {
+      \"ID\": \"share-downloads\",
+      \"AllowedOrigins\": [\"${WEB_ORIGIN}\"],
+      \"AllowedMethods\": [\"GET\", \"HEAD\"],
+      \"MaxAgeSeconds\": ${CORS_MAX_AGE}
+    }
+  ]
 }"
 
 # Lifecycle rules (stored by LocalStack for parity; expiry isn't enforced locally).

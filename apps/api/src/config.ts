@@ -64,9 +64,41 @@ export const API_DEFAULT_PORT = 4000;
 /** Request limits of the API (loadApiLimitsConfig). */
 export type ApiLimits = ApiLimitsConfig;
 
-/** The queues the API sends to: face index/unindex/deletion jobs and zip jobs. */
-export const API_QUEUES = ['faces', 'zip'] as const;
+/**
+ * The queues the API may send to: `original.completed` after an upload completes (ADR 0008
+ * section 2; BullMQ only, see API_SQS_QUEUES), face index/unindex/deletion jobs and zip jobs.
+ */
+export const API_QUEUES = ['media', 'faces', 'zip'] as const;
 export type ApiQueue = (typeof API_QUEUES)[number];
+
+/**
+ * The queues the API sends to on SQS (AWS stacks): S3 ObjectCreated notifications feed `media`
+ * there, and the api task has neither MEDIA_QUEUE_URL nor a send grant on it, so `media` is not
+ * an SQS destination of the api.
+ */
+export const API_SQS_QUEUES = ['faces', 'zip'] as const satisfies readonly ApiQueue[];
+export type ApiSqsQueue = (typeof API_SQS_QUEUES)[number];
+
+/** QUEUE_BACKEND of the api: SQS URLs of API_SQS_QUEUES, or BullMQ settings of API_QUEUES. */
+export type ApiQueueConfig =
+  | Extract<QueueBackendConfig<ApiSqsQueue>, { backend: 'sqs' }>
+  | Extract<QueueBackendConfig<ApiQueue>, { backend: 'bullmq' }>;
+
+function loadApiQueueConfig(env: Env): ApiQueueConfig {
+  const sqs = loadQueueBackendConfig(env, API_SQS_QUEUES);
+  if (sqs.backend === 'sqs') return sqs;
+  const bullmq = loadQueueBackendConfig(env, API_QUEUES);
+  if (bullmq.backend !== 'bullmq') throw new Error('QUEUE_BACKEND changed while loading');
+  return bullmq;
+}
+
+/**
+ * True when the api starts the media pipeline itself (`original.completed` to `media`): with
+ * BullMQ (R2 has no bucket notifications). On SQS, S3 ObjectCreated does it.
+ */
+export function apiSendsMediaJobs(config: Pick<ApiConfig, 'queues'>): boolean {
+  return config.queues.backend === 'bullmq';
+}
 
 export interface ApiConfig {
   app: AppConfig;
@@ -105,7 +137,7 @@ export interface ApiConfig {
   face: FaceConfig;
   faceUpload: FaceSearchUploadConfig;
   /** QUEUE_BACKEND: SQS queue URLs, or BullMQ prefix and per-queue job settings. */
-  queues: QueueBackendConfig<ApiQueue>;
+  queues: ApiQueueConfig;
   /** argon2id parameters of new share password hashes. */
   password: SharePasswordHashConfig;
   billing: BillingConfig;
@@ -142,7 +174,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     consent: loadConsentConfig(env),
     face: loadFaceConfig(env),
     faceUpload: loadFaceSearchUploadConfig(env),
-    queues: loadQueueBackendConfig(env, API_QUEUES),
+    queues: loadApiQueueConfig(env),
     password: loadSharePasswordHashConfig(env),
     billing: loadBillingConfig(env),
     paymentGateway: loadPaymentGatewayConfig(env),

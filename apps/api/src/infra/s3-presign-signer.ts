@@ -1,5 +1,10 @@
 import { createHash, createHmac } from 'node:crypto';
-import { CONTENT_DISPOSITION_QUERY_PARAM, parseS3Key } from '@shotx/shared';
+import {
+  bucketedSigningDate,
+  CONTENT_DISPOSITION_QUERY_PARAM,
+  parseS3Key,
+  S3_PRESIGN_MAX_EXPIRES_SECONDS,
+} from '@shotx/shared';
 import type { MediaUrlSigner } from '../tokens';
 
 /** RFC 3986 encoding, as SigV4 canonical requests need it. */
@@ -14,25 +19,31 @@ const sha256Hex = (value: string) => createHash('sha256').update(value).digest('
 const hmac = (key: Buffer | string, value: string) =>
   createHmac('sha256', key).update(value).digest();
 
-/** SigV4 presigned URLs live at most 7 days. */
-const MAX_EXPIRES_SECONDS = 7 * 24 * 60 * 60;
-
 export interface S3PresignSignerOptions {
-  /** AWS_ENDPOINT_URL (LocalStack), without a trailing slash. */
+  /** STORAGE_ENDPOINT_URL (an origin): R2's S3 API endpoint, LocalStack or MinIO. */
   endpointUrl: string;
+  /** STORAGE_REGION (`auto` for R2): the credential scope's region. */
   region: string;
   bucket: string;
+  /** STORAGE_ACCESS_KEY_ID / STORAGE_SECRET_ACCESS_KEY (a read-capable R2 token). */
   accessKeyId: string;
   secretAccessKey: string;
+  /** SIGNED_URL_EXPIRY_BUCKET_SECONDS: the signing date is rounded down to a multiple of it. */
+  signingDateBucketSeconds: number;
   now?: () => Date;
 }
 
 /**
- * Path-style S3 presigned GET URLs (SigV4, synchronous) for local development only: there is no
- * CloudFront on a laptop, and LocalStack refuses anonymous reads of the private bucket. The config
- * loader allows MEDIA_URL_SIGNER=s3-presign only on APP_STAGE=local; deployed stages always use
- * CloudFrontMediaUrlSigner. Like it, only keys this platform built are signed. Long-lived keys
- * only (no X-Amz-Security-Token): fine for LocalStack's static test credentials.
+ * Path-style SigV4 presigned GET URLs (synchronous) of the private media bucket on an
+ * S3-compatible endpoint (MEDIA_URL_SIGNER=s3-presign): Cloudflare R2 on the VPS (ADR 0008
+ * section 2), LocalStack or MinIO locally. Never an unsigned or non-expiring URL; only keys this
+ * platform built are signed (parseS3Key).
+ *
+ * The signing date (X-Amz-Date) is bucketedSigningDate(now, SIGNED_URL_EXPIRY_BUCKET_SECONDS), and
+ * callers pass a bucketed expiry (SignedUrls), so every URL for one key (and disposition) issued
+ * in one window is byte-identical and browsers get cache hits. X-Amz-Expires is the expiry minus
+ * the signing date, capped at S3_PRESIGN_MAX_EXPIRES_SECONDS (7 days, R2's and S3's limit).
+ * Long-lived keys only (no X-Amz-Security-Token).
  */
 export class S3PresignMediaUrlSigner implements MediaUrlSigner {
   private readonly origin: URL;
@@ -44,7 +55,10 @@ export class S3PresignMediaUrlSigner implements MediaUrlSigner {
   sign(key: string, expiresAt: Date, options: { contentDisposition?: string } = {}): string {
     if (parseS3Key(key) === null)
       throw new RangeError('Refusing to sign a key the platform did not build');
-    const now = (this.options.now ?? (() => new Date()))();
+    const now = bucketedSigningDate(
+      (this.options.now ?? (() => new Date()))(),
+      this.options.signingDateBucketSeconds,
+    );
     const amzDate = now
       .toISOString()
       .replace(/[-:]/g, '')
@@ -52,7 +66,7 @@ export class S3PresignMediaUrlSigner implements MediaUrlSigner {
     const day = amzDate.slice(0, 8);
     const scope = `${day}/${this.options.region}/s3/aws4_request`;
     const expires = Math.min(
-      MAX_EXPIRES_SECONDS,
+      S3_PRESIGN_MAX_EXPIRES_SECONDS,
       Math.max(1, Math.ceil((expiresAt.getTime() - now.getTime()) / 1000)),
     );
 

@@ -21,6 +21,9 @@ const addressList = z.string().transform((value, ctx) => {
   };
   if (value.trim().toLowerCase() === TRUSTED_PROXY_NONE) return [];
   const addresses: string[] = [];
+  if (value.split(',').every((item) => item.trim() === '')) {
+    return fail(`must list at least one address, or ${TRUSTED_PROXY_NONE}`);
+  }
   for (const item of value.split(',')) {
     if (item.trim() === '') continue;
     const range = parseRange(item);
@@ -42,7 +45,11 @@ const addressList = z.string().transform((value, ctx) => {
 
 const trustedProxyEnvSchema = z.object({
   AUTH_PROVIDER: z.enum(AUTH_PROVIDER_NAMES).default('cognito'),
-  TRUSTED_PROXY_ADDRESSES: addressList.optional(),
+  /** Blank or whitespace only counts as unset (parseEnv already drops ''), never as `none`. */
+  TRUSTED_PROXY_ADDRESSES: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    addressList.optional(),
+  ),
 });
 
 export interface TrustedProxyConfig {
@@ -64,9 +71,10 @@ export interface TrustedProxyConfig {
  * the VPS give the proxy container a fixed address on the compose network (compose
  * `ipv4_address`) and list that one address here.
  *
- * Unset means none, except that AUTH_PROVIDER=shotx outside APP_STAGE=local requires it (`none`
- * only if the API really has no proxy in front), so a forgotten setting can't collapse every client
- * to the proxy's IP.
+ * Unset (also blank or whitespace only) means none, except that AUTH_PROVIDER=shotx outside
+ * APP_STAGE=local requires it (`none` written out, only if the API really has no proxy in front),
+ * so a forgotten or blanked setting can't collapse every client to the proxy's IP. A value of only
+ * commas is an error.
  */
 export function loadTrustedProxyConfig(env: Env): TrustedProxyConfig {
   const e = parseEnv(trustedProxyEnvSchema, env, 'trusted proxy');

@@ -43,6 +43,13 @@
       "when": 1792988773118,
       "tag": "0005_shotx_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793051199129,
+      "tag": "0006_sweeps_outbox",
+      "breakpoints": true
     }
   ]
 }

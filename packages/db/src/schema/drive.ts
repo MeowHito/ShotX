@@ -59,6 +59,13 @@ export const folders = pgTable(
      * enabling face indexing requires. Kept when indexing is turned off, as a record.
      */
     faceIndexInformedAt: timestamptz('face_index_informed_at'),
+    /**
+     * Outbox mark of `index.folder` (migration 0006, ADR 0008 "Lost jobs"): set by the API in the
+     * transaction that enables indexing (when it sends `index.folder`), cleared by the worker when
+     * the fan-out is done; faces.sweep re-sends `index.folder` for marks older than
+     * FACES_SWEEP_INDEX_AGE_SECONDS and bumps the mark. Null: no index.folder outstanding.
+     */
+    faceIndexQueuedAt: timestamptz('face_index_queued_at'),
     deletedAt: timestamptz('deleted_at'),
     /** The trashed ancestor that took this folder to the trash; null if trashed directly. */
     trashedViaFolderId: uuid('trashed_via_folder_id'),
@@ -104,6 +111,10 @@ export const folders = pgTable(
     index('folders_face_index_expiry_idx')
       .on(t.faceIndexExpiresAt)
       .where(sql`${t.faceIndexEnabled}`),
+    // faces.sweep: index.folder jobs outstanding.
+    index('folders_face_index_pending_idx')
+      .on(t.faceIndexQueuedAt)
+      .where(sql`${t.faceIndexQueuedAt} IS NOT NULL`),
     // Coverage lookups: the owner's folders with indexing on (then path @> / <@ via the GiST index).
     index('folders_face_index_owner_idx')
       .on(t.ownerId)
@@ -201,6 +212,26 @@ export const files = pgTable(
     uploadExpiresAt: timestamptz('upload_expires_at'),
     /** When the worker verified the object; from then on the bytes are in used_bytes. */
     verifiedAt: timestamptz('verified_at'),
+    /**
+     * When the media pipeline was last started for this file (migration 0006, ADR 0008): set by
+     * `POST /uploads/:id/complete` in markCompleted's UPDATE (before the API sends
+     * `original.completed`; on AWS the S3 event follows the same completion) and by media.sweep
+     * when it re-sends. Null: not completed yet, or a row from before 0006 (the sweep then uses
+     * `created_at`).
+     */
+    mediaQueuedAt: timestamptz('media_queued_at'),
+    /** Times media.sweep re-sent `original.completed` (capped by MEDIA_SWEEP_MAX_REQUEUES). */
+    mediaRequeues: integer('media_requeues').notNull().default(0),
+    /**
+     * Outbox mark of `index.file` (migration 0006): set in the same transaction that makes the
+     * file `ready` while a face index covers it, or by the `index.folder` fan-out, then the job is
+     * sent; cleared by the faces consumer when the job ends with any outcome (indexed, skipped,
+     * not covered, trashed, video). faces.sweep re-sends for marks older than
+     * FACES_SWEEP_INDEX_AGE_SECONDS. Null: no index.file outstanding.
+     */
+    facesQueuedAt: timestamptz('faces_queued_at'),
+    /** Times faces.sweep re-sent `index.file` (capped by FACES_SWEEP_MAX_REQUEUES). */
+    facesRequeues: integer('faces_requeues').notNull().default(0),
     deletedAt: timestamptz('deleted_at'),
     /** The trashed folder that took this file to the trash; null if trashed directly. */
     trashedViaFolderId: uuid('trashed_via_folder_id'),
@@ -237,6 +268,18 @@ export const files = pgTable(
     index('files_upload_expiry_idx')
       .on(t.uploadExpiresAt)
       .where(sql`${t.uploadId} IS NOT NULL`),
+    // media.sweep: open uploads by age (a crash between CompleteMultipartUpload and markCompleted).
+    index('files_uploading_created_idx')
+      .on(t.createdAt)
+      .where(sql`${t.uploadId} IS NOT NULL`),
+    // media.sweep: files waiting for or stuck in processing (a small, transient set).
+    index('files_processing_idx')
+      .on(t.mediaQueuedAt)
+      .where(sql`${t.status} = 'processing'`),
+    // faces.sweep: index.file jobs outstanding.
+    index('files_faces_pending_idx')
+      .on(t.facesQueuedAt)
+      .where(sql`${t.facesQueuedAt} IS NOT NULL`),
     unique('files_id_owner_unique').on(t.id, t.ownerId),
     foreignKey({
       name: 'files_folder_same_owner_fk',
@@ -265,6 +308,7 @@ export const files = pgTable(
       sql`(${t.uploadId} IS NULL OR ${t.uploadPartBytes} IS NOT NULL) AND (${t.uploadPartBytes} IS NULL OR ${t.uploadPartBytes} BETWEEN ${minPart} AND ${maxPart})`,
     ),
     check('files_web_size_nonnegative', sql`${t.webSizeBytes} IS NULL OR ${t.webSizeBytes} >= 0`),
+    check('files_requeues_nonnegative', sql`${t.mediaRequeues} >= 0 AND ${t.facesRequeues} >= 0`),
     check(
       'files_trash_fields_need_deleted',
       sql`${t.deletedAt} IS NOT NULL OR (${t.trashedViaFolderId} IS NULL AND ${t.purgeRequestedAt} IS NULL)`,

@@ -15,6 +15,7 @@ import {
   type ListPartsResponse,
   type MultipartPlan,
   multipartPlan,
+  originalCompletedMessage,
   originalKey,
   parseS3Key,
   partsMatchPlan,
@@ -27,7 +28,7 @@ import {
 } from '@shotx/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { z } from 'zod';
-import type { ApiConfig } from '../config';
+import { type ApiConfig, apiSendsMediaJobs } from '../config';
 import { type Db, isUniqueViolation, type Queryable, rows, type Tx } from '../db/db';
 import { currentSubscription, storageCounters } from '../drive/account';
 import { insertFolder, liveFolder, newId } from '../drive/folders';
@@ -40,12 +41,16 @@ import {
   CLOCK,
   type Clock,
   DATABASE,
+  EVENT_LOG,
   OBJECT_STORAGE,
   type ObjectStorage,
+  QUEUE_SENDER,
+  type QueueSender,
   RATE_LIMITER,
   type RateLimiter,
   type UploadedPart,
 } from '../tokens';
+import type { EventLog } from '../infra/events';
 
 type InitBody = z.output<typeof uploadInitBodySchema>;
 
@@ -96,6 +101,8 @@ export class UploadService {
     @Inject(RATE_LIMITER) private readonly rateLimiter: RateLimiter,
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(DriveFileMapper) private readonly mapper: DriveFileMapper,
+    @Inject(QUEUE_SENDER) private readonly queue: QueueSender,
+    @Inject(EVENT_LOG) private readonly events: EventLog,
   ) {}
 
   // --- POST /uploads/init --------------------------------------------------------------------
@@ -539,8 +546,13 @@ export class UploadService {
   }
 
   /**
-   * Clears upload_id (and upload_part_bytes with it) and moves `uploading` to `processing`,
-   * guarded by the UploadId.
+   * Clears upload_id (and upload_part_bytes with it), moves `uploading` to `processing` and stamps
+   * media_queued_at (with either backend), guarded by the UploadId, in one statement. After it
+   * commits and with QUEUE_BACKEND=bullmq, starts the media pipeline with `original.completed`
+   * (ADR 0008 section 2: R2 has no bucket notifications; on SQS the S3 ObjectCreated event does
+   * it and the api sends nothing to `media`). An enqueue failure is logged
+   * (`media.enqueue_failed`) and does not fail the request: media.sweep re-sends for
+   * `processing` rows whose media_queued_at is old.
    */
   private async markCompleted(
     ownerId: string,
@@ -553,13 +565,40 @@ export class UploadService {
         uploadId: null,
         uploadPartBytes: null,
         status: sql`CASE WHEN ${files.status} = 'uploading' THEN 'processing'::file_status ELSE ${files.status} END`,
+        mediaQueuedAt: this.clock.now(),
       })
       .where(and(eq(files.id, fileId), eq(files.ownerId, ownerId), eq(files.uploadId, uploadId)))
       .returning();
-    if (updated !== undefined) return { file: this.mapper.toDriveFile(updated) };
+    if (updated !== undefined) {
+      if (updated.status === 'processing' && apiSendsMediaJobs(this.config)) {
+        await this.startMedia(updated);
+      }
+      return { file: this.mapper.toDriveFile(updated) };
+    }
     const current = await this.findUpload(ownerId, fileId);
     if (current.uploadId !== null) throw uploadNotFound();
     return { file: this.mapper.toDriveFile(current) };
+  }
+
+  /** Sends `original.completed`; failures are logged only (ids, never the key: it holds the name). */
+  private async startMedia(file: DriveFileRow): Promise<void> {
+    try {
+      await this.queue.send(
+        'media',
+        originalCompletedMessage({
+          fileId: file.id,
+          photographerId: file.ownerId,
+          key: file.s3Key,
+        }),
+      );
+    } catch (error) {
+      this.events.warn('media.enqueue_failed', {
+        fileId: file.id,
+        photographerId: file.ownerId,
+        queue: 'media',
+        error: error instanceof Error ? error.name : 'unknown',
+      });
+    }
   }
 
   // --- DELETE /uploads/:id -------------------------------------------------------------------

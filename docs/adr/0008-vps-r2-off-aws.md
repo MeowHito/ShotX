@@ -165,7 +165,9 @@ and the worker's equivalent):
   - TOTP replay protection (the last accepted time step is stored);
   - rate limits per account and per IP on password and code attempts, with lockout (anyone who
     knows an admin's email can lock that account; accepted, because another admin can unlock
-    it);
+    it). A lockout also ends that admin's active sessions until the lock expires or is lifted
+    (the admin guard checks `locked_until`), so a suspected attack takes effect at once; the
+    same denial-of-service trade-off is accepted;
   - every admin sign-in, failed or not, written to `audit_log`;
   - recovery by another admin (reset TOTP), audit-logged;
   - 12-hour refresh tokens, as in ADR 0002.

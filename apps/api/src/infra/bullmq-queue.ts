@@ -73,7 +73,7 @@ export interface BullMqSenderConfig {
 }
 
 /**
- * Sends jobs to the `faces` and `zip` BullMQ queues, with the same contract as SqsQueueSender:
+ * Sends jobs to the `media`, `faces` and `zip` BullMQ queues, with the same contract as SqsQueueSender:
  * the job data is the string from serializeQueueMessage (validated with the queue's shared schema;
  * ids only, never face ids, boxes, images or file names), the options the shared
  * bullMqJobOptions, the job name queueJobName (for dashboards; consumers branch on the parsed
@@ -88,7 +88,7 @@ export class BullMqQueueSender implements QueueSender {
   ) {
     const queue = (name: ApiQueue) =>
       bullMqQueue(name, connection, config.prefix, config.queues[name]);
-    this.queues = { faces: queue('faces'), zip: queue('zip') };
+    this.queues = { media: queue('media'), faces: queue('faces'), zip: queue('zip') };
   }
 
   async send<Q extends ApiQueue>(queue: Q, message: QueueMessageInput<Q>): Promise<void> {

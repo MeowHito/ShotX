@@ -3,14 +3,14 @@ import {
   type AuthProviderName,
   type CognitoPoolConfig,
   type Env,
+  type MediaBrowserOrigins,
   loadAppConfig,
   loadAuthClientConfig,
   loadAuthProviderConfig,
-  loadAwsConfig,
   loadBffAuthConfig,
   loadCognitoConfig,
   loadInternalApiConfig,
-  loadMediaUrlSignerConfig,
+  loadMediaBrowserOrigins,
   loadUploadConfig,
   parseEnv,
 } from '@shotx/shared';
@@ -86,41 +86,21 @@ export function clientUploadConfig(env: Env = process.env): ClientUploadConfig {
 }
 
 /**
- * Origins the browser PUTs upload parts to (CSP `connect-src`). The API presigns virtual-hosted
- * URLs on the regional endpoint. With MEDIA_BUCKET set that is exactly one origin; without it
- * (infra doesn't pass MEDIA_BUCKET to web yet) any bucket on the regional endpoint. LocalStack's
- * AWS_ENDPOINT_URL is added for local development.
+ * The storage origins the browser talks to, for the CSP (loadMediaBrowserOrigins; no storage
+ * keys needed): `upload` (presigned part PUTs, `connect-src`) and `media` (signed view and
+ * download URLs with MEDIA_URL_SIGNER=s3-presign, e.g. the R2 endpoint: `img-src`, `media-src`
+ * and `connect-src`; empty with `cloudfront`, whose `/media` is same-origin).
  */
-export function uploadOrigins(env: Env = process.env): string[] {
-  const aws = loadAwsConfig(env);
-  const origins: string[] = [];
-  const bucket = env.MEDIA_BUCKET;
-  if (bucket !== undefined && /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) {
-    origins.push(`https://${bucket}.s3.${aws.region}.amazonaws.com`);
-  } else {
-    origins.push(`https://*.s3.${aws.region}.amazonaws.com`);
-  }
-  if (aws.endpointUrl !== null) origins.push(new URL(aws.endpointUrl).origin);
-  return origins;
+export function mediaBrowserOrigins(env: Env = process.env): MediaBrowserOrigins {
+  return loadMediaBrowserOrigins(env);
 }
 
-/**
- * Origins of signed media URLs besides the site (CSP `img-src`/`media-src`). On AWS media is
- * same-origin (`/media` on CloudFront), so this is empty; with MEDIA_URL_SIGNER=s3-presign (the
- * shared loader refuses it outside APP_STAGE=local) URLs are signed on AWS_ENDPOINT_URL.
- */
-export function mediaOrigins(env: Env = process.env): string[] {
-  if (loadMediaUrlSignerConfig(env).signer !== 's3-presign') return [];
-  const aws = loadAwsConfig(env);
-  return aws.endpointUrl === null ? [] : [new URL(aws.endpointUrl).origin];
-}
+let cachedMediaBrowserOrigins: MediaBrowserOrigins | undefined;
 
-let cachedMediaOrigins: string[] | undefined;
-
-/** {@link mediaOrigins} of `process.env`, cached for the process (the proxy runs per request). */
-export function processMediaOrigins(): string[] {
-  cachedMediaOrigins ??= mediaOrigins(process.env);
-  return cachedMediaOrigins;
+/** {@link mediaBrowserOrigins} of `process.env`, cached for the process (the proxy runs per request). */
+export function processMediaBrowserOrigins(): MediaBrowserOrigins {
+  cachedMediaBrowserOrigins ??= mediaBrowserOrigins(process.env);
+  return cachedMediaBrowserOrigins;
 }
 
 /**

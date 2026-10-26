@@ -7,7 +7,7 @@ import {
   RekognitionFaceProvider,
   S3TempImageStore,
 } from '@shotx/face';
-import { QUEUE_NAMES, type QueueName } from '@shotx/shared';
+import { QUEUE_NAMES, type QueueName, storageS3ClientOptions } from '@shotx/shared';
 import { Redis } from 'ioredis';
 import { S3ObjectStore } from './aws/object-store';
 import { SqsQueueClient } from './aws/queue-client';
@@ -127,7 +127,9 @@ async function main(): Promise<void> {
     region: config.aws.region,
     ...(config.aws.endpointUrl === null ? {} : { endpoint: config.aws.endpointUrl }),
   };
-  const s3 = new S3Client({ ...aws, forcePathStyle: config.storage.forcePathStyle });
+  // Media storage has its own endpoint and keys (ADR 0008 section 1): with STORAGE_ENDPOINT_URL
+  // (R2) neither AWS_ENDPOINT_URL nor the default credential chain is consulted.
+  const s3 = new S3Client(storageS3ClientOptions(config.storage));
   const store = new S3ObjectStore(s3, config.storage.bucket);
   const runtime = createQueueRuntime(config, aws, log);
   const queues = runtime.sender;
@@ -200,6 +202,10 @@ async function main(): Promise<void> {
       faces: provider,
       orphanScans: new S3OrphanScanStore(store),
       orphanGraceMs: config.face.index.orphanGraceMs,
+      queues,
+      destinations: { media: runtime.destinations.media, faces: runtime.destinations.faces },
+      sweeps: worker.sweeps,
+      authSessionRetentionDays: config.retention.authSessionRetentionDays,
       ledger: new RedisJobRunLedger(
         redis,
         `shotx:${config.app.stage}:worker:jobs:done`,

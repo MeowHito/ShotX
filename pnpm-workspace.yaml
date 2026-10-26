@@ -3,6 +3,7 @@ packages:
   - packages/*
   - tools/*
   - infra
+  - deploy
 
 allowBuilds:
   esbuild: true

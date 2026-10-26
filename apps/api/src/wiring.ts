@@ -67,18 +67,22 @@ export function queueSender(config: ApiConfig): QueueWiring {
   };
 }
 
-/** CloudFront signed URLs on deployed stages; S3 presigned URLs with MEDIA_URL_SIGNER=s3-presign. */
-export function mediaUrlSigner(config: ApiConfig): MediaUrlSigner {
-  if (config.mediaUrls.signer === 's3-presign') {
-    if (config.aws.endpointUrl === null) {
-      throw new Error('MEDIA_URL_SIGNER=s3-presign needs AWS_ENDPOINT_URL (LocalStack)');
-    }
+/**
+ * MEDIA_URL_SIGNER=cloudfront: CloudFront signed URLs (AWS stacks, until infra/ is removed).
+ * `s3-presign`: SigV4 presigned GETs on STORAGE_ENDPOINT_URL with the STORAGE_* keys (R2 on the
+ * VPS, LocalStack or MinIO locally; any stage).
+ */
+export function mediaUrlSigner(config: ApiConfig, clock: Clock = systemClock): MediaUrlSigner {
+  const urls = config.mediaUrls;
+  if (urls.signer === 's3-presign') {
     return new S3PresignMediaUrlSigner({
-      endpointUrl: config.aws.endpointUrl,
-      region: config.aws.region,
+      endpointUrl: urls.endpointUrl,
+      region: urls.region,
       bucket: config.storage.bucket,
-      accessKeyId: config.mediaUrls.accessKeyId,
-      secretAccessKey: config.mediaUrls.secretAccessKey,
+      accessKeyId: urls.accessKeyId,
+      secretAccessKey: urls.secretAccessKey,
+      signingDateBucketSeconds: config.share.signedUrlExpiryBucketSeconds,
+      now: () => clock.now(),
     });
   }
   if (config.cloudFront === null) throw new Error('CloudFront signing configuration is missing');

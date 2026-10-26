@@ -4,6 +4,7 @@ import {
   anonIdCookie,
   base62Of128Bits,
   bucketedExpiry,
+  bucketedSigningDate,
   contentDispositionAttachment,
   downloadObject,
   faceMatchBucket,
@@ -114,6 +115,40 @@ describe('bucketedExpiry', () => {
     expect(() => bucketedExpiry(now, 600, 0)).toThrow(RangeError);
     expect(() => bucketedExpiry(now, 600, 2.5)).toThrow(RangeError);
     expect(() => bucketedExpiry(new Date(Number.NaN), 600, 300)).toThrow(RangeError);
+  });
+});
+
+describe('bucketedSigningDate', () => {
+  const at = (iso: string) => new Date(iso);
+
+  it('rounds down to the bucket, so one window gives one signing date', () => {
+    const first = bucketedSigningDate(at('2026-10-25T05:00:00.000Z'), 300);
+    expect(first.toISOString()).toBe('2026-10-25T05:00:00.000Z');
+    expect(bucketedSigningDate(at('2026-10-25T05:04:59.999Z'), 300)).toEqual(first);
+    expect(bucketedSigningDate(at('2026-10-25T05:05:00.000Z'), 300).toISOString()).toBe(
+      '2026-10-25T05:05:00.000Z',
+    );
+  });
+
+  it('keeps the URL valid for at least the TTL and at most TTL + 2 x bucket', () => {
+    for (const iso of [
+      '2026-10-25T05:00:00.000Z',
+      '2026-10-25T05:02:30.250Z',
+      '2026-10-25T05:04:59.999Z',
+    ]) {
+      const now = at(iso);
+      const expires =
+        (bucketedExpiry(now, 600, 300).getTime() - bucketedSigningDate(now, 300).getTime()) / 1000;
+      expect(expires, iso).toBeGreaterThanOrEqual(600);
+      expect(expires, iso).toBeLessThanOrEqual(600 + 2 * 300);
+      expect(bucketedSigningDate(now, 300).getTime()).toBeLessThanOrEqual(now.getTime());
+    }
+  });
+
+  it('rejects bad input', () => {
+    expect(() => bucketedSigningDate(new Date(), 0)).toThrow(RangeError);
+    expect(() => bucketedSigningDate(new Date(), 1.5)).toThrow(RangeError);
+    expect(() => bucketedSigningDate(new Date(Number.NaN), 300)).toThrow(RangeError);
   });
 });
 

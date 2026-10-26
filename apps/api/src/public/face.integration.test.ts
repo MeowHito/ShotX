@@ -714,6 +714,9 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
       });
       const [row] = await api.db.select().from(folders).where(eq(folders.id, folder.id));
       expect(row?.faceIndexInformedAt).not.toBeNull();
+      // Outbox mark for faces.sweep, set with the enabling transaction.
+      const queuedAt = api.clock.now();
+      expect(row?.faceIndexQueuedAt).toEqual(queuedAt);
       expect(api.queue.sent.slice(sent).map((m) => JSON.parse(m.body) as unknown)).toEqual([
         { type: 'index.folder', folderId: folder.id },
       ]);
@@ -727,11 +730,16 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
         new Date(api.clock.now().getTime() + days * 86_400_000).toISOString(),
       );
       expect(api.queue.sent.length).toBe(sent + 1);
+      // Extending doesn't move the mark (no index.folder was sent).
+      const [extended] = await api.db.select().from(folders).where(eq(folders.id, folder.id));
+      expect(extended?.faceIndexQueuedAt).toEqual(queuedAt);
       const off = await api.request('PATCH', path(folder.id), {
         token: owner.token,
         body: { enabled: false },
       });
       expect(off.body).toMatchObject({ faceIndexEnabled: false, faceIndexExpiresAt: null });
+      const [offRow] = await api.db.select().from(folders).where(eq(folders.id, folder.id));
+      expect(offRow?.faceIndexQueuedAt).toBeNull();
       expect(JSON.parse(api.queue.sent.at(-1)?.body ?? '{}')).toEqual({
         type: 'unindex.folder',
         folderId: folder.id,
@@ -768,7 +776,11 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
         api.queue.failing = false;
       }
       const [row] = await api.db.select().from(folders).where(eq(folders.id, folder.id));
-      expect(row).toMatchObject({ faceIndexEnabled: false, faceIndexExpiresAt: null });
+      expect(row).toMatchObject({
+        faceIndexEnabled: false,
+        faceIndexExpiresAt: null,
+        faceIndexQueuedAt: null,
+      });
     });
   });
 });

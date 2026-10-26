@@ -68,12 +68,66 @@ export const s3EventNotificationSchema = z.object({
 });
 export type S3EventNotification = z.output<typeof s3EventNotificationSchema>;
 
-/** Body of a `media` queue message. */
-export const mediaQueueMessageSchema = z.union([s3EventNotificationSchema, s3TestEventSchema]);
+/**
+ * "This original is complete; process it" (ADR 0008 section 2), for storage without bucket
+ * notifications (R2). Sent by the API after `POST /uploads/:id/complete` commits (an enqueue
+ * failure does not fail the request) and by `media.sweep` for rows whose message was lost. Works
+ * on both queue backends. `key` is the file's `s3_key`, built with `originalKey` and checked
+ * here with `parseS3Key`: it must be an `originals/` key of exactly this photographer and file.
+ * The bucket is implicit (the worker's MEDIA_BUCKET). The worker handles it exactly like an S3
+ * ObjectCreated record for the same key (see createdOriginals), so it is idempotent and a
+ * duplicate of an S3 event is harmless.
+ */
+export const originalCompletedMessageSchema = z
+  .object({
+    kind: z.literal('original.completed'),
+    fileId: z.uuid(),
+    photographerId: z.uuid(),
+    key: z.string().min(1).max(2048),
+  })
+  .refine(
+    (m) => {
+      const parsed = parseS3Key(m.key);
+      return (
+        parsed?.kind === 'original' &&
+        parsed.fileId === m.fileId &&
+        parsed.photographerId === m.photographerId
+      );
+    },
+    { error: "key must be the file's originals/ key (originalKey)", path: ['key'] },
+  );
+export type OriginalCompletedMessage = z.output<typeof originalCompletedMessageSchema>;
+
+/**
+ * Body of a `media` queue message: an `original.completed` message (API and media.sweep), or what
+ * S3 bucket notifications send (AWS stacks, kept until infra/ is removed).
+ */
+export const mediaQueueMessageSchema = z.union([
+  originalCompletedMessageSchema,
+  s3EventNotificationSchema,
+  s3TestEventSchema,
+]);
 export type MediaQueueMessage = z.output<typeof mediaQueueMessageSchema>;
 
 export function isS3TestEvent(message: MediaQueueMessage): message is S3TestEvent {
   return 'Event' in message;
+}
+
+export function isOriginalCompleted(
+  message: MediaQueueMessage,
+): message is OriginalCompletedMessage {
+  return 'kind' in message && message.kind === 'original.completed';
+}
+
+/** The `original.completed` message of a file, validated. Throws RangeError for a foreign key. */
+export function originalCompletedMessage(input: {
+  fileId: string;
+  photographerId: string;
+  key: string;
+}): OriginalCompletedMessage {
+  const result = originalCompletedMessageSchema.safeParse({ kind: 'original.completed', ...input });
+  if (!result.success) throw new RangeError('Not an originals/ key of this file');
+  return result.data;
 }
 
 export interface CreatedObject {
@@ -87,8 +141,16 @@ export interface CreatedObject {
   eventTime: string;
 }
 
-/** The objects a `media` message reports as created, keys decoded. Empty for a TestEvent. */
+/**
+ * The objects an S3 event reports as created, keys decoded. Empty for a TestEvent. Throws
+ * RangeError for an `original.completed` message, which reports no S3 object (no bucket, size or
+ * event time): use {@link mediaOriginals}, which handles every variant. Throwing, not returning
+ * nothing, so a consumer that predates the variant fails the job instead of dropping it.
+ */
 export function createdObjects(message: MediaQueueMessage): CreatedObject[] {
+  if (isOriginalCompleted(message)) {
+    throw new RangeError('original.completed carries no S3 event records; use mediaOriginals');
+  }
   if (isS3TestEvent(message)) return [];
   return message.Records.map((r) => ({
     bucket: r.s3.bucket.name,
@@ -110,7 +172,7 @@ export interface CreatedOriginal extends CreatedObject {
 }
 
 /**
- * Splits a `media` message into created originals (key parsed with `parseS3Key`) and everything
+ * Splits an S3 event `media` message into created originals (key parsed with `parseS3Key`) and everything
  * else (`ignored`: other prefixes, or keys this platform didn't build). The worker:
  *
  * - loads the `files` row by `fileId` and requires `owner_id = photographerId` and
@@ -150,6 +212,83 @@ export function createdOriginals(message: MediaQueueMessage): {
     } else {
       ignored.push(object);
     }
+  }
+  return { originals, ignored };
+}
+
+/** One original a `media` message asks the worker to process, whichever variant carried it. */
+export interface MediaOriginal {
+  /** `s3-event`: an S3 ObjectCreated record; `original.completed`: the API or media.sweep. */
+  source: 's3-event' | 'original.completed';
+  /** The decoded `originals/` key (`files.s3_key`). */
+  key: string;
+  photographerId: string;
+  fileId: string;
+  /** The sanitized name segment of the key (not the display name in `files.name`). */
+  originalName: string;
+}
+
+/** Why a part of a `media` message is not processed. Keys are not included: they hold file names. */
+export type IgnoredMediaReason = 'test-event' | 'other-bucket' | 'not-an-original';
+
+export interface IgnoredMediaObject {
+  source: 's3-event';
+  reason: IgnoredMediaReason;
+}
+
+/**
+ * Every original a `media` message asks for, for both variants (the entry point of the worker's
+ * media consumer):
+ * - `original.completed`: its file (already validated: an `originals/` key of that file);
+ * - S3 event: each record of `mediaBucket` whose key is an `originals/` key (parseS3Key); records
+ *   of other buckets or with other keys are `ignored` (logged without keys and dropped: the
+ *   bucket notification is filtered to `originals/`, so they indicate a misconfiguration); a
+ *   TestEvent is one ignored `test-event`.
+ *
+ * Each original is processed as described at {@link createdOriginals} (row checks, HeadObject
+ * size, magic bytes, verify, derivatives, ready, faces job); the variant does not change it.
+ */
+export function mediaOriginals(
+  message: MediaQueueMessage,
+  mediaBucket: string,
+): { originals: MediaOriginal[]; ignored: IgnoredMediaObject[] } {
+  if (isOriginalCompleted(message)) {
+    const parsed = parseS3Key(message.key);
+    if (parsed?.kind !== 'original') throw new RangeError('Invalid original.completed key');
+    return {
+      originals: [
+        {
+          source: 'original.completed',
+          key: message.key,
+          photographerId: parsed.photographerId,
+          fileId: parsed.fileId,
+          originalName: parsed.originalName,
+        },
+      ],
+      ignored: [],
+    };
+  }
+  if (isS3TestEvent(message))
+    return { originals: [], ignored: [{ source: 's3-event', reason: 'test-event' }] };
+  const originals: MediaOriginal[] = [];
+  const ignored: IgnoredMediaObject[] = [];
+  for (const object of createdObjects(message)) {
+    if (object.bucket !== mediaBucket) {
+      ignored.push({ source: 's3-event', reason: 'other-bucket' });
+      continue;
+    }
+    const parsed = parseS3Key(object.key);
+    if (parsed?.kind !== 'original') {
+      ignored.push({ source: 's3-event', reason: 'not-an-original' });
+      continue;
+    }
+    originals.push({
+      source: 's3-event',
+      key: object.key,
+      photographerId: parsed.photographerId,
+      fileId: parsed.fileId,
+      originalName: parsed.originalName,
+    });
   }
   return { originals, ignored };
 }

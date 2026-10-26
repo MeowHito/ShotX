@@ -1,6 +1,7 @@
 import { coveredByFaceIndexSql, files, folders } from '@shotx/db';
-import { and, eq, isNotNull, isNull, ne, sql } from 'drizzle-orm';
-import { type Db, rows } from '../db';
+import { UPLOAD_FILE_TYPES } from '@shotx/shared';
+import { and, eq, isNotNull, isNull, ne, type SQL, sql } from 'drizzle-orm';
+import type { Db } from '../db';
 import type { Logger } from '../logger';
 import { applyQuotaMove } from '../quota';
 
@@ -110,14 +111,46 @@ export interface ReadyFields {
   webSizeBytes: number;
 }
 
+const IMAGE_MIMES = UPLOAD_FILE_TYPES.filter((t) => t.kind === 'image').map((t) => t.mime);
+
+/**
+ * True for a live, not yet indexed photo of the row being updated whose folder an active face
+ * index covers now: the files that need an `index.file` job (videos are never indexed).
+ */
+function needsFaceIndexSql(now: Date): SQL {
+  return sql`(${files.mime} IN (${sql.join(
+    IMAGE_MIMES.map((m) => sql`${m}`),
+    sql`, `,
+  )})
+    AND ${files.deletedAt} IS NULL
+    AND ${files.purgeRequestedAt} IS NULL
+    AND ${files.faceCount} IS NULL
+    AND EXISTS (
+      SELECT 1 FROM ${folders} AS "fo"
+      WHERE "fo"."id" = ${files.folderId} AND "fo"."owner_id" = ${files.ownerId}
+        AND ${coveredByFaceIndexSql(sql`"fo"."path"`, files.ownerId, now)}
+    ))`;
+}
+
 /**
  * Records the derivatives and marks the file `ready`. Only a verified, not failed, not
- * purge-requested file changes; returns false otherwise.
+ * purge-requested file changes; returns null otherwise. In the same UPDATE it sets the
+ * `index.file` outbox mark (`faces_queued_at`, migration 0006) when a face index covers the photo,
+ * so a crash before the send is caught by faces.sweep; `facesQueued` says to send the job.
  */
-export async function markReady(db: Db, id: string, fields: ReadyFields): Promise<boolean> {
-  const updated = await db
+export async function markReady(
+  db: Db,
+  id: string,
+  fields: ReadyFields,
+  now: Date,
+): Promise<{ facesQueued: boolean } | null> {
+  const [updated] = await db
     .update(files)
-    .set({ ...fields, status: 'ready' })
+    .set({
+      ...fields,
+      status: 'ready',
+      facesQueuedAt: sql`CASE WHEN ${needsFaceIndexSql(now)} THEN now() ELSE ${files.facesQueuedAt} END`,
+    })
     .where(
       and(
         eq(files.id, id),
@@ -126,8 +159,8 @@ export async function markReady(db: Db, id: string, fields: ReadyFields): Promis
         isNull(files.purgeRequestedAt),
       ),
     )
-    .returning({ id: files.id });
-  return updated.length > 0;
+    .returning({ facesQueuedAt: files.facesQueuedAt });
+  return updated === undefined ? null : { facesQueued: updated.facesQueuedAt !== null };
 }
 
 /**
@@ -139,22 +172,4 @@ export async function markFailedAfterVerify(db: Db, id: string): Promise<void> {
     .update(files)
     .set({ status: 'failed' })
     .where(and(eq(files.id, id), ne(files.status, 'failed'), isNull(files.purgeRequestedAt)));
-}
-
-/**
- * True when an active face index covers the folder now: the folder or an ancestor has face
- * indexing enabled, is live and not expired (isCoveredByFaceIndex in @shotx/shared).
- */
-export async function folderIndexesFaces(
-  db: Db,
-  ownerId: string,
-  folderId: string,
-  now: Date,
-): Promise<boolean> {
-  const [row] = await rows<{ covered: boolean }>(
-    db,
-    sql`SELECT ${coveredByFaceIndexSql(sql`"fo"."path"`, ownerId, now)} AS "covered"
-      FROM ${folders} AS "fo" WHERE "fo"."id" = ${folderId} AND "fo"."owner_id" = ${ownerId}`,
-  );
-  return row?.covered === true;
 }

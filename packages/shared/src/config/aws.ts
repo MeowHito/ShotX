@@ -12,9 +12,11 @@ const awsEnvSchema = z.object({
 });
 
 /**
- * AWS SDK client settings shared by every client (S3, SQS, Rekognition). Credentials are not part
- * of it: the SDK's default chain reads them (the task role on ECS, AWS_ACCESS_KEY_ID and
- * AWS_SECRET_ACCESS_KEY for LocalStack).
+ * AWS SDK client settings of the AWS stacks (SQS, Rekognition, and S3 when STORAGE_ENDPOINT_URL is
+ * unset). Credentials are not part of it: the SDK's default chain reads them (the task role on
+ * ECS, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for LocalStack). Never set AWS_ENDPOINT_URL
+ * outside LocalStack: AWS SDK v3 applies it to every client (ADR 0008 section 1). Media storage
+ * uses loadMediaStorageConfig (storage.ts), which takes STORAGE_* first.
  */
 export interface AwsConfig {
   region: string;
@@ -28,30 +30,4 @@ export function loadAwsConfig(env: Env): AwsConfig {
   return { region: e.AWS_REGION, endpointUrl: e.AWS_ENDPOINT_URL ?? null };
 }
 
-/**
- * S3 bucket naming rules for general purpose buckets: 3–63 characters of lowercase letters,
- * digits, dots and hyphens, starting and ending with a letter or digit. (Dots are allowed by S3
- * but break virtual-hosted TLS; infra never uses them.)
- */
-const BUCKET_NAME = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
-
-const mediaStorageEnvSchema = z.object({
-  MEDIA_BUCKET: z
-    .string()
-    .regex(BUCKET_NAME, { error: 'must be a valid S3 bucket name' })
-    .refine((name) => !name.includes('..'), { error: 'must be a valid S3 bucket name' }),
-  /** LocalStack needs path-style requests. `true`/`false` (also 1/0, yes/no, on/off). */
-  S3_FORCE_PATH_STYLE: z.stringbool().default(false),
-});
-
-export interface MediaStorageConfig {
-  /** The private media bucket: originals/, derived/ and tmp/ (see s3-keys). */
-  bucket: string;
-  forcePathStyle: boolean;
-}
-
-/** Reads MEDIA_BUCKET (required; api and worker) and S3_FORCE_PATH_STYLE (default false). */
-export function loadMediaStorageConfig(env: Env): MediaStorageConfig {
-  const e = parseEnv(mediaStorageEnvSchema, env, 'media storage');
-  return { bucket: e.MEDIA_BUCKET, forcePathStyle: e.S3_FORCE_PATH_STYLE };
-}
+// The media bucket and its S3 client (loadMediaStorageConfig) live in storage.ts.

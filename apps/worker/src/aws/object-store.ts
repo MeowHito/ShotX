@@ -9,6 +9,7 @@ import {
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
+  ListPartsCommand,
   PutObjectCommand,
   type S3Client,
 } from '@aws-sdk/client-s3';
@@ -76,6 +77,12 @@ export interface ObjectStore {
   list(prefix: string): AsyncIterable<ListedObject>;
   /** Aborts a multipart upload; an upload that no longer exists is fine. */
   abortMultipartUpload(key: string, uploadId: string): Promise<void>;
+  /**
+   * True while the multipart upload is open (ListParts succeeds); false once it was completed or
+   * aborted (NoSuchUpload). media.sweep and quota.reconcile.nightly use it to tell a live upload
+   * from a completed one whose markCompleted was lost.
+   */
+  multipartUploadExists(key: string, uploadId: string): Promise<boolean>;
 }
 
 export class ObjectStoreError extends Error {
@@ -247,6 +254,20 @@ export class S3ObjectStore implements ObjectStore {
       }
       token = response.IsTruncated === true ? response.NextContinuationToken : undefined;
     } while (token !== undefined);
+  }
+
+  async multipartUploadExists(key: string, uploadId: string): Promise<boolean> {
+    try {
+      await this.s3.send(
+        new ListPartsCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId, MaxParts: 1 }),
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof Error && (error.name === 'NoSuchUpload' || isNotFound(error))) {
+        return false;
+      }
+      throw error;
+    }
   }
 
   async abortMultipartUpload(key: string, uploadId: string): Promise<void> {

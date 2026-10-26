@@ -361,6 +361,18 @@
           "quota.reconcile.nightly": {
             "expression": "cron(30 3 * * ? *)",
             "enabled": true
+          },
+          "media.sweep": {
+            "expression": "cron(7,22,37,52 * * * ? *)",
+            "enabled": true
+          },
+          "faces.sweep": {
+            "expression": "cron(20 * * * ? *)",
+            "enabled": true
+          },
+          "auth.sessions.purge.daily": {
+            "expression": "cron(0 5 * * ? *)",
+            "enabled": true
           }
         }
       }

@@ -953,7 +953,10 @@ describe('IAM for Rekognition', () => {
 
   it('gives the worker exactly what each S3 prefix needs', () => {
     const media = ['s3:AbortMultipartUpload', 's3:DeleteObject', 's3:GetObject', 's3:PutObject'];
-    expect(sorted(workerGrants.get('originals/*'))).toEqual(media);
+    // Plus ListParts on originals/ only: media.sweep recovers uploads the API failed to complete.
+    expect(sorted(workerGrants.get('originals/*'))).toEqual(
+      [...media, 's3:ListMultipartUploadParts'].sort(),
+    );
     expect(sorted(workerGrants.get('derived/*'))).toEqual(media);
     expect(sorted(workerGrants.get('tmp/index/*'))).toEqual([
       's3:DeleteObject',
@@ -1028,6 +1031,19 @@ describe('IAM for Rekognition', () => {
       .join(' ');
     for (const q of ['faces', 'zip']) expect(sends, q).toContain(`"${queueIds(q)[0]}"`);
     for (const q of ['media', 'jobs']) expect(sends, q).not.toContain(`"${queueIds(q)[0]}"`);
+  });
+
+  it('lets the worker send to the media (media.sweep) and faces queues only', () => {
+    const queueIds = (name: string) =>
+      Object.keys(
+        app.findResources('AWS::SQS::Queue', { Properties: { QueueName: `shotx-prod-${name}` } }),
+      );
+    const sends = workerStatements
+      .filter((st) => ([] as unknown[]).concat(st.Action).includes('sqs:SendMessage'))
+      .map((st) => JSON.stringify(st.Resource))
+      .join(' ');
+    for (const q of ['media', 'faces']) expect(sends, q).toContain(`"${queueIds(q)[0]}"`);
+    for (const q of ['zip', 'jobs']) expect(sends, q).not.toContain(`"${queueIds(q)[0]}"`);
   });
 
   it('gives Rekognition permissions to no role other than api and worker', () => {

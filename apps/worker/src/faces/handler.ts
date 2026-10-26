@@ -1,6 +1,6 @@
-import { folders } from '@shotx/db';
+import { files, folders } from '@shotx/db';
 import { parseQueueMessage, serializeQueueMessage } from '@shotx/shared';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Logger } from '../logger';
 import type { MessageHandler } from '../sqs/consumer';
 import { deleteRequestedFaces } from './delete-faces';
@@ -19,6 +19,8 @@ async function loadFolder(deps: FacesDeps, folderId: string) {
       ownerId: folders.ownerId,
       path: sql<string>`${folders.path}::text`,
       deletedAt: folders.deletedAt,
+      // As text: compared back exactly (microseconds) when the mark is cleared.
+      queuedAt: sql<string | null>`${folders.faceIndexQueuedAt}::text`,
     })
     .from(folders)
     .where(eq(folders.id, folderId));
@@ -27,7 +29,10 @@ async function loadFolder(deps: FacesDeps, folderId: string) {
 
 /**
  * `index.folder`: one `index.file` per ready, unindexed photo the folder subtree's face index
- * covers. Duplicates are harmless (index.file skips indexed files), so a retry may resend.
+ * covers. Each batch sets the files' outbox marks (`faces_queued_at`) before it is sent, so a lost
+ * message is re-sent by faces.sweep. Duplicates are harmless (index.file skips indexed files), so a
+ * retry may resend. When the fan-out is done (or there is nothing to do) the folder's own mark
+ * (`face_index_queued_at`, set by the API) is cleared, unless it changed meanwhile.
  */
 async function indexFolder(
   deps: FacesDeps,
@@ -35,37 +40,72 @@ async function indexFolder(
   log: Logger,
   mayContinue: () => boolean,
 ): Promise<void> {
+  const folder = await loadFolder(deps, folderId);
   if (!deps.features.faceSearch) {
     log.info('face search is disabled; index job acknowledged without indexing');
-    return;
-  }
-  const folder = await loadFolder(deps, folderId);
-  if (folder === null || folder.deletedAt !== null) {
+  } else if (folder === null || folder.deletedAt !== null) {
     log.info('folder is gone or trashed; nothing to index');
-    return;
-  }
-  let cursor = '00000000-0000-0000-0000-000000000000';
-  let queued = 0;
-  for (;;) {
-    if (!mayContinue()) {
-      throw new FacesJobIncompleteError(`index.folder queued ${queued} files before its deadline`);
+  } else {
+    let cursor = '00000000-0000-0000-0000-000000000000';
+    let queued = 0;
+    for (;;) {
+      if (!mayContinue()) {
+        throw new FacesJobIncompleteError(
+          `index.folder queued ${queued} files before its deadline`,
+        );
+      }
+      const ids = await unindexedPhotosInSubtree(
+        deps.db,
+        folder,
+        new Date(deps.now()),
+        cursor,
+        deps.batchSize,
+      );
+      if (ids.length === 0) break;
+      cursor = ids.at(-1)!;
+      await deps.db
+        .update(files)
+        .set({ facesQueuedAt: sql`now()` })
+        .where(inArray(files.id, ids));
+      await deps.queues.sendMessages(
+        deps.facesQueueUrl,
+        ids.map((fileId) => serializeQueueMessage('faces', { type: 'index.file', fileId })),
+      );
+      queued += ids.length;
     }
-    const ids = await unindexedPhotosInSubtree(
-      deps.db,
-      folder,
-      new Date(deps.now()),
-      cursor,
-      deps.batchSize,
-    );
-    if (ids.length === 0) break;
-    cursor = ids.at(-1)!;
-    await deps.queues.sendMessages(
-      deps.facesQueueUrl,
-      ids.map((fileId) => serializeQueueMessage('faces', { type: 'index.file', fileId })),
-    );
-    queued += ids.length;
+    log.info('folder indexing fanned out', { folderId, files: queued });
   }
-  log.info('folder indexing fanned out', { folderId, files: queued });
+  if (folder?.queuedAt != null) {
+    await deps.db
+      .update(folders)
+      .set({ faceIndexQueuedAt: null })
+      .where(
+        and(
+          eq(folders.id, folderId),
+          sql`${folders.faceIndexQueuedAt} = ${folder.queuedAt}::timestamptz`,
+        ),
+      );
+  }
+}
+
+/** The `index.file` outbox mark of a file, as text (null: none, or no such file). */
+async function fileMark(deps: FacesDeps, fileId: string): Promise<string | null> {
+  const [row] = await deps.db
+    .select({ queuedAt: sql<string | null>`${files.facesQueuedAt}::text` })
+    .from(files)
+    .where(eq(files.id, fileId));
+  return row?.queuedAt ?? null;
+}
+
+/**
+ * Clears the mark read when the job started, with its requeue counter; a mark set meanwhile (a
+ * newer send) stays for the job that send started.
+ */
+async function clearFileMark(deps: FacesDeps, fileId: string, mark: string): Promise<void> {
+  await deps.db
+    .update(files)
+    .set({ facesQueuedAt: null, facesRequeues: 0 })
+    .where(and(eq(files.id, fileId), sql`${files.facesQueuedAt} = ${mark}::timestamptz`));
 }
 
 /**
@@ -123,7 +163,10 @@ export function createFacesHandler(deps: FacesDeps): MessageHandler {
     switch (job.type) {
       case 'index.file': {
         const log = context.log.child({ jobType: job.type, fileId: job.fileId });
+        const mark = await fileMark(deps, job.fileId);
         const outcome = await indexFile(deps, job.fileId, log, signal);
+        // The job ended (any outcome; a throw keeps the mark for a retry or faces.sweep).
+        if (mark !== null) await clearFileMark(deps, job.fileId, mark);
         log.info('index job finished', { outcome });
         return;
       }

@@ -5,6 +5,7 @@ describe('loadTrustedProxyConfig', () => {
   it('defaults to trusting nobody', () => {
     expect(loadTrustedProxyConfig({})).toEqual({ addresses: [] });
     expect(loadTrustedProxyConfig({ TRUSTED_PROXY_ADDRESSES: '' })).toEqual({ addresses: [] });
+    expect(loadTrustedProxyConfig({ TRUSTED_PROXY_ADDRESSES: '   ' })).toEqual({ addresses: [] });
     expect(loadTrustedProxyConfig({ TRUSTED_PROXY_ADDRESSES: ' None ' })).toEqual({
       addresses: [],
     });
@@ -47,6 +48,14 @@ describe('loadTrustedProxyConfig', () => {
     }
   });
 
+  it('rejects a list of only separators', () => {
+    for (const bad of [',', ' , ,']) {
+      expect(() => loadTrustedProxyConfig({ TRUSTED_PROXY_ADDRESSES: bad }), bad).toThrow(
+        /must list at least one address, or none/,
+      );
+    }
+  });
+
   it('rejects anything else without echoing it', () => {
     for (const bad of [
       'my-proxy-host',
@@ -76,6 +85,9 @@ describe('loadTrustedProxyConfig', () => {
       { AUTH_PROVIDER: 'shotx', APP_STAGE: 'staging' },
       { AUTH_PROVIDER: 'shotx', APP_STAGE: 'local', NODE_ENV: 'production' },
       { AUTH_PROVIDER: 'shotx', APP_STAGE: 'prod', TRUSTED_PROXY_ADDRESSES: '' },
+      // Blank or whitespace only is unset, not `none`.
+      { AUTH_PROVIDER: 'shotx', APP_STAGE: 'prod', TRUSTED_PROXY_ADDRESSES: ' ' },
+      { AUTH_PROVIDER: 'shotx', APP_STAGE: 'prod', TRUSTED_PROXY_ADDRESSES: '\t \n' },
     ]) {
       expect(() => loadTrustedProxyConfig(env)).toThrow(/TRUSTED_PROXY_ADDRESSES is required/);
     }

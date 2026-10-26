@@ -1,3 +1,4 @@
+import { TEST_DESTINATIONS, testJobQueues } from '../../testing/jobs';
 import { randomUUID } from 'node:crypto';
 import {
   consents,
@@ -45,7 +46,7 @@ import {
   type TestDatabase,
   usageOf,
 } from '../../testing/database';
-import { MemoryObjectStore } from '../../testing/memory-aws';
+import { MemoryObjectStore, MemoryQueueClient } from '../../testing/memory-aws';
 import type { JobContext } from '../context';
 import { createJobsHandler } from '../handler';
 import { MemoryJobRunLedger } from '../ledger';
@@ -73,6 +74,8 @@ function context(env: Env, overrides: Partial<JobContext> = {}): JobContext {
   return {
     db: env.db,
     store: env.store,
+    queues: new MemoryQueueClient(),
+    destinations: { ...TEST_DESTINATIONS },
     faces: env.provider,
     log: silentLogger,
     now: Date.now,
@@ -888,6 +891,7 @@ describe('subscriptions.transition.daily', () => {
       });
       const ledger = new MemoryJobRunLedger();
       const handler = createJobsHandler({
+        ...testJobQueues(),
         db: env.db,
         store: env.store,
         faces: env.provider,

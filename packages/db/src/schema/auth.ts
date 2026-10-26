@@ -24,6 +24,8 @@ import { authPool } from './enums';
  * - Presenting a row that is revoked and has a successor is reuse: revoke the whole family
  *   (`auth_sessions_family_idx`) and answer REFRESH_TOKEN_REUSED.
  * - Logout revokes the family. A user's sessions go with the user (cascade).
+ * - auth.sessions.purge.daily deletes rows AUTH_SESSION_RETENTION_DAYS after `expires_at`
+ *   (`auth_sessions_expires_idx`); revoked rows stay until then, for reuse detection.
  * - `refresh_token_hash` is the lowercase hex SHA-256 of the token; the token itself is never
  *   stored.
  * - (user_id, pool) references users (id, auth_pool), so the session's pool is its user's.
@@ -38,7 +40,13 @@ export const authSessions = pgTable(
     familyId: uuid('family_id').notNull(),
     expiresAt: timestamptz('expires_at').notNull(),
     revokedAt: timestamptz('revoked_at'),
-    replacedById: uuid('replaced_by_id').references((): AnyPgColumn => authSessions.id),
+    /**
+     * The successor after rotation. ON DELETE SET NULL (migration 0006), so
+     * auth.sessions.purge.daily can delete expired rows in any batch order.
+     */
+    replacedById: uuid('replaced_by_id').references((): AnyPgColumn => authSessions.id, {
+      onDelete: 'set null',
+    }),
     createdAt: createdAt(),
     lastUsedAt: timestamptz('last_used_at').notNull().defaultNow(),
   },

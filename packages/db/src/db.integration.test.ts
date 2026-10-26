@@ -1947,6 +1947,24 @@ describe('auth sessions and admin credentials (migration 0005, PGlite)', () => {
     });
   });
 
+  it('purges a successor before its predecessor: replaced_by_id is set to null (migration 0006)', async () => {
+    const user = await newUser();
+    const familyId = randomUUID();
+    const first = one(await session(user.id, 'users', { familyId }));
+    const second = one(await session(user.id, 'users', { familyId }));
+    await db()
+      .update(schema.authSessions)
+      .set({ replacedById: second.id, revokedAt: new Date() })
+      .where(eq(schema.authSessions.id, first.id));
+    await db().delete(schema.authSessions).where(eq(schema.authSessions.id, second.id));
+    const [left] = await db()
+      .select()
+      .from(schema.authSessions)
+      .where(eq(schema.authSessions.id, first.id));
+    expect(left).toMatchObject({ replacedById: null });
+    expect(left?.revokedAt).not.toBeNull();
+  });
+
   it('gives credentials to admins-pool users only, with valid hashes and TOTP sizes', async () => {
     const admin = await newAdmin();
     const [row] = await credentials(admin.id);

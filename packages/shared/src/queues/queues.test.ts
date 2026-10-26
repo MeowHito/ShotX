@@ -3,7 +3,10 @@ import { derivedKey, originalKey } from '../s3-keys';
 import {
   createdObjects,
   createdOriginals,
+  isOriginalCompleted,
   isS3TestEvent,
+  mediaOriginals,
+  originalCompletedMessage,
   parseQueueMessage,
   QUEUE_MESSAGE_SCHEMAS,
   QUEUE_NAMES,
@@ -97,6 +100,9 @@ describe('queue names', () => {
       'faces.expire.daily',
       'faces.reconcile.daily',
       'quota.reconcile.nightly',
+      'media.sweep',
+      'faces.sweep',
+      'auth.sessions.purge.daily',
     ]);
   });
 });
@@ -200,6 +206,85 @@ describe('media queue', () => {
       originals: [],
       ignored: [],
     });
+  });
+});
+
+describe('media queue: original.completed', () => {
+  const key = originalKey({ photographerId, fileId, originalName: 'งานวิ่ง IMG+1 (2).jpg' });
+  const message = { kind: 'original.completed', fileId, photographerId, key } as const;
+
+  it('round-trips and is told apart from S3 events', () => {
+    const parsed = parseQueueMessage('media', serializeQueueMessage('media', message));
+    expect(parsed).toEqual(message);
+    expect(isOriginalCompleted(parsed)).toBe(true);
+    expect(isS3TestEvent(parsed)).toBe(false);
+    expect(isOriginalCompleted(parseQueueMessage('media', JSON.stringify(testEvent)))).toBe(false);
+    expect(isOriginalCompleted(parseQueueMessage('media', JSON.stringify(s3Event('a'))))).toBe(
+      false,
+    );
+    expect(originalCompletedMessage({ fileId, photographerId, key })).toEqual(message);
+  });
+
+  it.each([
+    ['a derived key', { key: derivedKey({ photographerId, fileId }, 'thumb') }],
+    ['another file', { fileId: otherFileId }],
+    ['another photographer', { photographerId: otherFileId }],
+    ['a hand-written key', { key: `originals/${photographerId}/${fileId}/../a.jpg` }],
+    ['a non-uuid id', { fileId: 'f', key: `originals/${photographerId}/f/a.jpg` }],
+    ['no key', { key: '' }],
+    ['another kind', { kind: 'original.created' }],
+  ])('rejects %s', (_label, change) => {
+    const body = { ...message, ...change };
+    expect(() => serializeQueueMessage('media', body as never)).toThrow(QueueMessageError);
+    expect(() => parseQueueMessage('media', JSON.stringify(body))).toThrow(QueueMessageError);
+  });
+
+  it('originalCompletedMessage refuses a key of another file', () => {
+    expect(() => originalCompletedMessage({ fileId: otherFileId, photographerId, key })).toThrow(
+      RangeError,
+    );
+  });
+
+  it('mediaOriginals gives the same original for both variants', () => {
+    const fromApi = mediaOriginals(
+      parseQueueMessage('media', JSON.stringify(message)),
+      'shotx-prod-media',
+    );
+    const encoded = encodeURIComponent(key).replace(/%2F/g, '/').replace(/%20/g, '+');
+    const fromS3 = mediaOriginals(
+      parseQueueMessage('media', JSON.stringify(s3Event(encoded))),
+      'shotx-prod-media',
+    );
+    const expected = { key, photographerId, fileId, originalName: 'งานวิ่ง IMG+1 (2).jpg' };
+    expect(fromApi).toEqual({
+      originals: [{ source: 'original.completed', ...expected }],
+      ignored: [],
+    });
+    expect(fromS3).toEqual({ originals: [{ source: 's3-event', ...expected }], ignored: [] });
+  });
+
+  it('mediaOriginals ignores test events, other buckets and other keys without keys', () => {
+    const parse = (body: unknown) => parseQueueMessage('media', JSON.stringify(body));
+    expect(mediaOriginals(parse(testEvent), 'shotx-prod-media')).toEqual({
+      originals: [],
+      ignored: [{ source: 's3-event', reason: 'test-event' }],
+    });
+    expect(mediaOriginals(parse(s3Event(encodeURIComponent(key))), 'other-bucket')).toEqual({
+      originals: [],
+      ignored: [{ source: 's3-event', reason: 'other-bucket' }],
+    });
+    expect(
+      mediaOriginals(
+        parse(s3Event(derivedKey({ photographerId, fileId }, 'thumb'))),
+        'shotx-prod-media',
+      ),
+    ).toEqual({ originals: [], ignored: [{ source: 's3-event', reason: 'not-an-original' }] });
+  });
+
+  it('createdObjects and createdOriginals refuse it instead of dropping it', () => {
+    const parsed = parseQueueMessage('media', JSON.stringify(message));
+    expect(() => createdObjects(parsed)).toThrow(/use mediaOriginals/);
+    expect(() => createdOriginals(parsed)).toThrow(/use mediaOriginals/);
   });
 });
 

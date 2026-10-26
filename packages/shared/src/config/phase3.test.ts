@@ -68,7 +68,53 @@ describe('loadWorkerSettings', () => {
       },
       tmpDir: undefined,
       logLevel: 'info',
+      sweeps: {
+        media: {
+          processingAgeSeconds: 21_600,
+          uploadingAgeSeconds: 3_600,
+          maxRequeues: 3,
+          batchSize: 500,
+        },
+        faces: {
+          deletionAgeSeconds: 3_600,
+          indexAgeSeconds: 21_600,
+          maxRequeues: 3,
+          batchSize: 500,
+        },
+        authSessionsPurgeBatchSize: 1_000,
+      },
     });
+  });
+
+  it('reads the sweep settings and keeps sweeps behind the longest processing time', () => {
+    const s = loadWorkerSettings({
+      MEDIA_SWEEP_PROCESSING_AGE_SECONDS: '18000',
+      MEDIA_SWEEP_UPLOADING_AGE_SECONDS: '900',
+      MEDIA_SWEEP_MAX_REQUEUES: '0',
+      FACES_SWEEP_DELETION_AGE_SECONDS: '600',
+      AUTH_SESSIONS_PURGE_BATCH_SIZE: '50',
+    });
+    expect(s.sweeps.media).toMatchObject({
+      processingAgeSeconds: 18_000,
+      uploadingAgeSeconds: 900,
+      maxRequeues: 0,
+    });
+    expect(s.sweeps.faces.deletionAgeSeconds).toBe(600);
+    expect(s.sweeps.authSessionsPurgeBatchSize).toBe(50);
+    expect(() => loadWorkerSettings({ MEDIA_SWEEP_PROCESSING_AGE_SECONDS: '14400' })).toThrow(
+      /MEDIA_SWEEP_PROCESSING_AGE_SECONDS must be longer than WORKER_MEDIA_MAX_PROCESSING_SECONDS/,
+    );
+    expect(() => loadWorkerSettings({ WORKER_FACES_MAX_PROCESSING_SECONDS: '30000' })).toThrow(
+      /FACES_SWEEP_INDEX_AGE_SECONDS must be longer/,
+    );
+    for (const [key, value] of [
+      ['MEDIA_SWEEP_UPLOADING_AGE_SECONDS', '60'],
+      ['MEDIA_SWEEP_MAX_REQUEUES', '-1'],
+      ['FACES_SWEEP_BATCH_SIZE', '0'],
+      ['AUTH_SESSIONS_PURGE_BATCH_SIZE', 'many'],
+    ] as const) {
+      expect(() => loadWorkerSettings({ [key]: value }), key).toThrow(new RegExp(key));
+    }
   });
 
   it('reads overrides', () => {

@@ -46,14 +46,19 @@ const windowSeconds = int(1, SECONDS_PER_DAY);
 
 const shareEnvSchema = z
   .object({
-    /** CloudFront signed URLs for thumbnails and previews (spec: ~1 h). */
+    /** Signed media URLs for thumbnails and previews (spec: ~1 h). */
     SIGNED_URL_VIEW_TTL_SECONDS: ttl.default(SECONDS_PER_HOUR),
-    /** CloudFront signed URLs for downloads and finished zips (spec: ~10 min). */
+    /** Signed media URLs for downloads and finished zips (spec: ~10 min). */
     SIGNED_URL_DOWNLOAD_TTL_SECONDS: ttl.default(10 * SECONDS_PER_MINUTE),
     /**
      * Signed URL expiries are rounded up to a multiple of this (see bucketedExpiry), so every URL
      * for one object issued within the same window is byte-identical and browsers and CloudFront
      * get cache hits. A URL then lives between its TTL and TTL + this.
+     *
+     * MEDIA_URL_SIGNER=s3-presign (R2, ADR 0008 section 2) also rounds the SigV4 signing date
+     * (X-Amz-Date) down to a multiple of this, since the date is part of the URL; X-Amz-Expires
+     * is then bucketed expiry - signing date (at most TTL + 2 x this), capped at
+     * S3_PRESIGN_MAX_EXPIRES_SECONDS (7 days). Media URLs are never unsigned or non-expiring.
      */
     SIGNED_URL_EXPIRY_BUCKET_SECONDS: int(1, SIGNED_URL_EXPIRY_BUCKET_MAX_SECONDS).default(
       5 * SECONDS_PER_MINUTE,

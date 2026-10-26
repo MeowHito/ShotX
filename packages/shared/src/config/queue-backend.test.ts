@@ -196,6 +196,14 @@ describe('queueJobName', () => {
         Bucket: 'b',
       }),
     ).toBe('media.s3-test-event');
+    expect(
+      queueJobName('media', {
+        kind: 'original.completed',
+        fileId,
+        photographerId: fileId,
+        key: `originals/${fileId}/${fileId}/a.jpg`,
+      }),
+    ).toBe('media.original-completed');
   });
 });
 

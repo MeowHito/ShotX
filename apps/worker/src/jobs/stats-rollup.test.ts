@@ -1,3 +1,4 @@
+import { TEST_DESTINATIONS, testJobQueues } from '../testing/jobs';
 import { randomUUID } from 'node:crypto';
 import { activityEvents, dailyStats, shareDailyStats, shares } from '@shotx/db';
 import { FakeFaceProvider, SyntheticWorld } from '@shotx/face/testing';
@@ -12,7 +13,7 @@ import {
   type TestDatabase,
 } from '../testing/database';
 import { testSubscriptionDeps } from '../testing/billing';
-import { MemoryObjectStore } from '../testing/memory-aws';
+import { MemoryObjectStore, MemoryQueueClient } from '../testing/memory-aws';
 import type { JobContext } from './context';
 import { createJobsHandler } from './handler';
 import { MemoryJobRunLedger } from './ledger';
@@ -27,6 +28,8 @@ function ctx(db: Db, now = NOW): JobContext {
     db,
     store: new MemoryObjectStore(),
     faces: new FakeFaceProvider(new SyntheticWorld({ persons: [], lookalikes: [] })),
+    queues: new MemoryQueueClient(),
+    destinations: { ...TEST_DESTINATIONS },
     log: silentLogger,
     now: () => now,
     batchSize: 100,
@@ -197,6 +200,7 @@ describe('stats.rollup.hourly', () => {
     const provider = new FakeFaceProvider(new SyntheticWorld({ persons: [], lookalikes: [] }));
     const store = new MemoryObjectStore();
     const handler = createJobsHandler({
+      ...testJobQueues(),
       db,
       store,
       faces: provider,

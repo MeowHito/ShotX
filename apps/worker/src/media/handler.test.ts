@@ -3,7 +3,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { files } from '@shotx/db';
-import { derivedKey, loadMediaConfig, QueueMessageError } from '@shotx/shared';
+import {
+  derivedKey,
+  loadMediaConfig,
+  originalCompletedMessage,
+  QueueMessageError,
+} from '@shotx/shared';
 import { eq, sql } from 'drizzle-orm';
 import sharp from 'sharp';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -256,12 +261,11 @@ describe('media consumer', () => {
     expect(queues.sent).toEqual([
       { queueUrl: FACES_URL, body: JSON.stringify({ type: 'index.file', fileId: id }) },
     ]);
-    // A redelivery re-sends while the file is not indexed yet (the faces consumer dedupes).
+    // The outbox mark is set with ready; a redelivery is a no-op (faces.sweep re-sends from the
+    // mark if this send was lost).
+    expect((await fileById(db, id))?.facesQueuedAt).toBeInstanceOf(Date);
     await handle(body, context());
-    expect(queues.sent).toHaveLength(2);
-    await db.update(files).set({ faceCount: 3 }).where(eq(files.id, id));
-    await handle(body, context());
-    expect(queues.sent).toHaveLength(2);
+    expect(queues.sent).toHaveLength(1);
   });
 
   it('queues face indexing for photos in a subfolder of a face-indexed folder', async () => {
@@ -292,6 +296,63 @@ describe('media consumer', () => {
     const { body } = await upload(jpeg, { ownerId, folderId: folder.id });
     await handle(body, context());
     expect(queues.sent).toEqual([]);
+  });
+
+  it('processes original.completed like the S3 event; later duplicates of either are no-ops', async () => {
+    const ownerId = await createPhotographer(db, { reservedBytes: jpeg.length });
+    const folder = await createFolder(db, ownerId, { faceIndexEnabled: true });
+    const { id, s3Key, body: s3Body } = await upload(jpeg, { ownerId, folderId: folder.id });
+    const completed = JSON.stringify(
+      originalCompletedMessage({ fileId: id, photographerId: ownerId, key: s3Key }),
+    );
+    const log = memoryLogger();
+    await handle(completed, { ...context(), log });
+    const row = await fileById(db, id);
+    expect(row?.status).toBe('ready');
+    // The index.file outbox mark is set with ready, then the job is sent.
+    expect(row?.facesQueuedAt).toBeInstanceOf(Date);
+    expect(queues.sent).toEqual([
+      { queueUrl: FACES_URL, body: JSON.stringify({ type: 'index.file', fileId: id }) },
+    ]);
+    expect(log.entries.find((e) => e.msg === 'original processed')?.fields).toMatchObject({
+      source: 'original.completed',
+      outcome: 'ready',
+    });
+    const puts = store.calls.put;
+
+    // AWS also delivers the S3 event for the same upload: nothing is counted or rendered twice.
+    await handle(s3Body, context());
+    expect(await usageOf(db, ownerId)).toEqual({ usedBytes: jpeg.length, reservedBytes: 0 });
+    expect(store.calls.put).toBe(puts);
+    expect((await fileById(db, id))?.status).toBe('ready');
+    // A late duplicate of either variant for a ready file is a no-op: no second faces job.
+    expect(queues.sent).toHaveLength(1);
+    await handle(completed, context());
+    expect(queues.sent).toHaveLength(1);
+    expect(await usageOf(db, ownerId)).toEqual({ usedBytes: jpeg.length, reservedBytes: 0 });
+  });
+
+  it('sets no faces outbox mark for files no face index covers', async () => {
+    const { id, body } = await upload(jpeg);
+    await handle(body, context());
+    expect((await fileById(db, id))?.facesQueuedAt).toBeNull();
+    expect(queues.sent).toEqual([]);
+  });
+
+  it('ignores S3 records of another bucket without logging keys', async () => {
+    const { id, s3Key } = await upload(jpeg);
+    const log = memoryLogger();
+    await handle(s3EventBody(s3Key, jpeg.length).replace(BUCKET, 'other-bucket'), {
+      ...context(),
+      log,
+    });
+    expect((await fileById(db, id))?.status).toBe('processing');
+    expect(store.objects.has(s3Key)).toBe(true);
+    expect(log.entries.find((e) => e.level === 'warn')?.fields).toMatchObject({
+      reason: 'other-bucket',
+      count: 1,
+    });
+    expect(JSON.stringify(log.entries)).not.toContain('originals/');
   });
 
   it('acknowledges the S3 test event and throws QueueMessageError for invalid bodies', async () => {

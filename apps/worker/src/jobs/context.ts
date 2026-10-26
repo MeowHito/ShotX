@@ -2,11 +2,16 @@ import type { ObjectStore } from '../aws/object-store';
 import type { Db } from '../db';
 import type { FaceDeleter } from '../faces';
 import type { Logger } from '../logger';
+import type { QueueSender } from '../queue/sender';
 
 export interface JobContext {
   db: Db;
   store: ObjectStore;
   faces: FaceDeleter;
+  /** Sends follow-up work (media.sweep, faces.sweep, upload recovery). */
+  queues: QueueSender;
+  /** Destinations of `queues` (SQS URLs, or the BullMQ queue names). */
+  destinations: { media: string; faces: string };
   log: Logger;
   now: () => number;
   /** Rows per batch. */

@@ -1,13 +1,17 @@
-import { parseQueueMessage, type ScheduledJobType } from '@shotx/shared';
+import { parseQueueMessage, type ScheduledJobType, type WorkerSweepSettings } from '@shotx/shared';
 import type { ObjectStore } from '../aws/object-store';
 import type { Db } from '../db';
 import type { FaceProvider } from '@shotx/face';
 import { errorFields, type LogFields } from '../logger';
+import type { QueueSender } from '../queue/sender';
 import type { MessageHandler } from '../sqs/consumer';
+import { runAuthSessionsPurge } from './auth-sessions-purge';
 import type { JobContext } from './context';
 import { runFacesExpire } from './faces-expire';
 import { runFacesReconcile } from './faces-reconcile';
+import { runFacesSweep } from './faces-sweep';
 import type { JobRunLedger } from './ledger';
+import { runMediaSweep } from './media-sweep';
 import type { OrphanScanStore } from './orphan-scans';
 import { runQuotaReconcile } from './quota-reconcile';
 import { runStatsRollup } from './stats-rollup';
@@ -30,6 +34,14 @@ export interface JobsHandlerDeps {
   /** FACE_ORPHAN_GRACE_MS. */
   orphanGraceMs: number;
   ledger: JobRunLedger;
+  /** media.sweep, faces.sweep and upload recovery send follow-up messages. */
+  queues: QueueSender;
+  /** Destinations of `queues` (SQS URLs, or the BullMQ queue names). */
+  destinations: { media: string; faces: string };
+  /** media.sweep, faces.sweep and auth.sessions.purge.daily settings (WorkerSettings.sweeps). */
+  sweeps: WorkerSweepSettings;
+  /** AUTH_SESSION_RETENTION_DAYS. */
+  authSessionRetentionDays: number;
   trashRetentionDays: number;
   batchSize: number;
   /** A run stops starting batches after this long (well under SQS's 12 h cap). */
@@ -49,6 +61,9 @@ const IMPLEMENTED = new Set<ScheduledJobType>([
   'faces.reconcile.daily',
   'stats.rollup.hourly',
   'subscriptions.transition.daily',
+  'media.sweep',
+  'faces.sweep',
+  'auth.sessions.purge.daily',
 ]);
 
 /** Consumer of the `jobs` queue (EventBridge Scheduler), deduped on (type, scheduledTime). */
@@ -78,6 +93,8 @@ export function createJobsHandler(deps: JobsHandlerDeps): MessageHandler {
       db: deps.db,
       store: deps.store,
       faces: deps.faces,
+      queues: deps.queues,
+      destinations: deps.destinations,
       log,
       now,
       batchSize: deps.batchSize,
@@ -110,6 +127,20 @@ export function createJobsHandler(deps: JobsHandlerDeps): MessageHandler {
       case 'subscriptions.transition.daily':
         result = {
           ...(await runSubscriptionTransitions(ctx, { ...deps.subscriptions, faces: deps.faces })),
+        };
+        break;
+      case 'media.sweep':
+        result = { ...(await runMediaSweep(ctx, deps.sweeps.media)) };
+        break;
+      case 'faces.sweep':
+        result = { ...(await runFacesSweep(ctx, deps.sweeps.faces)) };
+        break;
+      case 'auth.sessions.purge.daily':
+        result = {
+          ...(await runAuthSessionsPurge(ctx, {
+            retentionDays: deps.authSessionRetentionDays,
+            batchSize: deps.sweeps.authSessionsPurgeBatchSize,
+          })),
         };
         break;
       default:

@@ -201,6 +201,7 @@ describe('loadRetentionConfig', () => {
     expect(loadRetentionConfig({})).toEqual({
       trashRetentionDays: 30,
       faceIndexExpiryDays: 90,
+      authSessionRetentionDays: 7,
       subscription: {
         graceDays: 14,
         purgeAfterExpiryDays: 45,
@@ -208,6 +209,15 @@ describe('loadRetentionConfig', () => {
         purgeWarningDays: 7,
       },
     });
+  });
+
+  it('reads the auth session retention (0 = delete at expiry)', () => {
+    expect(loadRetentionConfig({ AUTH_SESSION_RETENTION_DAYS: '0' }).authSessionRetentionDays).toBe(
+      0,
+    );
+    expect(() => loadRetentionConfig({ AUTH_SESSION_RETENTION_DAYS: '366' })).toThrow(
+      /AUTH_SESSION_RETENTION_DAYS/,
+    );
   });
 
   it('keeps the purge warning before the purge', () => {

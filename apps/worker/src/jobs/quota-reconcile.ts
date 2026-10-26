@@ -3,11 +3,14 @@ import { expectedUsage, fileQuotaBucket, originalsPrefix } from '@shotx/shared';
 import { and, asc, eq, inArray, isNotNull, isNull, lt, notInArray, sql } from 'drizzle-orm';
 import { isUuid, rows } from '../db';
 import { errorFields } from '../logger';
+import { recoverCompletedUpload, storedOriginal } from '../media/recovery';
 import { applyQuotaMove, lockUsage, writeUsage } from '../quota';
 import { chunk, type JobContext, mayContinue } from './context';
 
 export interface QuotaReconcileResult {
   uploadsExpired: number;
+  /** Expired upload rows whose object was complete: completed and sent to the media pipeline. */
+  uploadsRecovered: number;
   uploadsSkipped: number;
   photographersChecked: number;
   /** Photographers whose storage_usage counters were corrected. */
@@ -19,12 +22,15 @@ export interface QuotaReconcileResult {
 
 /**
  * Upload sessions past `upload_expires_at` that never completed: abort the multipart upload, then
- * delete the row and release its reservation in one guarded transaction (the same guard as
- * `DELETE /uploads/:id`), then delete any object that made it to S3.
+ * HeadObject. An object of exactly the declared size means CompleteMultipartUpload succeeded and
+ * the API's markCompleted was lost: the row is completed and sent to the media pipeline
+ * (recoverCompletedUpload), never deleted. Otherwise delete the row and release its reservation
+ * in one guarded transaction (the same guard as `DELETE /uploads/:id`), then delete any object
+ * that made it to storage.
  */
 async function expireAbandonedUploads(
   ctx: JobContext,
-): Promise<{ expired: number; skipped: number }> {
+): Promise<{ expired: number; recovered: number; skipped: number }> {
   const now = new Date(ctx.now());
   const abandoned = and(
     isNotNull(files.uploadId),
@@ -35,9 +41,16 @@ async function expireAbandonedUploads(
   );
   const skippedIds = new Set<string>();
   let expired = 0;
+  let recovered = 0;
   while (mayContinue(ctx)) {
     const batch = await ctx.db
-      .select({ id: files.id, s3Key: files.s3Key, uploadId: files.uploadId })
+      .select({
+        id: files.id,
+        ownerId: files.ownerId,
+        s3Key: files.s3Key,
+        uploadId: files.uploadId,
+        sizeBytes: files.sizeBytes,
+      })
       .from(files)
       .where(
         skippedIds.size === 0 ? abandoned : and(abandoned, notInArray(files.id, [...skippedIds])),
@@ -49,7 +62,20 @@ async function expireAbandonedUploads(
       const log = ctx.log.child({ fileId: upload.id });
       try {
         if (upload.uploadId !== null) {
+          // Abort first: after it no CompleteMultipartUpload can still succeed, so the HeadObject
+          // below is the final answer.
           await ctx.store.abortMultipartUpload(upload.s3Key, upload.uploadId);
+          if ((await storedOriginal(ctx.store, upload)) === 'completed') {
+            const done = await recoverCompletedUpload(
+              { db: ctx.db, queues: ctx.queues, mediaQueue: ctx.destinations.media },
+              { ...upload, uploadId: upload.uploadId },
+            );
+            if (done) {
+              recovered++;
+              log.warn('expired upload was complete (markCompleted lost); recovered it');
+            }
+            continue;
+          }
         }
         const removed = await ctx.db.transaction(async (tx) => {
           const [row] = await tx
@@ -71,7 +97,7 @@ async function expireAbandonedUploads(
       }
     }
   }
-  return { expired, skipped: skippedIds.size };
+  return { expired, recovered, skipped: skippedIds.size };
 }
 
 interface Drift {
@@ -204,6 +230,7 @@ export async function runQuotaReconcile(ctx: JobContext): Promise<QuotaReconcile
   }
   return {
     uploadsExpired: uploads.expired,
+    uploadsRecovered: uploads.recovered,
     uploadsSkipped: uploads.skipped,
     photographersChecked: checked,
     countersFixed,

@@ -6,7 +6,7 @@ import { type ApiClient, createPublicApiClient } from '../api/client';
 import { ApiError } from '../api/errors';
 import { ClientError } from '../errors/messages';
 import { createShareApi } from '../share/share-api';
-import { createZipJob, pollZipJob } from './downloads';
+import { createZipJob, fetchFilesForShare, pollZipJob } from './downloads';
 
 const job = (status: ZipJobView['status']): ZipJobView => ({
   id: '0195f3a2-8d2f-7e5b-8c3a-4d5e6f7a8b9c',
@@ -141,5 +141,48 @@ describe('share API viewer recovery', () => {
     await expect(
       signedOut.api.call(PUBLIC_SHARE_ROUTES.meta, { params: { token: share.token } }),
     ).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('files for the iOS share sheet', () => {
+  const R2 = 'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com';
+  const fileIds = ['0195f3a2-8d2f-7e5b-8c3a-4d5e6f7a8b9c', '0195f3a2-8d2f-7e5b-8c3a-4d5e6f7a8b9d'];
+  const api = {
+    call: vi.fn((_route: unknown, options: { body: { fileIds: string[] } }) =>
+      Promise.resolve({
+        kind: 'file',
+        file: {
+          fileId: options.body.fileIds[0],
+          url: `${R2}/shotx-prod-media/derived/p/${options.body.fileIds[0]}/web.jpg?X-Amz-Signature=abc`,
+          fileName: `${options.body.fileIds[0]}.jpg`,
+          expiresAt: '2026-10-25T05:10:00.000Z',
+        },
+      }),
+    ),
+  } as unknown as ApiClient;
+
+  it('fetches cross-origin signed URLs as plain CORS GETs without credentials', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(new Response('x', { headers: { 'content-type': 'image/jpeg' } })),
+    );
+    const progress = vi.fn();
+    const files = await fetchFilesForShare(api, TOKEN, fileIds, progress, fetch);
+    expect(files.map((f) => f.name)).toEqual(fileIds.map((id) => `${id}.jpg`));
+    expect(files[0]?.type).toBe('image/jpeg');
+    expect(progress).toHaveBeenLastCalledWith(2);
+    for (const [url, init] of fetch.mock.calls) {
+      expect((url as string).startsWith(`${R2}/`)).toBe(true);
+      // No headers: a simple request, so the bucket needs no preflight rule for GET.
+      expect(init).toEqual({ credentials: 'omit', mode: 'cors' });
+    }
+  });
+
+  it('fails with a Thai save error when the storage refuses (e.g. CORS or expiry)', async () => {
+    const refused = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(new Response('', { status: 403 })),
+    );
+    await expect(fetchFilesForShare(api, TOKEN, fileIds, vi.fn(), refused)).rejects.toEqual(
+      new ClientError('client.saveFailed'),
+    );
   });
 });

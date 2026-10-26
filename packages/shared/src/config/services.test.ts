@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadAwsConfig, loadMediaStorageConfig } from './aws';
+import { loadAwsConfig } from './aws';
 import { loadCloudFrontSigningConfig } from './cloudfront';
 import { COGNITO_ENV, loadCognitoConfig } from './cognito';
 import { loadSentryConfig, loadWafCaptchaConfig } from './observability';
@@ -116,31 +116,7 @@ describe('loadAwsConfig', () => {
   });
 });
 
-describe('loadMediaStorageConfig', () => {
-  it('requires MEDIA_BUCKET and defaults to virtual-hosted requests', () => {
-    expect(loadMediaStorageConfig({ MEDIA_BUCKET: 'shotx-prod-media' })).toEqual({
-      bucket: 'shotx-prod-media',
-      forcePathStyle: false,
-    });
-    expect(
-      loadMediaStorageConfig({ MEDIA_BUCKET: 'shotx-local-media', S3_FORCE_PATH_STYLE: 'true' }),
-    ).toEqual({ bucket: 'shotx-local-media', forcePathStyle: true });
-    expect(() => loadMediaStorageConfig({})).toThrow(/at MEDIA_BUCKET\b/);
-  });
-
-  it.each([
-    ['MEDIA_BUCKET', 'Shotx-Media'],
-    ['MEDIA_BUCKET', 'ab'],
-    ['MEDIA_BUCKET', 'shotx..media'],
-    ['MEDIA_BUCKET', '-shotx'],
-    ['MEDIA_BUCKET', 's3://shotx-media'],
-    ['S3_FORCE_PATH_STYLE', 'maybe'],
-  ])('rejects %s=%j', (key, value) => {
-    expect(() => loadMediaStorageConfig({ MEDIA_BUCKET: 'shotx-media', [key]: value })).toThrow(
-      new RegExp(`at ${key}\\b`),
-    );
-  });
-});
+// loadMediaStorageConfig: storage.test.ts.
 
 describe('loadRedisConfig', () => {
   it('connects without AUTH locally', () => {

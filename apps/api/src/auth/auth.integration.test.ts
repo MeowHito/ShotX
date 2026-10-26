@@ -633,6 +633,58 @@ for (const backend of DATABASE_BACKENDS) {
         });
       });
 
+      it('never leaves a refusal without an expiring lock (double-submit race)', async () => {
+        const { userId } = await createAdmin(ops(), {
+          email: 'race@example.com',
+          name: 'R',
+          password,
+        });
+        const setCount = (n: number) =>
+          api.db
+            .update(adminCredentials)
+            .set({ failedAttempts: n, lockedUntil: null })
+            .where(eq(adminCredentials.userId, userId));
+        const credentials = async () =>
+          (
+            await api.db.select().from(adminCredentials).where(eq(adminCredentials.userId, userId))
+          )[0];
+
+        // The state the race used to leave: count at the threshold, no lock. The next attempt
+        // locks with an expiry (and the Retry-After comes true) instead of refusing forever.
+        await setCount(3);
+        const refused = await login('race@example.com', password);
+        expect(refused.status).toBe(429);
+        const retryAfter = Number(refused.headers.get('retry-after'));
+        expect(retryAfter).toBe(900);
+        const locked = await credentials();
+        expect(locked?.lockedUntil?.getTime()).toBe(api.clock.now().getTime() + 900_000);
+        expect(locked?.failedAttempts).toBe(0);
+        expect((await audits('auth.admin.locked')).some((r) => r.actorId === userId)).toBe(true);
+        api.clock.advance(retryAfter * 1000 + 1000);
+        expect((await login('race@example.com', password)).status).toBe(200);
+
+        // The race itself: count at threshold - 1, a correct password and a wrong one at once.
+        api.clock.advance(901_000);
+        await setCount(2);
+        const [right, wrong] = await Promise.all([
+          login('race@example.com', password),
+          login('race@example.com', 'wrong password!!'),
+        ]);
+        expect([200, 429]).toContain(right.status);
+        expect([401, 429]).toContain(wrong.status);
+        const after = await credentials();
+        const now = api.clock.now().getTime();
+        if (after !== undefined && after.failedAttempts >= 3) {
+          throw new Error('count at or past the threshold without a lock');
+        }
+        if (after?.lockedUntil != null && after.lockedUntil.getTime() > now) {
+          expect(after.lockedUntil.getTime()).toBeLessThanOrEqual(now + 900_000);
+          api.clock.advance(901_000);
+        }
+        api.clock.advance(901_000);
+        expect((await login('race@example.com', password)).status).toBe(200);
+      });
+
       it('admin guard: needs a live session, refused after a reset or lockout', async () => {
         const enrolment = await createAdmin(ops(), {
           email: 'guard@example.com',

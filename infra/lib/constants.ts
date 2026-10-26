@@ -144,4 +144,13 @@ export const INFRA_OWNED_ENV = [
   // Redis credentials over plain redis:// to a private host (the VPS compose network). AWS
   // ElastiCache is TLS only (rediss://), so the credentials must never travel in the clear.
   'REDIS_ALLOW_PLAINTEXT_AUTH',
+  // Media storage outside AWS S3 (R2 on the VPS, ADR 0008 section 2). AWS stacks use S3 through
+  // AWS_REGION and the task role: an endpoint here would move media off the OAC bucket CloudFront
+  // serves, the keys would be plaintext secrets in the task definition, and originals stay
+  // INTELLIGENT_TIERING as the platform spec requires.
+  'STORAGE_ENDPOINT_URL',
+  'STORAGE_REGION',
+  'STORAGE_ACCESS_KEY_ID',
+  'STORAGE_SECRET_ACCESS_KEY',
+  'STORAGE_ORIGINALS_CLASS',
 ] as const;

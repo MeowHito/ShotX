@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadWorkerSettings } from '@shotx/shared';
+import { loadWorkerSettings, storageS3ClientOptions } from '@shotx/shared';
 import { loadWorkerConfig } from './config';
 import { checkFacesBudget } from './faces/budget';
 import { createJsonLogger, errorFields } from './logger';
@@ -177,6 +177,32 @@ describe('worker config on BullMQ', () => {
         visibilityTimeoutSeconds: 900,
       }).problems,
     ).toEqual(['WORKER_FACES_MAX_PROCESSING_SECONDS is longer than heartbeats can hold (12 h)']);
+  });
+});
+
+describe('worker config with R2 storage', () => {
+  it('reads an explicit storage endpoint and keys, separate from AWS_ENDPOINT_URL', () => {
+    const config = loadWorkerConfig({
+      ...env,
+      STORAGE_ENDPOINT_URL: 'https://0123456789abcdef.r2.cloudflarestorage.com',
+      STORAGE_REGION: 'auto',
+      STORAGE_ACCESS_KEY_ID: 'worker-key',
+      STORAGE_SECRET_ACCESS_KEY: 'worker-secret',
+      STORAGE_ORIGINALS_CLASS: 'STANDARD',
+    });
+    const options = storageS3ClientOptions(config.storage);
+    expect(options).toMatchObject({
+      region: 'auto',
+      endpoint: 'https://0123456789abcdef.r2.cloudflarestorage.com',
+      credentials: { accessKeyId: 'worker-key', secretAccessKey: 'worker-secret' },
+    });
+    // Without STORAGE_ENDPOINT_URL storage stays on AWS S3 with the default chain.
+    expect(storageS3ClientOptions(loadWorkerConfig(env).storage)).toMatchObject({
+      region: 'ap-southeast-1',
+    });
+    expect(storageS3ClientOptions(loadWorkerConfig(env).storage)).not.toHaveProperty('credentials');
+    expect(config.worker.sweeps.media.maxRequeues).toBe(3);
+    expect(config.retention.authSessionRetentionDays).toBe(7);
   });
 });
 

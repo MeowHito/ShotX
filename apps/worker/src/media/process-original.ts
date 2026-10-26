@@ -2,9 +2,9 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  type CreatedOriginal,
   derivedKey,
   type MediaConfig,
+  type MediaOriginal,
   type MediaKind,
   serializeQueueMessage,
   UPLOAD_FILE_TYPES,
@@ -18,7 +18,6 @@ import {
   type FileRow,
   findFileById,
   findFileByKey,
-  folderIndexesFaces,
   markFailedAfterVerify,
   markReady,
   type ReadyFields,
@@ -77,7 +76,7 @@ function mediaKind(mime: string): MediaKind | null {
  * only reserved.
  */
 export async function processOriginal(
-  original: CreatedOriginal,
+  original: Pick<MediaOriginal, 'key' | 'fileId' | 'photographerId'>,
   deps: MediaDeps,
   log: Logger,
   signal: AbortSignal,
@@ -108,7 +107,9 @@ export async function processOriginal(
     return 'purged-deleted';
   }
   if (row.status === 'ready') {
-    await enqueueFacesIfNeeded(row, deps, log);
+    // A redelivery, the other variant of the same upload, or a late original.completed (a timed-out
+    // enqueue that landed after all): a no-op. A crash between ready and the faces send left the
+    // `faces_queued_at` mark that markReady set, and faces.sweep re-sends from it.
     return 'already-ready';
   }
   if (row.status === 'failed') {
@@ -168,7 +169,9 @@ export async function processOriginal(
       }
     }
 
-    if (!(await markReady(db, row.id, rendered.fields))) {
+    const now = new Date((deps.now ?? Date.now)());
+    const ready = await markReady(db, row.id, rendered.fields, now);
+    if (ready === null) {
       return settleSuperseded(
         row,
         deps,
@@ -182,7 +185,7 @@ export async function processOriginal(
       width: rendered.fields.width,
       height: rendered.fields.height,
     });
-    await enqueueFacesIfNeeded({ ...row, status: 'ready' }, deps, log);
+    if (ready.facesQueued) await sendIndexFile(row.id, deps, log);
     return 'ready';
   } finally {
     await rm(workDir, { recursive: true, force: true });
@@ -294,19 +297,15 @@ async function renderVideo(
 }
 
 /**
- * Sends `index.file` to the faces queue when the file is a live, not yet indexed photo in a
- * folder with face indexing on. Also runs when a ready file's event is redelivered, so a crash
- * between ready and the send can't lose the job; the faces consumer tolerates duplicates
- * (packages/face README, rule 5). Videos are never indexed in the MVP.
+ * Sends `index.file` for a file whose outbox mark (`faces_queued_at`) was just set in the same
+ * UPDATE that made it ready (or re-set on a redelivery). A crash before the send leaves the mark,
+ * and faces.sweep re-sends it; the faces consumer tolerates duplicates (packages/face README,
+ * rule 5) and clears the mark when the job ends. Videos are never marked.
  */
-async function enqueueFacesIfNeeded(row: FileRow, deps: MediaDeps, log: Logger): Promise<void> {
-  if (mediaKind(row.mime) !== 'image' || row.deletedAt !== null || row.faceCount !== null) return;
-  if (row.folderId === null) return;
-  const now = new Date((deps.now ?? Date.now)());
-  if (!(await folderIndexesFaces(deps.db, row.ownerId, row.folderId, now))) return;
+async function sendIndexFile(fileId: string, deps: MediaDeps, log: Logger): Promise<void> {
   await deps.queues.sendMessage(
     deps.facesQueueUrl,
-    serializeQueueMessage('faces', { type: 'index.file', fileId: row.id }),
+    serializeQueueMessage('faces', { type: 'index.file', fileId }),
   );
   log.info('queued face indexing');
 }

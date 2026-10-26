@@ -23,6 +23,8 @@ export class MemoryObjectStore implements ObjectStore {
     put: 0,
     deleted: [] as string[],
     aborted: [] as string[],
+    /** Upload ids multipartUploadExists was asked about. */
+    listedParts: [] as string[],
     /** Streams opened by getStream, and how many were open at most at the same time. */
     streamsOpened: 0,
     maxOpenStreams: 0,
@@ -160,6 +162,16 @@ export class MemoryObjectStore implements ObjectStore {
       if (key.startsWith(prefix)) yield { key, size: object.body.length };
     }
     await Promise.resolve();
+  }
+
+  /** Opens a multipart upload, as CreateMultipartUpload did for an `uploading` row. */
+  openUpload(key: string, uploadId: string): void {
+    this.uploads.set(uploadId, key);
+  }
+
+  multipartUploadExists(key: string, uploadId: string): Promise<boolean> {
+    this.calls.listedParts.push(uploadId);
+    return Promise.resolve(this.uploads.get(uploadId) === key);
   }
 
   abortMultipartUpload(_key: string, uploadId: string): Promise<void> {

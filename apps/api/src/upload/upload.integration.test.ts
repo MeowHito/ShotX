@@ -267,6 +267,9 @@ for (const backend of DATABASE_BACKENDS) {
       expect(again.status).toBe(200);
       expect(again.body.file.status).toBe('processing');
       expect((await abort(me, res.fileId)).status).toBe(409);
+      // SQS backend: media_queued_at is stamped, but S3 ObjectCreated feeds `media`, not the api.
+      expect((await row(res.fileId))?.mediaQueuedAt).toEqual(api.clock.now());
+      expect(api.queue.messages('media')).toEqual([]);
     });
 
     it('recovers when S3 completed but the response was lost', async () => {
@@ -466,3 +469,73 @@ for (const backend of DATABASE_BACKENDS) {
     });
   });
 }
+
+describe('upload completion with QUEUE_BACKEND=bullmq (R2: no bucket notifications)', () => {
+  let database: TestDatabase;
+  let api: TestApi;
+
+  beforeAll(async () => {
+    database = await DATABASE_BACKENDS[0].open();
+    api = await TestApi.start(database.db, { env: { QUEUE_BACKEND: 'bullmq' } });
+  });
+  afterAll(async () => {
+    await api?.close();
+    await database?.close();
+  });
+
+  async function upload(me: Awaited<ReturnType<TestApi['photographer']>>) {
+    const size = 6 * MiB;
+    const init = await api.request<UploadInitResponse>('POST', apiPath(U.init), {
+      token: me.token,
+      body: { name: 'รูป 1.jpg', size, mime: 'image/jpeg', folderId: null },
+    });
+    const res = init.body;
+    const parts = Array.from({ length: res.partCount }, (_, i) => ({
+      partNumber: i + 1,
+      etag: api.storage.putPart(
+        res.uploadId,
+        i + 1,
+        i + 1 < res.partCount ? res.partSize : size - res.partSize * (res.partCount - 1),
+      ),
+    }));
+    const complete = () =>
+      api.request<CompleteUploadResponse>('POST', apiPath(U.complete, { id: res.fileId }), {
+        token: me.token,
+        body: { parts },
+      });
+    return { fileId: res.fileId, complete };
+  }
+
+  it("sends original.completed after the commit, once, with the file's originals/ key", async () => {
+    const me = await api.photographer();
+    const { fileId, complete } = await upload(me);
+    expect((await complete()).status).toBe(200);
+    const [file] = await api.db.select().from(files).where(eq(files.id, fileId));
+    expect(file?.mediaQueuedAt).toEqual(api.clock.now());
+    expect(api.queue.messages('media')).toEqual([
+      { kind: 'original.completed', fileId, photographerId: me.id, key: file?.s3Key },
+    ]);
+    // An idempotent replay of the completion sends nothing more.
+    expect((await complete()).status).toBe(200);
+    expect(api.queue.messages('media')).toHaveLength(1);
+  });
+
+  it('logs a failed enqueue and still completes (media.sweep re-sends)', async () => {
+    const me = await api.photographer();
+    const { fileId, complete } = await upload(me);
+    api.queue.failing = true;
+    try {
+      const res = await complete();
+      expect(res.status).toBe(200);
+      expect(res.body.file.status).toBe('processing');
+    } finally {
+      api.queue.failing = false;
+    }
+    const [event] = api.events.of('media.enqueue_failed');
+    expect(event).toMatchObject({ fileId, photographerId: me.id, queue: 'media' });
+    // Ids only: never the key (it holds the file name).
+    expect(JSON.stringify(event)).not.toContain('originals/');
+    const [file] = await api.db.select().from(files).where(eq(files.id, fileId));
+    expect(file?.mediaQueuedAt).not.toBeNull();
+  });
+});

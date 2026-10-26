@@ -3,7 +3,7 @@ import { type Env, parseEnv } from './env';
 import { int, intList } from './fields';
 
 // Timings for the daily scheduled jobs (trash.purge.daily, faces.expire.daily,
-// subscriptions.transition.daily). The DPO or legal team reviews these before launch.
+// subscriptions.transition.daily, auth.sessions.purge.daily). The DPO or legal team reviews these before launch.
 const retentionEnvSchema = z
   .object({
     /** Trashed files are purged this many days after `deleted_at`. */
@@ -21,6 +21,12 @@ const retentionEnvSchema = z
      * purged. Less than SUBSCRIPTION_PURGE_AFTER_EXPIRY_DAYS. Assumption: 7.
      */
     SUBSCRIPTION_PURGE_WARNING_DAYS: int(1, 29).default(7),
+    /**
+     * auth.sessions.purge.daily deletes refresh sessions this many days after `expires_at`
+     * (revoked ones included: they go with their family's expiry). Assumption: 7 (short; the
+     * rows are personal data and sign-ins are in audit_log).
+     */
+    AUTH_SESSION_RETENTION_DAYS: int(0, 365).default(7),
   })
   .refine((e) => e.SUBSCRIPTION_PURGE_WARNING_DAYS < e.SUBSCRIPTION_PURGE_AFTER_EXPIRY_DAYS, {
     error: 'SUBSCRIPTION_PURGE_WARNING_DAYS must be less than SUBSCRIPTION_PURGE_AFTER_EXPIRY_DAYS',
@@ -29,6 +35,8 @@ const retentionEnvSchema = z
 export interface RetentionConfig {
   trashRetentionDays: number;
   faceIndexExpiryDays: number;
+  /** AUTH_SESSION_RETENTION_DAYS: days after an auth session's expiry until it is deleted. */
+  authSessionRetentionDays: number;
   subscription: {
     graceDays: number;
     purgeAfterExpiryDays: number;
@@ -43,6 +51,7 @@ export function loadRetentionConfig(env: Env): RetentionConfig {
   return {
     trashRetentionDays: e.TRASH_RETENTION_DAYS,
     faceIndexExpiryDays: e.FACE_INDEX_EXPIRY_DAYS,
+    authSessionRetentionDays: e.AUTH_SESSION_RETENTION_DAYS,
     subscription: {
       graceDays: e.SUBSCRIPTION_GRACE_DAYS,
       purgeAfterExpiryDays: e.SUBSCRIPTION_PURGE_AFTER_EXPIRY_DAYS,

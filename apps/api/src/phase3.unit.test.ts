@@ -424,6 +424,14 @@ describe('queue senders', () => {
     await expect(
       sender.send('faces', { type: 'delete.faces', deletionId: 'nope' }),
     ).rejects.toThrow('Invalid faces queue message');
+    await expect(
+      sender.send('media', {
+        kind: 'original.completed',
+        fileId: '0199b2a0-0000-7000-8000-000000000002',
+        photographerId: '0199b2a0-0000-7000-8000-000000000001',
+        key: 'originals/0199b2a0-0000-7000-8000-000000000001/0199b2a0-0000-7000-8000-000000000002/a.jpg',
+      }),
+    ).rejects.toThrow(/does not send to media on SQS/);
     const memory = new MemoryQueueSender();
     await memory.send('faces', { type: 'index.folder', folderId: jobId });
     expect(memory.messages('faces')).toEqual([{ type: 'index.folder', folderId: jobId }]);

@@ -1,6 +1,6 @@
 import { SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
 import { type AwsConfig, serializeQueueMessage } from '@shotx/shared';
-import type { ApiQueue } from '../config';
+import type { ApiQueue, ApiSqsQueue } from '../config';
 import type { QueueMessageInput, QueueSender } from '../tokens';
 import { withEnqueueTimeout } from './enqueue-timeout';
 
@@ -19,14 +19,19 @@ export function createSqsClient(aws: AwsConfig): SQSClient {
 export class SqsQueueSender implements QueueSender {
   constructor(
     private readonly client: Pick<SQSClient, 'send'>,
-    private readonly urls: Record<ApiQueue, string>,
+    /** faces and zip only: on SQS, S3 ObjectCreated feeds `media` (API_SQS_QUEUES). */
+    private readonly urls: Record<ApiSqsQueue, string>,
     /** QUEUE_ENQUEUE_TIMEOUT_MS: one SendMessage at most (aborted after it). */
     private readonly enqueueTimeoutMs: number,
   ) {}
 
   async send<Q extends ApiQueue>(queue: Q, message: QueueMessageInput<Q>): Promise<void> {
+    const target: ApiQueue = queue;
+    if (target === 'media') {
+      throw new Error('The api does not send to media on SQS (S3 events feed it)');
+    }
     const body = serializeQueueMessage(queue, message);
-    const command = new SendMessageCommand({ QueueUrl: this.urls[queue], MessageBody: body });
+    const command = new SendMessageCommand({ QueueUrl: this.urls[target], MessageBody: body });
     await withEnqueueTimeout(queue, this.enqueueTimeoutMs, (abortSignal) =>
       this.client.send(command, { abortSignal }),
     );

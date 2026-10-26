@@ -3,6 +3,7 @@ import {
   BULLMQ_QUEUE_ENV,
   loadAuthProviderConfig,
   loadBffAuthConfig,
+  loadMediaStorageConfig,
   loadMediaUrlSignerConfig,
   loadQueueBackendConfig,
   loadShotxAuthConfig,
@@ -39,8 +40,8 @@ const LOCAL_ONLY = {
  * ADR 0008 (VPS) settings the AWS stacks must not take from services.env: the queue backend and
  * the BullMQ/schedule settings (cdk.json `queues` and `schedules` are their AWS source), the
  * API-issued sign-in keys and secrets (AWS stays on Cognito, with no secret wiring for them) and
- * the trusted reverse proxy (on AWS the client address is CloudFront-Viewer-Address) and plaintext
- * Redis credentials (ElastiCache is TLS only).
+ * the trusted reverse proxy (on AWS the client address is CloudFront-Viewer-Address), plaintext
+ * Redis credentials (ElastiCache is TLS only) and non-AWS media storage (STORAGE_*).
  */
 const VPS_ONLY = [
   'QUEUE_BACKEND',
@@ -56,6 +57,11 @@ const VPS_ONLY = [
   'GOOGLE_OAUTH_CLIENT_SECRET',
   'TRUSTED_PROXY_ADDRESSES',
   'REDIS_ALLOW_PLAINTEXT_AUTH',
+  'STORAGE_ENDPOINT_URL',
+  'STORAGE_REGION',
+  'STORAGE_ACCESS_KEY_ID',
+  'STORAGE_SECRET_ACCESS_KEY',
+  'STORAGE_ORIGINALS_CLASS',
 ];
 
 /** Stands in for a CloudFormation token; queue URLs get a URL so the SQS loader can parse them. */
@@ -123,11 +129,12 @@ describe('local development stand-ins never reach a deployed stage', () => {
     }
   });
 
-  it('keeps every container on Cognito sign-in, the SQS queue backend and no trusted proxy', () => {
+  it('keeps every container on Cognito, SQS, AWS S3 and no trusted proxy', () => {
     const s = synthPlatform();
     const app = s.template(s.platform.app);
     const definitions = Object.values(app.findResources('AWS::ECS::TaskDefinition'));
     const queuesSeen = new Set<string>();
+    let storageSeen = 0;
     for (const td of definitions) {
       for (const container of (td.Properties as Json).ContainerDefinitions as Json[]) {
         const pairs = [
@@ -150,8 +157,17 @@ describe('local development stand-ins never reach a deployed stage', () => {
         const backend = loadQueueBackendConfig(env, queues);
         expect(backend.backend).toBe('sqs');
         for (const q of queues) queuesSeen.add(q);
+        // Media on AWS S3 through the task role, originals in Intelligent-Tiering.
+        if (env.MEDIA_BUCKET !== undefined) {
+          const storage = loadMediaStorageConfig(env);
+          expect(storage.client).toMatchObject({ explicit: false, credentials: null });
+          expect(storage.client.endpointUrl).toBeNull();
+          expect(storage.originalsStorageClass).toBe('INTELLIGENT_TIERING');
+          storageSeen += 1;
+        }
       }
     }
+    expect(storageSeen).toBeGreaterThan(0);
     // api and worker between them send to and consume every queue.
     expect([...queuesSeen].sort()).toEqual([...QUEUE_NAMES].sort());
   });

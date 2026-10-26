@@ -188,9 +188,13 @@ describe('cdk.json config', () => {
 
     it('checks the faces retention against the cap, not only the worst case', () => {
       // 5 x (39600 s cap + 900 s) = 202500 s > 2 days; with the 3960 s worst case it would fit.
-      const c = withWorker({ WORKER_FACES_MAX_PROCESSING_SECONDS: '39600' }, (x) => {
-        at(x, 'queues', 'faces').retentionDays = 2;
-      });
+      // The faces sweep must wait longer than the cap before re-enqueueing (loadWorkerSettings).
+      const c = withWorker(
+        { WORKER_FACES_MAX_PROCESSING_SECONDS: '39600', FACES_SWEEP_INDEX_AGE_SECONDS: '43200' },
+        (x) => {
+          at(x, 'queues', 'faces').retentionDays = 2;
+        },
+      );
       expect(() => parseConfig(c)).toThrow(/queues\.faces\.retentionDays/);
     });
 
@@ -223,9 +227,13 @@ describe('cdk.json config', () => {
         ['jobs', 'WORKER_JOB_MAX_RUNTIME_SECONDS', 1],
         ['media', 'WORKER_MEDIA_MAX_PROCESSING_SECONDS', 2],
       ] as const) {
-        const c = withWorker({ [key]: '39600' }, (x) => {
-          at(x, 'queues', q).retentionDays = retention;
-        });
+        // The media sweep must wait longer than the media cap (loadWorkerSettings).
+        const c = withWorker(
+          { [key]: '39600', MEDIA_SWEEP_PROCESSING_AGE_SECONDS: '43200' },
+          (x) => {
+            at(x, 'queues', q).retentionDays = retention;
+          },
+        );
         expect(() => parseConfig(c), q).toThrow(new RegExp(`queues\\.${q}\\.retentionDays`));
       }
     });

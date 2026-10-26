@@ -118,7 +118,10 @@ const rateLimited = (retryAfterSeconds: number) =>
 /** The two sign-in steps; each has its own rate-limit windows. */
 type Step = 'pwd' | 'otp';
 
-type Lockout = { kind: 'reserved' } | { kind: 'locked'; retryAfterSeconds: number };
+type Lockout =
+  | { kind: 'reserved' }
+  /** `justLocked`: this reservation applied the lock (audit `auth.admin.locked`). */
+  | { kind: 'locked'; retryAfterSeconds: number; justLocked?: boolean };
 
 /**
  * How long consecutive failures of an unknown email are remembered. Known accounts keep theirs
@@ -245,6 +248,7 @@ export class AdminSignIn {
         ((until?.getTime() ?? now.getTime() + seconds * 1000) - now.getTime()) / 1000,
       ),
     });
+    const until = new Date(now.getTime() + seconds * 1000);
     if (row === null) {
       const marker = await this.store.get(unknownLockKey(account));
       if (marker !== null) return lockedFor(new Date(Number(marker)));
@@ -253,20 +257,35 @@ export class AdminSignIn {
         threshold,
         UNKNOWN_ACCOUNT_FAILURE_TTL_SECONDS,
       );
-      return reserved.allowed ? { kind: 'reserved' } : lockedFor(null);
+      if (reserved.allowed) return { kind: 'reserved' };
+      // Past the threshold without a lock (a lost race): lock now, so the refusal expires.
+      await this.store.setWithTtl(unknownLockKey(account), String(until.getTime()), seconds);
+      await this.limiter.reset(unknownFailKey(account));
+      return { ...lockedFor(until), justLocked: true };
     }
+    // One statement: count the attempt, or, when that would pass the threshold (concurrent
+    // attempts reserved the remaining ones), lock the account with an expiry and restart the
+    // count, so a refusal is never left without a lock that ends.
+    const pastThreshold = sql`${adminCredentials.failedAttempts} + 1 > ${threshold}`;
     const [reserved] = await this.db
       .update(adminCredentials)
-      .set({ failedAttempts: sql`${adminCredentials.failedAttempts} + 1`, updatedAt: now })
+      .set({
+        failedAttempts: sql`CASE WHEN ${pastThreshold} THEN 0 ELSE ${adminCredentials.failedAttempts} + 1 END`,
+        lockedUntil: sql`CASE WHEN ${pastThreshold} THEN ${until.toISOString()}::timestamptz ELSE ${adminCredentials.lockedUntil} END`,
+        updatedAt: now,
+      })
       .where(
         and(
           eq(adminCredentials.userId, row.id),
           or(isNull(adminCredentials.lockedUntil), lte(adminCredentials.lockedUntil, now)),
         ),
       )
-      .returning({ failedAttempts: adminCredentials.failedAttempts });
+      .returning({ lockedUntil: adminCredentials.lockedUntil });
     if (reserved === undefined) return lockedFor(row.lockedUntil);
-    return reserved.failedAttempts > threshold ? lockedFor(null) : { kind: 'reserved' };
+    if (reserved.lockedUntil?.getTime() === until.getTime()) {
+      return { ...lockedFor(until), justLocked: true };
+    }
+    return { kind: 'reserved' };
   }
 
   /**
@@ -339,6 +358,9 @@ export class AdminSignIn {
     }
     const lockout = await this.reserveLockout(settings, row, account);
     if (lockout.kind === 'locked') {
+      if (lockout.justLocked === true) {
+        await this.audit('auth.admin.locked', row, account, { ipHash });
+      }
       await this.audit('auth.admin.sign_in_failed', row, account, { reason: 'locked', ipHash });
       throw rateLimited(lockout.retryAfterSeconds);
     }
@@ -402,6 +424,9 @@ export class AdminSignIn {
     const lockout = await this.reserveLockout(settings, row, account);
     if (lockout.kind === 'locked') {
       await this.store.del(key);
+      if (lockout.justLocked === true) {
+        await this.audit('auth.admin.locked', row, account, { ipHash });
+      }
       await this.audit('auth.admin.mfa_failed', row, account, { reason: 'locked', ipHash });
       throw rateLimited(lockout.retryAfterSeconds);
     }
