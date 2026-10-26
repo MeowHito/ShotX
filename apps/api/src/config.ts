@@ -2,6 +2,7 @@ import {
   type ApiLimitsConfig,
   type AppConfig,
   type AuthPool,
+  type AuthProviderConfig,
   type AwsConfig,
   type BillingConfig,
   type CloudFrontSigningConfig,
@@ -13,8 +14,10 @@ import {
   type FaceConfig,
   type FaceSearchUploadConfig,
   type FeatureFlags,
+  type MediaUrlSignerConfig,
   loadApiLimitsConfig,
   loadAppConfig,
+  loadAuthProviderConfig,
   loadAwsConfig,
   loadBillingConfig,
   loadCloudFrontSigningConfig,
@@ -26,6 +29,7 @@ import {
   loadFaceSearchUploadConfig,
   loadFeatureFlags,
   loadMediaStorageConfig,
+  loadMediaUrlSignerConfig,
   loadPaymentGatewayConfig,
   loadQueueUrls,
   loadRedisConfig,
@@ -66,8 +70,14 @@ export interface ApiConfig {
   drive: DriveConfig;
   share: ShareConfig;
   retention: RetentionConfig;
-  cloudFront: CloudFrontSigningConfig;
-  cognito: Record<AuthPool, CognitoPoolConfig>;
+  /** `s3-presign` only on APP_STAGE=local (LocalStack has no CloudFront). */
+  mediaUrls: MediaUrlSignerConfig;
+  /** Set with MEDIA_URL_SIGNER=cloudfront; null with `s3-presign`. */
+  cloudFront: CloudFrontSigningConfig | null;
+  /** `local` only on APP_STAGE=local (loadAuthProviderConfig refuses it anywhere else). */
+  auth: AuthProviderConfig;
+  /** Both pools with AUTH_PROVIDER=cognito; null with `local`, which needs no Cognito. */
+  cognito: Record<AuthPool, CognitoPoolConfig> | null;
   sentry: SentryConfig;
   limits: ApiLimits;
   features: FeatureFlags;
@@ -86,6 +96,8 @@ export interface ApiConfig {
 
 /** Everything the API reads from the environment, through the shared loaders only. */
 export function loadApiConfig(env: Env): ApiConfig {
+  const auth = loadAuthProviderConfig(env);
+  const mediaUrls = loadMediaUrlSignerConfig(env);
   return {
     app: loadAppConfig(env),
     server: loadServerConfig(env, API_DEFAULT_PORT),
@@ -96,8 +108,10 @@ export function loadApiConfig(env: Env): ApiConfig {
     drive: loadDriveConfig(env),
     share: loadShareConfig(env),
     retention: loadRetentionConfig(env),
-    cloudFront: loadCloudFrontSigningConfig(env),
-    cognito: loadCognitoConfig(env, ['users', 'admins']),
+    mediaUrls,
+    cloudFront: mediaUrls.signer === 'cloudfront' ? loadCloudFrontSigningConfig(env) : null,
+    auth,
+    cognito: auth.provider === 'cognito' ? loadCognitoConfig(env, ['users', 'admins']) : null,
     sentry: loadSentryConfig(env),
     limits: loadApiLimitsConfig(env),
     features: loadFeatureFlags(env),

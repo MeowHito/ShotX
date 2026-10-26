@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { cookieNames } from './lib/auth/session';
 import { buildCsp, securityHeaders } from './lib/security/headers';
-import { uploadOrigins } from './lib/server/config';
+import { processMediaOrigins, uploadOrigins } from './lib/server/config';
 
 /**
  * Runs before every page and route handler (not static assets or /healthz):
@@ -20,6 +20,7 @@ export function proxy(request: NextRequest) {
     https,
     publicBaseUrl,
     uploadOrigins: uploadOrigins(env),
+    mediaOrigins: processMediaOrigins(),
     cognitoDomain: env.COGNITO_DOMAIN || undefined,
     // Only the share page runs the face detector.
     allowWasm: request.nextUrl.pathname.startsWith('/s/'),

@@ -3,13 +3,12 @@ import { ConsoleLogger } from '@nestjs/common';
 import { createDb, createPool, loadDatabaseConfig } from '@shotx/db';
 import { createRedisRekognitionLimiters, RekognitionFaceProvider } from '@shotx/face';
 import { createApiApp } from './app';
-import { CognitoTokenVerifier, remoteJwks } from './auth/cognito-verifier';
 import { loadApiConfig, redisKeyPrefix } from './config';
-import { CloudFrontMediaUrlSigner } from './infra/cloudfront-signer';
 import { createRedis, RedisKeyValueStore, RedisRateLimiter } from './infra/redis';
 import { createS3Client, S3ObjectStorage } from './infra/s3-storage';
 import { createSqsClient, SqsQueueSender } from './infra/sqs-queue';
 import { systemClock } from './tokens';
+import { mediaUrlSigner, tokenVerifier } from './wiring';
 
 async function main(): Promise<void> {
   const env = process.env;
@@ -31,9 +30,9 @@ async function main(): Promise<void> {
       config,
       db: createDb(pool),
       storage: new S3ObjectStorage(s3, config.storage.bucket),
-      signer: new CloudFrontMediaUrlSigner(config.cloudFront),
+      signer: mediaUrlSigner(config),
       rateLimiter: new RedisRateLimiter(redis, redisKeyPrefix(config)),
-      tokenVerifier: new CognitoTokenVerifier(config.cognito, remoteJwks(config.cognito)),
+      tokenVerifier: tokenVerifier(config),
       clock: systemClock,
       store: new RedisKeyValueStore(redis, redisKeyPrefix(config)),
       queue: new SqsQueueSender(sqs, config.queues),

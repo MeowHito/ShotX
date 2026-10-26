@@ -1,10 +1,13 @@
 import {
+  type AuthProviderConfig,
   type CognitoPoolConfig,
   type Env,
   loadAppConfig,
+  loadAuthProviderConfig,
   loadAwsConfig,
   loadCognitoConfig,
   loadInternalApiConfig,
+  loadMediaUrlSignerConfig,
   loadUploadConfig,
   parseEnv,
 } from '@shotx/shared';
@@ -18,17 +21,22 @@ import type { ClientFaceConfig, ClientShareConfig } from '../face/config';
 export interface WebConfig {
   publicBaseUrl: string;
   apiInternalUrl: string;
-  cognito: CognitoPoolConfig;
+  /** `local` only on APP_STAGE=local (loadAuthProviderConfig refuses it anywhere else). */
+  auth: AuthProviderConfig;
+  /** The users pool with AUTH_PROVIDER=cognito; null with `local`. */
+  cognito: CognitoPoolConfig | null;
   /** `Secure` and `__Host-` cookies; off only on plain-http localhost. */
   secureCookies: boolean;
 }
 
 export function loadWebConfig(env: Env): WebConfig {
   const app = loadAppConfig(env);
+  const auth = loadAuthProviderConfig(env);
   return {
     publicBaseUrl: app.publicBaseUrl,
     apiInternalUrl: loadInternalApiConfig(env).apiInternalUrl,
-    cognito: loadCognitoConfig(env, ['users']).users,
+    auth,
+    cognito: auth.provider === 'cognito' ? loadCognitoConfig(env, ['users']).users : null,
     secureCookies: app.publicBaseUrl.startsWith('https://'),
   };
 }
@@ -74,6 +82,25 @@ export function uploadOrigins(env: Env = process.env): string[] {
   }
   if (aws.endpointUrl !== null) origins.push(new URL(aws.endpointUrl).origin);
   return origins;
+}
+
+/**
+ * Origins of signed media URLs besides the site (CSP `img-src`/`media-src`). On AWS media is
+ * same-origin (`/media` on CloudFront), so this is empty; with MEDIA_URL_SIGNER=s3-presign (the
+ * shared loader refuses it outside APP_STAGE=local) URLs are signed on AWS_ENDPOINT_URL.
+ */
+export function mediaOrigins(env: Env = process.env): string[] {
+  if (loadMediaUrlSignerConfig(env).signer !== 's3-presign') return [];
+  const aws = loadAwsConfig(env);
+  return aws.endpointUrl === null ? [] : [new URL(aws.endpointUrl).origin];
+}
+
+let cachedMediaOrigins: string[] | undefined;
+
+/** {@link mediaOrigins} of `process.env`, cached for the process (the proxy runs per request). */
+export function processMediaOrigins(): string[] {
+  cachedMediaOrigins ??= mediaOrigins(process.env);
+  return cachedMediaOrigins;
 }
 
 /** A same-origin absolute path (`/x/y`): MediaPipe assets are self-hosted, never on a CDN. */

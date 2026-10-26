@@ -36,6 +36,7 @@ import type { RateLimiter } from '../tokens';
 import { testWorld } from './faces';
 import {
   FakeObjectStorage,
+  requireCloudFront,
   TEST_FAKE_WEBHOOK_SECRET,
   TestAuth,
   TestClock,
@@ -134,7 +135,7 @@ export class TestApi {
         config,
         db,
         storage,
-        signer: new CloudFrontMediaUrlSigner(config.cloudFront),
+        signer: new CloudFrontMediaUrlSigner(requireCloudFront(config)),
         rateLimiter: options.rateLimiter ?? new MemoryRateLimiter(() => clock.now().getTime()),
         tokenVerifier: auth.verifier,
         clock,

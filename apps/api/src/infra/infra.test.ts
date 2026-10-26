@@ -1,13 +1,13 @@
 import { createPublicKey, createVerify } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { redisKeyPrefix } from '../config';
-import { testConfig } from '../testing/fakes';
+import { requireCloudFront, testConfig } from '../testing/fakes';
 import { CloudFrontMediaUrlSigner, mediaUrl } from './cloudfront-signer';
 import { createRedis, MemoryRateLimiter, RedisRateLimiter } from './redis';
 
 describe('CloudFront signer', () => {
   const config = testConfig();
-  const signer = new CloudFrontMediaUrlSigner(config.cloudFront);
+  const signer = new CloudFrontMediaUrlSigner(requireCloudFront(config));
   const key =
     'derived/0b0f6b8e-0000-7000-8000-000000000001/0b0f6b8e-0000-7000-8000-000000000002/thumb.webp';
 
@@ -31,9 +31,9 @@ describe('CloudFront signer', () => {
       .replace(/_/g, '=')
       .replace(/~/g, '/');
     const verify = createVerify('RSA-SHA1').update(policy);
-    expect(verify.verify(createPublicKey(config.cloudFront.privateKey), signature, 'base64')).toBe(
-      true,
-    );
+    expect(
+      verify.verify(createPublicKey(requireCloudFront(config).privateKey), signature, 'base64'),
+    ).toBe(true);
   });
 
   it('refuses keys the platform did not build, and encodes key segments', () => {

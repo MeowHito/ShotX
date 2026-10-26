@@ -3,6 +3,7 @@ import {
   type Env,
   loadApiLimitsConfig,
   loadAppConfig,
+  loadAuthProviderConfig,
   loadAwsConfig,
   loadBillingConfig,
   loadCloudFrontSigningConfig,
@@ -17,6 +18,7 @@ import {
   loadInternalApiConfig,
   loadMediaConfig,
   loadMediaStorageConfig,
+  loadMediaUrlSignerConfig,
   loadPaymentGatewayConfig,
   loadQueueUrls,
   loadQueueVisibilityTimeouts,
@@ -195,6 +197,9 @@ const ALL_LOADERS: Loader[] = [
       (e) =>
         loadPaymentGatewayConfig({ ...e, NODE_ENV: 'development', PAYMENT_GATEWAY: gateway }),
   ),
+  // The local stand-ins (.env.example selects them) are read only on APP_STAGE=local.
+  (e) => loadAuthProviderConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
+  (e) => loadMediaUrlSignerConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
 ];
 
 const throws = (loader: Loader, env: Env) => {

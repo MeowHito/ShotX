@@ -100,4 +100,15 @@ export const INFRA_OWNED_ENV = [
   'EMAIL_PROVIDER',
   'EMAIL_FROM_ADDRESS',
   'EMAIL_FROM_NAME',
+  // Runtime identity: always production and the configured stage.
+  'NODE_ENV',
+  'APP_STAGE',
+  // Local development stand-ins (packages/shared local-dev): never on a deployed stage, where
+  // auth is Cognito, media URLs are CloudFront and AWS credentials come from the task role.
+  'AUTH_PROVIDER',
+  'LOCAL_AUTH_SECRET',
+  'MEDIA_URL_SIGNER',
+  'AWS_ENDPOINT_URL',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
 ] as const;

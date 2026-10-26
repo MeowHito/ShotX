@@ -20,7 +20,7 @@ import { MemoryQueueSender, SqsQueueSender } from './infra/sqs-queue';
 import { SignedUrls } from './media/signed-urls';
 import { openPglite } from './testing/database';
 import { CapturingLogger } from './testing/harness';
-import { TestClock, testConfig } from './testing/fakes';
+import { requireCloudFront, TestClock, testConfig } from './testing/fakes';
 
 describe('error logging (no PII)', () => {
   it('logs a Drizzle error with PII parameters as class, pg code and a scrubbed message', async () => {
@@ -91,7 +91,7 @@ describe('error logging (no PII)', () => {
 
 describe('signed URLs', () => {
   const config = testConfig();
-  const signer = new CloudFrontMediaUrlSigner(config.cloudFront);
+  const signer = new CloudFrontMediaUrlSigner(requireCloudFront(config));
   const key = derivedKey(
     {
       photographerId: '0195f3a2-7c1e-7d4a-9b2f-3c4d5e6f7a8b',
@@ -124,7 +124,7 @@ describe('signed URLs', () => {
     expect(
       createVerify('RSA-SHA1')
         .update(policy)
-        .verify(createPublicKey(config.cloudFront.privateKey), signature, 'base64'),
+        .verify(createPublicKey(requireCloudFront(config).privateKey), signature, 'base64'),
     ).toBe(true);
   });
 

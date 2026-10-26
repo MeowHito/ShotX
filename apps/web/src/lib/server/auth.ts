@@ -2,14 +2,27 @@ import 'server-only';
 import { cookies } from 'next/headers';
 import { createCognitoAuthProvider } from '../auth/cognito';
 import type { AuthDeps } from '../auth/handlers';
+import { createLocalAuthProvider } from '../auth/local';
+import type { AuthProvider } from '../auth/provider';
 import { cookieNames, decodeSession, type Session } from '../auth/session';
-import { webConfig } from './config';
+import { type WebConfig, webConfig } from './config';
+
+function authProvider(config: WebConfig): AuthProvider {
+  if (config.auth.provider === 'local') {
+    return createLocalAuthProvider({
+      secret: config.auth.secret,
+      publicBaseUrl: config.publicBaseUrl,
+    });
+  }
+  if (config.cognito === null) throw new Error('Cognito configuration is missing');
+  return createCognitoAuthProvider(config.cognito);
+}
 
 /** Auth dependencies of the route handlers, from the environment. */
 export function authDeps(): AuthDeps {
   const config = webConfig();
   return {
-    provider: createCognitoAuthProvider(config.cognito),
+    provider: authProvider(config),
     publicBaseUrl: config.publicBaseUrl,
     secureCookies: config.secureCookies,
   };

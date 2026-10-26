@@ -20,6 +20,8 @@ export interface CspOptions {
   https: boolean;
   publicBaseUrl?: string;
   uploadOrigins: readonly string[];
+  /** Origins of signed media URLs other than the site itself (LocalStack in development). */
+  mediaOrigins?: readonly string[];
   cognitoDomain?: string;
   /** Allow compiling WebAssembly (the share page's MediaPipe face detector). */
   allowWasm?: boolean;
@@ -35,8 +37,8 @@ export function buildCsp(options: CspOptions): string {
     'default-src': "'self'",
     'script-src': `'self' 'nonce-${options.nonce}' 'strict-dynamic'${options.allowWasm ? " 'wasm-unsafe-eval'" : ''}${options.isDev ? " 'unsafe-eval'" : ''}`,
     'style-src': "'self' 'unsafe-inline'",
-    'img-src': unique([...self, 'blob:', 'data:']),
-    'media-src': unique([...self, 'blob:']),
+    'img-src': unique([...self, ...(options.mediaOrigins ?? []), 'blob:', 'data:']),
+    'media-src': unique([...self, ...(options.mediaOrigins ?? []), 'blob:']),
     'font-src': "'self'",
     'connect-src': unique([
       ...self,

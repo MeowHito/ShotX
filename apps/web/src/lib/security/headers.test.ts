@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { uploadOrigins } from '../server/config';
+import { mediaOrigins, uploadOrigins } from '../server/config';
 import { buildCsp, securityHeaders } from './headers';
 
 function directives(csp: string): Record<string, string> {
@@ -84,5 +84,38 @@ describe('CSP', () => {
     expect(
       uploadOrigins({ AWS_ENDPOINT_URL: 'http://localhost:4566', MEDIA_BUCKET: 'b-1' }),
     ).toEqual(['https://b-1.s3.ap-southeast-1.amazonaws.com', 'http://localhost:4566']);
+  });
+});
+
+describe('local media origins', () => {
+  const local = {
+    APP_STAGE: 'local',
+    NODE_ENV: 'development',
+    MEDIA_URL_SIGNER: 's3-presign',
+    AWS_REGION: 'ap-southeast-1',
+    AWS_ENDPOINT_URL: 'http://localhost:4566',
+    AWS_ACCESS_KEY_ID: 'test',
+    AWS_SECRET_ACCESS_KEY: 'test',
+  };
+
+  it('adds the LocalStack origin to img-src and media-src only with s3-presign', () => {
+    expect(mediaOrigins({ AWS_REGION: 'ap-southeast-1' })).toEqual([]);
+    const origins = mediaOrigins(local);
+    expect(origins).toEqual(['http://localhost:4566']);
+    const csp = buildCsp({
+      nonce: 'n',
+      isDev: true,
+      https: false,
+      uploadOrigins: [],
+      mediaOrigins: origins,
+    });
+    expect(csp).toMatch(/img-src [^;]*http:\/\/localhost:4566/);
+    expect(csp).toMatch(/media-src [^;]*http:\/\/localhost:4566/);
+  });
+
+  it('refuses s3-presign outside APP_STAGE=local', () => {
+    expect(() => mediaOrigins({ ...local, APP_STAGE: 'prod', NODE_ENV: 'production' })).toThrow(
+      /needs APP_STAGE=local/,
+    );
   });
 });

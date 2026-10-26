@@ -6,6 +6,7 @@ import {
   EMAIL_PROVIDERS,
   type FaceConfig,
   loadEmailConfig,
+  LOCAL_DEV_APP_STAGE,
   loadUploadConfig,
   PAYMENT_GATEWAY_SECRET_ENV,
   PAYMENT_GATEWAYS,
@@ -189,7 +190,15 @@ const scheduleSchema = z.object({
 
 export const configSchema = z
   .object({
-    stage: str.pipe(z.string().regex(/^[a-z][a-z0-9-]{1,15}$/)),
+    // `local` is reserved for laptops: the shared loaders allow the local stand-ins only there.
+    stage: str.pipe(
+      z
+        .string()
+        .regex(/^[a-z][a-z0-9-]{1,15}$/)
+        .refine((stage) => stage !== LOCAL_DEV_APP_STAGE, {
+          error: `"${LOCAL_DEV_APP_STAGE}" is reserved for local development`,
+        }),
+    ),
     account: str.pipe(z.string().regex(/^\d{12}$/, { error: 'must be a 12-digit AWS account id' })),
     tags: z.record(z.string(), str),
 
@@ -705,7 +714,7 @@ export const configSchema = z
       for (const key of Object.keys(vars)) {
         if ((INFRA_OWNED_ENV as readonly string[]).includes(key)) {
           envIssue(
-            `${group}: ${key} is set by infra (features, consent, billing, email, secrets, buckets)`,
+            `${group}: ${key} is set by infra (runtime, features, consent, billing, email, secrets, buckets) or is local-only`,
           );
         }
         if (group !== 'common' && readsUploadKey(key)) {

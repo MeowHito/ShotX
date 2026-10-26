@@ -2,7 +2,7 @@
 name: photo-platform
 description: Architecture, settled decisions and business rules for the photo-distribution platform — a Google Drive-like web app where photographers buy storage plans, upload and share photos and videos by link, and event attendees find their own photos by scanning their face (Amazon Rekognition), plus an admin analytics dashboard, built on AWS with Next.js, NestJS and PostgreSQL. Use this skill for ANY work on this project, including writing, reviewing or debugging code, DB schema and migrations, APIs, upload/folder/share/download features, face search, plans, quota and payments, admin metrics and charts, PDPA and consent, AWS infrastructure and cost questions, even when the request doesn't name the project (for example add a rename button, fix the upload bug, ทำหน้าสแกนหน้า, เพิ่มกราฟรายได้แอดมิน, ตั้งราคาแพ็กเกจ).
 ---
-  
+
 # Photo distribution platform
 
 Photographers buy a storage plan, upload photos and videos into a Drive-like folder tree, and share files or folders by link. Anyone with a link can scan their face (live camera or a photo from the device) to see and download the photos they appear in. Admins see revenue and per-photographer usage. The operator is a large company in Thailand: UI copy is Thai, code/comments/commits are English, money is THB.

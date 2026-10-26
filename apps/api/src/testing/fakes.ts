@@ -12,6 +12,12 @@ import { CognitoTokenVerifier } from '../auth/cognito-verifier';
 import { type ApiConfig, type ApiLimits, loadApiConfig } from '../config';
 import type { Clock, ObjectStorage, UploadedPart } from '../tokens';
 
+/** The CloudFront signing config of a test config (MEDIA_URL_SIGNER=cloudfront). */
+export function requireCloudFront(config: ApiConfig): NonNullable<ApiConfig['cloudFront']> {
+  if (config.cloudFront === null) throw new Error('Tests need MEDIA_URL_SIGNER=cloudfront');
+  return config.cloudFront;
+}
+
 /** A test RSA private key in PKCS#8 PEM (CloudFront signing). */
 export function testPrivateKeyPem(): string {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -86,13 +92,17 @@ export class TestAuth {
   private readonly keys: Record<AuthPool, { privateKey: JoseKey; jwk: JWK }>;
   readonly verifier: CognitoTokenVerifier;
 
+  private readonly cognito: NonNullable<ApiConfig['cognito']>;
+
   private constructor(
     keys: Record<AuthPool, { privateKey: JoseKey; jwk: JWK }>,
-    private readonly config: ApiConfig,
+    config: ApiConfig,
   ) {
     this.keys = keys;
+    if (config.cognito === null) throw new Error('TestAuth needs AUTH_PROVIDER=cognito');
+    this.cognito = config.cognito;
     const jwks = (pool: AuthPool) => createLocalJWKSet({ keys: [keys[pool].jwk] });
-    this.verifier = new CognitoTokenVerifier(config.cognito, {
+    this.verifier = new CognitoTokenVerifier(this.cognito, {
       users: jwks('users'),
       admins: jwks('admins'),
     });
@@ -124,7 +134,7 @@ export class TestAuth {
     } = {},
   ): Promise<string> {
     const tokenUse = options.tokenUse ?? 'access';
-    const clientId = options.clientId ?? this.config.cognito[pool].clientId;
+    const clientId = options.clientId ?? this.cognito[pool].clientId;
     const signer = this.keys[options.signWith ?? pool];
     const jwt = new SignJWT({
       token_use: tokenUse,
@@ -133,7 +143,7 @@ export class TestAuth {
     })
       .setProtectedHeader({ alg: 'RS256', kid: signer.jwk.kid ?? '' })
       .setSubject(sub)
-      .setIssuer(options.issuer ?? this.config.cognito[pool].issuer)
+      .setIssuer(options.issuer ?? this.cognito[pool].issuer)
       .setIssuedAt()
       .setExpirationTime(options.expiresIn ?? '1h');
     if (tokenUse === 'id') jwt.setAudience(clientId);

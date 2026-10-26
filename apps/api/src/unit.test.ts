@@ -102,10 +102,10 @@ describe('config', () => {
   it('loads everything through the shared loaders', () => {
     const config = loadApiConfig(testEnv({ PORT: '' }));
     expect(config.server.port).toBe(4000);
-    expect(config.cognito.users.issuer).toBe(
+    expect(config.cognito?.users.issuer).toBe(
       'https://cognito-idp.ap-southeast-1.amazonaws.com/ap-southeast-1_UsersPool1',
     );
-    expect(config.cognito.admins.clientId).toBe('adminclient456');
+    expect(config.cognito?.admins.clientId).toBe('adminclient456');
   });
 
   it('fails without required settings, never echoing secrets', () => {

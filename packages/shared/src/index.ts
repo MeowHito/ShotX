@@ -47,6 +47,7 @@ export * from './config/aws';
 export * from './config/redis';
 export * from './config/cloudfront';
 export * from './config/cognito';
+export * from './config/local-dev';
 export * from './config/observability';
 export * from './config/api';
 export * from './config/worker';

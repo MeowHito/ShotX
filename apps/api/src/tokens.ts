@@ -88,7 +88,10 @@ export interface VerifiedIdentity {
   pool: AuthPool;
   sub: string;
   tokenUse: 'id' | 'access';
-  /** From a verified ID token with `email_verified`; null otherwise (access tokens carry none). */
+  /**
+   * From a verified ID token with `email_verified`; null otherwise (Cognito access tokens carry
+   * none). Exception: AUTH_PROVIDER=local mints access tokens with the profile too (LocalTokenVerifier).
+   */
   email: string | null;
   /** From an ID token's `name` claim; null otherwise. */
   name: string | null;
