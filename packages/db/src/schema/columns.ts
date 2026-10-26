@@ -11,6 +11,13 @@ export const ltree = customType<{ data: string; driverData: string }>({
   },
 });
 
+/** PostgreSQL `bytea`, as a Buffer (node-postgres returns Buffers). */
+export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return 'bytea';
+  },
+});
+
 /** uuid primary key. uuidv7() (PostgreSQL 18) is time-ordered, which keeps btree inserts local. */
 export const id = () =>
   uuid('id')

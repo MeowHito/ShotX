@@ -19,6 +19,7 @@ import { emptyPhoto, eventPhoto, indexPhoto, selfie, testWorld } from '../testin
 import { type Browser, TestApi } from '../testing/harness';
 import { encodeForm, rawPost } from '../testing/raw-http';
 import { cloudFrontOriginHeaders } from '../http/client';
+import { unreachableBullMqSender } from '../testing/fakes';
 
 const world = testWorld();
 const VERSION = '2026-10-25';
@@ -478,6 +479,32 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
       expect(res.status).toBe(500);
     } finally {
       api.queue.failing = false;
+    }
+    const marked = await api.db
+      .select()
+      .from(faces)
+      .where(and(eq(faces.ownerId, owner.id), isNotNull(faces.deletionId)));
+    expect(marked).toEqual([]);
+    expect(
+      await api.db.select().from(faceDeletions).where(eq(faceDeletions.shareId, share.id)),
+    ).toEqual([]);
+  });
+
+  it('fails (and undoes the marking) instead of hanging when Redis is unreachable', async () => {
+    const { share, owner } = await event();
+    const b = await consented(share.token, browser(), ['face_deletion']);
+    const unreachable = unreachableBullMqSender(300);
+    api.queue.delegate = unreachable.sender;
+    try {
+      const started = Date.now();
+      const res = await b.request('POST', deletion(share.token), {
+        form: form({ bytes: await selfie(world, 'alice') }),
+      });
+      expect(res.status).toBe(500);
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      api.queue.delegate = null;
+      await unreachable.close();
     }
     const marked = await api.db
       .select()

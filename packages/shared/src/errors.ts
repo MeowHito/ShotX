@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   CHECKOUT_CHANGE_TYPES,
   FEATURES,
+  OIDC_PROVIDERS,
   PLAN_CHANGE_INVALID_REASONS,
   SHARE_UNAVAILABLE_REASONS,
   SUBSCRIPTION_STATUSES,
@@ -24,7 +25,10 @@ export const ErrorCode = {
   // Generic codes (Phase 2).
   /** The request params, query or body failed schema validation. Details: ValidationFailedDetails. */
   VALIDATION_FAILED: 'VALIDATION_FAILED',
-  /** No valid token, or the token is from the wrong Cognito pool for this route. */
+  /**
+   * No valid token, or the token is from the wrong pool for this route. On `bff` routes: the
+   * BFF key is missing or wrong.
+   */
   UNAUTHENTICATED: 'UNAUTHENTICATED',
   /** Authenticated, but the role may not use this route (e.g. a viewer calling /drive). */
   FORBIDDEN: 'FORBIDDEN',
@@ -118,6 +122,43 @@ export const ErrorCode = {
   WEBHOOK_SIGNATURE_INVALID: 'WEBHOOK_SIGNATURE_INVALID',
   /** The payment gateway failed or timed out (creating a checkout, cancelling auto-renew). */
   PAYMENT_GATEWAY_ERROR: 'PAYMENT_GATEWAY_ERROR',
+
+  // Sign-in issued by the API (ADR 0008 section 4, AUTH_ROUTES). Never says whether an account
+  // exists.
+  /**
+   * The identity provider is not enabled here (LINE or Google without credentials in
+   * AUTH_PROVIDER=local). Details: AuthProviderUnavailableDetails.
+   */
+  AUTH_PROVIDER_UNAVAILABLE: 'AUTH_PROVIDER_UNAVAILABLE',
+  /**
+   * The login state is unknown, expired or already used: the OIDC `state` of a callback, or the
+   * `challengeId` of an admin MFA step. Start the sign-in again.
+   */
+  LOGIN_STATE_INVALID: 'LOGIN_STATE_INVALID',
+  /**
+   * LINE or Google failed: the code exchange was refused or timed out, or the ID token failed
+   * verification (issuer, audience, nonce, expiry, signature). Details: IdentityProviderErrorDetails.
+   */
+  IDENTITY_PROVIDER_ERROR: 'IDENTITY_PROVIDER_ERROR',
+  /**
+   * Admin sign-in: wrong email or password, no such admin, or no password credentials. One code
+   * for all of them, so the response never reveals whether an account exists.
+   */
+  INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
+  /** Admin MFA step: the TOTP code is wrong, outside the window, or was already used. */
+  MFA_INVALID: 'MFA_INVALID',
+  /**
+   * An admins-pool token without `otp` in its `amr` claim (see ADMIN_REQUIRED_AMR). Every admin
+   * route answers this instead of serving the request.
+   */
+  MFA_REQUIRED: 'MFA_REQUIRED',
+  /** The refresh token is unknown, expired, revoked, or of another pool than the request named. */
+  REFRESH_TOKEN_INVALID: 'REFRESH_TOKEN_INVALID',
+  /**
+   * The refresh token was already rotated: it may have been stolen, so its whole session family
+   * is revoked. Sign in again.
+   */
+  REFRESH_TOKEN_REUSED: 'REFRESH_TOKEN_REUSED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -164,6 +205,14 @@ export const ERROR_HTTP_STATUS = {
   CHECKOUT_EXPIRED: 410,
   WEBHOOK_SIGNATURE_INVALID: 401,
   PAYMENT_GATEWAY_ERROR: 502,
+  AUTH_PROVIDER_UNAVAILABLE: 404,
+  LOGIN_STATE_INVALID: 400,
+  IDENTITY_PROVIDER_ERROR: 502,
+  INVALID_CREDENTIALS: 401,
+  MFA_INVALID: 401,
+  MFA_REQUIRED: 401,
+  REFRESH_TOKEN_INVALID: 401,
+  REFRESH_TOKEN_REUSED: 401,
 } as const satisfies Record<ErrorCode, number>;
 
 /** Body of every API error response. */
@@ -293,6 +342,29 @@ export const checkoutPendingDetailsSchema = z.object({
 });
 export type CheckoutPendingDetails = z.output<typeof checkoutPendingDetailsSchema>;
 
+export const authProviderUnavailableDetailsSchema = z.object({
+  provider: z.enum(OIDC_PROVIDERS),
+});
+export type AuthProviderUnavailableDetails = z.output<typeof authProviderUnavailableDetailsSchema>;
+
+/**
+ * - `exchange_failed`: the token endpoint refused the code (expired, reused, wrong redirect URI);
+ * - `id_token_invalid`: the ID token failed verification;
+ * - `unavailable`: the provider timed out or answered 5xx.
+ */
+export const IDENTITY_PROVIDER_ERROR_REASONS = [
+  'exchange_failed',
+  'id_token_invalid',
+  'unavailable',
+] as const;
+export type IdentityProviderErrorReason = (typeof IDENTITY_PROVIDER_ERROR_REASONS)[number];
+
+export const identityProviderErrorDetailsSchema = z.object({
+  provider: z.enum(OIDC_PROVIDERS),
+  reason: z.enum(IDENTITY_PROVIDER_ERROR_REASONS),
+});
+export type IdentityProviderErrorDetails = z.output<typeof identityProviderErrorDetailsSchema>;
+
 /**
  * Informational codes in successful billing responses (`notices`), never sent as errors. The web
  * app maps them to Thai text like error codes.
@@ -333,6 +405,8 @@ export const ERROR_DETAILS_SCHEMAS = {
   FACE_SEARCH_UNAVAILABLE: faceSearchUnavailableDetailsSchema,
   PLAN_CHANGE_INVALID: planChangeInvalidDetailsSchema,
   CHECKOUT_PENDING: checkoutPendingDetailsSchema,
+  AUTH_PROVIDER_UNAVAILABLE: authProviderUnavailableDetailsSchema,
+  IDENTITY_PROVIDER_ERROR: identityProviderErrorDetailsSchema,
 } as const satisfies Partial<Record<ErrorCode, z.ZodType>>;
 
 /**

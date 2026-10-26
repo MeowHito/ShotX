@@ -36,6 +36,13 @@
       "when": 1792963492986,
       "tag": "0004_phase3_fixes_billing",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792988773118,
+      "tag": "0005_shotx_auth",
+      "breakpoints": true
     }
   ]
 }

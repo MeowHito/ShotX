@@ -6,7 +6,9 @@
  *   domain, so signed thumbnail and preview URLs are 'self'; PUBLIC_BASE_URL is listed too for
  *   setups where the app runs on another origin (local development).
  * - connect-src: the BFF ('self') and the S3 upload origin(s) the browser PUTs parts to.
- * - form-action: the logout form redirects to the Cognito domain.
+ * - form-action: 'self', plus the Cognito domain with AUTH_PROVIDER=cognito (the logout form
+ *   redirects there). With API-issued tokens nothing else: LINE and Google are reached through
+ *   links to /auth/login (navigations), never as a form's redirect target (formActionOrigins).
  * - style-src keeps 'unsafe-inline': Radix and TanStack Virtual set inline styles at run time.
  * - Share pages (`allowWasm`) add 'wasm-unsafe-eval' for MediaPipe's face detector. Its loader
  *   script is inserted by our own (nonced) code, which 'strict-dynamic' allows; its wasm and model
@@ -22,7 +24,8 @@ export interface CspOptions {
   uploadOrigins: readonly string[];
   /** Origins of signed media URLs other than the site itself (LocalStack in development). */
   mediaOrigins?: readonly string[];
-  cognitoDomain?: string;
+  /** Origins a form submission may redirect to besides 'self' (formActionOrigins). */
+  formActionOrigins?: readonly string[];
   /** Allow compiling WebAssembly (the share page's MediaPipe face detector). */
   allowWasm?: boolean;
 }
@@ -45,10 +48,7 @@ export function buildCsp(options: CspOptions): string {
       ...options.uploadOrigins,
       ...(options.isDev ? ['ws:', 'wss:'] : []),
     ]),
-    'form-action': unique([
-      "'self'",
-      ...(options.cognitoDomain ? [new URL(options.cognitoDomain).origin] : []),
-    ]),
+    'form-action': unique(["'self'", ...(options.formActionOrigins ?? [])]),
     'frame-ancestors': "'none'",
     'base-uri': "'self'",
     'object-src': "'none'",

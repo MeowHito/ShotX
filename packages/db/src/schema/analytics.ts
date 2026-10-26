@@ -132,14 +132,17 @@ export const shareDailyStats = pgTable(
   ],
 );
 
-/** Every admin action. Append-only by convention: nothing updates or deletes rows. */
+/**
+ * Every admin action and every admin sign-in. Append-only by convention: nothing updates or
+ * deletes rows. `actor_id` may be null only for sign-in events (`auth.` actions, see
+ * AUTH_AUDIT_ACTIONS in @shotx/shared), e.g. a failed sign-in for an email that matches no admin
+ * (migration 0005).
+ */
 export const auditLog = pgTable(
   'audit_log',
   {
     id: id(),
-    actorId: uuid('actor_id')
-      .notNull()
-      .references(() => users.id),
+    actorId: uuid('actor_id').references(() => users.id),
     action: text('action').notNull(),
     targetType: text('target_type').notNull(),
     targetId: text('target_id').notNull(),
@@ -150,5 +153,9 @@ export const auditLog = pgTable(
     index('audit_log_actor_created_idx').on(t.actorId, t.createdAt),
     index('audit_log_target_idx').on(t.targetType, t.targetId),
     index('audit_log_created_idx').on(t.createdAt),
+    check(
+      'audit_log_actor_unless_auth_event',
+      sql`${t.actorId} IS NOT NULL OR ${t.action} LIKE 'auth.%'`,
+    ),
   ],
 );

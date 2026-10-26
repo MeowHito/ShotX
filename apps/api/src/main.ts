@@ -6,9 +6,8 @@ import { createApiApp } from './app';
 import { loadApiConfig, redisKeyPrefix } from './config';
 import { createRedis, RedisKeyValueStore, RedisRateLimiter } from './infra/redis';
 import { createS3Client, S3ObjectStorage } from './infra/s3-storage';
-import { createSqsClient, SqsQueueSender } from './infra/sqs-queue';
 import { systemClock } from './tokens';
-import { mediaUrlSigner, tokenVerifier } from './wiring';
+import { mediaUrlSigner, queueSender, tokenVerifier } from './wiring';
 
 async function main(): Promise<void> {
   const env = process.env;
@@ -16,7 +15,9 @@ async function main(): Promise<void> {
   const pool = createPool(loadDatabaseConfig(env));
   const redis = createRedis(config.redis);
   const s3 = createS3Client(config.aws, config.storage);
-  const sqs = createSqsClient(config.aws);
+  const queue = queueSender(config);
+  // BullMQ: Redis must be reachable before the API takes requests (bounded wait, then exit).
+  await queue.start();
   // Face search is the only synchronous Rekognition use: the interactive profile fails fast.
   const faceProvider = RekognitionFaceProvider.create(
     config.face.rekognition,
@@ -32,14 +33,14 @@ async function main(): Promise<void> {
       storage: new S3ObjectStorage(s3, config.storage.bucket),
       signer: mediaUrlSigner(config),
       rateLimiter: new RedisRateLimiter(redis, redisKeyPrefix(config)),
-      tokenVerifier: tokenVerifier(config),
+      tokenVerifier: tokenVerifier(config, systemClock),
       clock: systemClock,
       store: new RedisKeyValueStore(redis, redisKeyPrefix(config)),
-      queue: new SqsQueueSender(sqs, config.queues),
+      queue: queue.sender,
       faceProvider,
       onShutdown: async () => {
         s3.destroy();
-        sqs.destroy();
+        await queue.close();
         redis.disconnect();
         await pool.end();
       },

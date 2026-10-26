@@ -14,7 +14,13 @@ import { createDb, createPool } from './client';
 import { loadDatabaseConfig, pgPoolConfig } from './config';
 import { folderPath, folderSubtreeMoveSql, planFolderMove } from './ltree';
 import { MIGRATIONS_FOLDER, migrateDatabase } from './migrate';
-import { driveNameKey, isCoveredByFaceIndex, isFileInShareScope, zipKey } from '@shotx/shared';
+import {
+  AUTH_AUDIT_ACTIONS,
+  driveNameKey,
+  isCoveredByFaceIndex,
+  isFileInShareScope,
+  zipKey,
+} from '@shotx/shared';
 import { driveNameKeySql } from './schema/columns';
 import * as schema from './schema/index';
 import { SEED_PLANS, seedPlans } from './seed';
@@ -144,8 +150,8 @@ for (const backend of backends) {
         await db()
           .insert(schema.users)
           .values({
-            cognitoPool: 'users',
-            cognitoSub: randomUUID(),
+            authPool: 'users',
+            authSubject: randomUUID(),
             role: 'photographer',
             ...values,
           })
@@ -247,21 +253,21 @@ for (const backend of backends) {
       );
     });
 
-    it('keys identities per Cognito pool and never lets a users-pool identity be an admin', async () => {
+    it('keys identities per auth pool and never lets a users-pool identity be an admin', async () => {
       const sub = randomUUID();
-      await newUser({ cognitoPool: 'users', cognitoSub: sub, role: 'photographer' });
+      await newUser({ authPool: 'users', authSubject: sub, role: 'photographer' });
       // Same sub in the admins pool is a different identity.
-      await newUser({ cognitoPool: 'admins', cognitoSub: sub, role: 'admin' });
+      await newUser({ authPool: 'admins', authSubject: sub, role: 'admin' });
 
-      expect(await pgError(newUser({ cognitoPool: 'users', cognitoSub: sub }))).toEqual({
+      expect(await pgError(newUser({ authPool: 'users', authSubject: sub }))).toEqual({
         code: UNIQUE,
-        constraint: 'users_cognito_identity_unique',
+        constraint: 'users_auth_identity_unique',
       });
-      expect(await pgError(newUser({ cognitoPool: 'users', role: 'admin' }))).toEqual({
+      expect(await pgError(newUser({ authPool: 'users', role: 'admin' }))).toEqual({
         code: CHECK,
         constraint: 'users_admin_iff_admins_pool',
       });
-      expect(await pgError(newUser({ cognitoPool: 'admins', role: 'photographer' }))).toEqual({
+      expect(await pgError(newUser({ authPool: 'admins', role: 'photographer' }))).toEqual({
         code: CHECK,
         constraint: 'users_admin_iff_admins_pool',
       });
@@ -1830,6 +1836,264 @@ describe('migration 0004 on a database with 0003 and existing rows (PGlite)', ()
       expect(await rows(db, sql`SELECT purpose FROM consents`)).toEqual([
         { purpose: 'face_search' },
       ]);
+    } finally {
+      await client.close();
+    }
+  }, 120_000);
+});
+
+describe('auth sessions and admin credentials (migration 0005, PGlite)', () => {
+  let b: Backend;
+  const db = () => b.db;
+
+  beforeAll(async () => {
+    b = await openPglite();
+  }, 120_000);
+
+  afterAll(async () => {
+    await b?.close();
+  });
+
+  const newUser = async (values: Partial<NewUser> = {}) =>
+    one(
+      await db()
+        .insert(schema.users)
+        .values({ authPool: 'users', authSubject: `line:${randomUUID()}`, ...values })
+        .returning(),
+    );
+  const newAdmin = async (email: string | null = `${randomUUID()}@example.com`) => {
+    const id = randomUUID();
+    return one(
+      await db()
+        .insert(schema.users)
+        .values({ id, authPool: 'admins', authSubject: `admin:${id}`, role: 'admin', email })
+        .returning(),
+    );
+  };
+  const hash = () => randomBytes(32).toString('hex');
+  const session = (
+    userId: string,
+    pool: 'users' | 'admins',
+    values: Record<string, unknown> = {},
+  ) =>
+    db()
+      .insert(schema.authSessions)
+      .values({
+        userId,
+        pool,
+        refreshTokenHash: hash(),
+        familyId: randomUUID(),
+        expiresAt: new Date(Date.now() + 86_400_000),
+        ...values,
+      })
+      .returning();
+  const credentials = (userId: string, values: Record<string, unknown> = {}) =>
+    db()
+      .insert(schema.adminCredentials)
+      .values({
+        userId,
+        passwordHash: '$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA',
+        totpSecretEncrypted: randomBytes(36),
+        totpSecretNonce: randomBytes(12),
+        ...values,
+      })
+      .returning();
+
+  it('keeps a session in its user pool and its hash well-formed', async () => {
+    const user = await newUser();
+    const [row] = await session(user.id, 'users');
+    expect(row?.pool).toBe('users');
+    expect(await pgError(session(user.id, 'admins'))).toEqual({
+      code: FOREIGN_KEY,
+      constraint: 'auth_sessions_user_pool_fk',
+    });
+    expect(await pgError(session(user.id, 'users', { refreshTokenHash: 'ABC' }))).toEqual({
+      code: CHECK,
+      constraint: 'auth_sessions_hash_format',
+    });
+    const duplicate = row?.refreshTokenHash ?? '';
+    expect(await pgError(session(user.id, 'users', { refreshTokenHash: duplicate }))).toEqual({
+      code: UNIQUE,
+      constraint: 'auth_sessions_refresh_token_hash_unique',
+    });
+  });
+
+  it('rotates: a replaced session must be revoked, and a family revokes together', async () => {
+    const user = await newUser();
+    const familyId = randomUUID();
+    const first = one(await session(user.id, 'users', { familyId }));
+    const second = one(await session(user.id, 'users', { familyId }));
+    expect(
+      await pgError(
+        db()
+          .update(schema.authSessions)
+          .set({ replacedById: second.id })
+          .where(eq(schema.authSessions.id, first.id)),
+      ),
+    ).toEqual({ code: CHECK, constraint: 'auth_sessions_replaced_is_revoked' });
+    await db()
+      .update(schema.authSessions)
+      .set({ replacedById: second.id, revokedAt: new Date() })
+      .where(eq(schema.authSessions.id, first.id));
+    const revoked = await db()
+      .update(schema.authSessions)
+      .set({ revokedAt: new Date() })
+      .where(eq(schema.authSessions.familyId, familyId))
+      .returning();
+    expect(revoked).toHaveLength(2);
+    expect(await pgError(session(user.id, 'users', { expiresAt: new Date(0) }))).toEqual({
+      code: CHECK,
+      constraint: 'auth_sessions_expiry_order',
+    });
+  });
+
+  it('gives credentials to admins-pool users only, with valid hashes and TOTP sizes', async () => {
+    const admin = await newAdmin();
+    const [row] = await credentials(admin.id);
+    expect(row).toMatchObject({ authPool: 'admins', failedAttempts: 0, totpConfirmedAt: null });
+    expect(row?.totpSecretNonce).toHaveLength(12);
+    const viewer = await newUser();
+    expect(await pgError(credentials(viewer.id))).toEqual({
+      code: FOREIGN_KEY,
+      constraint: 'admin_credentials_admin_user_fk',
+    });
+    expect(await pgError(credentials(viewer.id, { authPool: 'users' }))).toEqual({
+      code: CHECK,
+      constraint: 'admin_credentials_admins_pool',
+    });
+    const other = await newAdmin();
+    expect(await pgError(credentials(other.id, { passwordHash: '$2b$10$bcrypt' }))).toEqual({
+      code: CHECK,
+      constraint: 'admin_credentials_password_argon2id',
+    });
+    expect(await pgError(credentials(other.id, { totpSecretNonce: randomBytes(16) }))).toEqual({
+      code: CHECK,
+      constraint: 'admin_credentials_totp_sizes',
+    });
+  });
+
+  it('deletes sessions and credentials with their user', async () => {
+    const admin = await newAdmin();
+    await credentials(admin.id);
+    await session(admin.id, 'admins');
+    await db().delete(schema.users).where(eq(schema.users.id, admin.id));
+    expect(
+      await db().select().from(schema.authSessions).where(eq(schema.authSessions.userId, admin.id)),
+    ).toEqual([]);
+    expect(
+      await db()
+        .select()
+        .from(schema.adminCredentials)
+        .where(eq(schema.adminCredentials.userId, admin.id)),
+    ).toEqual([]);
+  });
+
+  it('keeps ShotX admin emails unique ignoring case, and identities per pool', async () => {
+    const email = `Ops-${randomUUID()}@Example.com`;
+    await newAdmin(email);
+    expect(await pgError(newAdmin(email.toLowerCase()))).toEqual({
+      code: UNIQUE,
+      constraint: 'users_admin_email_unique',
+    });
+    // Legacy Cognito admins and users-pool accounts may share it.
+    await newUser({ authPool: 'admins', authSubject: randomUUID(), role: 'admin', email });
+    await newUser({ email });
+    const subject = `google:${randomUUID()}`;
+    await newUser({ authSubject: subject });
+    expect(await pgError(newUser({ authSubject: subject }))).toEqual({
+      code: UNIQUE,
+      constraint: 'users_auth_identity_unique',
+    });
+    expect(await pgError(newUser({ authSubject: '' }))).toEqual({
+      code: CHECK,
+      constraint: 'users_auth_subject_not_empty',
+    });
+  });
+
+  it('allows audit rows without an actor for auth events only', async () => {
+    // Failed sign-ins for unknown emails, and the operator CLI's actions.
+    for (const action of AUTH_AUDIT_ACTIONS) {
+      await db().insert(schema.auditLog).values({
+        actorId: null,
+        action,
+        targetType: 'admin_login',
+        targetId: 'hmac',
+      });
+    }
+    expect(
+      await pgError(
+        db().insert(schema.auditLog).values({
+          actorId: null,
+          action: 'takedown.share',
+          targetType: 'share',
+          targetId: randomUUID(),
+        }),
+      ),
+    ).toEqual({ code: CHECK, constraint: 'audit_log_actor_unless_auth_event' });
+  });
+});
+
+describe('migration 0005 on a database with 0004 and existing users (PGlite)', () => {
+  it('renames the identity columns and constraints and keeps the admin CHECK', async () => {
+    const client = await PGlite.create({ extensions: { ltree } });
+    try {
+      const db = drizzlePglite({ client, schema });
+      const dir = mkdtempSync(join(tmpdir(), 'shotx-migrations-'));
+      mkdirSync(join(dir, 'meta'));
+      const journal = JSON.parse(
+        readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8'),
+      ) as { entries: { tag: string }[] };
+      const entries = journal.entries.slice(0, 5);
+      writeFileSync(join(dir, 'meta', '_journal.json'), JSON.stringify({ ...journal, entries }));
+      for (const { tag } of entries) {
+        copyFileSync(join(MIGRATIONS_FOLDER, `${tag}.sql`), join(dir, `${tag}.sql`));
+      }
+      await migratePglite(db, { migrationsFolder: dir });
+      rmSync(dir, { recursive: true });
+      const exec = (query: SQL) => db.execute(query);
+
+      const viewer = randomUUID();
+      const admin = randomUUID();
+      await exec(
+        sql`INSERT INTO users (id, cognito_pool, cognito_sub, role, email) VALUES
+            (${viewer}, 'users', 'cognito-sub-1', 'user', 'a@example.com'),
+            (${admin}, 'admins', 'cognito-sub-2', 'admin', 'a@example.com')`,
+      );
+      await exec(
+        sql`INSERT INTO audit_log (actor_id, action, target_type, target_id) VALUES (${admin}, 'takedown.share', 'share', 'x')`,
+      );
+
+      await migratePglite(db, { migrationsFolder: MIGRATIONS_FOLDER });
+
+      expect(
+        await rows(
+          db,
+          sql`SELECT auth_pool::text AS pool, auth_subject AS subject FROM users ORDER BY auth_subject`,
+        ),
+      ).toEqual([
+        { pool: 'users', subject: 'cognito-sub-1' },
+        { pool: 'admins', subject: 'cognito-sub-2' },
+      ]);
+      expect(
+        await rows(
+          db,
+          sql`SELECT conname FROM pg_constraint WHERE conrelid = 'users'::regclass ORDER BY conname`,
+        ),
+      ).toEqual(
+        expect.arrayContaining([
+          { conname: 'users_admin_iff_admins_pool' },
+          { conname: 'users_auth_identity_unique' },
+          { conname: 'users_auth_subject_not_empty' },
+          { conname: 'users_id_auth_pool_unique' },
+        ]),
+      );
+      expect(
+        await pgError(
+          exec(
+            sql`INSERT INTO users (auth_pool, auth_subject, role) VALUES ('users', 'line:U1', 'admin')`,
+          ),
+        ),
+      ).toEqual({ code: CHECK, constraint: 'users_admin_iff_admins_pool' });
     } finally {
       await client.close();
     }

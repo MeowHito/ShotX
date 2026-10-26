@@ -1,11 +1,12 @@
 import { handleBffRequest } from '@/lib/bff/handler';
-import { authDeps } from '@/lib/server/auth';
+import { authDeps, serverCallContext } from '@/lib/server/auth';
 import { webConfig } from '@/lib/server/config';
 
 function forward(request: Request) {
   return handleBffRequest(request, {
-    auth: authDeps(),
+    auth: authDeps(request.headers),
     apiInternalUrl: webConfig().apiInternalUrl,
+    context: serverCallContext(request.headers),
   });
 }
 

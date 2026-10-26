@@ -1,4 +1,4 @@
-// Bundles the API into dist/main.js. Workspace packages (@shotx/*) ship TypeScript sources, so
+// Bundles the API into dist/main.js and the operator CLI into dist/cli/admin.js. Workspace packages (@shotx/*) ship TypeScript sources, so
 // they are bundled; every other package stays external and is installed in the image.
 import { build } from 'esbuild';
 
@@ -13,8 +13,8 @@ const externalizeNodeModules = {
 };
 
 await build({
-  entryPoints: ['src/main.ts'],
-  outfile: 'dist/main.js',
+  entryPoints: { main: 'src/main.ts', 'cli/admin': 'src/cli/admin.ts' },
+  outdir: 'dist',
   bundle: true,
   platform: 'node',
   target: 'node24',

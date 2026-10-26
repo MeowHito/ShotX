@@ -8,13 +8,30 @@ describe('newUserForIdentity', () => {
     expect(
       newUserForIdentity({ pool: 'users', sub, email: 'a@example.com', name: 'สมชาย' }),
     ).toEqual({
-      cognitoPool: 'users',
-      cognitoSub: sub,
+      authPool: 'users',
+      authSubject: sub,
       role: 'user',
       email: 'a@example.com',
       name: 'สมชาย',
     });
     expect(newUserForIdentity({ pool: 'admins', sub, email: null, name: null }).role).toBe('admin');
+  });
+
+  it('provisions prefixed ShotX subjects only in their pool', () => {
+    expect(
+      newUserForIdentity({ pool: 'users', sub: 'line:U1234', email: null, name: null }),
+    ).toMatchObject({ authPool: 'users', authSubject: 'line:U1234', role: 'user' });
+    expect(
+      newUserForIdentity({ pool: 'admins', sub: `admin:${sub}`, email: null, name: null }).role,
+    ).toBe('admin');
+    for (const [pool, subject] of [
+      ['admins', 'local:a@example.com'],
+      ['admins', 'google:123'],
+      ['users', `admin:${sub}`],
+      ['users', 'okta:123'],
+    ] as const) {
+      expect(() => newUserForIdentity({ pool, sub: subject, email: null, name: null })).toThrow();
+    }
   });
 
   it('rejects identities without a sub or with a bad email', () => {

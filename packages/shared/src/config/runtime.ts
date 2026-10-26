@@ -1,16 +1,13 @@
 import { z } from 'zod';
 import { type Env, parseEnv } from './env';
-import { httpUrl, int } from './fields';
+import { appStage, httpUrl, int } from './fields';
 
 export const NODE_ENVS = ['development', 'test', 'production'] as const;
 export type NodeEnv = (typeof NODE_ENVS)[number];
 
 const appEnvSchema = z.object({
   NODE_ENV: z.enum(NODE_ENVS).default('development'),
-  /** Same format as the infra stage name (infra/lib/config.ts). */
-  APP_STAGE: z.string().regex(/^[a-z][a-z0-9-]{1,15}$/, {
-    error: 'must be 2-16 characters: a lowercase letter, then lowercase letters, digits or -',
-  }),
+  APP_STAGE: appStage(),
   PUBLIC_BASE_URL: httpUrl({ httpsOnly: true }),
   ADMIN_BASE_URL: httpUrl({ httpsOnly: true }),
 });

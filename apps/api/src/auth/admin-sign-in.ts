@@ -1,0 +1,494 @@
+import { createHmac } from 'node:crypto';
+import { Inject, Injectable } from '@nestjs/common';
+import { adminCredentials, users } from '@shotx/db';
+import type {
+  AdminLoginResponse,
+  AdminSignInConfig,
+  AuthAuditAction,
+  AuthTokenResponse,
+} from '@shotx/shared';
+import { and, eq, gte, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import type { ApiConfig } from '../config';
+import type { Db, Queryable } from '../db/db';
+import { ApiError, notFound } from '../http/api-error';
+import { sha256Hex } from '../http/client';
+import {
+  API_CONFIG,
+  CLOCK,
+  type Clock,
+  DATABASE,
+  KEY_VALUE_STORE,
+  type KeyValueStore,
+  RATE_LIMITER,
+  type RateLimiter,
+  type RateLimitResult,
+} from '../tokens';
+import { parseJson, sessionUser, tokenResponse } from './auth.service';
+import { hashPassword, verifyPassword } from './password';
+import { newOpaqueToken, startSession, writeAuthAudit } from './sessions';
+import { SHOTX_AUTH, type ShotxAuth } from './shotx-auth';
+import { decryptTotpSecret, matchTotp } from './totp';
+
+// Admin sign-in (ADR 0008 section 4): email + password (argon2id), then a one-time challenge in
+// Redis, then TOTP. Admins-pool tokens are issued only by verifyMfa, with amr pwd + otp + mfa.
+
+/** Admin email as accounts are keyed: trimmed, ASCII-lowercased (users_admin_email_unique). */
+export function normalizeAdminEmail(email: string): string {
+  return email.trim().replace(/[A-Z]/g, (c) => c.toLowerCase());
+}
+
+/**
+ * The account key of rate limits and of audit rows without a known account (`admin_login`
+ * target): `v1:` + base64url(HMAC-SHA256(IP_HASH_SECRET, "admin-email:" + normalized email)).
+ * The email itself is never stored or used as a key.
+ */
+export function adminAccountKey(secret: string, email: string): string {
+  const mac = createHmac('sha256', secret)
+    .update(`admin-email:${normalizeAdminEmail(email)}`)
+    .digest('base64url');
+  return `v1:${mac}`;
+}
+
+/** Redis key of a pending MFA step (the challenge id is stored hashed). */
+export const adminChallengeKey = (challengeId: string) =>
+  `auth:admin-mfa:${sha256Hex(challengeId)}`;
+
+const challengeSchema = z.object({ userId: z.uuid(), account: z.string().min(1) });
+
+interface AdminRow {
+  id: string;
+  authSubject: string;
+  passwordHash: string;
+  totpSecretEncrypted: Buffer;
+  totpSecretNonce: Buffer;
+  totpConfirmedAt: Date | null;
+  totpLastUsedStep: number | null;
+  lockedUntil: Date | null;
+  /**
+   * admin_credentials.created_at: while TOTP is unconfirmed, when the current secret was enrolled
+   * (create and reset-totp both write a fresh row; see cli/admin-ops).
+   */
+  credentialsCreatedAt: Date;
+}
+
+const adminColumns = {
+  id: users.id,
+  authSubject: users.authSubject,
+  passwordHash: adminCredentials.passwordHash,
+  totpSecretEncrypted: adminCredentials.totpSecretEncrypted,
+  totpSecretNonce: adminCredentials.totpSecretNonce,
+  totpConfirmedAt: adminCredentials.totpConfirmedAt,
+  totpLastUsedStep: adminCredentials.totpLastUsedStep,
+  lockedUntil: adminCredentials.lockedUntil,
+  credentialsCreatedAt: adminCredentials.createdAt,
+};
+
+/** ShotX admins only: admins pool, `admin:` subject, with credentials. */
+const shotxAdmin = and(eq(users.authPool, 'admins'), sql`${users.authSubject} LIKE 'admin:%'`);
+
+/** The admin with this email (case-insensitive like users_admin_email_unique), or null. */
+export async function findAdminByEmail(q: Queryable, email: string): Promise<AdminRow | null> {
+  const [row] = await q
+    .select(adminColumns)
+    .from(users)
+    .innerJoin(adminCredentials, eq(adminCredentials.userId, users.id))
+    .where(
+      and(shotxAdmin, sql`lower(${users.email} COLLATE "C") = lower(${email.trim()} COLLATE "C")`),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+async function findAdminById(q: Queryable, id: string): Promise<AdminRow | null> {
+  const [row] = await q
+    .select(adminColumns)
+    .from(users)
+    .innerJoin(adminCredentials, eq(adminCredentials.userId, users.id))
+    .where(and(shotxAdmin, eq(users.id, id)))
+    .limit(1);
+  return row ?? null;
+}
+
+const rateLimited = (retryAfterSeconds: number) =>
+  new ApiError('RATE_LIMITED', 'Too many sign-in attempts; try again later', undefined, {
+    'Retry-After': String(Math.max(1, retryAfterSeconds)),
+  });
+
+/** The two sign-in steps; each has its own rate-limit windows. */
+type Step = 'pwd' | 'otp';
+
+type Lockout = { kind: 'reserved' } | { kind: 'locked'; retryAfterSeconds: number };
+
+/**
+ * How long consecutive failures of an unknown email are remembered. Known accounts keep theirs
+ * in admin_credentials without expiry; this only has to outlast any realistic guessing pause so
+ * both behave alike (every Redis key needs a TTL, ADR 0005).
+ */
+export const UNKNOWN_ACCOUNT_FAILURE_TTL_SECONDS = 30 * 24 * 3600;
+const unknownFailKey = (account: string) => `auth-admin:fail:${account}`;
+const unknownLockKey = (account: string) => `auth-admin:locked:${account}`;
+
+const invalidCredentials = () => new ApiError('INVALID_CREDENTIALS', 'Wrong email or password');
+
+/** Admin sign-in: POST /auth/admin/login and POST /auth/admin/mfa. */
+@Injectable()
+export class AdminSignIn {
+  /** A real argon2id hash of a random password, verified for unknown emails (same timing). */
+  private dummyHash: Promise<string> | null = null;
+
+  constructor(
+    @Inject(API_CONFIG) private readonly config: ApiConfig,
+    @Inject(SHOTX_AUTH) private readonly auth: ShotxAuth | null,
+    @Inject(DATABASE) private readonly db: Db,
+    @Inject(KEY_VALUE_STORE) private readonly store: KeyValueStore,
+    @Inject(RATE_LIMITER) private readonly limiter: RateLimiter,
+    @Inject(CLOCK) private readonly clock: Clock,
+  ) {}
+
+  /** The issuer and admin settings, or NOT_FOUND when admin sign-in is off here. */
+  private admin(): { auth: ShotxAuth; settings: AdminSignInConfig } {
+    const auth = this.auth;
+    if (auth === null || auth.config.admin === null || !auth.issuer.poolEnabled('admins')) {
+      throw notFound('Route');
+    }
+    return { auth, settings: auth.config.admin };
+  }
+
+  private dummy(): Promise<string> {
+    this.dummyHash ??= hashPassword(newOpaqueToken(), this.config.password.argon2id);
+    return this.dummyHash;
+  }
+
+  /** Rate-limit window keys, per sign-in step (password, code) and per IP or account. */
+  private windowKey = (step: Step, kind: 'ip' | 'acct', id: string) =>
+    `auth-admin:${step}:${kind}:${id}`;
+
+  /**
+   * Counts this attempt in both windows of its step before anything is evaluated (atomic INCR;
+   * the post-increment count decides), so a burst of parallel requests gets at most the limit
+   * evaluated. Successes count too; a completed sign-in resets the account's windows.
+   */
+  private async reserveWindows(
+    settings: AdminSignInConfig,
+    step: Step,
+    ipHash: string,
+    account: string,
+  ): Promise<RateLimitResult> {
+    const { perIp, perAccount } = settings.rateLimits;
+    const [ip, acct] = await Promise.all([
+      this.limiter.hit(this.windowKey(step, 'ip', ipHash), perIp.limit, perIp.windowSeconds),
+      this.limiter.hit(
+        this.windowKey(step, 'acct', account),
+        perAccount.limit,
+        perAccount.windowSeconds,
+      ),
+    ]);
+    return {
+      allowed: ip.allowed && acct.allowed,
+      retryAfterSeconds: Math.max(
+        ip.allowed ? 0 : ip.retryAfterSeconds,
+        acct.allowed ? 0 : acct.retryAfterSeconds,
+      ),
+    };
+  }
+
+  /** The account window of `step` is used up (the next attempt would be refused). */
+  private async accountWindowFull(
+    settings: AdminSignInConfig,
+    step: Step,
+    account: string,
+  ): Promise<boolean> {
+    const { perAccount } = settings.rateLimits;
+    const result = await this.limiter.peek(
+      this.windowKey(step, 'acct', account),
+      perAccount.limit,
+      perAccount.windowSeconds,
+    );
+    return !result.allowed;
+  }
+
+  private audit(
+    action: AuthAuditAction,
+    row: { id: string } | null,
+    account: string,
+    meta: Record<string, unknown>,
+  ): Promise<void> {
+    return writeAuthAudit(this.db, {
+      actorId: row?.id ?? null,
+      action,
+      targetType: row === null ? 'admin_login' : 'user',
+      targetId: row?.id ?? account,
+      meta,
+      now: this.clock.now(),
+    });
+  }
+
+  /**
+   * Reserves one attempt against the lockout, atomically and before evaluation. Known accounts:
+   * `UPDATE ... SET failed_attempts = failed_attempts + 1 ... RETURNING`, refused while
+   * `locked_until` is in the future. Unknown emails get the same behaviour from a Redis counter
+   * per account HMAC (UNKNOWN_ACCOUNT_FAILURE_TTL_SECONDS) and a lock marker, so a lockout never
+   * tells a real admin email from an unknown one. Attempts past the threshold are refused as
+   * locked without being evaluated.
+   */
+  private async reserveLockout(
+    settings: AdminSignInConfig,
+    row: AdminRow | null,
+    account: string,
+  ): Promise<Lockout> {
+    const now = this.clock.now();
+    const { threshold, seconds } = settings.lockout;
+    const lockedFor = (until: Date | null) => ({
+      kind: 'locked' as const,
+      retryAfterSeconds: Math.ceil(
+        ((until?.getTime() ?? now.getTime() + seconds * 1000) - now.getTime()) / 1000,
+      ),
+    });
+    if (row === null) {
+      const marker = await this.store.get(unknownLockKey(account));
+      if (marker !== null) return lockedFor(new Date(Number(marker)));
+      const reserved = await this.limiter.hit(
+        unknownFailKey(account),
+        threshold,
+        UNKNOWN_ACCOUNT_FAILURE_TTL_SECONDS,
+      );
+      return reserved.allowed ? { kind: 'reserved' } : lockedFor(null);
+    }
+    const [reserved] = await this.db
+      .update(adminCredentials)
+      .set({ failedAttempts: sql`${adminCredentials.failedAttempts} + 1`, updatedAt: now })
+      .where(
+        and(
+          eq(adminCredentials.userId, row.id),
+          or(isNull(adminCredentials.lockedUntil), lte(adminCredentials.lockedUntil, now)),
+        ),
+      )
+      .returning({ failedAttempts: adminCredentials.failedAttempts });
+    if (reserved === undefined) return lockedFor(row.lockedUntil);
+    return reserved.failedAttempts > threshold ? lockedFor(null) : { kind: 'reserved' };
+  }
+
+  /**
+   * After a failed (reserved) attempt: locks the account when its consecutive failures reached
+   * ADMIN_LOGIN_LOCKOUT_THRESHOLD (restarting the count), audits the failure and the lock.
+   * Returns whether the account is now locked.
+   */
+  private async recordFailure(
+    settings: AdminSignInConfig,
+    row: AdminRow | null,
+    account: string,
+    ipHash: string,
+    action: 'auth.admin.sign_in_failed' | 'auth.admin.mfa_failed',
+    reason: string,
+  ): Promise<boolean> {
+    await this.audit(action, row, account, { reason, ipHash });
+    const now = this.clock.now();
+    const { threshold, seconds } = settings.lockout;
+    const until = new Date(now.getTime() + seconds * 1000);
+    let locked = false;
+    if (row === null) {
+      const full = await this.limiter.peek(
+        unknownFailKey(account),
+        threshold,
+        UNKNOWN_ACCOUNT_FAILURE_TTL_SECONDS,
+      );
+      if (!full.allowed) {
+        await this.store.setWithTtl(unknownLockKey(account), String(until.getTime()), seconds);
+        await this.limiter.reset(unknownFailKey(account));
+        locked = true;
+      }
+    } else {
+      const [updated] = await this.db
+        .update(adminCredentials)
+        .set({ lockedUntil: until, failedAttempts: 0, updatedAt: now })
+        .where(
+          and(
+            eq(adminCredentials.userId, row.id),
+            gte(adminCredentials.failedAttempts, threshold),
+            or(isNull(adminCredentials.lockedUntil), lte(adminCredentials.lockedUntil, now)),
+          ),
+        )
+        .returning({ userId: adminCredentials.userId });
+      locked = updated !== undefined;
+    }
+    if (locked) {
+      await this.audit('auth.admin.locked', row, account, { ipHash, until: until.toISOString() });
+    }
+    return locked;
+  }
+
+  /**
+   * Step 1. Order: count the attempt in the password windows (refused: RATE_LIMITED), reserve
+   * it against the lockout (locked: RATE_LIMITED, for unknown emails too), then one argon2id
+   * verification (a dummy hash for unknown emails, so timing never reveals whether an admin
+   * exists). Wrong email or password: INVALID_CREDENTIALS. A correct password hands back its
+   * lockout reservation; only the TOTP step clears the count.
+   */
+  async login(email: string, password: string, ipHash: string): Promise<AdminLoginResponse> {
+    const { settings } = this.admin();
+    const account = adminAccountKey(this.config.consent.ipHashSecret, email);
+    const limits = await this.reserveWindows(settings, 'pwd', ipHash, account);
+    const row = await findAdminByEmail(this.db, email);
+    if (!limits.allowed) {
+      await this.audit('auth.admin.sign_in_failed', row, account, {
+        reason: 'rate_limited',
+        ipHash,
+      });
+      throw rateLimited(limits.retryAfterSeconds);
+    }
+    const lockout = await this.reserveLockout(settings, row, account);
+    if (lockout.kind === 'locked') {
+      await this.audit('auth.admin.sign_in_failed', row, account, { reason: 'locked', ipHash });
+      throw rateLimited(lockout.retryAfterSeconds);
+    }
+    const passwordOk = await verifyPassword(password, row?.passwordHash ?? (await this.dummy()));
+    if (row === null || !passwordOk) {
+      await this.recordFailure(
+        settings,
+        row,
+        account,
+        ipHash,
+        'auth.admin.sign_in_failed',
+        'invalid_credentials',
+      );
+      throw invalidCredentials();
+    }
+    await this.db
+      .update(adminCredentials)
+      .set({
+        failedAttempts: sql`greatest(${adminCredentials.failedAttempts} - 1, 0)`,
+        updatedAt: this.clock.now(),
+      })
+      .where(eq(adminCredentials.userId, row.id));
+    const challengeId = newOpaqueToken();
+    await this.store.setWithTtl(
+      adminChallengeKey(challengeId),
+      JSON.stringify({ userId: row.id, account }),
+      settings.challengeTtlSeconds,
+    );
+    return { challengeId, expiresIn: settings.challengeTtlSeconds };
+  }
+
+  /**
+   * Step 2. Like step 1, the attempt is counted in the code windows and reserved against the
+   * lockout before the code is checked, so parallel guesses can't exceed the limits. The
+   * challenge stays usable after a wrong code until it expires, the account window is used up
+   * or the account locks (then it is deleted). A code is accepted once: totp_last_used_step is
+   * advanced with a conditional UPDATE, so a replay (or a concurrent second use) is MFA_INVALID.
+   * The first valid code of an unconfirmed enrolment confirms it, unless the enrolment is older
+   * than ADMIN_TOTP_ENROLMENT_TTL_SECONDS (MFA_INVALID, audited `enrolment_expired`, until the
+   * operator runs reset-totp). Success clears the failure
+   * count and the account's windows.
+   */
+  async verifyMfa(challengeId: string, code: string, ipHash: string): Promise<AuthTokenResponse> {
+    const { auth, settings } = this.admin();
+    const key = adminChallengeKey(challengeId);
+    const parsed = challengeSchema.safeParse(parseJson(await this.store.get(key)));
+    if (!parsed.success) throw new ApiError('LOGIN_STATE_INVALID', 'Sign-in expired; start again');
+    const { userId, account } = parsed.data;
+
+    const limits = await this.reserveWindows(settings, 'otp', ipHash, account);
+    const row = await findAdminById(this.db, userId);
+    if (!limits.allowed) {
+      await this.store.del(key);
+      await this.audit('auth.admin.mfa_failed', row, account, { reason: 'rate_limited', ipHash });
+      throw rateLimited(limits.retryAfterSeconds);
+    }
+    if (row === null) {
+      await this.store.del(key);
+      throw new ApiError('LOGIN_STATE_INVALID', 'Sign-in expired; start again');
+    }
+    const lockout = await this.reserveLockout(settings, row, account);
+    if (lockout.kind === 'locked') {
+      await this.store.del(key);
+      await this.audit('auth.admin.mfa_failed', row, account, { reason: 'locked', ipHash });
+      throw rateLimited(lockout.retryAfterSeconds);
+    }
+
+    const now = this.clock.now();
+    const enrolmentExpired =
+      row.totpConfirmedAt === null &&
+      now.getTime() - row.credentialsCreatedAt.getTime() > settings.totpEnrolmentTtlSeconds * 1000;
+    const secret = decryptTotpSecret(settings.totp.encryptionKey, row.id, {
+      ciphertext: row.totpSecretEncrypted,
+      nonce: row.totpSecretNonce,
+    });
+    const check = {
+      nowMs: now.getTime(),
+      periodSeconds: settings.totp.periodSeconds,
+      digits: settings.totp.digits,
+      window: settings.totp.window,
+      lastUsedStep: row.totpLastUsedStep,
+    };
+    const step = matchTotp(secret, code, check);
+    // For the audit row only: a code that is valid but for an already used step is a replay.
+    const replayed =
+      step === null && matchTotp(secret, code, { ...check, lastUsedStep: null }) !== null;
+    secret.fill(0);
+    const fail = async (reason: string): Promise<never> => {
+      const locked = await this.recordFailure(
+        settings,
+        row,
+        account,
+        ipHash,
+        'auth.admin.mfa_failed',
+        reason,
+      );
+      if (locked || (await this.accountWindowFull(settings, 'otp', account))) {
+        await this.store.del(key);
+      }
+      throw new ApiError('MFA_INVALID', 'Wrong or expired code');
+    };
+    // An enrolment not confirmed within ADMIN_TOTP_ENROLMENT_TTL_SECONDS needs reset-totp.
+    if (enrolmentExpired) return fail('enrolment_expired');
+    if (step === null) return fail(replayed ? 'replayed' : 'invalid_code');
+
+    const [accepted] = await this.db
+      .update(adminCredentials)
+      .set({
+        totpLastUsedStep: step,
+        totpConfirmedAt: sql`coalesce(${adminCredentials.totpConfirmedAt}, ${now.toISOString()}::timestamptz)`,
+        failedAttempts: 0,
+        lockedUntil: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(adminCredentials.userId, row.id),
+          or(
+            isNull(adminCredentials.totpLastUsedStep),
+            lt(adminCredentials.totpLastUsedStep, step),
+          ),
+        ),
+      )
+      .returning({ userId: adminCredentials.userId });
+    if (accepted === undefined) return fail('replayed');
+    // One sign-in per challenge.
+    if ((await this.store.take(key)) === null) {
+      throw new ApiError('LOGIN_STATE_INVALID', 'Sign-in expired; start again');
+    }
+    await Promise.all(
+      (['pwd', 'otp'] as const).map((s) => this.limiter.reset(this.windowKey(s, 'acct', account))),
+    );
+
+    if (row.totpConfirmedAt === null) {
+      await this.audit('auth.admin.totp_confirmed', row, account, { ipHash });
+    }
+    await this.audit('auth.admin.sign_in', row, account, { ipHash, amr: ['pwd', 'otp', 'mfa'] });
+    const session = await startSession(this.db, {
+      userId: row.id,
+      pool: 'admins',
+      now,
+      ttlSeconds: auth.config.pools.admins?.refreshTokenTtlSeconds ?? 0,
+    });
+    return tokenResponse(
+      auth,
+      'admins',
+      await sessionUser(this.db, row.id),
+      session,
+      ['pwd', 'otp', 'mfa'],
+      now,
+    );
+  }
+}

@@ -1,40 +1,20 @@
-import { QueueMessageError } from '@shotx/shared';
 import { type QueueClient, type ReceivedMessage } from '../aws/queue-client';
 import { errorFields, type Logger } from '../logger';
+import {
+  isPermanentFailure,
+  MessageAbortedError,
+  type MessageHandler,
+  type QueueConsumerRuntime,
+} from '../queue/handler';
 import { Heartbeat } from './heartbeat';
 
-/**
- * A message that can never succeed (it doesn't match its queue's schema, or names something
- * that can't exist). The consumer makes it visible again at once so it reaches the DLQ through
- * maxReceiveCount quickly instead of waiting out timeouts.
- */
-export class PermanentMessageError extends Error {
-  override readonly name = 'PermanentMessageError';
-}
-
-/** Why a message's signal was aborted. */
-export type AbortReason = 'lost' | 'shutdown';
-
-export class MessageAbortedError extends Error {
-  override readonly name = 'MessageAbortedError';
-  constructor(readonly reason: AbortReason) {
-    super(`Message processing aborted (${reason})`);
-  }
-}
-
-export interface MessageContext {
-  messageId: string;
-  receiveCount: number;
-  /**
-   * Aborted when the message is no longer ours (`lost`: a heartbeat found the receipt handle
-   * invalid, so another attempt owns it) or on shutdown. Handlers pass it to long operations and
-   * stop at the next safe point.
-   */
-  signal: AbortSignal;
-  log: Logger;
-}
-
-export type MessageHandler = (body: string, context: MessageContext) => Promise<void>;
+export {
+  type AbortReason,
+  MessageAbortedError,
+  type MessageContext,
+  type MessageHandler,
+  PermanentMessageError,
+} from '../queue/handler';
 
 export interface QueueConsumerOptions {
   /** Queue name, for logs. */
@@ -107,7 +87,7 @@ export function retryDelaySeconds(
  * - {@link stop} (SIGTERM) stops receiving, releases waiting messages (visibility 0), gives
  *   running ones `shutdownGraceMs`, then aborts and releases them too.
  */
-export class QueueConsumer {
+export class QueueConsumer implements QueueConsumerRuntime {
   private stopping = false;
   private readonly receiveAbort = new AbortController();
   private readonly inFlight = new Set<InFlight>();
@@ -256,8 +236,7 @@ export class QueueConsumer {
         item.log.info('message done', { durationMs });
         return;
       }
-      const permanent =
-        failure instanceof PermanentMessageError || failure instanceof QueueMessageError;
+      const permanent = isPermanentFailure(failure);
       const delay = permanent
         ? 0
         : retryDelaySeconds(

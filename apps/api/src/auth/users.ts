@@ -31,7 +31,7 @@ function provisioningIdentity(identity: VerifiedIdentity) {
 
 /**
  * The `users` row of a verified identity, created on first use (ADR 0002): one SELECT on the
- * common path; otherwise `INSERT ... ON CONFLICT (cognito_pool, cognito_sub) DO NOTHING` with
+ * common path; otherwise `INSERT ... ON CONFLICT (auth_pool, auth_subject) DO NOTHING` with
  * newUserForIdentity and a SELECT again (a concurrent first request may have inserted it).
  * Later sign-ins never change the role, email or name.
  */
@@ -40,7 +40,7 @@ export async function provisionUser(q: Queryable, identity: VerifiedIdentity): P
     const [row] = await q
       .select({ id: users.id, role: users.role })
       .from(users)
-      .where(and(eq(users.cognitoPool, identity.pool), eq(users.cognitoSub, identity.sub)))
+      .where(and(eq(users.authPool, identity.pool), eq(users.authSubject, identity.sub)))
       .limit(1);
     return row;
   };
@@ -49,7 +49,7 @@ export async function provisionUser(q: Queryable, identity: VerifiedIdentity): P
   await q
     .insert(users)
     .values(newUserForIdentity(provisioningIdentity(identity)))
-    .onConflictDoNothing({ target: [users.cognitoPool, users.cognitoSub] });
+    .onConflictDoNothing({ target: [users.authPool, users.authSubject] });
   const created = await find();
   if (created === undefined) throw new Error('User provisioning returned no row');
   return created;

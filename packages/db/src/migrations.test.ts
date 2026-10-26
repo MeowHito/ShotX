@@ -87,6 +87,30 @@ describe('migrations', () => {
     expect(list[at('CREATE UNIQUE INDEX "consents_current_anon_unique"')]).toContain('"purpose"');
   });
 
+  it('0005 is shotx_auth: renames before use, the (id, auth_pool) key before its foreign keys', () => {
+    expect(journal.entries[5]?.tag).toBe('0005_shotx_auth');
+    const list = statements(sqlOf('0005_shotx_auth'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    const renames = [
+      'RENAME COLUMN "cognito_pool" TO "auth_pool"',
+      'RENAME COLUMN "cognito_sub" TO "auth_subject"',
+      'RENAME CONSTRAINT "users_cognito_identity_unique" TO "users_auth_identity_unique"',
+      'RENAME CONSTRAINT "users_cognito_sub_not_empty" TO "users_auth_subject_not_empty"',
+    ];
+    for (const rename of renames) expect(at(rename), rename).toBeGreaterThan(-1);
+    // Renames only: no column of users is dropped or re-added, so no data moves.
+    expect(list.some((s) => /DROP COLUMN|ADD COLUMN "auth_/.test(s))).toBe(false);
+    const firstUse = Math.min(at('"users_id_auth_pool_unique"'), at('"users_admin_email_unique"'));
+    for (const rename of renames.slice(0, 2)) expect(at(rename)).toBeLessThan(firstUse);
+    expect(at('ADD CONSTRAINT "users_id_auth_pool_unique"')).toBeLessThan(
+      at('"auth_sessions_user_pool_fk"'),
+    );
+    expect(at('ADD CONSTRAINT "users_id_auth_pool_unique"')).toBeLessThan(
+      at('"admin_credentials_admin_user_fk"'),
+    );
+    expect(at('"users_admin_iff_admins_pool"')).toBe(-1);
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

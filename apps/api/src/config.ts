@@ -4,6 +4,7 @@ import {
   type AuthPool,
   type AuthProviderConfig,
   type AwsConfig,
+  type BffAuthConfig,
   type BillingConfig,
   type CloudFrontSigningConfig,
   type CognitoPoolConfig,
@@ -18,7 +19,9 @@ import {
   loadApiLimitsConfig,
   loadAppConfig,
   loadAuthProviderConfig,
+  apiIssuesTokens,
   loadAwsConfig,
+  loadBffAuthConfig,
   loadBillingConfig,
   loadCloudFrontSigningConfig,
   loadCognitoConfig,
@@ -31,22 +34,27 @@ import {
   loadMediaStorageConfig,
   loadMediaUrlSignerConfig,
   loadPaymentGatewayConfig,
-  loadQueueUrls,
+  loadQueueBackendConfig,
   loadRedisConfig,
   loadRetentionConfig,
   loadSentryConfig,
   loadServerConfig,
   loadShareConfig,
   loadSharePasswordHashConfig,
+  loadShotxAuthConfig,
+  loadTrustedProxyConfig,
   loadUploadConfig,
   type MediaStorageConfig,
   type PaymentGatewayConfig,
+  type QueueBackendConfig,
   type RedisConfig,
   type RetentionConfig,
   type SentryConfig,
   type ServerConfig,
   type ShareConfig,
   type SharePasswordHashConfig,
+  type ShotxAuthConfig,
+  type TrustedProxyConfig,
   type UploadConfig,
 } from '@shotx/shared';
 
@@ -76,15 +84,28 @@ export interface ApiConfig {
   cloudFront: CloudFrontSigningConfig | null;
   /** `local` only on APP_STAGE=local (loadAuthProviderConfig refuses it anywhere else). */
   auth: AuthProviderConfig;
-  /** Both pools with AUTH_PROVIDER=cognito; null with `local`, which needs no Cognito. */
+  /** Both pools with AUTH_PROVIDER=cognito; null with `shotx` and `local`, which need no Cognito. */
   cognito: Record<AuthPool, CognitoPoolConfig> | null;
+  /**
+   * The API's own token issuer (keys, OIDC clients, admin sign-in) with AUTH_PROVIDER=shotx or
+   * local; null with `cognito`. Secret: never log it.
+   */
+  shotxAuth: ShotxAuthConfig | null;
+  /**
+   * AUTH_BFF_KEY: required on the `bff` sign-in routes and to trust BFF_CLIENT_IP_HEADER. Null
+   * when unset (only allowed with `cognito`). Secret: never log it.
+   */
+  bff: BffAuthConfig | null;
+  /** TRUSTED_PROXY_ADDRESSES: reverse proxies whose X-Forwarded-For is trusted. */
+  trustedProxies: TrustedProxyConfig;
   sentry: SentryConfig;
   limits: ApiLimits;
   features: FeatureFlags;
   consent: ConsentConfig;
   face: FaceConfig;
   faceUpload: FaceSearchUploadConfig;
-  queues: Record<ApiQueue, string>;
+  /** QUEUE_BACKEND: SQS queue URLs, or BullMQ prefix and per-queue job settings. */
+  queues: QueueBackendConfig<ApiQueue>;
   /** argon2id parameters of new share password hashes. */
   password: SharePasswordHashConfig;
   billing: BillingConfig;
@@ -112,13 +133,16 @@ export function loadApiConfig(env: Env): ApiConfig {
     cloudFront: mediaUrls.signer === 'cloudfront' ? loadCloudFrontSigningConfig(env) : null,
     auth,
     cognito: auth.provider === 'cognito' ? loadCognitoConfig(env, ['users', 'admins']) : null,
+    shotxAuth: apiIssuesTokens(auth.provider) ? loadShotxAuthConfig(env) : null,
+    bff: loadBffAuthConfig(env),
+    trustedProxies: loadTrustedProxyConfig(env),
     sentry: loadSentryConfig(env),
     limits: loadApiLimitsConfig(env),
     features: loadFeatureFlags(env),
     consent: loadConsentConfig(env),
     face: loadFaceConfig(env),
     faceUpload: loadFaceSearchUploadConfig(env),
-    queues: loadQueueUrls(env, API_QUEUES),
+    queues: loadQueueBackendConfig(env, API_QUEUES),
     password: loadSharePasswordHashConfig(env),
     billing: loadBillingConfig(env),
     paymentGateway: loadPaymentGatewayConfig(env),
@@ -129,6 +153,11 @@ export function loadApiConfig(env: Env): ApiConfig {
 /** Key prefix of every Redis key the API writes: `shotx:<stage>:api:`. */
 export function redisKeyPrefix(config: Pick<ApiConfig, 'app'>): string {
   return `shotx:${config.app.stage}:api:`;
+}
+
+/** Which callers may tell the API the client address (http/client clientIp). */
+export function clientIpTrust(config: Pick<ApiConfig, 'bff' | 'trustedProxies'>) {
+  return { bffKey: config.bff?.key ?? null, proxies: config.trustedProxies };
 }
 
 /** Cookies get `Secure` unless the site itself is plain http (localhost development). */

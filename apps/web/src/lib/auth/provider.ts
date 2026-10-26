@@ -1,33 +1,46 @@
-/**
- * The identity provider behind login. Production uses Cognito's Hosted UI (src/lib/auth/cognito);
- * tests use a fake. Every method talks to the provider server-side; tokens never reach browser JS.
- */
+import type { ErrorCode, OidcProvider } from '@shotx/shared';
 
-/** Cognito identity provider names (infra IDP_NAMES). Absent: the Hosted UI's own sign-in. */
-export const IDENTITY_PROVIDERS = { google: 'Google', line: 'LINE' } as const;
-export type IdentityProviderName = (typeof IDENTITY_PROVIDERS)[keyof typeof IDENTITY_PROVIDERS];
+/**
+ * The identity provider behind login, chosen by AUTH_PROVIDER (src/lib/server/auth):
+ * - `shotx` / `local`: the API issues the tokens and runs LINE and Google itself
+ *   (src/lib/auth/shotx, ADR 0008 section 4); `local` adds the development sign-in;
+ * - `cognito`: Cognito's Hosted UI (src/lib/auth/cognito), until infra/ is removed.
+ * Tests use fakes. Every method runs server-side; tokens never reach browser JS.
+ */
 
 export interface AuthTokens {
   accessToken: string;
-  /** Absent on refresh when the provider doesn't rotate it. */
+  /** Cognito only. */
   idToken?: string;
+  /** Absent on refresh when the provider doesn't rotate it (Cognito). */
   refreshToken?: string;
   /** Lifetime of the access token in seconds. */
   expiresIn: number;
+  /**
+   * Seconds until the refresh token's sign-in ends (the session cookies' max-age). Rotation never
+   * extends it. Absent (Cognito): AuthDeps.refreshTokenMaxAgeSeconds.
+   */
+  refreshExpiresIn?: number;
+  /** The person as the API reports it. Absent (Cognito): from the ID token. */
+  user?: { email: string | null; name: string | null };
 }
 
-export interface AuthorizationRequest {
+export interface LoginStart {
+  /** Where to send the browser. */
+  authorizationUrl: string;
+  /** Bound to the browser in the pending-login cookie and compared on the callback. */
   state: string;
-  codeChallenge: string;
-  redirectUri: string;
-  identityProvider?: IdentityProviderName;
+  /** PKCE verifier kept in the pending-login cookie (Cognito). Absent: the API holds it. */
+  codeVerifier?: string;
 }
 
 export interface AuthProvider {
-  authorizationUrl: (request: AuthorizationRequest) => string;
-  exchangeCode: (input: {
+  startLogin: (input: { identityProvider: OidcProvider; redirectUri: string }) => Promise<LoginStart>;
+  /** Finishes the sign-in with what the identity provider sent to the callback. */
+  completeLogin: (input: {
     code: string;
-    codeVerifier: string;
+    state: string;
+    codeVerifier?: string;
     redirectUri: string;
   }) => Promise<AuthTokens>;
   refresh: (refreshToken: string) => Promise<AuthTokens>;
@@ -35,6 +48,8 @@ export interface AuthProvider {
   revoke: (refreshToken: string) => Promise<void>;
   /** Where to send the browser to end the provider's own session, then come back. */
   logoutUrl: (returnTo: string) => string;
+  /** The development sign-in (AUTH_PROVIDER=local only); absent everywhere else. */
+  devLogin?: (identity: { email: string; name: string }) => Promise<AuthTokens>;
 }
 
 export class AuthProviderError extends Error {
@@ -42,8 +57,16 @@ export class AuthProviderError extends Error {
 
   constructor(
     message: string,
+    /** HTTP status of the provider's answer; absent when there was none. */
     readonly status?: number,
+    /** The API's error code (API-issued tokens). */
+    readonly code?: ErrorCode,
   ) {
     super(message);
+  }
+
+  /** The provider didn't decide anything (unreachable, timeout, 5xx): worth retrying later. */
+  get transient(): boolean {
+    return this.status === undefined || this.status >= 500;
   }
 }

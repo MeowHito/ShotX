@@ -87,6 +87,12 @@ export const httpUrl = (options: HttpUrlOptions = {}) =>
  */
 export const secret = () => z.string({ error: 'must be a string' }).min(1);
 
+/** APP_STAGE: same format as the infra stage name (infra/lib/config.ts), e.g. `local`, `prod`. */
+export const appStage = () =>
+  z.string().regex(/^[a-z][a-z0-9-]{1,15}$/, {
+    error: 'must be 2-16 characters: a lowercase letter, then lowercase letters, digits or -',
+  });
+
 /** An AWS region name, e.g. `ap-southeast-1`. */
 export const awsRegion = () =>
   z.string().regex(/^[a-z]{2}(-[a-z]+)+-\d{1,2}$/, { error: 'must be an AWS region name' });

@@ -1,4 +1,4 @@
-import type { AuthPool, QUEUE_MESSAGE_SCHEMAS } from '@shotx/shared';
+import type { AuthMethod, AuthPool, QUEUE_MESSAGE_SCHEMAS } from '@shotx/shared';
 import type { z } from 'zod';
 import type { ApiQueue } from './config';
 
@@ -81,11 +81,22 @@ export interface RateLimitResult {
 /** Fixed-window counters. Implementations fail closed: an error means not allowed. */
 export interface RateLimiter {
   hit(key: string, limit: number, windowSeconds: number): Promise<RateLimitResult>;
+  /**
+   * Whether one more hit would still be allowed, without counting one: `allowed` while the
+   * window's count is below `limit` (for limits that count failures only, e.g. admin sign-in).
+   */
+  peek(key: string, limit: number, windowSeconds: number): Promise<RateLimitResult>;
+  /** Ends the window of `key` (e.g. after a completed admin sign-in). */
+  reset(key: string): Promise<void>;
 }
 
-/** A verified Cognito identity: the pool comes from the verified issuer, never the request. */
+/**
+ * A verified identity (Cognito or ShotX-issued token): the pool comes from the verified issuer and
+ * key, never the request.
+ */
 export interface VerifiedIdentity {
   pool: AuthPool;
+  /** `users.auth_subject`: a raw Cognito `sub`, or a prefixed ShotX subject (`line:...`). */
   sub: string;
   tokenUse: 'id' | 'access';
   /**
@@ -95,6 +106,15 @@ export interface VerifiedIdentity {
   email: string | null;
   /** From an ID token's `name` claim; null otherwise. */
   name: string | null;
+  /**
+   * Who issued the token. Cognito enforces admin MFA in the pool itself; ShotX-issued admins
+   * tokens prove it with `amr` (AdminGuard, ADMIN_REQUIRED_AMR). Absent means `cognito`.
+   */
+  issuer?: 'cognito' | 'shotx';
+  /** `amr` of a ShotX-issued token; absent for Cognito tokens. */
+  amr?: readonly AuthMethod[];
+  /** `sid` of a ShotX-issued token (auth_sessions.family_id); absent for Cognito tokens. */
+  sessionId?: string;
 }
 
 export interface TokenVerifier {
@@ -129,12 +149,14 @@ export interface KeyValueStore {
   ): Promise<void>;
   /** HGET and HDEL one field atomically; null when the field (or key) doesn't exist. */
   hashTake(key: string, field: string): Promise<string | null>;
+  /** GETDEL: read a string key and delete it in one step (one-time values); null when missing. */
+  take(key: string): Promise<string | null>;
 }
 
 /** A message body as serializeQueueMessage accepts it. */
 export type QueueMessageInput<Q extends ApiQueue> = z.input<(typeof QUEUE_MESSAGE_SCHEMAS)[Q]>;
 
-/** Sends validated messages to the API's SQS queues (serializeQueueMessage). */
+/** Sends validated messages to the API's queues (serializeQueueMessage): SQS or BullMQ. */
 export interface QueueSender {
   send<Q extends ApiQueue>(queue: Q, message: QueueMessageInput<Q>): Promise<void>;
 }

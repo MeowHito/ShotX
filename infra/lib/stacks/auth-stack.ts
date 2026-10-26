@@ -24,7 +24,10 @@ export const IDP_NAMES = { google: 'Google', line: 'LINE' } as const;
  * - admins: the admin app only. No self sign-up, no federation, TOTP MFA required. Cognito can't
  *   require MFA for one group inside a pool, so a separate pool is how admin MFA is enforced.
  *
- * The app's roles (photographer/user/admin) live in the `users` table, keyed by `cognito_sub`.
+ * The app's roles (photographer/user/admin) live in the `users` table, keyed by
+ * `(auth_pool, auth_subject)` (formerly `cognito_pool`/`cognito_sub`): the pool (`users` or
+ * `admins`) and, for these pools, the raw Cognito `sub`. Tokens the API issues itself after
+ * ADR 0008 use provider-prefixed subjects in the same columns.
  * OAuth client secrets for Google and LINE are read from Secrets Manager at deploy time; they're
  * created manually before the first deploy and never appear in the template.
  */

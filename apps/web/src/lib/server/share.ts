@@ -11,7 +11,7 @@ import {
 } from '@shotx/shared';
 import { createApiClient } from '../api/client';
 import { isApiError } from '../api/errors';
-import { viewerAddressHeader } from '../bff/constants';
+import { type ServerCallContext, serverCallHeaders } from '../bff/client-ip';
 
 export type ServerShareMeta =
   | { kind: 'ok'; meta: ShareMetaResponse }
@@ -31,13 +31,15 @@ export async function fetchShareMeta(
   options: {
     apiInternalUrl: string;
     anonId?: string;
-    /** The CloudFront-Viewer-Address web received, so the API sees the viewer's address. */
-    viewerAddress?: string | null;
+    /** The BFF key and the viewer's address, so the API sees the viewer, not web. */
+    context?: ServerCallContext;
     fetch?: typeof fetch;
   },
 ): Promise<ServerShareMeta> {
   if (!isShareToken(token)) return { kind: 'not_found' };
-  const headers: Record<string, string> = { ...viewerAddressHeader(options.viewerAddress) };
+  const headers: Record<string, string> = {
+    ...(options.context !== undefined ? serverCallHeaders(options.context) : {}),
+  };
   if (options.anonId !== undefined && isValidAnonId(options.anonId)) {
     headers.cookie = `${ANON_ID_COOKIE}=${options.anonId}`;
   }

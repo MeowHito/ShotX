@@ -3,8 +3,10 @@ import {
   type Env,
   loadApiLimitsConfig,
   loadAppConfig,
+  loadAuthClientConfig,
   loadAuthProviderConfig,
   loadAwsConfig,
+  loadBffAuthConfig,
   loadBillingConfig,
   loadCloudFrontSigningConfig,
   loadCognitoConfig,
@@ -20,14 +22,18 @@ import {
   loadMediaStorageConfig,
   loadMediaUrlSignerConfig,
   loadPaymentGatewayConfig,
+  loadQueueBackendConfig,
   loadQueueUrls,
   loadQueueVisibilityTimeouts,
   loadRedisConfig,
   loadRetentionConfig,
+  loadScheduledJobsConfig,
   loadSentryConfig,
   loadServerConfig,
   loadShareConfig,
   loadSharePasswordHashConfig,
+  loadShotxAuthConfig,
+  loadTrustedProxyConfig,
   loadUploadConfig,
   loadWafCaptchaConfig,
   loadWorkerSettings,
@@ -200,6 +206,15 @@ const ALL_LOADERS: Loader[] = [
   // The local stand-ins (.env.example selects them) are read only on APP_STAGE=local.
   (e) => loadAuthProviderConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
   (e) => loadMediaUrlSignerConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
+  // ADR 0008 (VPS): BullMQ queues and schedules (.env.example selects bullmq), the API's own
+  // sign-in (.env.example selects local) and the reverse proxy trusted for X-Forwarded-For. AWS
+  // stacks never get these: see INFRA_OWNED_ENV.
+  (e) => loadQueueBackendConfig(e, QUEUE_NAMES),
+  loadScheduledJobsConfig,
+  (e) => loadShotxAuthConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
+  (e) => loadBffAuthConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
+  loadAuthClientConfig,
+  loadTrustedProxyConfig,
 ];
 
 const throws = (loader: Loader, env: Env) => {

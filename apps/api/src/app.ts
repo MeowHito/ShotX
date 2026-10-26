@@ -15,7 +15,14 @@ import { ExpressAdapter } from '@nestjs/platform-express';
 import express from 'express';
 import type { FaceProvider } from '@shotx/face';
 import type { EmailProvider, PaymentGatewayAdapter } from '@shotx/shared';
+import { AdminGuard } from './auth/admin.guard';
+import { AdminSignIn } from './auth/admin-sign-in';
+import { AuthController } from './auth/auth.controller';
+import { AuthService } from './auth/auth.service';
+import { BffGuard } from './auth/bff.guard';
+import type { OidcDeps } from './auth/oidc';
 import { PhotographerGuard, UserGuard } from './auth/photographer.guard';
+import { createShotxAuth, SHOTX_AUTH } from './auth/shotx-auth';
 import { OriginGuard, PublicGuard } from './auth/public.guard';
 import { BillingController } from './billing/billing.controller';
 import { BillingService } from './billing/billing.service';
@@ -85,6 +92,11 @@ export interface ApiDeps {
   paymentGateway?: PaymentGatewayAdapter;
   /** The EMAIL_PROVIDER adapter; default createEmailProvider(config). Tests pass the fake. */
   email?: EmailProvider;
+  /**
+   * HTTP client and Google JWKS of the LINE/Google sign-in (AUTH_PROVIDER=shotx or local);
+   * default: fetch and Google's remote JWKS. Tests pass local fakes (never the network).
+   */
+  oidc?: Partial<OidcDeps>;
   /** Structured alert events; default StdoutEventLog. Tests pass a MemoryEventLog. */
   events?: EventLog;
   /** Closes pools and clients when the app shuts down. */
@@ -130,6 +142,7 @@ export class AppModule {
         SharesController,
         PublicShareController,
         BillingController,
+        AuthController,
       ],
       providers: [
         { provide: API_CONFIG, useValue: deps.config },
@@ -153,6 +166,7 @@ export class AppModule {
             deps.paymentGateway ?? createPaymentGateway(deps.config.paymentGateway, deps.clock),
         },
         { provide: EMAIL_PROVIDER, useValue: deps.email ?? createEmailProvider(deps.config.email) },
+        { provide: SHOTX_AUTH, useValue: createShotxAuth(deps.config, deps.clock, deps.oidc) },
         { provide: SHUTDOWN, useValue: deps.onShutdown ?? (() => Promise.resolve()) },
         ShutdownHook,
         PhotographerGuard,
@@ -171,6 +185,10 @@ export class AppModule {
         DownloadsService,
         BillingService,
         WebhookService,
+        BffGuard,
+        AdminGuard,
+        AuthService,
+        AdminSignIn,
       ],
     };
   }

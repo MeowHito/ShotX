@@ -1,30 +1,82 @@
 import 'server-only';
-import { cookies } from 'next/headers';
+import { apiIssuesTokens, OIDC_PROVIDERS, type OidcProvider } from '@shotx/shared';
+import { cookies, headers } from 'next/headers';
 import { createCognitoAuthProvider } from '../auth/cognito';
 import type { AuthDeps } from '../auth/handlers';
-import { createLocalAuthProvider } from '../auth/local';
 import type { AuthProvider } from '../auth/provider';
 import { cookieNames, decodeSession, type Session } from '../auth/session';
+import { createShotxAuthProvider, fetchLoginProviders } from '../auth/shotx';
+import { clientIpFromHeaders, type ServerCallContext } from '../bff/client-ip';
 import { type WebConfig, webConfig } from './config';
 
-function authProvider(config: WebConfig): AuthProvider {
-  if (config.auth.provider === 'local') {
-    return createLocalAuthProvider({
-      secret: config.auth.secret,
-      publicBaseUrl: config.publicBaseUrl,
+/** The BFF key and the end user's address for API calls made while serving this request. */
+export function serverCallContext(
+  requestHeaders: Headers,
+  config: WebConfig = webConfig(),
+): ServerCallContext {
+  return {
+    bffKey: config.bffKey,
+    clientIp: clientIpFromHeaders(requestHeaders, config.clientIpSource),
+  };
+}
+
+/** {@link serverCallContext} of the request a server component is rendering. */
+export async function requestServerCallContext(): Promise<ServerCallContext> {
+  return serverCallContext(await headers());
+}
+
+function shotxContext(config: WebConfig, context: ServerCallContext) {
+  // loadBffAuthConfig requires AUTH_BFF_KEY with shotx and local.
+  if (config.bffKey === null) throw new Error('AUTH_BFF_KEY is missing');
+  return { ...context, bffKey: config.bffKey };
+}
+
+function authProvider(config: WebConfig, context: ServerCallContext): AuthProvider {
+  if (apiIssuesTokens(config.authProvider)) {
+    return createShotxAuthProvider({
+      apiInternalUrl: config.apiInternalUrl,
+      client: config.authClient,
+      context: shotxContext(config, context),
+      devLogin: config.authProvider === 'local',
     });
   }
   if (config.cognito === null) throw new Error('Cognito configuration is missing');
   return createCognitoAuthProvider(config.cognito);
 }
 
-/** Auth dependencies of the route handlers, from the environment. */
-export function authDeps(): AuthDeps {
+/** Auth dependencies of a route handler, from the environment and the request's headers. */
+export function authDeps(requestHeaders: Headers): AuthDeps {
   const config = webConfig();
   return {
-    provider: authProvider(config),
+    provider: authProvider(config, serverCallContext(requestHeaders, config)),
     publicBaseUrl: config.publicBaseUrl,
     secureCookies: config.secureCookies,
+  };
+}
+
+export interface LoginOptions {
+  /** Identity providers to offer, in display order. */
+  oidc: OidcProvider[];
+  /** Show the development sign-in form (AUTH_PROVIDER=local and the API offers it). */
+  devLogin: boolean;
+}
+
+/**
+ * What the sign-in page offers: with API-issued tokens, what GET /auth/providers reports (null
+ * when the API failed); with Cognito, LINE and Google (both are configured in infra).
+ */
+export async function loginOptions(): Promise<LoginOptions | null> {
+  const config = webConfig();
+  if (!apiIssuesTokens(config.authProvider)) return { oidc: [...OIDC_PROVIDERS], devLogin: false };
+  const providers = await fetchLoginProviders({
+    apiInternalUrl: config.apiInternalUrl,
+    client: config.authClient,
+    context: shotxContext(config, serverCallContext(await headers(), config)),
+  });
+  if (providers === null) return null;
+  return {
+    oidc: OIDC_PROVIDERS.filter((p) => providers.oidc.includes(p)),
+    devLogin: config.authProvider === 'local' && providers.devLogin,
   };
 }
 

@@ -714,7 +714,7 @@ export const configSchema = z
       for (const key of Object.keys(vars)) {
         if ((INFRA_OWNED_ENV as readonly string[]).includes(key)) {
           envIssue(
-            `${group}: ${key} is set by infra (runtime, features, consent, billing, email, secrets, buckets) or is local-only`,
+            `${group}: ${key} is set by infra (runtime, features, consent, billing, email, secrets, buckets, queues, schedules) or doesn't apply to AWS stacks (local development, ADR 0008 VPS settings)`,
           );
         }
         if (group !== 'common' && readsUploadKey(key)) {

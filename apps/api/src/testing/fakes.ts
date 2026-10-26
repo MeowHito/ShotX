@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
-import type { AuthPool, Env } from '@shotx/shared';
+import { type AuthPool, type Env, loadQueueBackendConfig, loadRedisConfig } from '@shotx/shared';
 import {
   createLocalJWKSet,
   exportJWK,
@@ -9,7 +9,8 @@ import {
   SignJWT,
 } from 'jose';
 import { CognitoTokenVerifier } from '../auth/cognito-verifier';
-import { type ApiConfig, type ApiLimits, loadApiConfig } from '../config';
+import { API_QUEUES, type ApiConfig, type ApiLimits, loadApiConfig } from '../config';
+import { BullMqQueueSender, createBullMqConnection } from '../infra/bullmq-queue';
 import type { Clock, ObjectStorage, UploadedPart } from '../tokens';
 
 /** The CloudFront signing config of a test config (MEDIA_URL_SIGNER=cloudfront). */
@@ -240,4 +241,33 @@ export class FakeObjectStorage implements ObjectStorage {
     const object = this.objects.get(key);
     return Promise.resolve(object === undefined ? null : { size: object.size });
   }
+}
+
+/**
+ * A real BullMQ sender on a Redis nobody listens on (port 1), with a short enqueue deadline: what
+ * the API sees when Redis is unreachable. Set it as MemoryQueueSender.delegate; close() after.
+ */
+export function unreachableBullMqSender(enqueueTimeoutMs = 300): {
+  sender: BullMqQueueSender;
+  close: () => Promise<void>;
+} {
+  const config = loadQueueBackendConfig(
+    {
+      QUEUE_BACKEND: 'bullmq',
+      APP_STAGE: 'unreachable',
+      QUEUE_ENQUEUE_TIMEOUT_MS: String(enqueueTimeoutMs),
+    },
+    API_QUEUES,
+  );
+  if (config.backend !== 'bullmq') throw new Error('expected bullmq');
+  const connection = createBullMqConnection(loadRedisConfig({ REDIS_URL: 'redis://127.0.0.1:1' }));
+  connection.on('error', () => undefined);
+  const sender = new BullMqQueueSender(connection, config);
+  return {
+    sender,
+    close: async () => {
+      connection.disconnect();
+      await sender.close().catch(() => undefined);
+    },
+  };
 }

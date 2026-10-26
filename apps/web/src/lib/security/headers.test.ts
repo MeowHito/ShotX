@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { mediaOrigins, uploadOrigins } from '../server/config';
+import { formActionOrigins, mediaOrigins, uploadOrigins } from '../server/config';
 import { buildCsp, securityHeaders } from './headers';
 
 function directives(csp: string): Record<string, string> {
@@ -20,7 +20,7 @@ describe('CSP', () => {
       https: true,
       publicBaseUrl: 'https://photos.example.com',
       uploadOrigins: ['https://shotx-prod-media.s3.ap-southeast-1.amazonaws.com'],
-      cognitoDomain: 'https://shotx-prod-auth.auth.ap-southeast-1.amazoncognito.com',
+      formActionOrigins: ['https://shotx-prod-auth.auth.ap-southeast-1.amazoncognito.com'],
     }),
   );
 
@@ -84,6 +84,30 @@ describe('CSP', () => {
     expect(
       uploadOrigins({ AWS_ENDPOINT_URL: 'http://localhost:4566', MEDIA_BUCKET: 'b-1' }),
     ).toEqual(['https://b-1.s3.ap-southeast-1.amazonaws.com', 'http://localhost:4566']);
+  });
+});
+
+describe('form-action', () => {
+  const cognitoDomain = 'https://shotx-prod-auth.auth.ap-southeast-1.amazoncognito.com/';
+
+  it('adds the Cognito domain only with AUTH_PROVIDER=cognito (the logout redirect)', () => {
+    expect(formActionOrigins({ COGNITO_DOMAIN: cognitoDomain })).toEqual([
+      'https://shotx-prod-auth.auth.ap-southeast-1.amazoncognito.com',
+    ]);
+    expect(formActionOrigins({ AUTH_PROVIDER: 'cognito' })).toEqual([]);
+  });
+
+  it('allows no other origin with API-issued tokens: LINE and Google are reached by links', () => {
+    expect(
+      formActionOrigins({ AUTH_PROVIDER: 'shotx', COGNITO_DOMAIN: cognitoDomain }),
+    ).toEqual([]);
+    const csp = directives(
+      buildCsp({ nonce: 'n', isDev: false, https: true, uploadOrigins: [], formActionOrigins: [] }),
+    );
+    expect(csp['form-action']).toBe("'self'");
+    for (const value of Object.values(csp)) {
+      expect(value).not.toMatch(/line\.me|accounts\.google\.com|amazoncognito/);
+    }
   });
 });
 

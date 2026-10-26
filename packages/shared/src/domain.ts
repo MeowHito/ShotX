@@ -5,11 +5,19 @@ export const USER_ROLES = ['photographer', 'admin', 'user'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 /**
- * The Cognito user pool an identity comes from. `users` holds photographers and viewers,
- * `admins` holds admins only (MFA required). A `sub` is unique only within its pool.
+ * The pool an identity comes from (`users.auth_pool`): a Cognito user pool (ADR 0002) or the
+ * matching pool of ShotX-issued tokens (ADR 0008). `users` holds photographers and viewers,
+ * `admins` holds admins only (MFA required). A subject is unique only within its pool.
  */
 export const AUTH_POOLS = ['users', 'admins'] as const;
 export type AuthPool = (typeof AUTH_POOLS)[number];
+
+/**
+ * OpenID Connect providers the API runs itself for the users pool (ADR 0008 section 4; the
+ * `:provider` of `/auth/oidc/:provider/start`).
+ */
+export const OIDC_PROVIDERS = ['line', 'google'] as const;
+export type OidcProvider = (typeof OIDC_PROVIDERS)[number];
 
 export const SUBSCRIPTION_STATUSES = ['trial', 'active', 'grace', 'expired', 'purged'] as const;
 export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
@@ -204,3 +212,31 @@ export const PLAN_CHANGE_INVALID_REASONS = [
   'months_not_offered',
 ] as const;
 export type PlanChangeInvalidReason = (typeof PLAN_CHANGE_INVALID_REASONS)[number];
+
+// --- Auth (ADR 0008) -----------------------------------------------------------------------------
+
+/**
+ * `audit_log.action` of sign-in and admin-account events. These rows may have no actor
+ * (`actor_id` null, migration 0005: the CHECK allows it for every `auth.` action): a failed
+ * sign-in whose email matches no admin, and the operator CLI's actions (`created`, `totp_reset`,
+ * `password_reset`, `unlocked`), which no signed-in user performs. Every other action needs an
+ * actor. `target_type` is `user` with the user id when the account is known, else `admin_login`
+ * with an HMAC of the normalized email (IP_HASH_SECRET), never the email itself. `meta` holds the
+ * reason and the IP hash (CLI actions: the operator's OS user, if known).
+ */
+export const AUTH_AUDIT_ACTIONS = [
+  'auth.admin.sign_in',
+  'auth.admin.sign_in_failed',
+  'auth.admin.mfa_failed',
+  'auth.admin.locked',
+  'auth.admin.totp_confirmed',
+  'auth.admin.created',
+  'auth.admin.totp_reset',
+  'auth.admin.password_reset',
+  'auth.admin.unlocked',
+  'auth.refresh_reused',
+] as const;
+export type AuthAuditAction = (typeof AUTH_AUDIT_ACTIONS)[number];
+
+/** `audit_log.action` prefix that may go without an actor. */
+export const AUTH_AUDIT_ACTION_PREFIX = 'auth.';

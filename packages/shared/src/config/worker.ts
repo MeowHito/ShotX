@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { QueueName } from '../queues/names';
+import { QUEUE_BACKENDS, type QueueName } from '../queues/names';
 import { type Env, parseEnv } from './env';
 import { int, MS_PER_SECOND, SECONDS_PER_DAY, SECONDS_PER_HOUR } from './fields';
 
@@ -33,6 +33,8 @@ const runtime = int(60, WORKER_MAX_PROCESSING_SECONDS_LIMIT);
 // doesn't set them, so the defaults apply unless `services.env.worker` overrides one.
 const workerEnvSchema = z
   .object({
+    /** Only decides whether the batch-size rules below apply (they are SQS's). */
+    QUEUE_BACKEND: z.enum(QUEUE_BACKENDS).default('sqs'),
     /** Messages per ReceiveMessage call, and messages processed at once per task, per queue. */
     WORKER_MEDIA_BATCH_SIZE: batchSize.default(4),
     /** sharp and ffmpeg are CPU heavy. */
@@ -88,23 +90,38 @@ const workerEnvSchema = z
     WORKER_TMP_DIR: z.string().min(1).optional(),
     LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
   })
-  .refine((e) => e.WORKER_MEDIA_CONCURRENCY <= e.WORKER_MEDIA_BATCH_SIZE, {
-    error: 'WORKER_MEDIA_CONCURRENCY must be at most WORKER_MEDIA_BATCH_SIZE',
-  })
-  .refine((e) => e.WORKER_FACES_CONCURRENCY <= e.WORKER_FACES_BATCH_SIZE, {
-    error: 'WORKER_FACES_CONCURRENCY must be at most WORKER_FACES_BATCH_SIZE',
-  })
-  .refine((e) => e.WORKER_ZIP_CONCURRENCY <= e.WORKER_ZIP_BATCH_SIZE, {
-    error: 'WORKER_ZIP_CONCURRENCY must be at most WORKER_ZIP_BATCH_SIZE',
-  })
-  .refine((e) => e.WORKER_JOBS_CONCURRENCY <= e.WORKER_JOBS_BATCH_SIZE, {
-    error: 'WORKER_JOBS_CONCURRENCY must be at most WORKER_JOBS_BATCH_SIZE',
-  });
+  .refine(
+    (e) => e.QUEUE_BACKEND === 'bullmq' || e.WORKER_MEDIA_CONCURRENCY <= e.WORKER_MEDIA_BATCH_SIZE,
+    {
+      error: 'WORKER_MEDIA_CONCURRENCY must be at most WORKER_MEDIA_BATCH_SIZE (with SQS)',
+    },
+  )
+  .refine(
+    (e) => e.QUEUE_BACKEND === 'bullmq' || e.WORKER_FACES_CONCURRENCY <= e.WORKER_FACES_BATCH_SIZE,
+    {
+      error: 'WORKER_FACES_CONCURRENCY must be at most WORKER_FACES_BATCH_SIZE (with SQS)',
+    },
+  )
+  .refine(
+    (e) => e.QUEUE_BACKEND === 'bullmq' || e.WORKER_ZIP_CONCURRENCY <= e.WORKER_ZIP_BATCH_SIZE,
+    {
+      error: 'WORKER_ZIP_CONCURRENCY must be at most WORKER_ZIP_BATCH_SIZE (with SQS)',
+    },
+  )
+  .refine(
+    (e) => e.QUEUE_BACKEND === 'bullmq' || e.WORKER_JOBS_CONCURRENCY <= e.WORKER_JOBS_BATCH_SIZE,
+    {
+      error: 'WORKER_JOBS_CONCURRENCY must be at most WORKER_JOBS_BATCH_SIZE (with SQS)',
+    },
+  );
 
 export interface WorkerConsumerSettings {
-  /** Messages per ReceiveMessage call. */
+  /** Messages per ReceiveMessage call (SQS only; unused with BullMQ). */
   batchSize: number;
-  /** Messages processed at once per task; at most batchSize. */
+  /**
+   * Messages processed at once per task (BullMQ: Worker `concurrency`). At most batchSize with
+   * SQS; not tied to it with QUEUE_BACKEND=bullmq.
+   */
   concurrency: number;
 }
 
@@ -131,7 +148,10 @@ export interface WorkerSettings {
   logLevel: LogLevel;
 }
 
-/** Reads the WORKER_* settings and LOG_LEVEL (worker only). Every key has a default. */
+/**
+ * Reads the WORKER_* settings and LOG_LEVEL (worker only). Every key has a default. QUEUE_BACKEND
+ * (default `sqs`) is read only to skip the concurrency <= batch size rule with `bullmq`.
+ */
 export function loadWorkerSettings(env: Env): WorkerSettings {
   const e = parseEnv(workerEnvSchema, env, 'worker');
   return {

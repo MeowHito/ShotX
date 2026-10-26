@@ -9,6 +9,8 @@ allowBuilds:
   # next-intl pulls these in; both ship prebuilt binaries, so their install scripts are not needed.
   '@parcel/watcher': false
   '@swc/core': false
+  # bullmq (worker) pulls this in through msgpackr; prebuilt binaries ship as optional packages.
+  msgpackr-extract: false
 
 # Supply-chain hygiene: don't install versions published less than 7 days ago.
 minimumReleaseAge: 10080

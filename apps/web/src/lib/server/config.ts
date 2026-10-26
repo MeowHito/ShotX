@@ -1,10 +1,13 @@
 import {
-  type AuthProviderConfig,
+  type AuthClientConfig,
+  type AuthProviderName,
   type CognitoPoolConfig,
   type Env,
   loadAppConfig,
+  loadAuthClientConfig,
   loadAuthProviderConfig,
   loadAwsConfig,
+  loadBffAuthConfig,
   loadCognitoConfig,
   loadInternalApiConfig,
   loadMediaUrlSignerConfig,
@@ -12,6 +15,7 @@ import {
   parseEnv,
 } from '@shotx/shared';
 import { z } from 'zod';
+import type { ClientIpSource } from '../bff/client-ip';
 import type { ClientFaceConfig, ClientShareConfig } from '../face/config';
 
 /**
@@ -21,22 +25,38 @@ import type { ClientFaceConfig, ClientShareConfig } from '../face/config';
 export interface WebConfig {
   publicBaseUrl: string;
   apiInternalUrl: string;
-  /** `local` only on APP_STAGE=local (loadAuthProviderConfig refuses it anywhere else). */
-  auth: AuthProviderConfig;
-  /** The users pool with AUTH_PROVIDER=cognito; null with `local`. */
+  /**
+   * AUTH_PROVIDER. `shotx` and `local`: the API issues tokens; `local` only on APP_STAGE=local
+   * (loadAuthProviderConfig refuses it anywhere else). Web reads nothing else of that config.
+   */
+  authProvider: AuthProviderName;
+  /** The users pool with AUTH_PROVIDER=cognito; null otherwise. */
   cognito: CognitoPoolConfig | null;
+  /**
+   * AUTH_BFF_KEY, sent on every server-side API call (secret: never log it). Always set with
+   * `shotx`/`local`; null with `cognito` when unset, and then no client IP is passed either.
+   */
+  bffKey: string | null;
+  /** Where the end user's address comes from (see ClientIpSource). */
+  clientIpSource: ClientIpSource;
+  /** Timeout of `/auth/*` calls and the API's refresh reuse grace (API-issued tokens only). */
+  authClient: AuthClientConfig;
   /** `Secure` and `__Host-` cookies; off only on plain-http localhost. */
   secureCookies: boolean;
 }
 
 export function loadWebConfig(env: Env): WebConfig {
   const app = loadAppConfig(env);
-  const auth = loadAuthProviderConfig(env);
+  const { provider } = loadAuthProviderConfig(env);
   return {
     publicBaseUrl: app.publicBaseUrl,
     apiInternalUrl: loadInternalApiConfig(env).apiInternalUrl,
-    auth,
-    cognito: auth.provider === 'cognito' ? loadCognitoConfig(env, ['users']).users : null,
+    authProvider: provider,
+    cognito: provider === 'cognito' ? loadCognitoConfig(env, ['users']).users : null,
+    bffKey: loadBffAuthConfig(env)?.key ?? null,
+    // AWS (Cognito) sits behind CloudFront; the VPS behind the reverse proxy (ADR 0008).
+    clientIpSource: provider === 'cognito' ? 'cloudfront-viewer-address' : 'x-forwarded-for',
+    authClient: loadAuthClientConfig(env),
     secureCookies: app.publicBaseUrl.startsWith('https://'),
   };
 }
@@ -101,6 +121,27 @@ let cachedMediaOrigins: string[] | undefined;
 export function processMediaOrigins(): string[] {
   cachedMediaOrigins ??= mediaOrigins(process.env);
   return cachedMediaOrigins;
+}
+
+/**
+ * Origins the browser may be redirected to after submitting a form (CSP `form-action`): the
+ * logout form ends at Cognito's /logout with AUTH_PROVIDER=cognito. With API-issued tokens every
+ * form (logout, the development sign-in) redirects within the site, and LINE and Google are only
+ * reached by following a link to /auth/login (a navigation, which `form-action` doesn't cover), so
+ * nothing is added.
+ */
+export function formActionOrigins(env: Env = process.env): string[] {
+  if (loadAuthProviderConfig(env).provider !== 'cognito') return [];
+  const domain = env.COGNITO_DOMAIN;
+  return domain ? [new URL(domain).origin] : [];
+}
+
+let cachedFormActionOrigins: string[] | undefined;
+
+/** {@link formActionOrigins} of `process.env`, cached for the process. */
+export function processFormActionOrigins(): string[] {
+  cachedFormActionOrigins ??= formActionOrigins(process.env);
+  return cachedFormActionOrigins;
 }
 
 /** A same-origin absolute path (`/x/y`): MediaPipe assets are self-hosted, never on a CDN. */

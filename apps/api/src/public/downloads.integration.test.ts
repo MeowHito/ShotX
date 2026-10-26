@@ -12,6 +12,7 @@ import {
 import { and, asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DATABASE_BACKENDS, type TestDatabase } from '../testing/database';
+import { unreachableBullMqSender } from '../testing/fakes';
 import { TestApi } from '../testing/harness';
 
 const downloads = (token: string) => apiPath(P.downloads, { token });
@@ -253,6 +254,38 @@ for (const backend of DATABASE_BACKENDS) {
         const retry = await b.request('POST', downloads(share.token), {
           body: { fileIds: [list[0]?.id, list[1]?.id] },
           headers: { [KEY]: 'lost-send' },
+        });
+        expect(retry.status).toBe(200);
+        expect(api.queue.sent.length).toBe(sent + 1);
+      });
+
+      it('fails instead of hanging when Redis is unreachable; a retry re-sends', async () => {
+        const { share, files: list } = await shared();
+        const b = api.browser();
+        const unreachable = unreachableBullMqSender(300);
+        api.queue.delegate = unreachable.sender;
+        try {
+          const started = Date.now();
+          const failed = await b.request('POST', downloads(share.token), {
+            body: { fileIds: [list[0]?.id, list[1]?.id] },
+            headers: { [KEY]: 'redis-down' },
+          });
+          expect(failed.status).toBe(500);
+          expect(Date.now() - started).toBeLessThan(5_000);
+          // The replay path re-sends while the job is still queued: it fails fast too.
+          const again = await b.request('POST', downloads(share.token), {
+            body: { fileIds: [list[0]?.id, list[1]?.id] },
+            headers: { [KEY]: 'redis-down' },
+          });
+          expect(again.status).toBe(500);
+        } finally {
+          api.queue.delegate = null;
+          await unreachable.close();
+        }
+        const sent = api.queue.sent.length;
+        const retry = await b.request('POST', downloads(share.token), {
+          body: { fileIds: [list[0]?.id, list[1]?.id] },
+          headers: { [KEY]: 'redis-down' },
         });
         expect(retry.status).toBe(200);
         expect(api.queue.sent.length).toBe(sent + 1);

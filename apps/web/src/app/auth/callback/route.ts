@@ -1,7 +1,7 @@
 import { handleCallback } from '@/lib/auth/handlers';
 import { authDeps } from '@/lib/server/auth';
 
-/** OAuth redirect URI (infra `auth.callbackPath`). */
+/** The redirect URI registered with the identity providers (and infra `auth.callbackPath`). */
 export function GET(request: Request) {
-  return handleCallback(request, authDeps());
+  return handleCallback(request, authDeps(request.headers));
 }

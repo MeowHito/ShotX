@@ -1,4 +1,11 @@
-import { PAYMENT_GATEWAY_SECRET_NAMES, S3_PREFIXES } from '@shotx/shared';
+import {
+  AUTH_SIGNING_KEY_ENV,
+  BULLMQ_QUEUE_ENV,
+  PAYMENT_GATEWAY_SECRET_NAMES,
+  S3_PREFIXES,
+  SCHEDULE_TIMEZONE_ENV,
+  SCHEDULED_JOB_ENV,
+} from '@shotx/shared';
 
 /**
  * Fixed platform facts. These are decisions from the platform spec, not tunables: changing one
@@ -106,9 +113,35 @@ export const INFRA_OWNED_ENV = [
   // Local development stand-ins (packages/shared local-dev): never on a deployed stage, where
   // auth is Cognito, media URLs are CloudFront and AWS credentials come from the task role.
   'AUTH_PROVIDER',
-  'LOCAL_AUTH_SECRET',
   'MEDIA_URL_SIGNER',
   'AWS_ENDPOINT_URL',
   'AWS_ACCESS_KEY_ID',
   'AWS_SECRET_ACCESS_KEY',
+  // Queues are SQS on AWS (ADR 0008 keeps them there until infra/ is removed): `bullmq` would
+  // send api and worker to Redis while infra wires, alarms and scales on SQS. The BullMQ settings
+  // and schedules have their AWS source in cdk.json (`queues`, `schedules` on EventBridge), so a
+  // value here would be ignored and only look like it changed something.
+  'QUEUE_BACKEND',
+  ...Object.values(BULLMQ_QUEUE_ENV).flatMap((names) => Object.values(names)),
+  SCHEDULE_TIMEZONE_ENV,
+  ...Object.values(SCHEDULED_JOB_ENV).flatMap((names) => Object.values(names)),
+  // API-issued sign-in (AUTH_PROVIDER=shotx, ADR 0008): AWS stacks stay on Cognito and have no
+  // Secrets Manager wiring for these, so a value here would be a plaintext secret in the task
+  // definition. Google and LINE client ids come from cdk.json `auth` (the Cognito identity
+  // providers) and are refused with their secrets so each has one source.
+  'AUTH_BFF_KEY',
+  ...Object.values(AUTH_SIGNING_KEY_ENV).flatMap((names) => Object.values(names)),
+  'ADMIN_TOTP_ENCRYPTION_KEY',
+  'LINE_LOGIN_CHANNEL_ID',
+  'LINE_LOGIN_CHANNEL_SECRET',
+  'GOOGLE_OAUTH_CLIENT_ID',
+  'GOOGLE_OAUTH_CLIENT_SECRET',
+  // The VPS reverse proxy whose X-Forwarded-For the api trusts. On AWS the client address is
+  // CloudFront-Viewer-Address (VIEWER_ADDRESS_HEADER); the ALB appends to a viewer-supplied
+  // X-Forwarded-For instead of replacing it, so trusting it there would let viewers pick their IP
+  // and dodge the per-IP rate limits.
+  'TRUSTED_PROXY_ADDRESSES',
+  // Redis credentials over plain redis:// to a private host (the VPS compose network). AWS
+  // ElastiCache is TLS only (rediss://), so the credentials must never travel in the clear.
+  'REDIS_ALLOW_PLAINTEXT_AUTH',
 ] as const;

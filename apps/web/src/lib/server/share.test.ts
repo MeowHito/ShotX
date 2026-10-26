@@ -25,18 +25,32 @@ describe('SSR share meta', () => {
     expect((init?.headers as Record<string, string>).authorization).toBeUndefined();
   });
 
-  it('forwards the CloudFront-Viewer-Address it received, and nothing malformed', async () => {
+  it('sends the BFF key and the viewer\u2019s address, and nothing malformed', async () => {
     const fake = new FakeApi();
     const share = fake.addPublicShare();
     const fetch = serverFetch(fake);
-    const viewerAddress = '203.0.113.10:51234';
-    await fetchShareMeta(share.token, { apiInternalUrl: API, viewerAddress, fetch });
-    await fetchShareMeta(share.token, { apiInternalUrl: API, viewerAddress: 'x\r\nevil', fetch });
-    await fetchShareMeta(share.token, { apiInternalUrl: API, fetch });
-    const sent = fetch.mock.calls.map(
-      ([, init]) => (init?.headers as Record<string, string>)['cloudfront-viewer-address'],
-    );
-    expect(sent).toEqual([viewerAddress, undefined, undefined]);
+    const bffKey = 'k'.repeat(40);
+    const call = (context?: { bffKey: string | null; clientIp: string | null }) =>
+      fetchShareMeta(share.token, { apiInternalUrl: API, context, fetch });
+    await call({ bffKey, clientIp: '203.0.113.10' });
+    await call({ bffKey, clientIp: 'x\r\nevil' });
+    await call({ bffKey: null, clientIp: '203.0.113.10' });
+    await call();
+    const sent = fetch.mock.calls.map(([, init]) => {
+      const headers = init?.headers as Record<string, string>;
+      return [headers['x-shotx-bff-key'], headers['x-shotx-client-ip']];
+    });
+    expect(sent).toEqual([
+      [bffKey, '203.0.113.10'],
+      [bffKey, undefined],
+      [undefined, undefined],
+      [undefined, undefined],
+    ]);
+    for (const [, init] of fetch.mock.calls) {
+      expect(init?.headers as Record<string, string>).not.toHaveProperty(
+        'cloudfront-viewer-address',
+      );
+    }
   });
 
   it('never forwards a malformed anon cookie', async () => {

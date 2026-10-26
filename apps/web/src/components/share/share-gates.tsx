@@ -52,7 +52,7 @@ function loginHref(provider: 'line' | 'google', token: string): string {
 }
 
 /**
- * require_login: sign in with LINE or Google through Cognito, then come back to this page, which
+ * require_login: sign in with LINE or Google, then come back to this page, which
  * creates the viewer session (POST /bff/me/viewer-session) and reloads.
  */
 export function LoginRequired({ token }: { token: string }) {
@@ -62,7 +62,7 @@ export function LoginRequired({ token }: { token: string }) {
       <LogInIcon className="size-10 text-primary" aria-hidden />
       <h1 className="text-2xl font-bold">{tl('title')}</h1>
       <p className="text-muted-foreground">{tl('body')}</p>
-      {/* Plain links: route handlers that redirect to the Cognito Hosted UI. */}
+      {/* Plain links: route handlers that redirect to LINE or Google. */}
       <a
         href={loginHref('line', token)}
         className={cn(

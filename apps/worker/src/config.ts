@@ -3,6 +3,7 @@ import {
   type AppConfig,
   type AwsConfig,
   type BillingConfig,
+  type BullMqQueueSettings,
   type EmailConfig,
   type Env,
   type FaceConfig,
@@ -16,10 +17,11 @@ import {
   loadMediaConfig,
   loadMediaStorageConfig,
   loadPaymentGatewayConfig,
-  loadQueueUrls,
+  loadQueueBackendConfig,
   loadQueueVisibilityTimeouts,
   loadRedisConfig,
   loadRetentionConfig,
+  loadScheduledJobsConfig,
   loadShareConfig,
   loadUploadConfig,
   loadWorkerSettings,
@@ -30,6 +32,7 @@ import {
   type QueueName,
   type RedisConfig,
   type RetentionConfig,
+  type ScheduledJobsConfig,
   type ShareConfig,
   SQS_MAX_VISIBILITY_TIMEOUT_SECONDS,
   type WorkerSettings,
@@ -42,14 +45,31 @@ export type ConsumedQueue = QueueName;
 /** The zip limits and result lifetime (ZIP_MAX_FILES, ZIP_MAX_BYTES, ZIP_RESULT_TTL_SECONDS). */
 export type ZipConfig = ShareConfig['zip'];
 
+/**
+ * Where the queues live (QUEUE_BACKEND), with what each runtime needs:
+ * - `sqs` (until infra/ is removed): queue URLs and visibility timeouts (heartbeats);
+ * - `bullmq` (ADR 0008): the key prefix, per-queue settings and the job schedules.
+ */
+export type WorkerQueueConfig =
+  | {
+      backend: 'sqs';
+      urls: Record<QueueName, string>;
+      visibilityTimeoutSeconds: Record<QueueName, number>;
+    }
+  | {
+      backend: 'bullmq';
+      prefix: string;
+      queues: Record<QueueName, BullMqQueueSettings>;
+      schedules: ScheduledJobsConfig;
+    };
+
 export interface WorkerConfig {
   app: AppConfig;
   aws: AwsConfig;
   storage: MediaStorageConfig;
   database: DatabaseConfig;
   redis: RedisConfig;
-  queueUrls: Record<QueueName, string>;
-  visibilityTimeoutSeconds: Record<QueueName, number>;
+  queue: WorkerQueueConfig;
   media: MediaConfig;
   retention: RetentionConfig;
   face: FaceConfig;
@@ -71,23 +91,13 @@ export interface WorkerConfig {
 
 /** Everything the worker reads from the environment, validated at start-up. */
 export function loadWorkerConfig(env: Env): WorkerConfig {
-  const visibilityTimeoutSeconds = loadQueueVisibilityTimeouts(env, CONSUMED_QUEUES);
-  for (const queue of CONSUMED_QUEUES) {
-    const seconds = visibilityTimeoutSeconds[queue];
-    if (seconds < 3 || seconds > SQS_MAX_VISIBILITY_TIMEOUT_SECONDS) {
-      throw new Error(
-        `Invalid queue configuration: the ${queue} visibility timeout must be at least 3 s for heartbeats`,
-      );
-    }
-  }
   return {
     app: loadAppConfig(env),
     aws: loadAwsConfig(env),
     storage: loadMediaStorageConfig(env),
     database: loadDatabaseConfig(env),
     redis: loadRedisConfig(env),
-    queueUrls: loadQueueUrls(env, CONSUMED_QUEUES),
-    visibilityTimeoutSeconds,
+    queue: loadWorkerQueueConfig(env),
     media: loadMediaConfig(env),
     retention: loadRetentionConfig(env),
     face: loadFaceConfig(env),
@@ -99,4 +109,22 @@ export function loadWorkerConfig(env: Env): WorkerConfig {
     email: loadEmailConfig(env),
     paymentGateway: loadPaymentGatewayConfig(env),
   };
+}
+
+/** QUEUE_BACKEND and its settings for the consumed queues. */
+export function loadWorkerQueueConfig(env: Env): WorkerQueueConfig {
+  const backend = loadQueueBackendConfig(env, CONSUMED_QUEUES);
+  if (backend.backend === 'bullmq') {
+    return { ...backend, schedules: loadScheduledJobsConfig(env) };
+  }
+  const visibilityTimeoutSeconds = loadQueueVisibilityTimeouts(env, CONSUMED_QUEUES);
+  for (const queue of CONSUMED_QUEUES) {
+    const seconds = visibilityTimeoutSeconds[queue];
+    if (seconds < 3 || seconds > SQS_MAX_VISIBILITY_TIMEOUT_SECONDS) {
+      throw new Error(
+        `Invalid queue configuration: the ${queue} visibility timeout must be at least 3 s for heartbeats`,
+      );
+    }
+  }
+  return { backend: 'sqs', urls: backend.urls, visibilityTimeoutSeconds };
 }

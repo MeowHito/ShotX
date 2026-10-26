@@ -9,7 +9,8 @@ import {
   VIEWER_SESSION_COOKIE,
 } from '@shotx/shared';
 import { type AuthDeps, isSameOrigin, resolveSession } from '../auth/handlers';
-import { BFF_PREFIX, VIEWER_ADDRESS_HEADER, viewerAddressHeader } from './constants';
+import { type ServerCallContext, serverCallHeaders } from './client-ip';
+import { BFF_PREFIX } from './constants';
 
 /**
  * Backend-for-frontend: the browser calls `/bff/<route path>` with its httpOnly session cookie;
@@ -17,7 +18,11 @@ import { BFF_PREFIX, VIEWER_ADDRESS_HEADER, viewerAddressHeader } from './consta
  * API at API_INTERNAL_URL. Only routes in the shared route table are forwarded (no open proxy),
  * and file bytes never come through here: uploads go from the browser to S3 with presigned URLs.
  * Public routes (`auth: 'public'`, the share page's) are not forwarded either: the browser calls
- * them at `/api/...` directly so the WAF sees the viewer's IP and the API's cookies reach it.
+ * them at `/api/...` directly so the API sees the viewer's address and its cookies reach it.
+ * Nor are `webhook` (payment gateways) and `bff` routes (sign-in: web calls those itself with the
+ * BFF key, see src/lib/auth/shotx; forwarding them would hand the key's power to any browser).
+ * Every forwarded call carries the BFF key and the end user's address (serverCallHeaders), built
+ * from config and the proxy's header, never copied from the browser's request.
  */
 
 /** Largest JSON body forwarded (the biggest is a complete with 10,000 parts, ~1 MB). */
@@ -108,6 +113,8 @@ export interface BffDeps {
   auth: AuthDeps;
   /** API origin, e.g. the internal ALB (API_INTERNAL_URL). Routes are under `/api` on it. */
   apiInternalUrl: string;
+  /** The BFF key and the end user's address (src/lib/server/auth serverCallContext). */
+  context: ServerCallContext;
   fetch?: typeof fetch;
 }
 
@@ -136,8 +143,14 @@ export async function handleBffRequest(request: Request, deps: BffDeps): Promise
   }
   const path = url.pathname.slice(BFF_PREFIX.length);
   const route = matchRoute(request.method, path);
-  // Public routes go to /api directly; gateway webhooks are server-to-server, never via a browser.
-  if (route === null || route.auth === 'public' || route.auth === 'webhook') {
+  // Public routes go to /api directly; gateway webhooks and the sign-in (`bff`) routes are
+  // server-to-server, never via a browser.
+  if (
+    route === null ||
+    route.auth === 'public' ||
+    route.auth === 'webhook' ||
+    route.auth === 'bff'
+  ) {
     return errorResponse(404, ErrorCode.NOT_FOUND, 'Unknown route');
   }
 
@@ -145,7 +158,13 @@ export async function handleBffRequest(request: Request, deps: BffDeps): Promise
     return errorResponse(403, ErrorCode.FORBIDDEN, 'Cross-origin request');
   }
 
-  const { session, setCookies } = await resolveSession(request.headers.get('cookie'), deps.auth);
+  const { session, setCookies, unavailable } = await resolveSession(
+    request.headers.get('cookie'),
+    deps.auth,
+  );
+  if (unavailable === true) {
+    return errorResponse(502, ErrorCode.INTERNAL_ERROR, 'Sign-in service unreachable');
+  }
   if (session === null) {
     return errorResponse(401, ErrorCode.UNAUTHENTICATED, 'Not signed in', setCookies);
   }
@@ -169,7 +188,7 @@ export async function handleBffRequest(request: Request, deps: BffDeps): Promise
         authorization: `Bearer ${session.accessToken}`,
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
         ...forwardableRequestHeaders(route, request.headers),
-        ...viewerAddressHeader(request.headers.get(VIEWER_ADDRESS_HEADER)),
+        ...serverCallHeaders(deps.context),
       },
       body,
       cache: 'no-store',

@@ -17,10 +17,18 @@ import { authPool, billingMode, subscriptionStatus, userRole } from './enums';
 /**
  * Everyone who signs in: photographers, viewers (role `user`) and admins.
  *
- * Identity is the pair (cognito_pool, cognito_sub): a `sub` is only unique within its Cognito user
- * pool, and the API resolves the pool from the token it verified, never from the request. The
- * CHECK ties `admin` to the admins pool both ways, so a users-pool identity can never be an admin
- * and an admins-pool identity is always one.
+ * Identity is the pair (auth_pool, auth_subject) (ADR 0002, renamed from cognito_pool/cognito_sub
+ * by migration 0005 for ADR 0008): a subject is only unique within its pool, and the API resolves
+ * the pool from the token it verified, never from the request. Cognito subjects are raw; subjects
+ * of ShotX-issued tokens carry their provider as a prefix (`line:`, `google:`, `local:`,
+ * `admin:`; see @shotx/shared account/auth-subject). The CHECK ties `admin` to the admins pool
+ * both ways, so a users-pool identity can never be an admin and an admins-pool identity is always
+ * one.
+ *
+ * `users_id_auth_pool_unique` lets auth_sessions and admin_credentials reference (id, auth_pool),
+ * so a session's pool is always its user's and only admins-pool users get admin credentials.
+ * Password sign-in finds admins by email: `users_admin_email_unique` keeps it unique (ignoring
+ * ASCII case) among ShotX admins (`admin:` subjects).
  */
 export const users = pgTable(
   'users',
@@ -30,17 +38,18 @@ export const users = pgTable(
     email: text('email'),
     name: text('name'),
     role: userRole('role').notNull().default('user'),
-    cognitoPool: authPool('cognito_pool').notNull(),
-    cognitoSub: text('cognito_sub').notNull(),
+    authPool: authPool('auth_pool').notNull(),
+    authSubject: text('auth_subject').notNull(),
     createdAt: createdAt(),
   },
   (t) => [
-    unique('users_cognito_identity_unique').on(t.cognitoPool, t.cognitoSub),
-    check(
-      'users_admin_iff_admins_pool',
-      sql`(${t.role} = 'admin') = (${t.cognitoPool} = 'admins')`,
-    ),
-    check('users_cognito_sub_not_empty', sql`length(${t.cognitoSub}) > 0`),
+    unique('users_auth_identity_unique').on(t.authPool, t.authSubject),
+    unique('users_id_auth_pool_unique').on(t.id, t.authPool),
+    uniqueIndex('users_admin_email_unique')
+      .on(sql`lower(${t.email} COLLATE "C")`)
+      .where(sql`${t.authPool} = 'admins' AND ${t.authSubject} LIKE 'admin:%'`),
+    check('users_admin_iff_admins_pool', sql`(${t.role} = 'admin') = (${t.authPool} = 'admins')`),
+    check('users_auth_subject_not_empty', sql`length(${t.authSubject}) > 0`),
   ],
 );
 

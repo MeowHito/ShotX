@@ -32,7 +32,9 @@ import { CloudFrontMediaUrlSigner } from '../infra/cloudfront-signer';
 import { MemoryEventLog } from '../infra/events';
 import { MemoryKeyValueStore, MemoryRateLimiter } from '../infra/redis';
 import { MemoryQueueSender } from '../infra/sqs-queue';
-import type { RateLimiter } from '../tokens';
+import type { RateLimiter, TokenVerifier } from '../tokens';
+import type { OidcDeps } from '../auth/oidc';
+import { tokenVerifier } from '../wiring';
 import { testWorld } from './faces';
 import {
   FakeObjectStorage,
@@ -112,12 +114,18 @@ export class TestApi {
       limits?: Partial<ApiLimits>;
       rateLimiter?: RateLimiter;
       faceProvider?: FaceProvider;
+      /** Fake LINE/Google endpoints (FakeOidcProviders.deps) for AUTH_PROVIDER=shotx or local. */
+      oidc?: (clock: TestClock) => Partial<OidcDeps>;
     } = {},
   ): Promise<TestApi> {
     const config = testConfig(options.env, options.limits);
-    const auth = await TestAuth.create(config);
+    // With AUTH_PROVIDER=shotx or local the API verifies its own tokens; `auth` then still signs
+    // Cognito-like tokens (for helpers' signatures), which that API rejects.
+    const cognito = config.auth.provider === 'cognito';
+    const auth = await TestAuth.create(cognito ? config : testConfig());
     const storage = new FakeObjectStorage();
     const clock = new TestClock();
+    const verifier: TokenVerifier = cognito ? auth.verifier : tokenVerifier(config, clock);
     const store = new MemoryKeyValueStore(() => clock.now().getTime());
     const queue = new MemoryQueueSender();
     const faceProvider = options.faceProvider ?? new FakeFaceProvider(testWorld());
@@ -137,7 +145,7 @@ export class TestApi {
         storage,
         signer: new CloudFrontMediaUrlSigner(requireCloudFront(config)),
         rateLimiter: options.rateLimiter ?? new MemoryRateLimiter(() => clock.now().getTime()),
-        tokenVerifier: auth.verifier,
+        tokenVerifier: verifier,
         clock,
         store,
         queue,
@@ -145,6 +153,7 @@ export class TestApi {
         paymentGateway: gateway,
         email,
         events,
+        oidc: options.oidc?.(clock) ?? {},
       },
       logger,
     );
@@ -216,8 +225,8 @@ export class TestApi {
     const [user] = await this.db
       .insert(users)
       .values({
-        cognitoPool: 'users',
-        cognitoSub: sub,
+        authPool: 'users',
+        authSubject: sub,
         role: options.role ?? 'photographer',
         name: options.name ?? null,
       })
@@ -265,8 +274,8 @@ export class TestApi {
     const [user] = await this.db
       .insert(users)
       .values({
-        cognitoPool: 'users',
-        cognitoSub: sub,
+        authPool: 'users',
+        authSubject: sub,
         role: 'photographer',
         email: options.email === undefined ? `p-${sub.slice(0, 8)}@example.com` : options.email,
       })
@@ -322,7 +331,7 @@ export class TestApi {
     const sub = randomUUID();
     const [user] = await this.db
       .insert(users)
-      .values({ cognitoPool: 'users', cognitoSub: sub, role: 'user' })
+      .values({ authPool: 'users', authSubject: sub, role: 'user' })
       .returning({ id: users.id });
     if (user === undefined) throw new Error('no user');
     return { id: user.id, sub, token: await this.auth.token('users', sub) };

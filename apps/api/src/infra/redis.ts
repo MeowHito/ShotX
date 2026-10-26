@@ -29,12 +29,23 @@ end
 return { count, ttl }
 `;
 
+/** The current count and TTL of a fixed window, without changing it. Returns { count, ttl }. */
+const PEEK_SCRIPT = `
+local count = tonumber(redis.call('GET', KEYS[1]) or '0')
+local ttl = redis.call('TTL', KEYS[1])
+return { count, ttl }
+`;
+
 /** Rate limits in Redis. Fails closed: any Redis error is "not allowed" (ADR 0005). */
 export class RedisRateLimiter implements RateLimiter {
   constructor(
     private readonly redis: Pick<Redis, 'eval'>,
     private readonly prefix: string,
   ) {}
+
+  async reset(key: string): Promise<void> {
+    await this.redis.eval("return redis.call('DEL', KEYS[1])", 1, `${this.prefix}rl:${key}`);
+  }
 
   async hit(key: string, limit: number, windowSeconds: number): Promise<RateLimitResult> {
     try {
@@ -50,6 +61,19 @@ export class RedisRateLimiter implements RateLimiter {
       return { allowed: false, retryAfterSeconds: windowSeconds };
     }
   }
+
+  async peek(key: string, limit: number, windowSeconds: number): Promise<RateLimitResult> {
+    try {
+      const result = (await this.redis.eval(PEEK_SCRIPT, 1, `${this.prefix}rl:${key}`)) as [
+        number,
+        number,
+      ];
+      const [count, ttl] = result;
+      return { allowed: count < limit, retryAfterSeconds: ttl > 0 ? ttl : windowSeconds };
+    } catch {
+      return { allowed: false, retryAfterSeconds: windowSeconds };
+    }
+  }
 }
 
 /** In-process limiter for tests and local runs without Redis. Same semantics. */
@@ -57,6 +81,11 @@ export class MemoryRateLimiter implements RateLimiter {
   private readonly windows = new Map<string, { count: number; resetAt: number }>();
 
   constructor(private readonly now: () => number = Date.now) {}
+
+  reset(key: string): Promise<void> {
+    this.windows.delete(key);
+    return Promise.resolve();
+  }
 
   hit(key: string, limit: number, windowSeconds: number): Promise<RateLimitResult> {
     const now = this.now();
@@ -68,6 +97,18 @@ export class MemoryRateLimiter implements RateLimiter {
     w.count++;
     return Promise.resolve({
       allowed: w.count <= limit,
+      retryAfterSeconds: Math.max(1, Math.ceil((w.resetAt - now) / 1000)),
+    });
+  }
+
+  peek(key: string, limit: number, windowSeconds: number): Promise<RateLimitResult> {
+    const now = this.now();
+    const w = this.windows.get(key);
+    if (w === undefined || w.resetAt <= now) {
+      return Promise.resolve({ allowed: limit > 0, retryAfterSeconds: windowSeconds });
+    }
+    return Promise.resolve({
+      allowed: w.count < limit,
       retryAfterSeconds: Math.max(1, Math.ceil((w.resetAt - now) / 1000)),
     });
   }
@@ -105,7 +146,10 @@ return written
 /** The most fields one merge script call carries (Lua's unpack and argument limits). */
 const MERGE_FIELDS_PER_CALL = 500;
 
-type RedisStoreClient = Pick<Redis, 'get' | 'set' | 'del' | 'hgetall' | 'multi' | 'eval'>;
+type RedisStoreClient = Pick<
+  Redis,
+  'get' | 'getdel' | 'set' | 'del' | 'hgetall' | 'multi' | 'eval'
+>;
 
 /**
  * KeyValueStore on Redis. Every key gets the service prefix, every write a TTL (ADR 0005), and
@@ -173,6 +217,10 @@ export class RedisKeyValueStore implements KeyValueStore {
   async hashTake(key: string, field: string): Promise<string | null> {
     const value = (await this.redis.eval(HASH_TAKE_SCRIPT, 1, this.k(key), field)) as string | null;
     return value ?? null;
+  }
+
+  async take(key: string): Promise<string | null> {
+    return this.redis.getdel(this.k(key));
   }
 }
 
@@ -274,5 +322,13 @@ export class MemoryKeyValueStore implements KeyValueStore {
     value.delete(field);
     if (value.size === 0) this.data.delete(key);
     return taken;
+  }
+
+  async take(key: string): Promise<string | null> {
+    await this.check();
+    const value = this.live(key)?.value;
+    if (typeof value !== 'string') return null;
+    this.data.delete(key);
+    return value;
   }
 }

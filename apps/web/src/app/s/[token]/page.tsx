@@ -1,13 +1,12 @@
 import { ANON_ID_COOKIE } from '@shotx/shared';
 import type { Metadata } from 'next';
-import { cookies, headers } from 'next/headers';
+import { cookies } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { getTranslations } from 'next-intl/server';
 import { cache } from 'react';
 import { ShareUnavailable } from '@/components/share/share-gates';
 import { SharePage } from '@/components/share/share-view';
-import { VIEWER_ADDRESS_HEADER } from '@/lib/bff/constants';
-import { viewerState } from '@/lib/server/auth';
+import { requestServerCallContext, viewerState } from '@/lib/server/auth';
 import { clientFaceConfig, clientShareConfig, webConfig } from '@/lib/server/config';
 import { fetchShareMeta, shareOpenGraph } from '@/lib/server/share';
 
@@ -16,11 +15,10 @@ type Params = Promise<{ token: string }>;
 /** One API call per request, shared by generateMetadata and the page. */
 const loadMeta = cache(async (token: string) => {
   const store = await cookies();
-  const requestHeaders = await headers();
   return fetchShareMeta(token, {
     apiInternalUrl: webConfig().apiInternalUrl,
     anonId: store.get(ANON_ID_COOKIE)?.value,
-    viewerAddress: requestHeaders.get(VIEWER_ADDRESS_HEADER),
+    context: await requestServerCallContext(),
   });
 });
 

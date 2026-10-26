@@ -65,13 +65,15 @@ describe('schema', () => {
         'payment_webhook_events',
         'subscription_notices',
         'subscription_events',
+        'auth_sessions',
+        'admin_credentials',
       ].sort(),
     );
   });
 
   it('has the data-model columns of every table', () => {
     const expected: Record<string, string[]> = {
-      users: ['id', 'email', 'name', 'role', 'cognito_sub', 'created_at'],
+      users: ['id', 'email', 'name', 'role', 'auth_pool', 'auth_subject', 'created_at'],
       plans: [
         'id',
         'code',
@@ -180,6 +182,30 @@ describe('schema', () => {
         'bytes_out',
       ],
       audit_log: ['id', 'actor_id', 'action', 'target_type', 'target_id', 'meta', 'created_at'],
+      auth_sessions: [
+        'id',
+        'user_id',
+        'pool',
+        'refresh_token_hash',
+        'family_id',
+        'expires_at',
+        'revoked_at',
+        'replaced_by_id',
+        'created_at',
+        'last_used_at',
+      ],
+      admin_credentials: [
+        'user_id',
+        'password_hash',
+        'totp_secret_encrypted',
+        'totp_secret_nonce',
+        'totp_confirmed_at',
+        'totp_last_used_step',
+        'failed_attempts',
+        'locked_until',
+        'created_at',
+        'updated_at',
+      ],
       zip_jobs: [
         'id',
         'photographer_id',
@@ -372,14 +398,47 @@ describe('schema', () => {
     );
   });
 
-  it('keys users on (Cognito pool, sub) and ties admin to the admins pool', () => {
+  it('keys users on (auth pool, auth subject) and ties admin to the admins pool', () => {
     const users = config('users');
-    expect(
-      users.uniqueConstraints.map((u) => [u.name, u.columns.map((c) => c.name)]),
-    ).toContainEqual(['users_cognito_identity_unique', ['cognito_pool', 'cognito_sub']]);
-    expect(users.checks.map((c) => c.name)).toContain('users_admin_iff_admins_pool');
-    expect(column('users', 'cognito_pool').notNull).toBe(true);
-    expect(column('users', 'cognito_sub').notNull).toBe(true);
+    const uniques = users.uniqueConstraints.map((u) => [u.name, u.columns.map((c) => c.name)]);
+    expect(uniques).toContainEqual(['users_auth_identity_unique', ['auth_pool', 'auth_subject']]);
+    expect(uniques).toContainEqual(['users_id_auth_pool_unique', ['id', 'auth_pool']]);
+    expect(users.checks.map((c) => c.name)).toEqual(
+      expect.arrayContaining(['users_admin_iff_admins_pool', 'users_auth_subject_not_empty']),
+    );
+    expect(users.indexes.map((i) => i.config.name)).toContain('users_admin_email_unique');
+    expect(column('users', 'auth_pool').notNull).toBe(true);
+    expect(column('users', 'auth_subject').notNull).toBe(true);
+  });
+
+  it('ties auth sessions and admin credentials to their user and pool', () => {
+    const fk = (table: string, name: string) => {
+      const found = config(table).foreignKeys.find((f) => f.getName() === name);
+      if (found === undefined) throw new Error(`no fk ${name}`);
+      const ref = found.reference();
+      return {
+        columns: ref.columns.map((c) => c.name),
+        foreignTable: getTableName(ref.foreignTable),
+        foreignColumns: ref.foreignColumns.map((c) => c.name),
+        onDelete: found.onDelete,
+      };
+    };
+    expect(fk('auth_sessions', 'auth_sessions_user_pool_fk')).toEqual({
+      columns: ['user_id', 'pool'],
+      foreignTable: 'users',
+      foreignColumns: ['id', 'auth_pool'],
+      onDelete: 'cascade',
+    });
+    expect(fk('admin_credentials', 'admin_credentials_admin_user_fk')).toEqual({
+      columns: ['user_id', 'auth_pool'],
+      foreignTable: 'users',
+      foreignColumns: ['id', 'auth_pool'],
+      onDelete: 'cascade',
+    });
+    expect(config('auth_sessions').indexes.map((i) => i.config.name)).toContain(
+      'auth_sessions_family_idx',
+    );
+    expect(column('audit_log', 'actor_id').notNull).toBe(false);
   });
 
   it('keeps folders, files and faces within one owner', () => {

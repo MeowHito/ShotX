@@ -1,5 +1,7 @@
 import type {
   activityEvents,
+  adminCredentials,
+  authSessions,
   auditLog,
   checkoutSessions,
   consents,
@@ -68,3 +70,7 @@ export type SubscriptionNotice = typeof subscriptionNotices.$inferSelect;
 export type NewSubscriptionNotice = typeof subscriptionNotices.$inferInsert;
 export type SubscriptionEvent = typeof subscriptionEvents.$inferSelect;
 export type NewSubscriptionEvent = typeof subscriptionEvents.$inferInsert;
+export type AuthSession = typeof authSessions.$inferSelect;
+export type NewAuthSession = typeof authSessions.$inferInsert;
+export type AdminCredentials = typeof adminCredentials.$inferSelect;
+export type NewAdminCredentials = typeof adminCredentials.$inferInsert;

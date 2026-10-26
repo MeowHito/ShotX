@@ -1,4 +1,17 @@
-import { loadAuthProviderConfig, loadMediaUrlSignerConfig } from '@shotx/shared';
+import {
+  AUTH_SIGNING_KEY_ENV,
+  BULLMQ_QUEUE_ENV,
+  loadAuthProviderConfig,
+  loadBffAuthConfig,
+  loadMediaUrlSignerConfig,
+  loadQueueBackendConfig,
+  loadShotxAuthConfig,
+  loadTrustedProxyConfig,
+  QUEUE_NAMES,
+  QUEUE_URL_ENV,
+  SCHEDULE_TIMEZONE_ENV,
+  SCHEDULED_JOB_ENV,
+} from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
 import { parseConfig } from '../lib/config';
 import { rawConfig, synthPlatform } from './helpers';
@@ -16,12 +29,40 @@ const LOCAL_ONLY = {
   NODE_ENV: 'development',
   APP_STAGE: 'local',
   AUTH_PROVIDER: 'local',
-  LOCAL_AUTH_SECRET: 'x'.repeat(40),
   MEDIA_URL_SIGNER: 's3-presign',
   AWS_ENDPOINT_URL: 'http://localhost:4566',
   AWS_ACCESS_KEY_ID: 'test',
   AWS_SECRET_ACCESS_KEY: 'test',
 };
+
+/**
+ * ADR 0008 (VPS) settings the AWS stacks must not take from services.env: the queue backend and
+ * the BullMQ/schedule settings (cdk.json `queues` and `schedules` are their AWS source), the
+ * API-issued sign-in keys and secrets (AWS stays on Cognito, with no secret wiring for them) and
+ * the trusted reverse proxy (on AWS the client address is CloudFront-Viewer-Address) and plaintext
+ * Redis credentials (ElastiCache is TLS only).
+ */
+const VPS_ONLY = [
+  'QUEUE_BACKEND',
+  ...Object.values(BULLMQ_QUEUE_ENV).flatMap((names) => Object.values(names)),
+  SCHEDULE_TIMEZONE_ENV,
+  ...Object.values(SCHEDULED_JOB_ENV).flatMap((names) => Object.values(names)),
+  'AUTH_BFF_KEY',
+  ...Object.values(AUTH_SIGNING_KEY_ENV).flatMap((names) => Object.values(names)),
+  'ADMIN_TOTP_ENCRYPTION_KEY',
+  'LINE_LOGIN_CHANNEL_ID',
+  'LINE_LOGIN_CHANNEL_SECRET',
+  'GOOGLE_OAUTH_CLIENT_ID',
+  'GOOGLE_OAUTH_CLIENT_SECRET',
+  'TRUSTED_PROXY_ADDRESSES',
+  'REDIS_ALLOW_PLAINTEXT_AUTH',
+];
+
+/** Stands in for a CloudFormation token; queue URLs get a URL so the SQS loader can parse them. */
+const tokenSample = (name: string): string =>
+  (Object.values(QUEUE_URL_ENV) as string[]).includes(name)
+    ? `https://sqs.ap-southeast-1.amazonaws.com/000000000000/${name.toLowerCase()}`
+    : 'token';
 
 describe('local development stand-ins never reach a deployed stage', () => {
   it('reserves the stage name local', () => {
@@ -42,6 +83,22 @@ describe('local development stand-ins never reach a deployed stage', () => {
     });
   }
 
+  for (const group of ['common', 'web', 'admin', 'backend', 'api', 'worker']) {
+    it(`refuses the queue backend and API-issued sign-in keys in services.env.${group}`, () => {
+      const c = withEdit((x) => {
+        at(x, 'services', 'env')[group] = Object.fromEntries(VPS_ONLY.map((k) => [k, 'x']));
+      });
+      let message = '';
+      try {
+        parseConfig(c);
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      const refused = (key: string) => message.includes(`${group}: ${key} is set by infra`);
+      expect(VPS_ONLY.filter((key) => !refused(key))).toEqual([]);
+    });
+  }
+
   it('gives every container NODE_ENV=production and resolves to Cognito and CloudFront', () => {
     const s = synthPlatform();
     const app = s.template(s.platform.app);
@@ -57,12 +114,45 @@ describe('local development stand-ins never reach a deployed stage', () => {
           ]),
         );
         expect(env.NODE_ENV).toBe('production');
-        for (const key of ['AUTH_PROVIDER', 'LOCAL_AUTH_SECRET', 'MEDIA_URL_SIGNER']) {
+        for (const key of ['AUTH_PROVIDER', 'MEDIA_URL_SIGNER']) {
           expect(env[key], key).toBeUndefined();
         }
         expect(loadAuthProviderConfig(env)).toEqual({ provider: 'cognito' });
         expect(loadMediaUrlSignerConfig(env)).toEqual({ signer: 'cloudfront' });
       }
     }
+  });
+
+  it('keeps every container on Cognito sign-in, the SQS queue backend and no trusted proxy', () => {
+    const s = synthPlatform();
+    const app = s.template(s.platform.app);
+    const definitions = Object.values(app.findResources('AWS::ECS::TaskDefinition'));
+    const queuesSeen = new Set<string>();
+    for (const td of definitions) {
+      for (const container of (td.Properties as Json).ContainerDefinitions as Json[]) {
+        const pairs = [
+          ...((container.Environment ?? []) as { Name: string; Value: unknown }[]).map(
+            (e) => [e.Name, typeof e.Value === 'string' ? e.Value : tokenSample(e.Name)] as const,
+          ),
+          ...((container.Secrets ?? []) as { Name: string }[]).map(
+            (e) => [e.Name, 'secret'] as const,
+          ),
+        ];
+        const env = Object.fromEntries(pairs);
+        for (const key of VPS_ONLY) expect(env[key], key).toBeUndefined();
+        // No bff routes and no API-issued tokens: the token issuer refuses to start.
+        expect(loadBffAuthConfig(env)).toBeNull();
+        // X-Forwarded-For is trusted from nobody.
+        expect(loadTrustedProxyConfig(env)).toEqual({ addresses: [] });
+        expect(() => loadShotxAuthConfig(env)).toThrow(/AUTH_PROVIDER must be shotx or local/);
+        // The queues this container has URLs for, read the way api and worker read them.
+        const queues = QUEUE_NAMES.filter((q) => env[QUEUE_URL_ENV[q]] !== undefined);
+        const backend = loadQueueBackendConfig(env, queues);
+        expect(backend.backend).toBe('sqs');
+        for (const q of queues) queuesSeen.add(q);
+      }
+    }
+    // api and worker between them send to and consume every queue.
+    expect([...queuesSeen].sort()).toEqual([...QUEUE_NAMES].sort());
   });
 });

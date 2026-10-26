@@ -1,7 +1,14 @@
 // @vitest-environment node
-import { BILLING_ROUTES, DRIVE_ROUTES, ME_ROUTES, UPLOAD_ROUTES } from '@shotx/shared';
+import {
+  AUTH_ROUTES,
+  BILLING_ROUTES,
+  DRIVE_ROUTES,
+  ME_ROUTES,
+  UPLOAD_ROUTES,
+} from '@shotx/shared';
 import { describe, expect, it, vi } from 'vitest';
-import type { AuthProvider } from '../auth/provider';
+import { type AuthProvider, AuthProviderError } from '../auth/provider';
+import type { ServerCallContext } from './client-ip';
 import { cookieNames, encodeJsonCookie } from '../auth/session';
 import {
   type BffDeps,
@@ -21,12 +28,22 @@ const session = encodeJsonCookie({
   user: { sub: 's', email: null, name: null },
 });
 
-function deps(fetch: typeof globalThis.fetch): BffDeps {
+const BFF_KEY = 'bff-key-0123456789abcdef0123456789abcdef';
+const CONTEXT: ServerCallContext = { bffKey: BFF_KEY, clientIp: '203.0.113.7' };
+/** What every forwarded call carries besides the route's own headers. */
+const SERVER_HEADERS = { 'x-shotx-bff-key': BFF_KEY, 'x-shotx-client-ip': '203.0.113.7' };
+
+function deps(
+  fetch: typeof globalThis.fetch,
+  context: ServerCallContext = CONTEXT,
+  provider: AuthProvider = {} as AuthProvider,
+): BffDeps {
   return {
     apiInternalUrl: 'http://internal-alb',
     fetch,
+    context,
     auth: {
-      provider: {} as AuthProvider,
+      provider,
       publicBaseUrl: BASE,
       secureCookies: true,
     },
@@ -46,7 +63,7 @@ describe('BFF', () => {
     expect(matchRoute('PUT', '/drive/folders')).toBeNull();
   });
 
-  it('forwards with the bearer token and never forwards cookies', async () => {
+  it('forwards with the bearer token, the BFF key and client IP, and never forwards cookies', async () => {
     const fetch = upstream();
     const response = await handleBffRequest(
       new Request(`${BASE}/bff/drive/folders`, {
@@ -67,6 +84,7 @@ describe('BFF', () => {
       accept: 'application/json',
       authorization: 'Bearer access-token',
       'content-type': 'application/json',
+      ...SERVER_HEADERS,
     });
     expect(init?.body).toBe('{"parentId":null,"name":"a"}');
   });
@@ -232,7 +250,7 @@ describe('BFF', () => {
     expect(forwardableSetCookies(ME_ROUTES.createViewerSession, upstreamHeaders())).toHaveLength(1);
   });
 
-  it('forwards Idempotency-Key only for routes that declare it, and the viewer address', async () => {
+  it('forwards Idempotency-Key only for routes that declare it, never client-sent server headers', async () => {
     const fetch = upstream();
     const key = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
     await handleBffRequest(
@@ -245,6 +263,8 @@ describe('BFF', () => {
           'idempotency-key': key,
           'cloudfront-viewer-address': '203.0.113.10:51234',
           'x-forwarded-for': '198.51.100.1',
+          'x-shotx-bff-key': 'guessed-key',
+          'x-shotx-client-ip': '6.6.6.6',
         },
         body: JSON.stringify({
           planCode: 'pro',
@@ -260,7 +280,8 @@ describe('BFF', () => {
       authorization: 'Bearer access-token',
       'content-type': 'application/json',
       'idempotency-key': key,
-      'cloudfront-viewer-address': '203.0.113.10:51234',
+      // From web's config and the proxy's header (the context), never the browser's copies.
+      ...SERVER_HEADERS,
     });
 
     expect(
@@ -269,6 +290,58 @@ describe('BFF', () => {
     expect(
       forwardableRequestHeaders(DRIVE_ROUTES.createFolder, new Headers({ 'idempotency-key': key })),
     ).toEqual({});
+  });
+
+  it('sends no BFF headers without a key (AUTH_PROVIDER=cognito, AUTH_BFF_KEY unset)', async () => {
+    const fetch = upstream();
+    await handleBffRequest(
+      new Request(`${BASE}/bff/drive/usage`, {
+        headers: { cookie: `${names.session}=${session}`, 'x-shotx-client-ip': '6.6.6.6' },
+      }),
+      deps(fetch, { bffKey: null, clientIp: '203.0.113.7' }),
+    );
+    expect(fetch.mock.calls[0]?.[1]?.headers).toEqual({
+      accept: 'application/json',
+      authorization: 'Bearer access-token',
+    });
+  });
+
+  it('never forwards the sign-in routes (RouteAuth bff): only web calls them, with its key', async () => {
+    const fetch = upstream();
+    for (const route of Object.values(AUTH_ROUTES)) {
+      const path = route.path.replace(':provider', 'line');
+      const response = await handleBffRequest(
+        new Request(`${BASE}/bff${path}`, {
+          method: route.method,
+          headers: { origin: BASE, cookie: `${names.session}=${session}` },
+          ...(route.method === 'GET' ? {} : { body: '{}' }),
+        }),
+        deps(fetch),
+      );
+      expect(response.status, route.path).toBe(404);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('answers 502 and keeps the cookies when the token refresh cannot reach the API', async () => {
+    const fetch = upstream();
+    const expired = encodeJsonCookie({
+      accessToken: 'old',
+      expiresAt: 0,
+      user: { sub: 's', email: null, name: null },
+    });
+    const provider = {
+      refresh: () => Promise.reject(new AuthProviderError('API unreachable')),
+    } as unknown as AuthProvider;
+    const response = await handleBffRequest(
+      new Request(`${BASE}/bff/drive/usage`, {
+        headers: { cookie: `${names.session}=${expired}; ${names.refresh}=r` },
+      }),
+      deps(fetch, CONTEXT, provider),
+    );
+    expect(response.status).toBe(502);
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('never forwards gateway webhooks', async () => {

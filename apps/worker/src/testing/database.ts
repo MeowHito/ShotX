@@ -37,7 +37,7 @@ export async function createPhotographer(
 ): Promise<string> {
   const [user] = await db
     .insert(users)
-    .values({ role: 'photographer', cognitoPool: 'users', cognitoSub: randomUUID() })
+    .values({ role: 'photographer', authPool: 'users', authSubject: `local:${randomUUID()}` })
     .returning({ id: users.id });
   const id = user!.id;
   await db.insert(storageUsage).values({

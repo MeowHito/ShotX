@@ -22,6 +22,7 @@ describe('JavaScript build', () => {
     expect(code).not.toMatch(/from ["']@shotx\//);
     expect(code).toMatch(/from ["']sharp["']/);
     expect(code).toMatch(/from ["']archiver["']/);
+    expect(code).toMatch(/from ["']bullmq["']/);
 
     // Every module loads (sharp's native binary, archiver, the AWS SDK, @shotx/* code), then main
     // rejects the empty environment with its structured start-up error and no secrets.

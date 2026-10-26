@@ -1,29 +1,119 @@
 import { S3Client } from '@aws-sdk/client-s3';
 import { SESv2Client } from '@aws-sdk/client-sesv2';
-import { SQSClient } from '@aws-sdk/client-sqs';
+import { SQSClient, type SQSClientConfig } from '@aws-sdk/client-sqs';
 import { createDb, createPool } from '@shotx/db';
 import {
   createRedisRekognitionLimiters,
   RekognitionFaceProvider,
   S3TempImageStore,
 } from '@shotx/face';
-import type { QueueName } from '@shotx/shared';
+import { QUEUE_NAMES, type QueueName } from '@shotx/shared';
 import { Redis } from 'ioredis';
 import { S3ObjectStore } from './aws/object-store';
 import { SqsQueueClient } from './aws/queue-client';
 import { createEmailProvider } from './billing/email';
 import { createRenewalGateway } from './billing/gateway';
-import { CONSUMED_QUEUES, loadWorkerConfig } from './config';
-import { checkFacesBudget } from './faces/budget';
+import { BullMqConsumer } from './bullmq/consumer';
+import { createBullMqConnection } from './bullmq/options';
+import { syncJobSchedulers } from './bullmq/schedules';
+import { BullMqQueueSender } from './bullmq/sender';
+import { CONSUMED_QUEUES, loadWorkerConfig, type WorkerConfig } from './config';
+import { checkFacesBudget, type QueueHold } from './faces/budget';
 import { CollectionRegistry } from './faces/deps';
 import { createFacesHandler } from './faces/handler';
 import { createJobsHandler } from './jobs/handler';
 import { RedisJobRunLedger } from './jobs/ledger';
 import { S3OrphanScanStore } from './jobs/orphan-scans';
-import { createJsonLogger, errorFields } from './logger';
+import { createJsonLogger, errorFields, type Logger } from './logger';
 import { createMediaHandler } from './media/handler';
-import { type MessageHandler, QueueConsumer } from './sqs/consumer';
+import type { MessageHandler, QueueConsumerRuntime } from './queue/handler';
+import type { QueueSender } from './queue/sender';
+import { QueueConsumer } from './sqs/consumer';
 import { createZipHandler } from './zip/handler';
+
+/** The queue runtime of QUEUE_BACKEND: how the worker sends, consumes and schedules. */
+interface QueueRuntime {
+  sender: QueueSender;
+  /** Each queue's destination for `sender` (SQS URL or BullMQ queue name). */
+  destinations: Record<QueueName, string>;
+  /** How the faces queue holds a running message (for the time budget check). */
+  facesHold: QueueHold;
+  consumers(handlers: Record<QueueName, MessageHandler>): QueueConsumerRuntime[];
+  /** Start-up work before consuming (BullMQ: sync the job schedulers). */
+  prepare(): Promise<void>;
+  /** Closes what the runtime opened, after the consumers stopped. */
+  close(): Promise<void>;
+}
+
+/** The one place that picks the queue backend (ADR 0008 section 1). */
+function createQueueRuntime(config: WorkerConfig, aws: SQSClientConfig, log: Logger): QueueRuntime {
+  const { worker, queue } = config;
+  if (queue.backend === 'sqs') {
+    const client = new SqsQueueClient(new SQSClient(aws));
+    return {
+      sender: client,
+      destinations: queue.urls,
+      facesHold: { backend: 'sqs', visibilityTimeoutSeconds: queue.visibilityTimeoutSeconds.faces },
+      consumers: (handlers) =>
+        CONSUMED_QUEUES.map(
+          (name) =>
+            new QueueConsumer({
+              queue: name,
+              queueUrl: queue.urls[name],
+              client,
+              handler: handlers[name],
+              visibilityTimeoutSeconds: queue.visibilityTimeoutSeconds[name],
+              batchSize: worker.consumers[name].batchSize,
+              concurrency: worker.consumers[name].concurrency,
+              waitTimeSeconds: worker.receiveWaitSeconds,
+              retryBaseSeconds: worker.retryBaseSeconds,
+              shutdownGraceMs: worker.shutdownGraceMs,
+              log,
+            }),
+        ),
+      // EventBridge Scheduler (infra/) sends the scheduled jobs.
+      prepare: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+    };
+  }
+  const connection = createBullMqConnection(config.redis);
+  connection.on('error', (error) => log.warn('bullmq redis error', errorFields(error)));
+  const sender = new BullMqQueueSender({
+    connection,
+    prefix: queue.prefix,
+    queues: queue.queues,
+    log,
+  });
+  return {
+    sender,
+    destinations: Object.fromEntries(QUEUE_NAMES.map((name) => [name, name])) as Record<
+      QueueName,
+      string
+    >,
+    facesHold: { backend: 'bullmq', lockDurationMs: queue.queues.faces.lockDurationMs },
+    consumers: (handlers) =>
+      CONSUMED_QUEUES.map(
+        (name) =>
+          new BullMqConsumer({
+            queue: name,
+            connection,
+            prefix: queue.prefix,
+            settings: queue.queues[name],
+            handler: handlers[name],
+            concurrency: worker.consumers[name].concurrency,
+            shutdownGraceMs: worker.shutdownGraceMs,
+            log,
+          }),
+      ),
+    prepare: async () => {
+      await syncJobSchedulers(sender.queue('jobs'), queue.schedules, queue.queues.jobs, log);
+    },
+    close: async () => {
+      await sender.close();
+      await connection.quit().catch(() => connection.disconnect());
+    },
+  };
+}
 
 async function main(): Promise<void> {
   const config = loadWorkerConfig(process.env);
@@ -39,7 +129,8 @@ async function main(): Promise<void> {
   };
   const s3 = new S3Client({ ...aws, forcePathStyle: config.storage.forcePathStyle });
   const store = new S3ObjectStore(s3, config.storage.bucket);
-  const queues = new SqsQueueClient(new SQSClient(aws));
+  const runtime = createQueueRuntime(config, aws, log);
+  const queues = runtime.sender;
   const pool = createPool(config.database);
   const db = createDb(pool);
   const redis = new Redis(config.redis.url, {
@@ -56,11 +147,7 @@ async function main(): Promise<void> {
   const limiters = createRedisRekognitionLimiters(redis, config.face.rekognition, 'background');
   const provider = RekognitionFaceProvider.create(config.face.rekognition, 'background', limiters);
 
-  const budget = checkFacesBudget(
-    config.face,
-    worker.maxProcessingMs.faces,
-    config.visibilityTimeoutSeconds.faces,
-  );
+  const budget = checkFacesBudget(config.face, worker.maxProcessingMs.faces, runtime.facesHold);
   for (const problem of budget.problems) log.error(`faces time budget: ${problem}`);
   log.info('faces time budget', {
     worstAttemptMs: budget.worstAttemptMs,
@@ -77,7 +164,7 @@ async function main(): Promise<void> {
       store,
       queues,
       bucket: config.storage.bucket,
-      facesQueueUrl: config.queueUrls.faces,
+      facesQueueUrl: runtime.destinations.faces,
       media: config.media,
       video: worker.video,
       exifDefaultUtcOffset: worker.exifDefaultUtcOffset,
@@ -88,7 +175,7 @@ async function main(): Promise<void> {
       db,
       store,
       queues,
-      facesQueueUrl: config.queueUrls.faces,
+      facesQueueUrl: runtime.destinations.faces,
       provider,
       tempStore: new S3TempImageStore(s3, config.storage.bucket),
       collections: new CollectionRegistry(provider),
@@ -131,22 +218,7 @@ async function main(): Promise<void> {
     }),
   };
 
-  const consumers = CONSUMED_QUEUES.map(
-    (queue) =>
-      new QueueConsumer({
-        queue,
-        queueUrl: config.queueUrls[queue],
-        client: queues,
-        handler: handlers[queue],
-        visibilityTimeoutSeconds: config.visibilityTimeoutSeconds[queue],
-        batchSize: worker.consumers[queue].batchSize,
-        concurrency: worker.consumers[queue].concurrency,
-        waitTimeSeconds: worker.receiveWaitSeconds,
-        retryBaseSeconds: worker.retryBaseSeconds,
-        shutdownGraceMs: worker.shutdownGraceMs,
-        log,
-      }),
-  );
+  const consumers = runtime.consumers(handlers);
 
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
@@ -154,14 +226,18 @@ async function main(): Promise<void> {
     shuttingDown = true;
     log.info('shutting down', { signal });
     await Promise.all(consumers.map((c) => c.stop()));
-    await Promise.allSettled([pool.end(), redis.quit()]);
+    await Promise.allSettled([runtime.close(), pool.end(), redis.quit()]);
     log.info('stopped');
     process.exit(0);
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
-  log.info('worker started', { queues: CONSUMED_QUEUES.join(',') });
+  await runtime.prepare();
+  log.info('worker started', {
+    queues: CONSUMED_QUEUES.join(','),
+    queueBackend: config.queue.backend,
+  });
   await Promise.all(consumers.map((c) => c.start()));
 }
 

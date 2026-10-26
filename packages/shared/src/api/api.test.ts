@@ -216,7 +216,7 @@ describe('upload schemas', () => {
 });
 
 describe('route table', () => {
-  it('covers every Phase 2, 3 and 4 route of the spec, plus the added ones', () => {
+  it('covers every Phase 2, 3 and 4 route of the spec, the added ones and auth (ADR 0008)', () => {
     const routes = ALL_ROUTES.map((r) => `${r.method} ${r.path}`);
     expect(routes).toEqual([
       'GET /drive/folders/:id/children',
@@ -262,6 +262,14 @@ describe('route table', () => {
       'GET /billing/subscription',
       'POST /billing/subscription/cancel',
       'POST /billing/webhooks/:gateway',
+      'GET /auth/providers',
+      'POST /auth/oidc/:provider/start',
+      'POST /auth/oidc/callback',
+      'POST /auth/dev/login',
+      'POST /auth/refresh',
+      'POST /auth/logout',
+      'POST /auth/admin/login',
+      'POST /auth/admin/mfa',
     ]);
     expect(new Set(routes).size).toBe(routes.length);
   });

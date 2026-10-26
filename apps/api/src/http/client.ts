@@ -1,5 +1,14 @@
-import { createHash, createHmac } from 'node:crypto';
-import { IP_HASH_VERSION, ipHashInput } from '@shotx/shared';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import {
+  BFF_CLIENT_IP_HEADER,
+  BFF_KEY_HEADER,
+  bffClientIpSchema,
+  IP_HASH_VERSION,
+  ipHashInput,
+  isIpAddress,
+  isTrustedProxy,
+  type TrustedProxyConfig,
+} from '@shotx/shared';
 import type { Request } from 'express';
 
 function headerValue(req: Request, name: string): string | undefined {
@@ -28,22 +37,97 @@ export function cameThroughCloudFront(req: Request): boolean {
   );
 }
 
+/** Which callers may tell the API the client address (ApiConfig `bff` and `trustedProxies`). */
+export interface ClientIpTrust {
+  /** AUTH_BFF_KEY; null when unset (then BFF_CLIENT_IP_HEADER is never trusted). */
+  bffKey: string | null;
+  /** TRUSTED_PROXY_ADDRESSES: socket peers whose X-Forwarded-For is trusted. */
+  proxies: TrustedProxyConfig;
+}
+
+/** Trust nobody: CloudFront markers and the socket peer only. */
+export const NO_CLIENT_IP_TRUST: ClientIpTrust = { bffKey: null, proxies: { addresses: [] } };
+
 /**
- * The client address: CloudFront's `CloudFront-Viewer-Address` (`ip:port`) when the request came
- * through CloudFront (cameThroughCloudFront), else the socket address (local runs, tests, and the
- * web/admin tasks' server-side calls). Never X-Forwarded-For, and never CloudFront-Viewer-Address
- * on a request without CloudFront's markers.
+ * Constant-time comparison of a presented secret with the expected one. Both sides are hashed
+ * first, so neither the length nor a common prefix leaks through timing.
  */
-export function clientIp(req: Request): string {
-  if (cameThroughCloudFront(req)) {
+export function secretMatches(presented: string | undefined, expected: string | null): boolean {
+  if (presented === undefined || expected === null || presented === '') return false;
+  const a = createHash('sha256').update(presented, 'utf8').digest();
+  const b = createHash('sha256').update(expected, 'utf8').digest();
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * True when the socket peer is the public reverse proxy (TRUSTED_PROXY_ADDRESSES): the request
+ * came from the internet, not from the web or admin container.
+ */
+export function cameThroughPublicProxy(req: Request, proxies: TrustedProxyConfig): boolean {
+  const peer = req.socket.remoteAddress;
+  return peer !== undefined && isTrustedProxy(peer, proxies);
+}
+
+/**
+ * True when the request carries the valid BFF key (web and admin server-side calls). BFF headers
+ * on a request that came through the public proxy are ignored: web and admin call the API
+ * directly on the private network, so such a request is internet traffic (and a leaked key can't
+ * be used from outside).
+ */
+export function hasValidBffKey(req: Request, trust: ClientIpTrust): boolean {
+  if (cameThroughPublicProxy(req, trust.proxies)) return false;
+  return secretMatches(headerValue(req, BFF_KEY_HEADER), trust.bffKey);
+}
+
+/** `::ffff:1.2.3.4` as `1.2.3.4`, brackets and zone ids removed; other values unchanged. */
+function normalizeIp(value: string): string {
+  const trimmed = value.trim().replace(/^\[(.*)\]$/, '$1');
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(trimmed);
+  return mapped?.[1] ?? trimmed;
+}
+
+/**
+ * The client address (ADR 0008 section 1), first match wins:
+ *
+ * 1. BFF_CLIENT_IP_HEADER (`x-shotx-client-ip`) when the request also carries the valid BFF key
+ *    and did not come through the public proxy (hasValidBffKey; web and admin pass the viewer's
+ *    address on; any route). Otherwise the header is ignored. A value that isn't an IP address
+ *    is ignored too.
+ * 2. CloudFront's `CloudFront-Viewer-Address` (`ip:port`) when the request came through
+ *    CloudFront (cameThroughCloudFront), on AWS stages only: when TRUSTED_PROXY_ADDRESSES is set
+ *    the API runs behind its own reverse proxy, which passes client headers through, so the
+ *    CloudFront markers prove nothing there and are ignored. Kept until infra/ is removed.
+ * 3. X-Forwarded-For when the socket peer is a trusted proxy (isTrustedProxy). The proxy
+ *    overwrites the header with the TCP peer, so it holds one value; if a client's copy got
+ *    through anyway, only the rightmost entry (the one the proxy wrote) counts.
+ * 4. The socket peer.
+ *
+ * IPv4-mapped IPv6 addresses (`::ffff:1.2.3.4`, as Node reports IPv4 peers on a dual-stack
+ * socket) come back as IPv4.
+ */
+export function clientIp(req: Request, trust: ClientIpTrust = NO_CLIENT_IP_TRUST): string {
+  const forwarded = headerValue(req, BFF_CLIENT_IP_HEADER);
+  if (forwarded !== undefined && hasValidBffKey(req, trust)) {
+    const parsed = bffClientIpSchema.safeParse(normalizeIp(forwarded));
+    if (parsed.success) return parsed.data;
+  }
+  if (trust.proxies.addresses.length === 0 && cameThroughCloudFront(req)) {
     const value = headerValue(req, 'cloudfront-viewer-address');
     if (value !== undefined) {
       const match = /^(.+):(\d{1,5})$/.exec(value.trim());
       const ip = (match?.[1] ?? '').replace(/^\[(.*)\]$/, '$1');
-      if (ip !== '') return ip;
+      if (ip !== '') return normalizeIp(ip);
     }
   }
-  return req.socket.remoteAddress ?? 'unknown';
+  const peer = req.socket.remoteAddress;
+  if (peer !== undefined && isTrustedProxy(peer, trust.proxies)) {
+    const xff = headerValue(req, 'x-forwarded-for');
+    const rightmost = xff?.split(',').at(-1)?.trim();
+    if (rightmost !== undefined && rightmost !== '' && isIpAddress(rightmost)) {
+      return normalizeIp(rightmost);
+    }
+  }
+  return peer === undefined ? 'unknown' : normalizeIp(peer);
 }
 
 /**

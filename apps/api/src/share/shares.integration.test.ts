@@ -348,7 +348,7 @@ for (const backend of DATABASE_BACKENDS) {
         const rows = await api.db
           .select()
           .from(users)
-          .where(eq(users.cognitoSub, 'first-time-sub'));
+          .where(eq(users.authSubject, 'first-time-sub'));
         expect(rows).toHaveLength(1);
       });
 
@@ -405,7 +405,7 @@ for (const backend of DATABASE_BACKENDS) {
         const [racer] = await api.db
           .select()
           .from(users)
-          .where(eq(users.cognitoSub, 'racing-photographer'));
+          .where(eq(users.authSubject, 'racing-photographer'));
         expect(
           await api.db
             .select()

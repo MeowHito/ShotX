@@ -1,7 +1,7 @@
 import type { FaceProvider, TempImageStore } from '@shotx/face';
 import type { FaceConfig, FeatureFlags, RetentionConfig } from '@shotx/shared';
 import type { ObjectStore } from '../aws/object-store';
-import type { QueueClient } from '../aws/queue-client';
+import type { QueueSender } from '../queue/sender';
 import type { Db } from '../db';
 
 /**
@@ -33,7 +33,8 @@ export class CollectionRegistry {
 export interface FacesDeps {
   db: Db;
   store: ObjectStore;
-  queues: QueueClient;
+  queues: QueueSender;
+  /** The faces queue's destination for `queues`: its SQS URL, or `faces` on BullMQ. */
   facesQueueUrl: string;
   provider: FaceProvider;
   /** Where indexPhoto puts its temporary index images (S3 `tmp/index/` in production). */

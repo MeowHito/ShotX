@@ -6,6 +6,7 @@ import {
   SendMessageCommand,
   type SQSClient,
 } from '@aws-sdk/client-sqs';
+import type { QueueSender } from '../queue/sender';
 
 export interface ReceivedMessage {
   messageId: string;
@@ -22,7 +23,7 @@ export interface ReceiveOptions {
 }
 
 /** The SQS operations the worker uses. Tests use an in-memory implementation. */
-export interface QueueClient {
+export interface QueueClient extends QueueSender {
   receive(queueUrl: string, options: ReceiveOptions): Promise<ReceivedMessage[]>;
   deleteMessage(queueUrl: string, receiptHandle: string): Promise<void>;
   /** Throws ReceiptHandleInvalidError when the message is no longer ours. */

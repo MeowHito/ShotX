@@ -1,67 +1,15 @@
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { LOCAL_AUTH_AUDIENCE, LOCAL_AUTH_ISSUER } from '@shotx/shared';
-import { SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 import { CloudFrontMediaUrlSigner } from '../infra/cloudfront-signer';
 import { S3PresignMediaUrlSigner } from '../infra/s3-presign-signer';
+import { SqsQueueSender } from '../infra/sqs-queue';
+import { BullMqQueueSender } from '../infra/bullmq-queue';
 import { testConfig } from '../testing/fakes';
-import { mediaUrlSigner, tokenVerifier } from '../wiring';
-// The web app's local provider mints the tokens this verifier accepts: test the real handoff.
-import { createLocalAuthProvider, issueLocalCode } from '../../../web/src/lib/auth/local';
-import { createPkcePair } from '../../../web/src/lib/auth/pkce';
+import { shotxEnv, TEST_SHOTX_AUTH_ENV } from '../testing/shotx-auth';
+import { mediaUrlSigner, queueSender, tokenVerifier } from '../wiring';
 import { CognitoTokenVerifier } from './cognito-verifier';
-import { LocalTokenVerifier } from './local-verifier';
-
-const SECRET = 'local-test-secret-0123456789abcdef';
-
-function token(
-  claims: Record<string, unknown> = {},
-  options: { secret?: string; issuer?: string; audience?: string; expiresIn?: string } = {},
-): Promise<string> {
-  return new SignJWT({
-    token_use: 'access',
-    email: 'a@shotx.test',
-    email_verified: true,
-    name: 'A',
-    ...claims,
-  })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setSubject('sub-1')
-    .setIssuer(options.issuer ?? LOCAL_AUTH_ISSUER)
-    .setAudience(options.audience ?? LOCAL_AUTH_AUDIENCE)
-    .setIssuedAt()
-    .setExpirationTime(options.expiresIn ?? '1h')
-    .sign(new TextEncoder().encode(options.secret ?? SECRET));
-}
-
-describe('LocalTokenVerifier', () => {
-  const verifier = new LocalTokenVerifier(SECRET);
-
-  it('accepts local tokens as users-pool identities with their profile', async () => {
-    await expect(verifier.verify(await token())).resolves.toEqual({
-      pool: 'users',
-      sub: 'sub-1',
-      tokenUse: 'access',
-      email: 'a@shotx.test',
-      name: 'A',
-    });
-  });
-
-  it('rejects other secrets, issuers, audiences, expired tokens and bad token_use', async () => {
-    const bad = [
-      await token({}, { secret: 'another-secret-0123456789abcdefgh' }),
-      await token({}, { issuer: 'https://cognito-idp.ap-southeast-1.amazonaws.com/x' }),
-      await token({}, { audience: 'other' }),
-      await token({}, { expiresIn: '-1m' }),
-      await token({ token_use: 'refresh' }),
-      'not-a-jwt',
-    ];
-    for (const t of bad) {
-      await expect(verifier.verify(t)).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
-    }
-  });
-});
+import { ShotxTokenVerifier } from './shotx-tokens';
 
 describe('S3PresignMediaUrlSigner', () => {
   const now = new Date('2026-10-26T01:02:03Z');
@@ -144,50 +92,42 @@ describe('S3PresignMediaUrlSigner', () => {
   });
 });
 
-describe('web-minted local tokens', () => {
-  it('are accepted by the API verifier; refresh tokens are not', async () => {
-    const provider = createLocalAuthProvider({
-      secret: SECRET,
-      publicBaseUrl: 'http://localhost:3010',
-    });
-    const pkce = await createPkcePair();
-    const code = issueLocalCode(SECRET, { email: 'b@shotx.test', name: 'บี' }, pkce.challenge);
-    const tokens = await provider.exchangeCode({
-      code,
-      codeVerifier: pkce.verifier,
-      redirectUri: '',
-    });
-    const verifier = new LocalTokenVerifier(SECRET);
-    await expect(verifier.verify(tokens.accessToken)).resolves.toMatchObject({
-      pool: 'users',
-      tokenUse: 'access',
-      email: 'b@shotx.test',
-      name: 'บี',
-    });
-    await expect(verifier.verify(tokens.idToken ?? '')).resolves.toMatchObject({ tokenUse: 'id' });
-    await expect(verifier.verify(tokens.refreshToken ?? '')).rejects.toMatchObject({
-      code: 'UNAUTHENTICATED',
-    });
-  });
-});
-
 describe('adapter wiring', () => {
   const local = {
     APP_STAGE: 'local',
     NODE_ENV: 'development',
+    ...TEST_SHOTX_AUTH_ENV,
     AUTH_PROVIDER: 'local',
-    LOCAL_AUTH_SECRET: SECRET,
     MEDIA_URL_SIGNER: 's3-presign',
     AWS_ENDPOINT_URL: 'http://localhost:4566',
     AWS_ACCESS_KEY_ID: 'test',
     AWS_SECRET_ACCESS_KEY: 'test',
   };
 
-  it('uses Cognito and CloudFront by default', () => {
+  it('uses Cognito, CloudFront and SQS by default', async () => {
     const config = testConfig();
     expect(config.auth).toEqual({ provider: 'cognito' });
+    expect(config.shotxAuth).toBeNull();
     expect(tokenVerifier(config)).toBeInstanceOf(CognitoTokenVerifier);
     expect(mediaUrlSigner(config)).toBeInstanceOf(CloudFrontMediaUrlSigner);
+    const queue = queueSender(config);
+    expect(queue.sender).toBeInstanceOf(SqsQueueSender);
+    await queue.close();
+  });
+
+  it('uses the API-issued tokens with AUTH_PROVIDER=shotx', () => {
+    const config = testConfig(shotxEnv());
+    expect(config.cognito).toBeNull();
+    expect(config.shotxAuth?.devLogin).toBeNull();
+    expect(tokenVerifier(config)).toBeInstanceOf(ShotxTokenVerifier);
+  });
+
+  it('uses BullMQ with QUEUE_BACKEND=bullmq (no queue URLs needed)', async () => {
+    const config = testConfig({ QUEUE_BACKEND: 'bullmq', FACES_QUEUE_URL: '', ZIP_QUEUE_URL: '' });
+    expect(config.queues).toMatchObject({ backend: 'bullmq', prefix: 'shotx:test:bull' });
+    const queue = queueSender(config);
+    expect(queue.sender).toBeInstanceOf(BullMqQueueSender);
+    await queue.close();
   });
 
   it('needs no Cognito or CloudFront variables in local mode', () => {
@@ -205,7 +145,8 @@ describe('adapter wiring', () => {
     });
     expect(config.cognito).toBeNull();
     expect(config.cloudFront).toBeNull();
-    expect(tokenVerifier(config)).toBeInstanceOf(LocalTokenVerifier);
+    expect(config.shotxAuth?.devLogin).toEqual({ pool: 'users' });
+    expect(tokenVerifier(config)).toBeInstanceOf(ShotxTokenVerifier);
     expect(mediaUrlSigner(config)).toBeInstanceOf(S3PresignMediaUrlSigner);
   });
 

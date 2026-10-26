@@ -41,14 +41,17 @@ const env = {
 describe('worker config', () => {
   it('accepts what infra sets on the worker task', () => {
     const config = loadWorkerConfig(env);
-    expect(config.visibilityTimeoutSeconds).toEqual({
-      media: 300,
-      faces: 900,
-      zip: 300,
-      jobs: 900,
+    // QUEUE_BACKEND defaults to sqs while infra/ exists.
+    expect(config.queue).toEqual({
+      backend: 'sqs',
+      urls: {
+        media: env.MEDIA_QUEUE_URL,
+        faces: env.FACES_QUEUE_URL,
+        zip: env.ZIP_QUEUE_URL,
+        jobs: env.JOBS_QUEUE_URL,
+      },
+      visibilityTimeoutSeconds: { media: 300, faces: 900, zip: 300, jobs: 900 },
     });
-    expect(config.queueUrls.faces).toBe(env.FACES_QUEUE_URL);
-    expect(config.queueUrls.zip).toBe(env.ZIP_QUEUE_URL);
     expect(config.media.web).toEqual({ longEdge: 2560, jpegQuality: 85 });
     expect(config.retention.trashRetentionDays).toBe(30);
     expect(config.retention.faceIndexExpiryDays).toBe(90);
@@ -121,13 +124,77 @@ describe('worker config', () => {
   });
 });
 
+describe('worker config on BullMQ', () => {
+  /** The VPS: no queue URLs or visibility timeouts, QUEUE_BACKEND=bullmq. */
+  const vps = Object.fromEntries(
+    Object.entries({ ...env, QUEUE_BACKEND: 'bullmq' }).filter(
+      ([key]) => !key.endsWith('_QUEUE_URL') && !key.endsWith('_VISIBILITY_TIMEOUT_SECONDS'),
+    ),
+  );
+
+  it('reads the prefix, queue settings and schedules instead of SQS URLs', () => {
+    const { queue } = loadWorkerConfig(vps);
+    if (queue.backend !== 'bullmq') throw new Error('expected bullmq');
+    expect(queue.prefix).toBe('shotx:staging:bull');
+    expect(queue.queues.faces).toEqual({
+      attempts: 5,
+      backoffDelayMs: 10_000,
+      lockDurationMs: 900_000,
+      maxStalledCount: 1,
+      removeOnFailCount: 10_000,
+      removeOnFailAgeSeconds: 1_209_600,
+      removeOnCompleteCount: 1_000,
+      removeOnCompleteAgeSeconds: 86_400,
+      eventsMaxLen: 10_000,
+    });
+    expect(queue.schedules.timezone).toBe('Asia/Bangkok');
+    expect(queue.schedules.jobs['trash.purge.daily']).toEqual({
+      cron: '30 1 * * *',
+      enabled: true,
+    });
+    const off = loadWorkerConfig({ ...vps, SCHEDULE_TRASH_PURGE_DAILY_ENABLED: 'false' }).queue;
+    expect(off.backend === 'bullmq' && off.schedules.jobs['trash.purge.daily'].enabled).toBe(false);
+    expect(() => loadWorkerConfig({ ...vps, SCHEDULE_TRASH_PURGE_DAILY_CRON: 'daily' })).toThrow(
+      /SCHEDULE_TRASH_PURGE_DAILY_CRON/,
+    );
+  });
+
+  it('checks the faces budget against the lock renewal, without the 12 h SQS cap', () => {
+    const config = loadWorkerConfig(vps);
+    if (config.queue.backend !== 'bullmq') throw new Error('expected bullmq');
+    const hold = {
+      backend: 'bullmq' as const,
+      lockDurationMs: config.queue.queues.faces.lockDurationMs,
+    };
+    const budget = checkFacesBudget(config.face, config.worker.maxProcessingMs.faces, hold);
+    expect(budget.problems).toEqual([]);
+    expect(budget.heartbeatIntervalMs).toBe(450_000);
+    const thirteenHours = 13 * 3_600_000;
+    expect(checkFacesBudget(config.face, thirteenHours, hold).problems).toEqual([]);
+    expect(
+      checkFacesBudget(config.face, thirteenHours, {
+        backend: 'sqs',
+        visibilityTimeoutSeconds: 900,
+      }).problems,
+    ).toEqual(['WORKER_FACES_MAX_PROCESSING_SECONDS is longer than heartbeats can hold (12 h)']);
+  });
+});
+
 describe('faces time budget', () => {
+  const sqsHold = (config: ReturnType<typeof loadWorkerConfig>) => {
+    if (config.queue.backend !== 'sqs') throw new Error('expected sqs');
+    return {
+      backend: 'sqs' as const,
+      visibilityTimeoutSeconds: config.queue.visibilityTimeoutSeconds.faces,
+    };
+  };
+
   it('fits the defaults: grace ≥ 2 × the worst attempt, processing cap above it, heartbeats', () => {
     const config = loadWorkerConfig(env);
     const budget = checkFacesBudget(
       config.face,
       config.worker.maxProcessingMs.faces,
-      config.visibilityTimeoutSeconds.faces,
+      sqsHold(config),
     );
     expect(budget.problems).toEqual([]);
     // packages/face README: re-index worst case 8 × 342,600 ms.
@@ -145,7 +212,7 @@ describe('faces time budget', () => {
     const { problems } = checkFacesBudget(
       config.face,
       config.worker.maxProcessingMs.faces,
-      config.visibilityTimeoutSeconds.faces,
+      sqsHold(config),
     );
     expect(problems).toHaveLength(2);
     expect(problems[0]).toMatch(/FACE_ORPHAN_GRACE_MS/);

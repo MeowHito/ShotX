@@ -10,7 +10,7 @@ import {
   UPLOAD_FILE_TYPES,
 } from '@shotx/shared';
 import type { ObjectStore } from '../aws/object-store';
-import type { QueueClient } from '../aws/queue-client';
+import type { QueueSender } from '../queue/sender';
 import { type Db, isUuid } from '../db';
 import type { Logger } from '../logger';
 import { MediaDecodeError } from './errors';
@@ -32,7 +32,8 @@ import { extractPosterFrame, probeVideo, transcodePreview, type VideoTools } fro
 export interface MediaDeps {
   db: Db;
   store: ObjectStore;
-  queues: QueueClient;
+  queues: QueueSender;
+  /** The faces queue's destination for `queues`: its SQS URL, or `faces` on BullMQ. */
   facesQueueUrl: string;
   media: MediaConfig;
   video: VideoTools;

@@ -21,6 +21,7 @@
     "@shotx/face": "workspace:*",
     "@shotx/shared": "workspace:*",
     "archiver": "^8.0.0",
+    "bullmq": "6.3.12",
     "drizzle-orm": "^0.45.4",
     "exif-reader": "^2.0.3",
     "ioredis": "^6.0.0",

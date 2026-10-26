@@ -16,7 +16,7 @@ import {
   viewerSessionKey,
 } from '@shotx/shared';
 import type { Request, Response } from 'express';
-import { type ApiConfig, secureCookies } from '../config';
+import { type ApiConfig, clientIpTrust, secureCookies } from '../config';
 import type { Db } from '../db/db';
 import { ApiError } from '../http/api-error';
 import { clientIp, ipHash, sha256Hex } from '../http/client';
@@ -112,7 +112,7 @@ export class PublicGuard implements CanActivate {
     req[CONTEXT] = {
       viewer,
       anonId,
-      ipHash: ipHash(this.config.consent.ipHashSecret, clientIp(req)),
+      ipHash: ipHash(this.config.consent.ipHashSecret, clientIp(req, clientIpTrust(this.config))),
       cookies,
     };
     return true;

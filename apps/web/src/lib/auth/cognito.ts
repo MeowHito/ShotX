@@ -1,5 +1,6 @@
-import type { CognitoPoolConfig } from '@shotx/shared';
+import type { CognitoPoolConfig, OidcProvider } from '@shotx/shared';
 import { z } from 'zod';
+import { createPkcePair, randomToken } from './pkce';
 import { type AuthProvider, AuthProviderError, type AuthTokens } from './provider';
 
 const tokenResponseSchema = z.object({
@@ -12,9 +13,16 @@ const tokenResponseSchema = z.object({
 
 const SCOPES = 'openid email profile';
 
+/** Cognito identity provider names (infra IDP_NAMES). */
+export const COGNITO_IDENTITY_PROVIDERS = {
+  google: 'Google',
+  line: 'LINE',
+} as const satisfies Record<OidcProvider, string>;
+
 /**
- * Cognito user pool OAuth 2.0 endpoints (Hosted UI / managed login). The web client is public
- * (no secret): authorization code flow with PKCE.
+ * Cognito user pool OAuth 2.0 endpoints (Hosted UI / managed login), AUTH_PROVIDER=cognito. The
+ * web client is public (no secret): authorization code flow with PKCE, whose verifier web keeps
+ * in the pending-login cookie.
  */
 export function createCognitoAuthProvider(
   config: Pick<CognitoPoolConfig, 'domain' | 'clientId'>,
@@ -38,7 +46,7 @@ export function createCognitoAuthProvider(
       throw new AuthProviderError(`Token endpoint answered ${response.status}`, response.status);
     }
     const parsed = tokenResponseSchema.safeParse(await response.json());
-    if (!parsed.success) throw new AuthProviderError('Unexpected token response');
+    if (!parsed.success) throw new AuthProviderError('Unexpected token response', response.status);
     return {
       accessToken: parsed.data.access_token,
       idToken: parsed.data.id_token,
@@ -48,24 +56,27 @@ export function createCognitoAuthProvider(
   }
 
   return {
-    authorizationUrl({ state, codeChallenge, redirectUri, identityProvider }) {
+    async startLogin({ identityProvider, redirectUri }) {
+      const pkce = await createPkcePair();
+      const state = randomToken(24);
       const url = new URL(`${domain}/oauth2/authorize`);
       url.searchParams.set('response_type', 'code');
       url.searchParams.set('client_id', config.clientId);
       url.searchParams.set('redirect_uri', redirectUri);
       url.searchParams.set('scope', SCOPES);
       url.searchParams.set('state', state);
-      url.searchParams.set('code_challenge', codeChallenge);
+      url.searchParams.set('code_challenge', pkce.challenge);
       url.searchParams.set('code_challenge_method', 'S256');
       // Managed login pages in Thai.
       url.searchParams.set('lang', 'th');
-      if (identityProvider !== undefined) {
-        url.searchParams.set('identity_provider', identityProvider);
-      }
-      return url.toString();
+      url.searchParams.set('identity_provider', COGNITO_IDENTITY_PROVIDERS[identityProvider]);
+      return { authorizationUrl: url.toString(), state, codeVerifier: pkce.verifier };
     },
 
-    exchangeCode({ code, codeVerifier, redirectUri }) {
+    completeLogin({ code, codeVerifier, redirectUri }) {
+      if (codeVerifier === undefined) {
+        return Promise.reject(new AuthProviderError('PKCE verifier missing', 400));
+      }
       return tokenRequest({
         grant_type: 'authorization_code',
         code,

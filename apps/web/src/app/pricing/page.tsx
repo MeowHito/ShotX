@@ -1,10 +1,9 @@
 import { Alert, buttonVariants } from '@shotx/ui';
 import type { Metadata } from 'next';
-import { headers } from 'next/headers';
 import Link from 'next/link';
 import { getTranslations } from 'next-intl/server';
 import { PricingTable } from '@/components/billing/pricing-table';
-import { VIEWER_ADDRESS_HEADER } from '@/lib/bff/constants';
+import { requestServerCallContext } from '@/lib/server/auth';
 import { fetchPlans } from '@/lib/server/billing';
 import { webConfig } from '@/lib/server/config';
 
@@ -16,10 +15,9 @@ export async function generateMetadata(): Promise<Metadata> {
 /** Public `/pricing`: plans and prices from `GET /plans`, rendered on the server. */
 export default async function PricingPage() {
   const t = await getTranslations('pricing');
-  const requestHeaders = await headers();
   const plans = await fetchPlans({
     apiInternalUrl: webConfig().apiInternalUrl,
-    viewerAddress: requestHeaders.get(VIEWER_ADDRESS_HEADER),
+    context: await requestServerCallContext(),
   });
   return (
     <main className="mx-auto max-w-6xl space-y-8 px-4 py-10">

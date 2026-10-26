@@ -82,7 +82,7 @@ describe('auth', () => {
 
   it('never lets an admins-pool token act as a photographer', async () => {
     const sub = randomUUID();
-    await api.db.insert(users).values({ cognitoPool: 'admins', cognitoSub: sub, role: 'admin' });
+    await api.db.insert(users).values({ authPool: 'admins', authSubject: sub, role: 'admin' });
     const token = await api.auth.token('admins', sub);
     const res = await api.request('GET', usagePath, { token });
     expect(res.status).toBe(401);

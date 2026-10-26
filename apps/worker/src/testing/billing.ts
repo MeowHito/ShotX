@@ -50,8 +50,8 @@ export async function createBillingPhotographer(
     .insert(users)
     .values({
       role: 'photographer',
-      cognitoPool: 'users',
-      cognitoSub: randomUUID(),
+      authPool: 'users',
+      authSubject: `local:${randomUUID()}`,
       email:
         options.email === undefined ? `p-${randomUUID().slice(0, 8)}@example.com` : options.email,
     })

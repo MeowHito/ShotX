@@ -16,6 +16,7 @@ import { ApiExceptionFilter } from './http/exception.filter';
 import { selfieMagicMatches } from './http/multipart';
 import { CloudFrontMediaUrlSigner } from './infra/cloudfront-signer';
 import { HASH_MERGE_MAX_SCRIPT, MemoryKeyValueStore, RedisKeyValueStore } from './infra/redis';
+import { EnqueueTimeoutError } from './infra/enqueue-timeout';
 import { MemoryQueueSender, SqsQueueSender } from './infra/sqs-queue';
 import { SignedUrls } from './media/signed-urls';
 import { openPglite } from './testing/database';
@@ -27,10 +28,10 @@ describe('error logging (no PII)', () => {
     const database = await openPglite();
     let thrown: unknown;
     try {
-      // users_cognito_sub_not_empty fails; the parameters carry an email and a name.
+      // users_auth_subject_not_empty fails; the parameters carry an email and a name.
       await database.db.insert(users).values({
-        cognitoPool: 'users',
-        cognitoSub: '',
+        authPool: 'users',
+        authSubject: '',
         email: 'somchai.secret@example.com',
         name: 'ไฟล์ลับ IMG_0001.jpg',
       });
@@ -59,7 +60,7 @@ describe('error logging (no PII)', () => {
     const text = logger.text();
     expect(text).toContain('POST /api/drive/folders failed:');
     expect(text).toContain('pg=23514');
-    expect(text).toContain('constraint=users_cognito_sub_not_empty');
+    expect(text).toContain('constraint=users_auth_subject_not_empty');
     for (const pii of [
       'somchai.secret',
       'example.com',
@@ -406,10 +407,14 @@ describe('queue senders', () => {
 
   it('sends validated job bodies to the right queue URL', async () => {
     sqs.on(SendMessageCommand).resolves({ MessageId: 'm1' });
-    const sender = new SqsQueueSender(new SQSClient({ region: 'ap-southeast-1' }), {
-      faces: 'https://sqs.example/faces',
-      zip: 'https://sqs.example/zip',
-    });
+    const sender = new SqsQueueSender(
+      new SQSClient({ region: 'ap-southeast-1' }),
+      {
+        faces: 'https://sqs.example/faces',
+        zip: 'https://sqs.example/zip',
+      },
+      5_000,
+    );
     const jobId = '0195f3a2-af4b-7a7d-8e5c-6f7a8b9cadbe';
     await sender.send('zip', { type: 'zip.create', jobId });
     expect(sqs.commandCalls(SendMessageCommand)[0]?.args[0].input).toEqual({
@@ -422,5 +427,24 @@ describe('queue senders', () => {
     const memory = new MemoryQueueSender();
     await memory.send('faces', { type: 'index.folder', folderId: jobId });
     expect(memory.messages('faces')).toEqual([{ type: 'index.folder', folderId: jobId }]);
+  });
+
+  it('gives up on a SendMessage that hangs after QUEUE_ENQUEUE_TIMEOUT_MS and aborts it', async () => {
+    let aborted = false;
+    const hanging = {
+      send: (_command: unknown, options?: { abortSignal?: AbortSignal }) =>
+        new Promise<never>(() => {
+          options?.abortSignal?.addEventListener('abort', () => {
+            aborted = true;
+          });
+        }),
+    } as unknown as SQSClient;
+    const sender = new SqsQueueSender(hanging, { faces: 'https://x/f', zip: 'https://x/z' }, 150);
+    const started = Date.now();
+    await expect(
+      sender.send('zip', { type: 'zip.create', jobId: '0195f3a2-af4b-7a7d-8e5c-6f7a8b9cadbe' }),
+    ).rejects.toBeInstanceOf(EnqueueTimeoutError);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(aborted).toBe(true);
   });
 });

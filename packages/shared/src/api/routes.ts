@@ -2,6 +2,20 @@ import type { z } from 'zod';
 import type { ActivityType } from '../domain';
 import { ErrorCode } from '../errors';
 import {
+  adminLoginBodySchema,
+  adminLoginResponseSchema,
+  adminMfaBodySchema,
+  authProvidersResponseSchema,
+  authTokenResponseSchema,
+  devLoginBodySchema,
+  logoutBodySchema,
+  oidcCallbackBodySchema,
+  oidcProviderParamsSchema,
+  oidcStartBodySchema,
+  oidcStartResponseSchema,
+  refreshBodySchema,
+} from './auth';
+import {
   checkoutHeadersSchema,
   checkoutResponseSchema,
   createCheckoutBodySchema,
@@ -86,9 +100,16 @@ export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
  * - `webhook`: server-to-server calls from a payment gateway. No token, no cookies, no Origin
  *   check, not behind the WAF's share rules; the body is read raw and the gateway adapter verifies
  *   its signature before anything is parsed (WEBHOOK_SIGNATURE_INVALID).
+ * - `bff`: sign-in routes (AUTH_ROUTES, AUTH_PROVIDER=shotx or local). No user token: called
+ *   server-side by the web and admin BFFs only, with the shared key in BFF_KEY_HEADER required
+ *   (missing or wrong: UNAUTHENTICATED). Never proxied from the browser (the web's generic `/bff`
+ *   proxy must refuse them like `public` and `webhook`), no cookies, no Origin check.
+ * Every server-side call from web or admin (any RouteAuth) sends BFF_KEY_HEADER and the end
+ * user's IP in BFF_CLIENT_IP_HEADER; the API trusts that IP only with a valid key.
  * Admins (admins-pool tokens) use only `/admin/*` routes; anywhere else they are UNAUTHENTICATED.
+ * Admins-pool tokens without `otp` in `amr` are MFA_REQUIRED on admin routes (ADMIN_REQUIRED_AMR).
  */
-export type RouteAuth = 'photographer' | 'user' | 'public' | 'webhook';
+export type RouteAuth = 'photographer' | 'user' | 'public' | 'webhook' | 'bff';
 
 /** A multipart/form-data request body of file parts only. */
 export interface MultipartSpec {
@@ -724,6 +745,96 @@ export const BILLING_ROUTES = {
   },
 } as const satisfies Record<string, RouteContract>;
 
+/**
+ * Sign-in routes of the API's own issuer (ADR 0008 section 4); see api/auth. All `bff`. With
+ * AUTH_PROVIDER=cognito they answer NOT_FOUND. Every sign-in writes nothing to activity_events;
+ * admin sign-ins (successful and failed) are written to audit_log (AUTH_AUDIT_ACTIONS).
+ */
+export const AUTH_ROUTES = {
+  /** What the sign-in pages may offer. */
+  providers: {
+    method: 'GET',
+    path: '/auth/providers',
+    status: 200,
+    auth: 'bff',
+    response: authProvidersResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND),
+  },
+  oidcStart: {
+    method: 'POST',
+    path: '/auth/oidc/:provider/start',
+    status: 200,
+    auth: 'bff',
+    params: oidcProviderParamsSchema,
+    body: oidcStartBodySchema,
+    response: oidcStartResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.AUTH_PROVIDER_UNAVAILABLE),
+  },
+  oidcCallback: {
+    method: 'POST',
+    path: '/auth/oidc/callback',
+    status: 200,
+    auth: 'bff',
+    body: oidcCallbackBodySchema,
+    response: authTokenResponseSchema,
+    errors: errors(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.LOGIN_STATE_INVALID,
+      ErrorCode.IDENTITY_PROVIDER_ERROR,
+    ),
+  },
+  /** AUTH_PROVIDER=local only (NOT_FOUND otherwise); users pool only. */
+  devLogin: {
+    method: 'POST',
+    path: '/auth/dev/login',
+    status: 200,
+    auth: 'bff',
+    body: devLoginBodySchema,
+    response: authTokenResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND),
+  },
+  refresh: {
+    method: 'POST',
+    path: '/auth/refresh',
+    status: 200,
+    auth: 'bff',
+    body: refreshBodySchema,
+    response: authTokenResponseSchema,
+    errors: errors(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.REFRESH_TOKEN_INVALID,
+      ErrorCode.REFRESH_TOKEN_REUSED,
+    ),
+  },
+  logout: {
+    method: 'POST',
+    path: '/auth/logout',
+    status: 204,
+    auth: 'bff',
+    body: logoutBodySchema,
+    errors: errors(ErrorCode.NOT_FOUND),
+  },
+  adminLogin: {
+    method: 'POST',
+    path: '/auth/admin/login',
+    status: 200,
+    auth: 'bff',
+    body: adminLoginBodySchema,
+    response: adminLoginResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.INVALID_CREDENTIALS),
+  },
+  /** Answers admins-pool tokens with `amr` ["pwd", "otp", "mfa"]. */
+  adminMfa: {
+    method: 'POST',
+    path: '/auth/admin/mfa',
+    status: 200,
+    auth: 'bff',
+    body: adminMfaBodySchema,
+    response: authTokenResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.LOGIN_STATE_INVALID, ErrorCode.MFA_INVALID),
+  },
+} as const satisfies Record<string, RouteContract>;
+
 /** Every route with a contract, by module. */
 export const API_ROUTES = {
   drive: DRIVE_ROUTES,
@@ -732,6 +843,7 @@ export const API_ROUTES = {
   shares: SHARE_ROUTES,
   publicShare: PUBLIC_SHARE_ROUTES,
   billing: BILLING_ROUTES,
+  auth: AUTH_ROUTES,
 } as const;
 
 /** Every route as a flat list, e.g. for OpenAPI generation. */

@@ -1,34 +1,46 @@
 import { z } from 'zod';
 import { AUTH_POOLS, type AuthPool, type BillingMode, type UserRole } from '../domain';
+import { AUTH_SUBJECT_MAX_LENGTH, isAuthSubjectInPool } from './auth-subject';
 
 /**
- * User provisioning (ADR 0002). Identity is the pair (pool, `sub`) of a verified Cognito token;
- * email is never an identity and never merges accounts. On the first authenticated request the
- * API's guard provisions the `users` row in one statement:
+ * User provisioning (ADR 0002, ADR 0008). Identity is the pair (pool, subject) of a verified token
+ * (Cognito, or ShotX-issued: see account/auth-subject); email is never an identity and never
+ * merges accounts. On the first authenticated request the API's guard provisions the `users` row
+ * in one statement:
  *
- *   INSERT INTO users (cognito_pool, cognito_sub, role, email, name)
- *   VALUES ($pool, $sub, $role, $email, $name)
- *   ON CONFLICT (cognito_pool, cognito_sub) DO NOTHING;
- *   SELECT ... FROM users WHERE cognito_pool = $pool AND cognito_sub = $sub;
+ *   INSERT INTO users (auth_pool, auth_subject, role, email, name)
+ *   VALUES ($pool, $subject, $role, $email, $name)
+ *   ON CONFLICT (auth_pool, auth_subject) DO NOTHING;
+ *   SELECT ... FROM users WHERE auth_pool = $pool AND auth_subject = $subject;
  *
  * with the values from {@link newUserForIdentity}. Later sign-ins never change the role, and
  * email and name are only filled on insert. A users-pool identity starts as `user` (viewer) and
  * becomes `photographer` only through `POST /me/photographer`; an admins-pool identity is always
- * `admin` (the `users_admin_iff_admins_pool` CHECK enforces both).
+ * `admin` (the `users_admin_iff_admins_pool` CHECK enforces both). Admins-pool rows of ShotX
+ * tokens are created by the operator CLI, never by the guard.
  */
-export const authIdentitySchema = z.object({
-  pool: z.enum(AUTH_POOLS),
-  /** Cognito `sub` (a UUID today; treated as opaque). */
-  sub: z.string().min(1).max(255),
-  /** From the verified ID token or userinfo; LINE may have none. */
-  email: z.email().max(320).nullable(),
-  name: z.string().trim().min(1).max(200).nullable(),
-});
+export const authIdentitySchema = z
+  .object({
+    pool: z.enum(AUTH_POOLS),
+    /**
+     * `users.auth_subject`: a raw Cognito `sub`, or a prefixed ShotX subject (`line:...`,
+     * `google:...`, `local:...`, `admin:...`). Opaque otherwise.
+     */
+    sub: z.string().min(1).max(AUTH_SUBJECT_MAX_LENGTH),
+    /** From the verified ID token or userinfo; LINE may have none. */
+    email: z.email().max(320).nullable(),
+    name: z.string().trim().min(1).max(200).nullable(),
+  })
+  .refine((identity) => isAuthSubjectInPool(identity.sub, identity.pool), {
+    error: 'subject is not valid in this pool',
+    path: ['sub'],
+  });
 export type AuthIdentity = z.output<typeof authIdentitySchema>;
 
+/** Columns of a new `users` row (Drizzle insert names). */
 export interface NewUserValues {
-  cognitoPool: AuthPool;
-  cognitoSub: string;
+  authPool: AuthPool;
+  authSubject: string;
   role: UserRole;
   email: string | null;
   name: string | null;
@@ -38,8 +50,8 @@ export interface NewUserValues {
 export function newUserForIdentity(identity: AuthIdentity): NewUserValues {
   const valid = authIdentitySchema.parse(identity);
   return {
-    cognitoPool: valid.pool,
-    cognitoSub: valid.sub,
+    authPool: valid.pool,
+    authSubject: valid.sub,
     role: valid.pool === 'admins' ? 'admin' : 'user',
     email: valid.email,
     name: valid.name,

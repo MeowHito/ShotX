@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { redisKeyPrefix } from '../config';
 import { requireCloudFront, testConfig } from '../testing/fakes';
 import { CloudFrontMediaUrlSigner, mediaUrl } from './cloudfront-signer';
-import { createRedis, MemoryRateLimiter, RedisRateLimiter } from './redis';
+import { createRedis, MemoryRateLimiter, RedisKeyValueStore, RedisRateLimiter } from './redis';
 
 describe('CloudFront signer', () => {
   const config = testConfig();
@@ -86,12 +86,21 @@ describe('rate limiters', () => {
       const prefix = redisKeyPrefix(config);
       const limiter = new RedisRateLimiter(redis, prefix);
       const key = `it:${Date.now()}`;
+      expect((await limiter.peek(key, 1, 30)).allowed).toBe(true);
+      expect(await redis.exists(`${prefix}rl:${key}`)).toBe(0); // peek writes nothing
       expect((await limiter.hit(key, 1, 30)).allowed).toBe(true);
+      expect((await limiter.peek(key, 1, 30)).allowed).toBe(false);
+      expect((await limiter.peek(key, 2, 30)).allowed).toBe(true);
       expect((await limiter.hit(key, 1, 30)).allowed).toBe(false);
       const ttl = await redis.ttl(`${prefix}rl:${key}`);
       expect(ttl).toBeGreaterThan(0);
       expect(ttl).toBeLessThanOrEqual(30);
       await redis.del(`${prefix}rl:${key}`);
+
+      const store = new RedisKeyValueStore(redis, prefix);
+      await store.setWithTtl(`once:${key}`, 'v', 30);
+      expect(await store.take(`once:${key}`)).toBe('v');
+      expect(await store.take(`once:${key}`)).toBeNull();
     } finally {
       redis.disconnect();
     }
