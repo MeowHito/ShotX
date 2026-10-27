@@ -463,9 +463,6 @@ importers:
       '@aws-sdk/client-rekognition':
         specifier: ^3.1152.0
         version: 3.1152.0
-      '@aws-sdk/client-s3':
-        specifier: ^3.1152.0
-        version: 3.1152.0
       '@shotx/shared':
         specifier: workspace:*
         version: link:../shared
@@ -537,9 +534,6 @@ importers:
 
   tools/face-eval:
     dependencies:
-      '@aws-sdk/client-s3':
-        specifier: ^3.1152.0
-        version: 3.1152.0
       '@shotx/face':
         specifier: workspace:*
         version: link:../../packages/face

@@ -29,11 +29,8 @@ describe('cdk.json config', () => {
     expect(config.storage.abortIncompleteMultipartUploadDays).toBe(2);
   });
 
-  it('rejects tmp/index/ expiry outside 1-3 days', () => {
-    const c = withEdit((x) => {
-      at(x, 'storage').tmpIndexExpirationDays = 5;
-    });
-    expect(() => parseConfig(c)).toThrow(/tmpIndexExpirationDays/);
+  it('has no tmp/index/ setting (IndexFaces gets bytes, ADR 0008 section 5)', () => {
+    expect(parseConfig(rawConfig()).storage).not.toHaveProperty('tmpIndexExpirationDays');
   });
 
   describe('tmp/zips/ lifecycle', () => {
@@ -126,7 +123,6 @@ describe('cdk.json config', () => {
 
   describe('tmp/ rules stay within the spec’s 1-3 days (ADR 0006)', () => {
     for (const key of [
-      'tmpIndexExpirationDays',
       'tmpZipsExpirationDays',
       'tmpReconcileExpirationDays',
       'tmpOtherExpirationDays',
@@ -141,9 +137,8 @@ describe('cdk.json config', () => {
       });
     }
 
-    it('uses 1 day for tmp/index/, 2 for tmp/zips/ and 3 for tmp/reconcile/ and the rest', () => {
+    it('uses 2 days for tmp/zips/ and 3 for tmp/reconcile/ and the rest', () => {
       expect(parseConfig(rawConfig()).storage).toMatchObject({
-        tmpIndexExpirationDays: 1,
         tmpZipsExpirationDays: 2,
         tmpReconcileExpirationDays: 3,
         tmpOtherExpirationDays: 3,
@@ -560,12 +555,12 @@ describe('cdk.json config', () => {
     expect(() => parseConfig(c)).toThrow(/default user is disabled/);
   });
 
-  it('refuses to let CloudFront read tmp/index/', () => {
-    for (const prefix of ['tmp/', 'tmp/index/']) {
+  it('refuses to let CloudFront read tmp/reconcile/ (scan files with face ids)', () => {
+    for (const prefix of ['tmp/', 'tmp/reconcile/']) {
       const c = withEdit((x) => {
         at(x, 'cdn', 'media').readablePrefixes = ['derived/', prefix];
       });
-      expect(() => parseConfig(c)).toThrow(/tmp\/index/);
+      expect(() => parseConfig(c), prefix).toThrow(/tmp\/reconcile/);
     }
   });
 

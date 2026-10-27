@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadWorkerSettings, storageS3ClientOptions } from '@shotx/shared';
+import { awsClientOptions, loadWorkerSettings, storageS3ClientOptions } from '@shotx/shared';
 import { loadWorkerConfig } from './config';
 import { checkFacesBudget } from './faces/budget';
 import { createJsonLogger, errorFields } from './logger';
@@ -181,15 +181,23 @@ describe('worker config on BullMQ', () => {
 });
 
 describe('worker config with R2 storage', () => {
+  const r2 = {
+    ...env,
+    STORAGE_ENDPOINT_URL: 'https://0123456789abcdef.r2.cloudflarestorage.com',
+    STORAGE_REGION: 'auto',
+    STORAGE_ACCESS_KEY_ID: 'worker-key',
+    STORAGE_SECRET_ACCESS_KEY: 'worker-secret',
+    STORAGE_ORIGINALS_CLASS: 'STANDARD',
+    // Off AWS there is no task role: Rekognition and SES need their own keys.
+    REKOGNITION_ACCESS_KEY_ID: 'AKIAREKOGNITIONWORKER',
+    REKOGNITION_SECRET_ACCESS_KEY: 'rekognition-secret',
+    SES_ACCESS_KEY_ID: 'AKIASESWORKERKEY0001',
+    SES_SECRET_ACCESS_KEY: 'ses-secret',
+    AWS_IGNORE_CONFIGURED_ENDPOINT_URLS: 'true',
+  };
+
   it('reads an explicit storage endpoint and keys, separate from AWS_ENDPOINT_URL', () => {
-    const config = loadWorkerConfig({
-      ...env,
-      STORAGE_ENDPOINT_URL: 'https://0123456789abcdef.r2.cloudflarestorage.com',
-      STORAGE_REGION: 'auto',
-      STORAGE_ACCESS_KEY_ID: 'worker-key',
-      STORAGE_SECRET_ACCESS_KEY: 'worker-secret',
-      STORAGE_ORIGINALS_CLASS: 'STANDARD',
-    });
+    const config = loadWorkerConfig(r2);
     const options = storageS3ClientOptions(config.storage);
     expect(options).toMatchObject({
       region: 'auto',
@@ -201,8 +209,32 @@ describe('worker config with R2 storage', () => {
       region: 'ap-southeast-1',
     });
     expect(storageS3ClientOptions(loadWorkerConfig(env).storage)).not.toHaveProperty('credentials');
+    expect(awsClientOptions(config.rekognitionClient)).toEqual({
+      region: 'ap-southeast-1',
+      credentials: {
+        accessKeyId: 'AKIAREKOGNITIONWORKER',
+        secretAccessKey: 'rekognition-secret',
+      },
+    });
+    expect(config.sesClient?.credentials?.accessKeyId).toBe('AKIASESWORKERKEY0001');
+    // On AWS (no STORAGE_ENDPOINT_URL, Cognito) the task role still works.
+    expect(loadWorkerConfig(env).rekognitionClient.credentials).toBeNull();
     expect(config.worker.sweeps.media.maxRequeues).toBe(3);
     expect(config.retention.authSessionRetentionDays).toBe(7);
+  });
+
+  it('refuses the default chain and AWS_ENDPOINT_URL off AWS', () => {
+    const without = (...keys: string[]) =>
+      Object.fromEntries(Object.entries(r2).filter(([key]) => !keys.includes(key)));
+    expect(() =>
+      loadWorkerConfig(without('REKOGNITION_ACCESS_KEY_ID', 'REKOGNITION_SECRET_ACCESS_KEY')),
+    ).toThrow(/REKOGNITION_ACCESS_KEY_ID/);
+    expect(() => loadWorkerConfig(without('SES_ACCESS_KEY_ID', 'SES_SECRET_ACCESS_KEY'))).toThrow(
+      /SES_ACCESS_KEY_ID/,
+    );
+    expect(() => loadWorkerConfig({ ...r2, AWS_ENDPOINT_URL: 'http://localstack:4566' })).toThrow(
+      /AWS_ENDPOINT_URL must be unset/,
+    );
   });
 });
 

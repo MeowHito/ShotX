@@ -6,6 +6,7 @@ import type { ComboResult } from './evaluate';
 import { analyzeFailures } from './failures';
 import { renderReport, type ReportInput, SYNTHETIC_DISCLAIMER } from './report';
 import type { Dataset } from './dataset';
+import { emptyEncodingStats, LEGACY_S3_MAX_BYTES } from './encoding';
 
 const targets: Targets = {
   strongPrecision: 0.98,
@@ -27,8 +28,15 @@ const dataset: Dataset = {
   synthetic: undefined,
 };
 
-const combos: ComboResult[] = (['never', 'always'] as const).map((tiling) => ({
-  index: { longEdge: 3500, qualityFilter: 'LOW', tiling },
+const FIVE_MIB = 5 * 1024 * 1024;
+const indexOptions = [
+  { tiling: 'never', maxBytes: FIVE_MIB },
+  { tiling: 'always', maxBytes: FIVE_MIB },
+  { tiling: 'never', maxBytes: LEGACY_S3_MAX_BYTES },
+] as const;
+
+const combos: ComboResult[] = indexOptions.map(({ tiling, maxBytes }) => ({
+  index: { longEdge: 3500, maxBytes, qualityFilter: 'LOW', tiling },
   search: { selfies: 1, expansionSeeds: 0 },
   scans: [
     {
@@ -55,12 +63,24 @@ function input(synthetic: boolean, env: Record<string, string> = {}): ReportInpu
     facesStored: 3,
     distinctFaces: 3,
     calls: { ...emptyCounts(), indexFaces: 2 },
+    encoding: {
+      ...emptyEncodingStats(),
+      photos: 2,
+      images: 2,
+      degradedImages: 1,
+      degradedPhotos: 1,
+      degradedFullImages: 1,
+      minQuality: 75,
+      totalBytes: 7 * 1024 * 1024,
+      largestImageBytes: FIVE_MIB,
+    },
   };
   const analysis = analyze(
     combos,
     {
-      'le3500-low-never': stats,
-      'le3500-low-always': { ...stats, calls: { ...stats.calls, indexFaces: 10 } },
+      'le3500-5mib-low-never': stats,
+      'le3500-5mib-low-always': { ...stats, calls: { ...stats.calls, indexFaces: 10 } },
+      'le3500-15mib-low-never': stats,
     },
     (id) => dataset.persons.find((p) => p.id === id)!.positives,
     { strong: [90, 95], maybe: [85, 90] },
@@ -106,6 +126,7 @@ describe('renderReport', () => {
       'FACE_STRONG',
       'FACE_MAYBE',
       'FACE_INDEX_LONG_EDGE',
+      'FACE_INDEX_MAX_BYTES',
       'FACE_INDEX_QUALITY_FILTER',
       'FACE_INDEX_TILING',
       'FACE_EXPANSION_SEEDS',
@@ -124,6 +145,21 @@ describe('renderReport', () => {
     expect(row(renderReport(input(false, { FACE_INDEX_TILING: 'always' })))).toMatch(
       /\| always \|$/,
     );
+  });
+
+  it('compares byte limits, marks the old S3 path as reference only and never recommends it', () => {
+    const report = renderReport(input(false));
+    const row = report.split('\n').find((line) => line.includes('`FACE_INDEX_MAX_BYTES`'));
+    expect(row).toMatch(/\| 5 MiB \(bytes\) \| 5 MiB \(bytes\) \|$/);
+    expect(report).toContain('### Index image byte limit');
+    expect(report).toContain('15 MiB (old S3 path, reference only)');
+    expect(report).toContain('## Index image encoding');
+    expect(report).toContain('`le3500-15mib-low-never`');
+    expect(report).toContain('Upload to Rekognition per 1,000 photos');
+  });
+
+  it('says on synthetic reports that no real faces were used', () => {
+    expect(renderReport(input(true))).toContain('No real event');
   });
 
   it('contains aggregate numbers only: no person ids, photo names or dataset paths', () => {

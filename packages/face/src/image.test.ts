@@ -2,6 +2,7 @@ import { loadFaceConfig } from '@shotx/shared';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import { encodeJpeg, orientedSize, prepareSelfie, UnreadableImageError } from './image';
+import { REKOGNITION_INLINE_MAX_BYTES } from './provider';
 
 function solid(width: number, height: number): Promise<Buffer> {
   return sharp({ create: { width, height, channels: 3, background: '#808080' } })
@@ -37,7 +38,12 @@ async function rotatedPhoto(): Promise<Buffer> {
 }
 
 const config = loadFaceConfig({});
-const options = { longEdge: 3500, quality: 90, maxBytes: 15 * 1024 * 1024, encode: config.encode };
+const options = {
+  longEdge: 3500,
+  quality: 90,
+  maxBytes: REKOGNITION_INLINE_MAX_BYTES,
+  encode: config.encode,
+};
 
 describe('encodeJpeg', () => {
   it('caps the long edge and keeps the aspect ratio', async () => {
@@ -48,6 +54,11 @@ describe('encodeJpeg', () => {
   it('never upscales', async () => {
     const image = await encodeJpeg(await solid(800, 600), options);
     expect([image.width, image.height]).toEqual([800, 600]);
+  });
+
+  it('reports the quality used and whether it had to shrink', async () => {
+    const image = await encodeJpeg(await solid(800, 600), options);
+    expect(image).toMatchObject({ quality: 90, downscaled: false });
   });
 
   it('applies the EXIF orientation and strips metadata', async () => {
@@ -78,6 +89,7 @@ describe('encodeJpeg', () => {
     const maxBytes = 200 * 1024;
     const image = await encodeJpeg(input, { ...options, maxBytes });
     expect(image.bytes.length).toBeLessThanOrEqual(maxBytes);
+    expect(image.quality).toBeLessThan(90);
   });
 
   it('gives up below the minimum long edge', async () => {
@@ -97,6 +109,7 @@ describe('encodeJpeg', () => {
     ]) {
       await expect(encodeJpeg(input, { ...options, encode })).rejects.toBeInstanceOf(RangeError);
     }
+    await expect(encodeJpeg(input, { ...options, maxBytes: 0 })).rejects.toBeInstanceOf(RangeError);
   });
 
   it('reports undecodable input', async () => {

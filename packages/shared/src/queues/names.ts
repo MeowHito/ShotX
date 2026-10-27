@@ -221,8 +221,25 @@ export const SCHEDULED_JOB_TYPES = [
    * - files with `faces_queued_at` older than FACES_SWEEP_INDEX_AGE_SECONDS and
    *   `faces_requeues` below FACES_SWEEP_MAX_REQUEUES: send `index.file` again (bumping both);
    * - folders with `face_index_queued_at` older than FACES_SWEEP_INDEX_AGE_SECONDS: send
-   *   `index.folder` again (bumping it).
+   *   `index.folder` again (bumping it);
+   * - coverage scan (catches files whose outbox mark was never set, e.g. rows from before
+   *   migration 0006 or a lost fan-out): `ready` image files (`mime` image/*) with
+   *   `face_count IS NULL`, `faces_queued_at IS NULL`, `deleted_at IS NULL`, created more than
+   *   FACES_SWEEP_INDEX_AGE_SECONDS ago, under an active face index (isCoveredByFaceIndex: a
+   *   folder or ancestor with `face_index_enabled` and `face_index_expires_at` in the future).
+   *   Drive it from the active folders (folders_face_index_owner_idx, then `path <@` on the GiST
+   *   index) and read their files through `files_unindexed_ready_idx`, whose predicate the query
+   *   must repeat exactly (`status = 'ready' AND face_count IS NULL AND faces_queued_at IS NULL
+   *   AND deleted_at IS NULL`), keyset-paginated by (folder_id, id). Set `faces_queued_at = now()`
+   *   in a guarded UPDATE (`WHERE faces_queued_at IS NULL`) before sending `index.file`; this is a
+   *   first send, so `faces_requeues` is not bumped.
    * At most FACES_SWEEP_BATCH_SIZE messages of each kind per run.
+   *
+   * While FACE_SEARCH_ENABLED=false nothing is indexed, so the outbox marks are kept, not
+   * cleared: the faces consumer skips index jobs without touching `faces_queued_at` /
+   * `face_index_queued_at`, and faces.sweep sends no `index.file` / `index.folder` and runs no
+   * coverage scan (so `faces_requeues` doesn't climb to the cap while indexing is off). When it is
+   * turned back on, the next runs re-send the kept marks. Deletions are re-sent either way.
    */
   'faces.sweep',
   /**

@@ -25,7 +25,6 @@ import {
   APP_ROUTING_HEADER,
   PATHS,
   PRIMARY_REGION,
-  TMP_RECONCILE_PREFIX,
   type AlbServiceName,
   type ServiceName,
 } from '../constants';
@@ -569,15 +568,6 @@ export class Services extends Construct {
     );
     taskRoles.worker.addToPrincipalPolicy(
       new iam.PolicyStatement({
-        sid: 'FaceIndexScratch',
-        // Rekognition reads the IndexFaces image with the caller's credentials, so the worker
-        // must be able to read what it wrote here.
-        actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
-        resources: objects(S3_PREFIXES.tmpIndex),
-      }),
-    );
-    taskRoles.worker.addToPrincipalPolicy(
-      new iam.PolicyStatement({
         // Multipart upload of the archive (Create/UploadPart/Complete are s3:PutObject). The
         // lifecycle rule deletes it; CloudFront serves it.
         sid: 'ZipOutput',
@@ -588,8 +578,9 @@ export class Services extends Construct {
     taskRoles.worker.addToPrincipalPolicy(
       new iam.PolicyStatement({
         sid: 'ReconcileScratch',
+        // The worker's scan files, the only part of tmp/ it reads back and deletes.
         actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
-        resources: objects(TMP_RECONCILE_PREFIX),
+        resources: objects(S3_PREFIXES.tmpReconcile),
       }),
     );
     taskRoles.worker.addToPrincipalPolicy(
@@ -602,7 +593,9 @@ export class Services extends Construct {
     taskRoles.worker.addToPrincipalPolicy(
       new iam.PolicyStatement({
         sid: 'FaceIndex',
-        // No SearchFacesByImage: the worker never handles selfies.
+        // IndexFaces gets the image as bytes (ADR 0008 section 5), so Rekognition reads nothing
+        // from S3 and no tmp/ grant is needed. No SearchFacesByImage: the worker never handles
+        // selfies.
         actions: [
           'rekognition:CreateCollection',
           'rekognition:DeleteCollection',

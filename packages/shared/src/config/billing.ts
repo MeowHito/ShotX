@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { PAYMENT_GATEWAYS, type PaymentGateway } from '../domain';
+import { AWS_CLIENT_ENV, loadAwsClientConfig } from './aws-clients';
 import { type Env, parseEnv } from './env';
 import { GiB, int, intList, SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE } from './fields';
 
@@ -150,7 +151,7 @@ export type EmailProviderName = (typeof EMAIL_PROVIDERS)[number];
 
 const emailEnvSchema = z.object({
   APP_STAGE: appStage,
-  /** `ses` (Amazon SES in AWS_REGION) or `fake` (records messages; refused on APP_STAGE=prod). */
+  /** `ses` (Amazon SES, client from SES_*) or `fake` (records messages; refused on APP_STAGE=prod). */
   EMAIL_PROVIDER: z.enum(EMAIL_PROVIDERS).default('fake'),
   /** Sender of every email, e.g. `no-reply@photos.example.com` (an SES-verified identity). */
   EMAIL_FROM_ADDRESS: z.email({ error: 'must be an email address' }).max(254),
@@ -166,12 +167,15 @@ export interface EmailConfig {
 /**
  * Reads EMAIL_PROVIDER (default `fake`), EMAIL_FROM_ADDRESS (required) and EMAIL_FROM_NAME
  * (`ShotX`). Throws when APP_STAGE is `prod` and the provider is `fake` (NODE_ENV doesn't matter).
+ * The SES client (with `ses`): loadSesClientConfig (aws-clients.ts).
  */
 export function loadEmailConfig(env: Env): EmailConfig {
   const e = parseEnv(emailEnvSchema, env, 'email');
   if (e.APP_STAGE === PRODUCTION_APP_STAGE && e.EMAIL_PROVIDER === 'fake') {
     throw new Error('Invalid email configuration: EMAIL_PROVIDER=fake on APP_STAGE=prod');
   }
+  // Validates every SES_* value; the keys are enforced by loadSesClientConfig.
+  loadAwsClientConfig(env, AWS_CLIENT_ENV.ses, 'email', { required: false });
   return {
     provider: e.EMAIL_PROVIDER,
     from: { address: e.EMAIL_FROM_ADDRESS, name: e.EMAIL_FROM_NAME },

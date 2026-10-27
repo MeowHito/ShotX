@@ -307,14 +307,14 @@ The worker role has `sqs:ChangeMessageVisibility` on every queue it consumes.
 ## S3 lifecycle (tmp/)
 
 One rule per `tmp/` prefix (ADR 0006). Where rules overlap S3 applies the shortest expiration, so
-a single `tmp/` rule would cut zips short.
+a single `tmp/` rule would cut zips short. There is no `tmp/index/` rule: IndexFaces gets the
+image as bytes (ADR 0008 section 5), so the worker writes no index images to S3.
 
-| prefix           | days | config                               | why                                                 |
-| ---------------- | ---: | ------------------------------------ | --------------------------------------------------- |
-| `tmp/index/`     |    1 | `storage.tmpIndexExpirationDays`     | face-index scratch images, deleted after IndexFaces |
-| `tmp/zips/`      |    2 | `storage.tmpZipsExpirationDays`      | must outlive the zip download window (below)        |
-| `tmp/reconcile/` |    3 | `storage.tmpReconcileExpirationDays` | worker reconciliation scan files                    |
-| `tmp/` (rest)    |    3 | `storage.tmpOtherExpirationDays`     | catch-all; must be ≥ every rule above (checked)     |
+| prefix           | days | config                               | why                                             |
+| ---------------- | ---: | ------------------------------------ | ----------------------------------------------- |
+| `tmp/zips/`      |    2 | `storage.tmpZipsExpirationDays`      | must outlive the zip download window (below)    |
+| `tmp/reconcile/` |    3 | `storage.tmpReconcileExpirationDays` | worker reconciliation scan files                |
+| `tmp/` (rest)    |    3 | `storage.tmpOtherExpirationDays`     | catch-all; must be ≥ every rule above (checked) |
 
 Every rule must be 1–3 days (the spec's range, `TMP_LIFECYCLE_MAX_DAYS`); synth rejects anything
 else. `tmp/reconcile/` must also cover one `FACE_ORPHAN_GRACE_MS` plus one daily run (2 days at

@@ -3,6 +3,7 @@ import {
   LATEST_CONSENT_POLICY_VERSION,
   QUEUE_NAMES,
   QUEUE_VISIBILITY_TIMEOUT_ENV,
+  S3_PREFIXES,
   SCHEDULED_JOB_TYPES,
   SQS_MAX_VISIBILITY_TIMEOUT_SECONDS,
   TMP_LIFECYCLE_MAX_DAYS,
@@ -10,7 +11,7 @@ import {
 import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 import { faceSearchLimits, facesQueueWorstCase, zipLifetime } from '../lib/config';
-import { EDGE_REGION, PRIMARY_REGION, TMP_RECONCILE_PREFIX } from '../lib/constants';
+import { EDGE_REGION, PRIMARY_REGION } from '../lib/constants';
 import { heartbeatQueueIssues } from '../lib/face-limits';
 import { minZipExpirationDays } from '../lib/worker-limits';
 import { collect, resourcesOfType, synthPlatform } from './helpers';
@@ -156,9 +157,8 @@ describe('S3 lifecycle rules', () => {
     return r?.ExpirationInDays as number;
   };
 
-  it('expires tmp/index/ (face-index scratch images) after 1 to 3 days', () => {
-    expect(expiry('tmp/index/')).toBeGreaterThanOrEqual(1);
-    expect(expiry('tmp/index/')).toBeLessThanOrEqual(3);
+  it('has no tmp/index/ rule: IndexFaces gets bytes, nothing is written there', () => {
+    expect(rules.some((r) => r.Prefix === 'tmp/index/')).toBe(false);
   });
 
   it('keeps tmp/zips/ for ZIP_RESULT_TTL_SECONDS plus the zip cap and the last download URL', () => {
@@ -169,7 +169,7 @@ describe('S3 lifecycle rules', () => {
   });
 
   it('expires tmp/reconcile/ (reconciliation scan files) after 3 days', () => {
-    expect(TMP_RECONCILE_PREFIX).toBe('tmp/reconcile/');
+    expect(S3_PREFIXES.tmpReconcile).toBe('tmp/reconcile/');
     expect(expiry('tmp/reconcile/')).toBe(3);
   });
 
@@ -177,7 +177,7 @@ describe('S3 lifecycle rules', () => {
     const tmpRules = rules.filter(
       (r) => typeof r.Prefix === 'string' && r.Prefix.startsWith('tmp/'),
     );
-    expect(tmpRules).toHaveLength(4);
+    expect(tmpRules).toHaveLength(3);
     for (const r of tmpRules) {
       expect(r.ExpirationInDays as number, String(r.Prefix)).toBeGreaterThanOrEqual(1);
       expect(r.ExpirationInDays as number, String(r.Prefix)).toBeLessThanOrEqual(
@@ -191,12 +191,7 @@ describe('S3 lifecycle rules', () => {
     const tmpRules = rules.filter(
       (r) => typeof r.Prefix === 'string' && r.Prefix.startsWith('tmp/'),
     );
-    expect(tmpRules.map((r) => r.Prefix).sort()).toEqual([
-      'tmp/',
-      'tmp/index/',
-      'tmp/reconcile/',
-      'tmp/zips/',
-    ]);
+    expect(tmpRules.map((r) => r.Prefix).sort()).toEqual(['tmp/', 'tmp/reconcile/', 'tmp/zips/']);
     for (const general of tmpRules) {
       for (const specific of tmpRules) {
         if ((specific.Prefix as string).startsWith(general.Prefix as string)) {
@@ -244,7 +239,8 @@ describe('CloudFront', () => {
     const resources = JSON.stringify(st.Resource);
     for (const prefix of s.config.cdn.media.readablePrefixes)
       expect(resources).toContain(`/${prefix}*`);
-    expect(resources).not.toContain('tmp/index');
+    expect(resources).not.toContain('tmp/reconcile');
+    expect(resources).not.toMatch(/tmp\/\*/);
     expect(resources).not.toMatch(/"\/\*"/);
   });
 
@@ -916,9 +912,8 @@ describe('IAM for Rekognition', () => {
     expect(JSON.stringify(listing[0]?.Resource)).not.toMatch(/collection\/\*"/);
   });
 
-  it('lets the IndexFaces caller (worker) read tmp/index/*', () => {
-    const reads = has(workerStatements, 's3:GetObject').map((st) => JSON.stringify(st.Resource));
-    expect(reads.some((r) => r.includes('/tmp/index/*'))).toBe(true);
+  it('gives the worker nothing on tmp/index/: IndexFaces gets bytes (ADR 0008 section 5)', () => {
+    expect(JSON.stringify(workerStatements)).not.toContain('tmp/index');
   });
 
   const apiStatements = policies
@@ -958,11 +953,6 @@ describe('IAM for Rekognition', () => {
       [...media, 's3:ListMultipartUploadParts'].sort(),
     );
     expect(sorted(workerGrants.get('derived/*'))).toEqual(media);
-    expect(sorted(workerGrants.get('tmp/index/*'))).toEqual([
-      's3:DeleteObject',
-      's3:GetObject',
-      's3:PutObject',
-    ]);
     // Zips: multipart Put and Abort only.
     expect(sorted(workerGrants.get('tmp/zips/*'))).toEqual([
       's3:AbortMultipartUpload',
@@ -977,13 +967,7 @@ describe('IAM for Rekognition', () => {
     // Nothing on tmp/* as a whole.
     expect(workerGrants.has('tmp/*')).toBe(false);
     const s3Keys = [...workerGrants.keys()].filter((k) => k.endsWith('*'));
-    expect(s3Keys.sort()).toEqual([
-      'derived/*',
-      'originals/*',
-      'tmp/index/*',
-      'tmp/reconcile/*',
-      'tmp/zips/*',
-    ]);
+    expect(s3Keys.sort()).toEqual(['derived/*', 'originals/*', 'tmp/reconcile/*', 'tmp/zips/*']);
   });
 
   it('gives the worker indexing, deletion and reconciliation calls, but no selfie search', () => {

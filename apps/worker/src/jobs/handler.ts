@@ -42,6 +42,8 @@ export interface JobsHandlerDeps {
   sweeps: WorkerSweepSettings;
   /** AUTH_SESSION_RETENTION_DAYS. */
   authSessionRetentionDays: number;
+  /** FACE_SEARCH_ENABLED: faces.sweep sends index jobs only while it is on. */
+  faceSearchEnabled: boolean;
   trashRetentionDays: number;
   batchSize: number;
   /** A run stops starting batches after this long (well under SQS's 12 h cap). */
@@ -133,7 +135,9 @@ export function createJobsHandler(deps: JobsHandlerDeps): MessageHandler {
         result = { ...(await runMediaSweep(ctx, deps.sweeps.media)) };
         break;
       case 'faces.sweep':
-        result = { ...(await runFacesSweep(ctx, deps.sweeps.faces)) };
+        result = {
+          ...(await runFacesSweep(ctx, deps.sweeps.faces, { faceSearch: deps.faceSearchEnabled })),
+        };
         break;
       case 'auth.sessions.purge.daily':
         result = {

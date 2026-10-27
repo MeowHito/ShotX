@@ -26,13 +26,16 @@ import {
   loadQueueUrls,
   loadQueueVisibilityTimeouts,
   loadRedisConfig,
+  loadRekognitionClientConfig,
   loadRetentionConfig,
   loadScheduledJobsConfig,
   loadSentryConfig,
+  loadSesClientConfig,
   loadServerConfig,
   loadShareConfig,
   loadSharePasswordHashConfig,
   loadShotxAuthConfig,
+  loadStorageLifecycleConfig,
   loadTrustedProxyConfig,
   loadUploadConfig,
   loadWafCaptchaConfig,
@@ -215,6 +218,11 @@ const ALL_LOADERS: Loader[] = [
   (e) => loadBffAuthConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
   loadAuthClientConfig,
   loadTrustedProxyConfig,
+  // ADR 0008 sections 1 and 5: Rekognition and SES clients off AWS, and the R2 bucket lifecycle
+  // the deploy script applies (deploy/r2).
+  loadRekognitionClientConfig,
+  loadSesClientConfig,
+  loadStorageLifecycleConfig,
 ];
 
 const throws = (loader: Loader, env: Env) => {

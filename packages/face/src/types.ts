@@ -21,8 +21,13 @@ export interface Size {
   height: number;
 }
 
-/** How a provider call references an image: inline bytes or an S3 object in the same region. */
-export type ImageInput = { bytes: Uint8Array } | { s3: { bucket: string; key: string } };
+/**
+ * How a provider call passes an image: its bytes, sent as Rekognition's `Image.Bytes` (ADR 0008
+ * section 5; the S3Object form is gone with tmp/index/).
+ */
+export interface ImageInput {
+  bytes: Uint8Array;
+}
 
 export interface IndexedFace {
   faceId: string;

@@ -10,6 +10,7 @@ import {
   vary,
 } from './analysis';
 import { emptyCounts } from './counting-provider';
+import { emptyEncodingStats, LEGACY_S3_MAX_BYTES } from './encoding';
 import type { ComboResult, IndexStats, PersonScan } from './evaluate';
 import { summarize, type Thresholds } from './metrics';
 
@@ -26,7 +27,9 @@ const assumptions: CostAssumptions = {
   retentionMonths: 3,
 };
 
-function stats(indexFaces: number, deleteFaces = 0): IndexStats {
+const FIVE_MIB = 5 * 1024 * 1024;
+
+function stats(indexFaces: number, deleteFaces = 0, uploadBytes = 0): IndexStats {
   return {
     photos: 100,
     failedPhotos: 0,
@@ -34,6 +37,7 @@ function stats(indexFaces: number, deleteFaces = 0): IndexStats {
     facesStored: 400,
     distinctFaces: 380,
     calls: { ...emptyCounts(), indexFaces, deleteFaces },
+    encoding: { ...emptyEncodingStats(), photos: 100, totalBytes: uploadBytes },
   };
 }
 
@@ -115,8 +119,12 @@ describe('analyze', () => {
     files: [files.map(([photoId, similarity]) => ({ photoId, similarity }))],
     truncated: false,
   });
-  const combo = (longEdge: number, files: Array<[string, number]>): ComboResult => ({
-    index: { longEdge, qualityFilter: 'LOW', tiling: 'never' },
+  const combo = (
+    longEdge: number,
+    files: Array<[string, number]>,
+    maxBytes = FIVE_MIB,
+  ): ComboResult => ({
+    index: { longEdge, maxBytes, qualityFilter: 'LOW', tiling: 'never' },
     search: { selfies: 1, expansionSeeds: 0 },
     scans: [scan(files)],
   });
@@ -136,9 +144,9 @@ describe('analyze', () => {
     const analysis = analyze(
       combos,
       {
-        'le1600-low-never': stats(100),
-        'le2400-low-never': stats(150),
-        'le3500-low-never': stats(120),
+        'le1600-5mib-low-never': stats(100),
+        'le2400-5mib-low-never': stats(150),
+        'le3500-5mib-low-never': stats(120),
       },
       () => positives,
       { strong: [90, 95], maybe: [85, 90] },
@@ -153,10 +161,46 @@ describe('analyze', () => {
     expect(vary(analysis, 'selfies')).toHaveLength(1);
   });
 
+  it('never recommends a byte limit above 5 MiB, which only the old S3 path took', () => {
+    const analysis = analyze(
+      [
+        combo(3500, [['a', 99]], 2 * 1024 * 1024),
+        combo(3500, [['a', 99]]),
+        combo(
+          3500,
+          [
+            ['a', 99],
+            ['b', 97],
+          ],
+          LEGACY_S3_MAX_BYTES,
+        ),
+      ],
+      {
+        'le3500-2mib-low-never': stats(100, 0, 100 * 2_000_000),
+        'le3500-5mib-low-never': stats(100, 0, 100 * 3_000_000),
+        'le3500-15mib-low-never': stats(100, 0, 100 * 9_000_000),
+      },
+      () => positives,
+      { strong: [90, 95], maybe: [85, 90] },
+      targets,
+      assumptions,
+    );
+    // The 15 MiB option finds more but can't be deployed; of the equal ones the smaller upload wins.
+    expect(analysis.recommended.index.maxBytes).toBe(2 * 1024 * 1024);
+    expect(analysis.recommended.costAt(analysis.thresholds).per1000Photos.uploadBytes).toBe(
+      2_000_000_000,
+    );
+    expect(vary(analysis, 'maxBytes').map((c) => c.index.maxBytes)).toEqual([
+      2 * 1024 * 1024,
+      FIVE_MIB,
+      LEGACY_S3_MAX_BYTES,
+    ]);
+  });
+
   it('reports no-go when recall misses the target', () => {
     const analysis = analyze(
       [combo(3500, [['a', 99]])],
-      { 'le3500-low-never': stats(100) },
+      { 'le3500-5mib-low-never': stats(100) },
       () => positives,
       { strong: [90, 95], maybe: [85, 90] },
       targets,

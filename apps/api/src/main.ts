@@ -1,17 +1,27 @@
 import 'reflect-metadata';
 import { ConsoleLogger } from '@nestjs/common';
 import { createDb, createPool, loadDatabaseConfig } from '@shotx/db';
-import { createRedisRekognitionLimiters, RekognitionFaceProvider } from '@shotx/face';
 import { createApiApp } from './app';
 import { loadApiConfig, redisKeyPrefix } from './config';
 import { createRedis, RedisKeyValueStore, RedisRateLimiter } from './infra/redis';
 import { createS3Client, S3ObjectStorage } from './infra/s3-storage';
 import { systemClock } from './tokens';
-import { mediaUrlSigner, queueSender, tokenVerifier } from './wiring';
+import {
+  assertExplicitStorage,
+  interactiveFaceProvider,
+  mediaSignerSummary,
+  mediaUrlSigner,
+  queueSender,
+  tokenVerifier,
+} from './wiring';
 
 async function main(): Promise<void> {
   const env = process.env;
   const config = loadApiConfig(env);
+  const logger = new ConsoleLogger('api', { json: config.app.nodeEnv === 'production' });
+  // Off AWS nothing may use AWS_ENDPOINT_URL or the default credential chain (ADR 0008 §1).
+  assertExplicitStorage(config);
+  logger.log(mediaSignerSummary(config));
   const pool = createPool(loadDatabaseConfig(env));
   const redis = createRedis(config.redis);
   const s3 = createS3Client(config.storage);
@@ -19,12 +29,7 @@ async function main(): Promise<void> {
   // BullMQ: Redis must be reachable before the API takes requests (bounded wait, then exit).
   await queue.start();
   // Face search is the only synchronous Rekognition use: the interactive profile fails fast.
-  const faceProvider = RekognitionFaceProvider.create(
-    config.face.rekognition,
-    'interactive',
-    createRedisRekognitionLimiters(redis, config.face.rekognition, 'interactive'),
-  );
-  const logger = new ConsoleLogger('api', { json: config.app.nodeEnv === 'production' });
+  const faceProvider = interactiveFaceProvider(config, redis);
 
   const app = await createApiApp(
     {

@@ -5,10 +5,6 @@ import {
   derivedKey,
   derivedKeys,
   derivedPrefix,
-  INDEX_IMAGE_FULL,
-  indexImageKey,
-  indexImagePrefix,
-  indexTilePart,
   isSafeKeySegment,
   isSafeOriginalName,
   isValidOriginalNameInput,
@@ -62,26 +58,6 @@ describe('key builders', () => {
     );
   });
 
-  it('builds temporary index image keys per attempt and part (ADR 0004)', () => {
-    expect(indexImageKey({ fileId, attemptId: 'a1', part: INDEX_IMAGE_FULL })).toBe(
-      `tmp/index/${fileId}/a1/full.jpg`,
-    );
-    expect(indexImageKey({ fileId, attemptId: 'a1', part: indexTilePart(0) })).toBe(
-      `tmp/index/${fileId}/a1/t0.jpg`,
-    );
-    expect(indexImageKey({ fileId, attemptId: 'a2', part: indexTilePart(3) })).toBe(
-      `tmp/index/${fileId}/a2/t3.jpg`,
-    );
-    expect(indexImagePrefix(fileId)).toBe(`tmp/index/${fileId}/`);
-    expect(indexImagePrefix(fileId, 'a1')).toBe(`tmp/index/${fileId}/a1/`);
-  });
-
-  it('gives concurrent attempts for one file different keys', () => {
-    const a = indexImageKey({ fileId, attemptId: 'attempt-a', part: 'full' });
-    const b = indexImageKey({ fileId, attemptId: 'attempt-b', part: 'full' });
-    expect(a).not.toBe(b);
-  });
-
   it('keeps every key under its spec prefix', () => {
     expect(originalKey({ ...ids, originalName: 'a.jpg' }).startsWith(S3_PREFIXES.originals)).toBe(
       true,
@@ -90,11 +66,10 @@ describe('key builders', () => {
       expect(derivedKey(ids, v).startsWith(S3_PREFIXES.derived)).toBe(true);
     }
     expect(zipKey('j').startsWith(S3_PREFIXES.tmpZips)).toBe(true);
-    expect(
-      indexImageKey({ fileId, attemptId: 'a', part: 'full' }).startsWith(S3_PREFIXES.tmpIndex),
-    ).toBe(true);
     expect(S3_PREFIXES.tmpZips.startsWith(S3_PREFIXES.tmp)).toBe(true);
-    expect(S3_PREFIXES.tmpIndex.startsWith(S3_PREFIXES.tmp)).toBe(true);
+    expect(S3_PREFIXES.tmpReconcile.startsWith(S3_PREFIXES.tmp)).toBe(true);
+    // ADR 0008 section 5: no tmp/index/ prefix (index images go to Rekognition as bytes).
+    expect(Object.values(S3_PREFIXES)).not.toContain('tmp/index/');
   });
 });
 
@@ -111,10 +86,6 @@ describe('id validation', () => {
       );
       expect(() => derivedKey({ photographerId: bad, fileId }, 'thumb')).toThrow(RangeError);
       expect(() => zipKey(bad)).toThrow(RangeError);
-      expect(() => indexImageKey({ fileId: bad, attemptId: 'a', part: 'full' })).toThrow(
-        RangeError,
-      );
-      expect(() => indexImageKey({ fileId, attemptId: bad, part: 'full' })).toThrow(RangeError);
       expect(() => originalsPrefix(bad)).toThrow(RangeError);
     },
   );
@@ -125,17 +96,9 @@ describe('id validation', () => {
     }
   });
 
-  it('rejects unknown derived variants and bad index parts', () => {
+  it('rejects unknown derived variants', () => {
     // @ts-expect-error: not a variant
     expect(() => derivedKey(ids, 'original')).toThrow(/Unknown derived variant/);
-    // @ts-expect-error: not a part
-    expect(() => indexImageKey({ fileId, attemptId: 'a', part: 'tile1' })).toThrow(RangeError);
-    expect(() => indexImageKey({ fileId, attemptId: 'a', part: 't01' })).toThrow(RangeError);
-    expect(() => indexImageKey({ fileId, attemptId: 'a', part: 't-1' })).toThrow(RangeError);
-    for (const bad of [-1, 1.5, 1000, Number.NaN]) {
-      expect(() => indexTilePart(bad)).toThrow(RangeError);
-    }
-    expect(indexTilePart(999)).toBe('t999');
   });
 });
 
@@ -330,15 +293,9 @@ describe('parseS3Key', () => {
         variant,
       });
     }
-    expect(parseS3Key(indexImageKey({ fileId, attemptId: 'a1', part: 't2' }))).toEqual({
-      kind: 'index',
-      fileId,
-      attemptId: 'a1',
-      part: 't2',
-    });
-    expect(parseS3Key(indexImageKey({ fileId, attemptId: 'a1', part: 'full' }))).toMatchObject({
-      part: 'full',
-    });
+    // tmp/index/ keys (ADR 0004) are no longer keys the platform builds or signs.
+    expect(parseS3Key(`tmp/index/${fileId}/a1/full.jpg`)).toBeNull();
+    expect(parseS3Key(`tmp/index/${fileId}/a1/t2.jpg`)).toBeNull();
     expect(parseS3Key(zipKey('job-1'))).toEqual({ kind: 'zip', jobId: 'job-1' });
   });
 

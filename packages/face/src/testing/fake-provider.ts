@@ -3,10 +3,12 @@ import type { EncodedImage } from '../image';
 import type { SmallFaceDetector } from '../index-photo';
 import {
   type FaceProvider,
+  ImageTooLargeError,
   type IndexFacesRequest,
   type ListFacesPage,
   type ListFacesRequest,
   NoFaceDetectedError,
+  REKOGNITION_INLINE_MAX_BYTES,
   REKOGNITION_LIST_FACES_MAX_RESULTS,
   type SearchByFaceRequest,
   type SearchByImageRequest,
@@ -15,13 +17,11 @@ import { compareMatches } from '../search';
 import type {
   BoundingBox,
   FaceMatch,
-  ImageInput,
   IndexFacesResult,
   PixelRect,
   QualityFilter,
   Size,
 } from '../types';
-import type { ObjectReader } from './memory-store';
 import { type DetectedFace, detectSyntheticFaces } from './synthetic';
 import { faceQuality, type Observation, type Pose, type SyntheticWorld } from './world';
 
@@ -69,10 +69,19 @@ export interface FakeFailure {
   afterEffect?: boolean;
 }
 
+export interface FakeFaceProviderOptions {
+  /**
+   * Largest image accepted, like Rekognition's `Image.Bytes` limit: larger ones fail with
+   * ImageTooLargeError. Defaults to REKOGNITION_INLINE_MAX_BYTES. Only the evaluation harness
+   * raises it, to replay the old 15 MiB S3 path.
+   */
+  maxImageBytes?: number | undefined;
+}
+
 /**
  * Deterministic FaceProvider for synthetic images (see `./synthetic`). It detects faces from
  * pixels, applies Rekognition-like size and quality limits, and scores matches with the world's
- * similarity model.
+ * similarity model. Like Rekognition, it takes images as bytes up to 5 MiB.
  */
 export class FakeFaceProvider implements FaceProvider {
   readonly calls = {
@@ -90,10 +99,14 @@ export class FakeFaceProvider implements FaceProvider {
   private readonly issued = new Set<string>();
   private readonly detections = new Map<string, Promise<Detection>>();
 
+  private readonly maxImageBytes: number;
+
   constructor(
     private readonly world: SyntheticWorld,
-    private readonly objects?: ObjectReader,
-  ) {}
+    options: FakeFaceProviderOptions = {},
+  ) {
+    this.maxImageBytes = options.maxImageBytes ?? REKOGNITION_INLINE_MAX_BYTES;
+  }
 
   /**
    * Makes calls of `operation` fail: after `after` more calls succeed, the next `times` fail.
@@ -137,7 +150,7 @@ export class FakeFaceProvider implements FaceProvider {
     this.calls.searchFacesByImage++;
     return this.run('searchFacesByImage', async () => {
       const collection = this.collection(request.collectionId);
-      const { faces } = await this.detect(request.image);
+      const { faces } = await this.detect(this.checkSize(request.image));
       const query = faces.reduce<DetectedFace | undefined>(
         (best, face) => (!best || face.box.width > best.box.width ? face : best),
         undefined,
@@ -213,7 +226,7 @@ export class FakeFaceProvider implements FaceProvider {
 
   private async index(request: IndexFacesRequest): Promise<IndexFacesResult> {
     const collection = this.collection(request.collectionId);
-    const { size, faces } = await this.detect(this.resolve(request.image));
+    const { size, faces } = await this.detect(this.checkSize(request.image.bytes));
     const minWidth = minFaceWidth(size);
     const rule = QUALITY_RULES[request.qualityFilter];
     const result: IndexFacesResult = { faces: [], unindexed: [] };
@@ -282,10 +295,10 @@ export class FakeFaceProvider implements FaceProvider {
     return collection;
   }
 
-  private resolve(image: ImageInput): Uint8Array {
-    if ('bytes' in image) return image.bytes;
-    const bytes = this.objects?.get(image.s3.key);
-    if (!bytes) throw new Error(`Object ${image.s3.key} not found`);
+  private checkSize(bytes: Uint8Array): Uint8Array {
+    if (bytes.length > this.maxImageBytes) {
+      throw new ImageTooLargeError(bytes.length, this.maxImageBytes);
+    }
     return bytes;
   }
 

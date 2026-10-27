@@ -1,10 +1,11 @@
-import { readFileSync } from 'node:fs';
 import {
   loadFaceConfig,
   loadShareConfig,
+  loadStorageLifecycleConfig,
   loadWorkerSettings,
   S3_PREFIXES,
-  TMP_LIFECYCLE_MAX_DAYS,
+  STORAGE_LIFECYCLE_DEFAULTS,
+  type StorageLifecycleConfig,
 } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
 import {
@@ -14,85 +15,42 @@ import {
   describeLifecycle,
   lifecycleIssues,
   mainOrigin,
-  minReconcileExpirationDays,
-  minZipExpirationDays,
   type RuntimeSettings,
   sameCors,
   sameLifecycle,
-  type StorageSettings,
-  storageSettingsFromCdkJson,
-  TMP_RECONCILE_PREFIX,
-  zipObjectLifetime,
 } from '../r2/rules';
 
-const cdkJson: unknown = JSON.parse(
-  readFileSync(new URL('../../infra/cdk.json', import.meta.url), 'utf8'),
-);
-const withStorage = (edit: Record<string, unknown>) => {
-  const c = structuredClone(cdkJson) as { context: { shotx: { storage: object } } };
-  c.context.shotx.storage = { ...c.context.shotx.storage, ...edit };
-  return c;
-};
-const settings = storageSettingsFromCdkJson(cdkJson);
+// The lifecycle settings and the ADR 0006 math are tested in packages/shared
+// (config/lifecycle.test.ts); these tests cover what deploy/ builds from them.
+
+const settings: StorageLifecycleConfig = loadStorageLifecycleConfig({});
 const runtime = (env: Record<string, string> = {}): RuntimeSettings => ({
   worker: loadWorkerSettings(env),
   shares: [loadShareConfig(env)],
   face: loadFaceConfig(env),
 });
 
-describe('storage settings from infra/cdk.json', () => {
-  it('reads the values infra uses for the AWS bucket', () => {
-    expect(settings).toEqual({
-      abortIncompleteMultipartUploadDays: 2,
-      tmpZipsExpirationDays: 2,
-      tmpReconcileExpirationDays: 3,
-      tmpOtherExpirationDays: 3,
-      uploadCorsMaxAgeSeconds: 3000,
-    });
-  });
-
-  it('keeps every tmp/ rule within ADR 0006 range', () => {
-    for (const key of [
-      'tmpZipsExpirationDays',
-      'tmpReconcileExpirationDays',
-      'tmpOtherExpirationDays',
-    ]) {
-      expect(
-        () => storageSettingsFromCdkJson(withStorage({ [key]: TMP_LIFECYCLE_MAX_DAYS + 1 })),
-        key,
-      ).toThrow(new RegExp(key));
-      expect(() => storageSettingsFromCdkJson(withStorage({ [key]: 0 })), key).toThrow(
-        new RegExp(key),
-      );
-    }
-    expect(() =>
-      storageSettingsFromCdkJson(withStorage({ abortIncompleteMultipartUploadDays: 8 })),
-    ).toThrow(/abortIncompleteMultipartUploadDays/);
-  });
-
-  it('refuses a file without context.shotx.storage', () => {
-    expect(() => storageSettingsFromCdkJson({ context: {} })).toThrow();
+describe('lifecycle settings', () => {
+  it('default to the values the AWS bucket uses', () => {
+    expect(settings).toEqual(STORAGE_LIFECYCLE_DEFAULTS);
   });
 });
 
 describe('ADR 0006 checks', () => {
-  it('passes with cdk.json and the shared defaults', () => {
+  it('passes with the shared defaults', () => {
     expect(lifecycleIssues(settings, runtime())).toEqual([]);
   });
 
   it('needs the zip rule to outlive processing + result TTL + URL lifetime', () => {
     // Defaults: 7200 + 86400 + 600 + 300 = 94500 s, 2 days.
-    const lifetime = zipObjectLifetime(runtime().worker, runtime().shares);
-    expect(lifetime.seconds).toBe(94_500);
-    expect(minZipExpirationDays(lifetime)).toBe(2);
-    const short: StorageSettings = { ...settings, tmpZipsExpirationDays: 1 };
+    const short: StorageLifecycleConfig = { ...settings, tmpZipsExpirationDays: 1 };
     expect(lifecycleIssues(short, runtime()).join('\n')).toMatch(
-      /tmpZipsExpirationDays \(1\) must be >= 2: [\s\S]*= 94500s/,
+      /STORAGE_TMP_ZIPS_EXPIRATION_DAYS \(1\) must be >= 2: [\s\S]*= 94500s/,
     );
     // A two-day result TTL needs three days.
     const long = runtime({ ZIP_RESULT_TTL_SECONDS: String(2 * 86_400) });
     expect(lifecycleIssues(settings, long).join('\n')).toMatch(
-      /tmpZipsExpirationDays \(2\) must be >= 3/,
+      /STORAGE_TMP_ZIPS_EXPIRATION_DAYS \(2\) must be >= 3/,
     );
     expect(lifecycleIssues({ ...settings, tmpZipsExpirationDays: 3 }, long)).toEqual([]);
   });
@@ -102,19 +60,19 @@ describe('ADR 0006 checks', () => {
       loadShareConfig({}),
       loadShareConfig({ ZIP_RESULT_TTL_SECONDS: String(2 * 86_400) }),
     ];
-    expect(zipObjectLifetime(loadWorkerSettings({}), shares).resultTtlSeconds).toBe(2 * 86_400);
+    expect(lifecycleIssues(settings, { ...runtime(), shares }).join('\n')).toMatch(
+      /STORAGE_TMP_ZIPS_EXPIRATION_DAYS \(2\) must be >= 3/,
+    );
   });
 
   it('needs reconcile scans to survive one grace period plus one daily run', () => {
-    expect(minReconcileExpirationDays(3 * 3_600_000)).toBe(2);
-    expect(minReconcileExpirationDays(86_400_000)).toBe(2);
     const issues = lifecycleIssues({ ...settings, tmpReconcileExpirationDays: 1 }, runtime());
-    expect(issues.join('\n')).toMatch(/tmpReconcileExpirationDays \(1\) must be >= 2/);
+    expect(issues.join('\n')).toMatch(/STORAGE_TMP_RECONCILE_EXPIRATION_DAYS \(1\) must be >= 2/);
   });
 
   it('keeps the tmp/ catch-all at least as long as every per-prefix rule', () => {
     const issues = lifecycleIssues({ ...settings, tmpOtherExpirationDays: 2 }, runtime());
-    expect(issues.join('\n')).toMatch(/tmpOtherExpirationDays \(2\) must be >= 3/);
+    expect(issues.join('\n')).toMatch(/STORAGE_TMP_OTHER_EXPIRATION_DAYS \(2\) must be >= 3/);
   });
 });
 
@@ -194,11 +152,10 @@ describe('lifecycle rules', () => {
         Expiration: { Days: 3 },
       },
     ]);
-    expect(TMP_RECONCILE_PREFIX).toBe(`${S3_PREFIXES.tmp}reconcile/`);
   });
 
   it('has no tmp/index/ rule and no storage-class transition (R2)', () => {
-    expect(rules.map((r) => r.Filter.Prefix)).not.toContain(S3_PREFIXES.tmpIndex);
+    expect(rules.map((r) => r.Filter.Prefix)).not.toContain('tmp/index/');
     expect(JSON.stringify(rules)).not.toMatch(/Transition|INTELLIGENT_TIERING/);
   });
 

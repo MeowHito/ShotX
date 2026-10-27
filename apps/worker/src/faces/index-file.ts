@@ -10,7 +10,7 @@ import {
   type IndexPhotoResult,
   recordFacesDeadline,
 } from '@shotx/face';
-import { indexImageKey, UPLOAD_FILE_TYPES } from '@shotx/shared';
+import { UPLOAD_FILE_TYPES } from '@shotx/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { rows } from '../db';
 import { deleteFacesInBatches } from '../faces';
@@ -144,8 +144,6 @@ export async function indexFile(
     result = await indexPhoto(
       {
         provider: deps.provider,
-        tempStore: deps.tempStore,
-        tempKey: indexImageKey,
         newAttemptId: deps.newAttemptId,
       },
       original,

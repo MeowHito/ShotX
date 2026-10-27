@@ -3,6 +3,7 @@ import {
   loadWorkerSettings,
   type ShareConfig,
   type WorkerSettings,
+  type ZipObjectLifetime,
 } from '@shotx/shared';
 import { ECS_MAX_STOP_TIMEOUT_SECONDS } from './constants';
 import { backendEnv, type ServiceEnvGroups } from './face-limits';
@@ -13,7 +14,6 @@ import { backendEnv, type ServiceEnvGroups } from './face-limits';
  * the ECS stop timeout and the bucket lifecycle can't drift from what the services do.
  */
 
-const SECONDS_PER_DAY = 86_400;
 const MS_PER_SECOND = 1000;
 
 /** The WORKER_* settings the worker will load at runtime. Throws on invalid values. */
@@ -69,69 +69,18 @@ export function zipJobWorstCaseSeconds(share: ShareConfig, budget: ZipJobBudget)
   );
 }
 
-// --- tmp/zips/ lifecycle -----------------------------------------------------------------------
+// --- tmp/zips/ and tmp/reconcile/ lifecycle (ADR 0006) ----------------------------------------
 
-export interface ZipObjectLifetime {
-  /** Longest a zip job writes before it completes (WORKER_ZIP_MAX_PROCESSING_SECONDS). */
-  readonly maxProcessingSeconds: number;
-  /** ZIP_RESULT_TTL_SECONDS: completed_at to zip_jobs.expires_at. */
-  readonly resultTtlSeconds: number;
-  /** SIGNED_URL_DOWNLOAD_TTL_SECONDS: a URL issued just before expires_at lives this long... */
-  readonly downloadTtlSeconds: number;
-  /** ...rounded up by SIGNED_URL_EXPIRY_BUCKET_SECONDS (bucketedExpiry). */
-  readonly expiryBucketSeconds: number;
-  /** Total: the oldest age (from S3's creation date) at which a zip may still be downloaded. */
-  readonly seconds: number;
-}
-
-/**
- * How old a zip object can be while a download of it is still allowed. S3 lifecycle counts age
- * from the object's creation date, which for a multipart upload is when the upload was
- * initiated, i.e. when the job started writing, up to WORKER_ZIP_MAX_PROCESSING_SECONDS before
- * `completed_at`. From `completed_at` the API issues URLs for ZIP_RESULT_TTL_SECONDS, and the last
- * one stays valid for the download TTL rounded up by the expiry bucket.
- */
-export function zipObjectLifetime(
-  worker: WorkerSettings,
-  shares: readonly ShareConfig[],
-): ZipObjectLifetime {
-  const max = (pick: (s: ShareConfig) => number) => Math.max(...shares.map(pick));
-  const maxProcessingSeconds = worker.maxProcessingMs.zip / MS_PER_SECOND;
-  const resultTtlSeconds = max((s) => s.zip.resultTtlSeconds);
-  const downloadTtlSeconds = max((s) => s.signedUrlTtlSeconds.download);
-  const expiryBucketSeconds = max((s) => s.signedUrlExpiryBucketSeconds);
-  return {
-    maxProcessingSeconds,
-    resultTtlSeconds,
-    downloadTtlSeconds,
-    expiryBucketSeconds,
-    seconds: maxProcessingSeconds + resultTtlSeconds + downloadTtlSeconds + expiryBucketSeconds,
-  };
-}
-
-/** Smallest `storage.tmpZipsExpirationDays` that keeps every downloadable zip. */
-export function minZipExpirationDays(lifetime: ZipObjectLifetime): number {
-  return Math.ceil(lifetime.seconds / SECONDS_PER_DAY);
-}
-
-// --- tmp/reconcile/ lifecycle ------------------------------------------------------------------
-
-/**
- * The orphan-face reconciliation job runs once a day (cdk.json `schedules.jobs`). A scan file it
- * writes is acted on by a later run once FACE_ORPHAN_GRACE_MS has passed.
- */
-export const RECONCILE_RUN_INTERVAL_SECONDS = SECONDS_PER_DAY;
-
-/**
- * Smallest `storage.tmpReconcileExpirationDays`: a scan file must survive one orphan grace plus
- * one daily run (ADR 0006). S3 expires objects at the first midnight UTC after the rule's age, so
- * the real lifetime is never shorter than the number of days.
- */
-export function minReconcileExpirationDays(orphanGraceMs: number): number {
-  return Math.ceil(
-    (orphanGraceMs / MS_PER_SECOND + RECONCILE_RUN_INTERVAL_SECONDS) / SECONDS_PER_DAY,
-  );
-}
+// The ADR 0006 math lives in packages/shared (config/lifecycle.ts), shared with deploy/r2. S3
+// lifecycle counts a multipart object's age from the upload's initiation, so a zip can be up to
+// WORKER_ZIP_MAX_PROCESSING_SECONDS older than `completed_at`.
+export {
+  minReconcileExpirationDays,
+  minZipExpirationDays,
+  RECONCILE_RUN_INTERVAL_SECONDS,
+  type ZipObjectLifetime,
+  zipObjectLifetime,
+} from '@shotx/shared';
 
 export function describeZipLifetime(l: ZipObjectLifetime): string {
   return (

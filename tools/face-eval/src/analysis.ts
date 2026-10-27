@@ -1,4 +1,5 @@
 import type { CostConfig } from '@shotx/shared';
+import { isDeployableSize } from './encoding';
 import {
   type ComboResult,
   type IndexOption,
@@ -35,7 +36,11 @@ export interface CallEstimate {
   deleteCallsPerPhoto: number;
   searchCallsPerScan: number;
   facesPerPhoto: number;
+  /** Bytes of index images (full image and tiles) sent to Rekognition per photo. */
+  uploadBytesPerPhoto: number;
   per1000Photos: {
+    /** Index image bytes uploaded from the worker (the VPS bandwidth of ADR 0008). */
+    uploadBytes: number;
     indexCalls: number;
     searchCalls: number;
     totalCalls: number;
@@ -80,6 +85,7 @@ export function estimateCalls(
   const indexCallsPerPhoto = stats.calls.indexFaces / photos;
   const deleteCallsPerPhoto = stats.calls.deleteFaces / photos;
   const facesPerPhoto = stats.facesStored / photos;
+  const uploadBytesPerPhoto = stats.encoding.totalBytes / Math.max(1, stats.encoding.photos);
   const indexCalls = 1000 * (indexCallsPerPhoto + deleteCallsPerPhoto);
   const searchCalls = assumptions.scansPer1000Photos * searchCallsPerScan;
   const totalCalls = indexCalls + searchCalls;
@@ -92,7 +98,9 @@ export function estimateCalls(
     deleteCallsPerPhoto,
     searchCallsPerScan,
     facesPerPhoto,
+    uploadBytesPerPhoto,
     per1000Photos: {
+      uploadBytes: 1000 * uploadBytesPerPhoto,
       indexCalls,
       searchCalls,
       totalCalls,
@@ -149,7 +157,11 @@ export function chooseOperatingPoint(
 export interface Analysis {
   combos: ComboAnalysis[];
   recommended: ComboAnalysis;
-  /** False when no option met both precision targets; `recommended` is then the best F1. */
+  /**
+   * False when no deployable option met both precision targets; `recommended` is then the best
+   * F1. Options whose byte limit is above Image.Bytes' 5 MiB (the old S3 path, fake provider only)
+   * are references and never recommended.
+   */
   feasible: boolean;
   thresholds: OperatingPoint;
   go: Array<{ criterion: string; target: string; actual: number | null; pass: boolean }>;
@@ -195,19 +207,23 @@ export function analyze(
   const recallAt = (c: ComboAnalysis) => c.at(c.operatingPoint).overallSummary.micro.recall ?? 0;
   const f1At = (c: ComboAnalysis) => c.at(c.operatingPoint).overallSummary.micro.f1 ?? 0;
   const callsAt = (c: ComboAnalysis) => c.costAt(c.operatingPoint).per1000Photos.totalCalls;
+  const bytesAt = (c: ComboAnalysis) => c.costAt(c.operatingPoint).per1000Photos.uploadBytes;
 
-  const feasible = analyses.filter(
-    (c) => c.operatingPoint.strongMet && c.operatingPoint.overallMet,
-  );
+  const deployable = analyses.filter((c) => isDeployableSize(c.index.maxBytes));
+  const pool = deployable.length > 0 ? deployable : analyses;
+  const feasible = pool.filter((c) => c.operatingPoint.strongMet && c.operatingPoint.overallMet);
   let recommended: ComboAnalysis;
   if (feasible.length > 0) {
     const best = Math.max(...feasible.map(recallAt));
     const candidates = feasible.filter((c) => recallAt(c) >= best - targets.recallTolerance);
-    recommended = candidates.reduce((a, b) =>
-      callsAt(b) < callsAt(a) || (callsAt(b) === callsAt(a) && recallAt(b) > recallAt(a)) ? b : a,
-    );
+    // Fewest calls, then the best recall, then the least upload.
+    recommended = candidates.reduce((a, b) => {
+      if (callsAt(b) !== callsAt(a)) return callsAt(b) < callsAt(a) ? b : a;
+      if (recallAt(b) !== recallAt(a)) return recallAt(b) > recallAt(a) ? b : a;
+      return bytesAt(b) < bytesAt(a) ? b : a;
+    });
   } else {
-    recommended = analyses.reduce((a, b) => (f1At(b) > f1At(a) ? b : a));
+    recommended = pool.reduce((a, b) => (f1At(b) > f1At(a) ? b : a));
   }
 
   const thresholds = recommended.operatingPoint;
@@ -246,6 +262,7 @@ export function analyze(
 
 export const DIMENSIONS = [
   'longEdge',
+  'maxBytes',
   'qualityFilter',
   'tiling',
   'expansionSeeds',

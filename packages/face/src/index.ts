@@ -6,7 +6,6 @@ export * from './throttling';
 export * from './redis-token-bucket';
 export * from './rekognition-limits';
 export * from './rekognition-provider';
-export * from './temp-store';
 export * from './image';
 export * from './geometry';
 export * from './index-photo';

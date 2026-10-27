@@ -19,6 +19,18 @@ import { LOCAL_DEV_APP_STAGE } from './stage-gate';
 // SDK v3 applies to every client, so Rekognition would go to R2) or on the default credential
 // chain, whenever STORAGE_ENDPOINT_URL is set. Without it, storage is AWS S3 exactly as before:
 // AWS_REGION, AWS_ENDPOINT_URL (LocalStack only) and the default chain (the ECS task role).
+//
+// To verify against a real R2 bucket before launch (ADR 0008 "To verify against real R2"; keep
+// this list and the ADR's in step):
+// - `response-content-disposition` on presigned GETs (the fallback is Content-Disposition stored
+//   at write time, which goes stale on rename);
+// - presigned `UploadPart` from a browser with CORS, `ETag` exposed;
+// - ListMultipartUploads / ListParts / AbortMultipartUpload;
+// - lifecycle rules (abort-incomplete-multipart, per-prefix tmp/ expiry, about a day late);
+// - DeleteObjects with the checksum the AWS SDK sends (with `requestChecksumCalculation:
+//   'WHEN_REQUIRED'` DeleteObjects still needs one: CRC32 by default, not Content-MD5);
+// - CORS responses carry `Vary: Origin`, so a cached response for one origin (or a no-CORS
+//   request) is never served to another.
 
 /** Storage classes the api may write originals with (STORAGE_ORIGINALS_CLASS). */
 export const ORIGINALS_STORAGE_CLASSES = [
@@ -332,6 +344,14 @@ export type MediaUrlSignerName = (typeof MEDIA_URL_SIGNER_NAMES)[number];
 
 const mediaUrlSignerEnvSchema = z.object({
   MEDIA_URL_SIGNER: z.enum(MEDIA_URL_SIGNER_NAMES).default('cloudfront'),
+  /**
+   * Optional keys used only to sign GET URLs: an R2 API token with Object Read only on the media
+   * bucket, so a leaked signing key can't write or delete. Both or neither; unset falls back to
+   * STORAGE_ACCESS_KEY_ID / STORAGE_SECRET_ACCESS_KEY. A presigned URL embeds its access key id.
+   */
+  STORAGE_SIGNING_ACCESS_KEY_ID: storageKeysEnvSchema.shape.STORAGE_ACCESS_KEY_ID,
+  /** Secret: never log it. */
+  STORAGE_SIGNING_SECRET_ACCESS_KEY: storageKeysEnvSchema.shape.STORAGE_SECRET_ACCESS_KEY,
 });
 
 export type MediaUrlSignerConfig =
@@ -342,24 +362,52 @@ export type MediaUrlSignerConfig =
       endpointUrl: string;
       /** STORAGE_REGION (`auto` for R2): the SigV4 credential scope's region. */
       region: string;
-      /** STORAGE_ACCESS_KEY_ID. */
+      /** STORAGE_SIGNING_ACCESS_KEY_ID when set, else STORAGE_ACCESS_KEY_ID. */
       accessKeyId: string;
-      /** STORAGE_SECRET_ACCESS_KEY. Secret: never log it. */
+      /** STORAGE_SIGNING_SECRET_ACCESS_KEY when set, else STORAGE_SECRET_ACCESS_KEY. Secret. */
       secretAccessKey: string;
+      /** Which pair signs: `signing` (the read-only token) or `storage` (the api's own keys). */
+      keySource: 'signing' | 'storage';
     };
 
 const SIGNER_NAME = 'media URL signer';
 
 /**
  * Reads MEDIA_URL_SIGNER (default `cloudfront`). `s3-presign` is allowed on every stage and needs
- * STORAGE_ENDPOINT_URL, STORAGE_REGION, STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_ACCESS_KEY (never
- * AWS_ACCESS_KEY_ID: presigning with the AWS default chain would hand out S3 URLs); outside
- * APP_STAGE=local the endpoint must be https on a public host.
+ * STORAGE_ENDPOINT_URL, STORAGE_REGION and keys: STORAGE_SIGNING_ACCESS_KEY_ID /
+ * STORAGE_SIGNING_SECRET_ACCESS_KEY (a read-only token) when set, else STORAGE_ACCESS_KEY_ID /
+ * STORAGE_SECRET_ACCESS_KEY (never AWS_ACCESS_KEY_ID: presigning with the AWS default chain would
+ * hand out S3 URLs). Outside APP_STAGE=local the endpoint must be https on a public host. The
+ * signing keys are refused with `cloudfront` (they would be silently unused).
  */
 export function loadMediaUrlSignerConfig(env: Env): MediaUrlSignerConfig {
   const e = parseEnv(mediaUrlSignerEnvSchema, env, SIGNER_NAME);
-  if (e.MEDIA_URL_SIGNER === 'cloudfront') return { signer: 'cloudfront' };
+  const signingId = e.STORAGE_SIGNING_ACCESS_KEY_ID;
+  const signingSecret = e.STORAGE_SIGNING_SECRET_ACCESS_KEY;
+  if ((signingId === undefined) !== (signingSecret === undefined)) {
+    throw new Error(
+      `Invalid ${SIGNER_NAME} configuration: set both STORAGE_SIGNING_ACCESS_KEY_ID and STORAGE_SIGNING_SECRET_ACCESS_KEY, or neither`,
+    );
+  }
+  if (e.MEDIA_URL_SIGNER === 'cloudfront') {
+    if (signingId !== undefined) {
+      throw new Error(
+        `Invalid ${SIGNER_NAME} configuration: STORAGE_SIGNING_ACCESS_KEY_ID needs MEDIA_URL_SIGNER=s3-presign`,
+      );
+    }
+    return { signer: 'cloudfront' };
+  }
   const endpoint = requirePresignEndpoint(env);
+  if (signingId !== undefined && signingSecret !== undefined) {
+    return {
+      signer: 's3-presign',
+      endpointUrl: endpoint.url,
+      region: endpoint.region,
+      accessKeyId: signingId,
+      secretAccessKey: signingSecret,
+      keySource: 'signing',
+    };
+  }
   const keys = readStorageKeys(env, endpoint, SIGNER_NAME);
   if (keys === null)
     throw new Error(`Invalid ${SIGNER_NAME} configuration: storage keys are missing`);
@@ -369,6 +417,7 @@ export function loadMediaUrlSignerConfig(env: Env): MediaUrlSignerConfig {
     region: endpoint.region,
     accessKeyId: keys.accessKeyId,
     secretAccessKey: keys.secretAccessKey,
+    keySource: 'storage',
   };
 }
 

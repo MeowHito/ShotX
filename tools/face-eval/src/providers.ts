@@ -1,21 +1,20 @@
-import { S3Client } from '@aws-sdk/client-s3';
 import {
   createLocalRekognitionLimiters,
   type FaceProvider,
-  InlineTempImageStore,
+  REKOGNITION_INLINE_MAX_BYTES,
   RekognitionFaceProvider,
-  S3TempImageStore,
   type SmallFaceDetector,
-  type TempImageStore,
 } from '@shotx/face';
+import { FakeFaceProvider, SyntheticSmallFaceDetector, SyntheticWorld } from '@shotx/face/testing';
 import {
-  FakeFaceProvider,
-  MemoryTempImageStore,
-  SyntheticSmallFaceDetector,
-  SyntheticWorld,
-} from '@shotx/face/testing';
-import type { FaceConfig } from '@shotx/shared';
+  type AwsClientConfig,
+  type Env,
+  type FaceConfig,
+  isAwsEndpointHost,
+  loadRekognitionClientConfig,
+} from '@shotx/shared';
 import type { Dataset } from './dataset';
+import { type IndexOption, indexKey, indexKeyWithoutSize } from './evaluate';
 
 export const PROVIDERS = ['fake', 'rekognition'] as const;
 export type ProviderName = (typeof PROVIDERS)[number];
@@ -23,10 +22,16 @@ export type ProviderName = (typeof PROVIDERS)[number];
 /** The flag that must accompany `--provider rekognition`. */
 export const AWS_ACKNOWLEDGEMENT = 'i-understand-this-calls-aws';
 
+/** Environment variables AWS SDK v3 applies to a Rekognition client without an explicit endpoint. */
+const IMPLICIT_ENDPOINT_ENV = ['AWS_ENDPOINT_URL', 'AWS_ENDPOINT_URL_REKOGNITION'] as const;
+
 export interface ProviderSetup {
   name: ProviderName;
-  provider: FaceProvider;
-  tempStore: TempImageStore;
+  /** The provider for one index option; see `EvaluationInput.providerFor`. */
+  providerFor: (option: IndexOption) => FaceProvider;
+  collectionKey: (option: IndexOption) => string;
+  /** Largest image the provider accepts. */
+  maxImageBytes: number;
   smallFaceDetector: SmallFaceDetector | undefined;
   description: string;
 }
@@ -48,13 +53,48 @@ export function assertProviderAllowed(name: string, acknowledged: boolean): Prov
   return name as ProviderName;
 }
 
+/**
+ * The Rekognition client settings for an evaluation (ADR 0008 section 1), stricter than the
+ * services: face-eval measures real Rekognition, so it needs the evaluation account's own keys
+ * (never the default credential chain, which on a laptop is whatever profile is active) and an
+ * AWS endpoint (never LocalStack, and never AWS_ENDPOINT_URL from a sourced `.env`).
+ */
+export function evaluationClientConfig(env: Env): AwsClientConfig {
+  const client = loadRekognitionClientConfig(env);
+  if (client.credentials === null) {
+    throw new Error(
+      'Set REKOGNITION_ACCESS_KEY_ID and REKOGNITION_SECRET_ACCESS_KEY to the approved evaluation ' +
+        "account's keys: face-eval never uses the default AWS credential chain.",
+    );
+  }
+  if (client.endpointUrl !== null) {
+    if (!isAwsEndpointHost(new URL(client.endpointUrl).hostname)) {
+      throw new Error(
+        `REKOGNITION_ENDPOINT_URL points to ${new URL(client.endpointUrl).host}, which is not AWS. ` +
+          'face-eval measures real Rekognition: unset it (the local .env points it at LocalStack).',
+      );
+    }
+  } else {
+    const leaking = IMPLICIT_ENDPOINT_ENV.filter((name) => (env[name] ?? '') !== '');
+    if (leaking.length > 0) {
+      throw new Error(
+        `Unset ${leaking.join(' and ')}: AWS SDK v3 would send Rekognition there instead of to ` +
+          `${client.region} (the local .env points AWS_ENDPOINT_URL at LocalStack).`,
+      );
+    }
+  }
+  return client;
+}
+
 export interface ProviderRequest {
   name: string;
   acknowledged: boolean;
   dataset: Dataset;
   config: FaceConfig;
-  /** S3 bucket for temporary index images (Rekognition only); inline images are capped at 5 MB. */
-  tempBucket?: string | undefined;
+  /** Read only with `--provider rekognition`: the REKOGNITION_* client settings. */
+  env: Env;
+  /** The largest FACE_INDEX_MAX_BYTES in the grid. */
+  maxIndexBytes: number;
 }
 
 export function createProvider(request: ProviderRequest): ProviderSetup {
@@ -68,36 +108,42 @@ export function createProvider(request: ProviderRequest): ProviderSetup {
       );
     }
     const world = new SyntheticWorld(synthetic.world);
-    const tempStore = new MemoryTempImageStore();
+    // Above 5 MiB only to replay the old 15 MiB S3 path for comparison.
+    const maxImageBytes = Math.max(REKOGNITION_INLINE_MAX_BYTES, request.maxIndexBytes);
     return {
       name,
-      provider: new FakeFaceProvider(world, tempStore),
-      tempStore,
+      providerFor: () => new FakeFaceProvider(world, { maxImageBytes }),
+      collectionKey: indexKeyWithoutSize,
+      maxImageBytes,
       smallFaceDetector: new SyntheticSmallFaceDetector(world),
       description: 'FakeFaceProvider (deterministic synthetic similarity model, no AWS calls)',
     };
   }
 
+  if (request.maxIndexBytes > REKOGNITION_INLINE_MAX_BYTES) {
+    throw new Error(
+      `Rekognition takes images as bytes of at most ${REKOGNITION_INLINE_MAX_BYTES} bytes ` +
+        '(ADR 0008 section 5); the S3 path is gone. Compare larger limits with `face-eval encode`.',
+    );
+  }
+  const client = evaluationClientConfig(request.env);
   const { rekognition } = request.config;
   // One process, so in-process limiters keep it under the per-operation TPS.
   const provider = RekognitionFaceProvider.create(
     rekognition,
     'background',
     createLocalRekognitionLimiters(rekognition),
+    client,
   );
-  const tempStore: TempImageStore = request.tempBucket
-    ? new S3TempImageStore(new S3Client({ region: rekognition.region }), request.tempBucket)
-    : new InlineTempImageStore();
   return {
     name,
-    provider,
-    tempStore,
+    providerFor: () => provider,
+    collectionKey: indexKey,
+    maxImageBytes: REKOGNITION_INLINE_MAX_BYTES,
     // No YuNet detector is wired yet: "signal" tiling relies on Rekognition's unindexed reasons.
     smallFaceDetector: undefined,
-    description: `Amazon Rekognition (${rekognition.region}), ${
-      request.tempBucket
-        ? `index images via s3://${request.tempBucket}/tmp/index/`
-        : 'inline index images (≤ 5 MB)'
-    }`,
+    description: `Amazon Rekognition (${client.region}${
+      client.endpointUrl === null ? '' : `, endpoint ${new URL(client.endpointUrl).host}`
+    }), index images as bytes (≤ ${REKOGNITION_INLINE_MAX_BYTES} bytes)`,
   };
 }

@@ -8,20 +8,30 @@ import {
   prepareSelfie,
   searchBySelfies,
 } from '@shotx/face';
-import {
-  FakeFaceProvider,
-  MemoryTempImageStore,
-  SyntheticSmallFaceDetector,
-  SyntheticWorld,
-} from '@shotx/face/testing';
-import { loadFaceConfig, parseS3Key } from '@shotx/shared';
+import { FakeFaceProvider, SyntheticSmallFaceDetector, SyntheticWorld } from '@shotx/face/testing';
+import { loadFaceConfig } from '@shotx/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type Dataset, loadDataset, readSelfies } from './dataset';
-import { evaluate, type EvaluationResult, indexKey, type IndexOption } from './evaluate';
+import { LEGACY_S3_MAX_BYTES } from './encoding';
+import {
+  evaluate,
+  type EvaluationResult,
+  indexKey,
+  indexKeyWithoutSize,
+  type IndexOption,
+} from './evaluate';
 import { synthesize } from './synth';
 
 const config = loadFaceConfig({});
-const indexOption: IndexOption = { longEdge: 1600, qualityFilter: 'LOW', tiling: 'always' };
+const indexOption: IndexOption = {
+  longEdge: 1600,
+  maxBytes: config.index.maxBytes,
+  qualityFilter: 'LOW',
+  tiling: 'always',
+};
+/** Same pipeline under the old 15 MiB S3 limit, and under a limit small enough to degrade images. */
+const legacyOption: IndexOption = { ...indexOption, maxBytes: LEGACY_S3_MAX_BYTES };
+const smallOption: IndexOption = { ...indexOption, maxBytes: 24 * 1024 };
 const searchOptions = [
   { selfies: 3, expansionSeeds: 2 },
   { selfies: 1, expansionSeeds: 0 },
@@ -29,8 +39,7 @@ const searchOptions = [
 
 let dir: string;
 let dataset: Dataset;
-let fake: FakeFaceProvider;
-let tempStore: MemoryTempImageStore;
+const fakes = new Map<string, FakeFaceProvider>();
 let result: EvaluationResult;
 
 beforeAll(async () => {
@@ -47,15 +56,19 @@ beforeAll(async () => {
   });
   dataset = await loadDataset(join(dir, 'synthetic'));
   const world = new SyntheticWorld(dataset.synthetic!.world);
-  tempStore = new MemoryTempImageStore();
-  fake = new FakeFaceProvider(world, tempStore);
   result = await evaluate({
     dataset,
-    provider: fake,
-    tempStore,
+    providerFor: (option) => {
+      const fake = new FakeFaceProvider(world, { maxImageBytes: LEGACY_S3_MAX_BYTES });
+      fakes.set(indexKey(option), fake);
+      return fake;
+    },
+    collectionKey: indexKeyWithoutSize,
+    maxImageBytes: LEGACY_S3_MAX_BYTES,
     smallFaceDetector: new SyntheticSmallFaceDetector(world),
-    config,
-    indexOptions: [indexOption],
+    // FaceConfig refuses limits the smallest size might not fit; 24 KiB needs a smaller floor.
+    config: { ...config, encode: { ...config.encode, minLongEdge: 64 } },
+    indexOptions: [indexOption, legacyOption, smallOption],
     searchOptions,
     sweepFloor: 70,
     minStrong: 80,
@@ -64,7 +77,7 @@ beforeAll(async () => {
     keepCollections: true,
     log: () => undefined,
   });
-}, 60_000);
+}, 120_000);
 
 afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -76,32 +89,42 @@ describe('evaluate', () => {
     expect(stats.photos).toBe(8);
     expect(stats.failedPhotos).toBe(0);
     expect(stats.calls.indexFaces).toBe(8 * 5);
-    expect(result.combos).toHaveLength(2);
+    expect(result.combos).toHaveLength(3 * 2);
     for (const combo of result.combos) expect(combo.scans).toHaveLength(5);
     // The comparison below only means something if expansion actually ran.
     expect(result.combos[0]!.scans.some((scan) => scan.seedSimilarities.length > 0)).toBe(true);
   });
 
-  it('gives every attempt and part its own temporary image and deletes them all', () => {
-    expect(tempStore.putKeys).toHaveLength(8 * 5);
-    expect(new Set(tempStore.putKeys).size).toBe(tempStore.putKeys.length);
-    for (const key of tempStore.putKeys) {
-      expect(key).toMatch(/^tmp\/index\/p\d+\/[0-9a-f-]{36}\/(full|t[0-3])\.jpg$/);
-      // Built by the shared key builder, so the worker's parser recognizes every key.
-      expect(parseS3Key(key)).toMatchObject({ kind: 'index' });
+  it('records how every image sent was encoded under each byte limit', () => {
+    const encoding = (option: IndexOption) => result.indexStats[indexKey(option)]!.encoding;
+    for (const option of [indexOption, legacyOption, smallOption]) {
+      expect(encoding(option)).toMatchObject({ photos: 8, images: 8 * 5, tiles: 8 * 4 });
+      expect(encoding(option).largestImageBytes).toBeLessThanOrEqual(option.maxBytes);
     }
-    expect(tempStore.keys()).toEqual([]);
+    // Synthetic photos are small: nothing changes between 15 MiB and 5 MiB…
+    expect(encoding(indexOption).degradedImages).toBe(0);
+    expect(encoding(legacyOption)).toEqual(encoding(indexOption));
+    // …but a small enough limit degrades them, and the stats show it.
+    expect(encoding(smallOption).degradedFullImages).toBeGreaterThan(0);
+    expect(encoding(smallOption).minQuality).toBeLessThan(config.index.jpegQuality);
+  });
+
+  it('gives byte-identical images identical results whatever the byte limit', () => {
+    const scansOf = (option: IndexOption) =>
+      result.combos.filter((c) => indexKey(c.index) === indexKey(option)).map((c) => c.scans);
+    expect(scansOf(legacyOption)).toEqual(scansOf(indexOption));
   });
 
   // The harness searches once at the sweep floor and applies thresholds offline. That must give
   // the same photos and the same number of calls as the production search at each threshold pair.
   it('matches the production search path at every threshold pair', async () => {
-    const collectionId = faceCollectionId(`eval-test-${indexKey(indexOption)}`);
+    const collectionId = faceCollectionId(`eval-test-${indexKeyWithoutSize(indexOption)}`);
+    const fake = fakes.get(indexKey(indexOption))!;
     const fileOf = new Map(
       fake.storedFaces(collectionId).map((f) => [f.faceId, f.externalImageId]),
     );
     let compared = 0;
-    for (const combo of result.combos) {
+    for (const combo of result.combos.filter((c) => c.index === indexOption)) {
       for (const scan of combo.scans) {
         const person = dataset.persons.find((p) => p.id === scan.personId)!;
         const raw = await readSelfies(dataset, person, combo.search.selfies);
@@ -143,5 +166,5 @@ describe('evaluate', () => {
       }
     }
     expect(compared).toBeGreaterThan(0);
-  }, 60_000);
+  }, 120_000);
 });

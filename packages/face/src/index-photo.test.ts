@@ -1,4 +1,5 @@
-import { type Env, indexImageKey, loadFaceConfig, parseS3Key } from '@shotx/shared';
+import { type Env, loadFaceConfig } from '@shotx/shared';
+import sharp from 'sharp';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   indexPhoto,
@@ -6,23 +7,25 @@ import {
   IndexPhotoError,
   indexPhotoOptions,
   type IndexPhotoTarget,
-  type IndexTempKey,
-  TempImageCleanupError,
   TILING_MODES,
   type TilingMode,
 } from './index-photo';
-import { IndexFacesOutcomeUnknownError } from './provider';
+import {
+  type FaceProvider,
+  ImageTooLargeError,
+  IndexFacesOutcomeUnknownError,
+  type IndexFacesRequest,
+  REKOGNITION_INLINE_MAX_BYTES,
+} from './provider';
 import { reconcileCollection } from './reconcile';
 import {
   FakeFaceProvider,
-  MemoryTempImageStore,
   renderScene,
   type Scene,
   SyntheticSmallFaceDetector,
   SyntheticWorld,
 } from './testing';
 import type { Clock } from './throttling';
-import type { ImageInput } from './types';
 
 const world = SyntheticWorld.create({ volunteers: 4, bystanders: 2, seed: 11 });
 const [v1, v2, v3] = world.persons.map((person) => person.id) as [string, string, string];
@@ -40,25 +43,31 @@ const scene: Scene = {
   ],
 };
 
-/** The production key builder (ADR 0004). */
-const tempKey: IndexTempKey = indexImageKey;
-
 let photo: Buffer;
 beforeAll(async () => {
   photo = await renderScene(world, scene, 1);
 });
 
+/** Records every IndexFaces request the fake receives. */
+function recording(fake: FakeFaceProvider): { provider: FaceProvider; sent: IndexFacesRequest[] } {
+  const sent: IndexFacesRequest[] = [];
+  const provider: FaceProvider = Object.create(fake) as FaceProvider;
+  provider.indexFaces = (request) => {
+    sent.push(request);
+    return fake.indexFaces(request);
+  };
+  return { provider, sent };
+}
+
 async function setup() {
-  const tempStore = new MemoryTempImageStore();
-  const fake = new FakeFaceProvider(world, tempStore);
+  const fake = new FakeFaceProvider(world);
   await fake.createCollection('pg-test');
+  const { provider, sent } = recording(fake);
   const deps: IndexPhotoDeps = {
-    provider: fake,
-    tempStore,
-    tempKey,
+    provider,
     smallFaceDetector: new SyntheticSmallFaceDetector(world),
   };
-  return { fake, tempStore, deps };
+  return { fake, sent, deps };
 }
 
 /** Options as the worker builds them, with the tiling mode set through FACE_INDEX_TILING. */
@@ -74,9 +83,9 @@ function options(
 }
 
 async function run(tiling: TilingMode, env: Env = {}) {
-  const { fake, tempStore, deps } = await setup();
+  const { fake, sent, deps } = await setup();
   const result = await indexPhoto(deps, photo, options({ tiling }, env));
-  return { result, fake, tempStore };
+  return { result, fake, sent };
 }
 
 function manualClock(): Clock {
@@ -101,12 +110,12 @@ async function failure(promise: Promise<unknown>): Promise<IndexPhotoError> {
 
 describe('indexPhoto', () => {
   it('indexes only the full image without tiling', async () => {
-    const { result, fake, tempStore } = await run('never');
+    const { result, fake, sent } = await run('never');
     expect(result.tiled).toBe(false);
     expect(result.indexCalls).toBe(1);
+    expect(sent).toHaveLength(1);
     expect(result.faces.map((face) => face.tile)).toEqual([null]);
     expect(fake.storedFaces('pg-test').map((face) => face.personId)).toEqual([v1]);
-    expect(tempStore.keys()).toEqual([]);
   });
 
   it('tiles when the local detector sees small faces and finds them', async () => {
@@ -185,131 +194,87 @@ describe('indexPhotoOptions tiling', () => {
   });
 });
 
-describe('indexPhoto temporary images', () => {
-  it('builds every key with the injected function and a fresh attempt id', async () => {
-    const { tempStore, deps } = await setup();
-    const ids = ['attempt-a', 'attempt-b'];
-    const pinned = { ...deps, newAttemptId: () => ids.shift()! };
-    const first = await indexPhoto(pinned, photo, options({ tiling: 'always' }));
-    const second = await indexPhoto(pinned, photo, options({ tiling: 'never' }));
-    expect(first.attemptId).toBe('attempt-a');
-    expect(second.attemptId).toBe('attempt-b');
-    expect(tempStore.putKeys).toEqual([
-      'tmp/index/file-1/attempt-a/full.jpg',
-      'tmp/index/file-1/attempt-a/t0.jpg',
-      'tmp/index/file-1/attempt-a/t1.jpg',
-      'tmp/index/file-1/attempt-a/t2.jpg',
-      'tmp/index/file-1/attempt-a/t3.jpg',
-      'tmp/index/file-1/attempt-b/full.jpg',
-    ]);
-    // Tile parts are 0-based, the same index as PhotoFace.tile.
-    expect(tempStore.putKeys.slice(0, 5).map((key) => parseS3Key(key))).toEqual(
-      ['full', 't0', 't1', 't2', 't3'].map((part) => ({
-        kind: 'index',
-        fileId: 'file-1',
-        attemptId: 'attempt-a',
-        part,
-      })),
-    );
-    expect(tempStore.keys()).toEqual([]);
+describe('indexPhoto images', () => {
+  it('sends the full image and every tile as bytes and reports how each was encoded', async () => {
+    const { result, sent } = await run('always');
+    expect(sent).toHaveLength(5);
+    expect(result.images.map((image) => image.tile)).toEqual([null, 0, 1, 2, 3]);
+    for (const [i, request] of sent.entries()) {
+      expect(Object.keys(request.image)).toEqual(['bytes']);
+      const image = result.images[i]!;
+      expect(request.image.bytes.length).toBe(image.bytes);
+      expect(image.bytes).toBeLessThanOrEqual(REKOGNITION_INLINE_MAX_BYTES);
+      const meta = await sharp(request.image.bytes).metadata();
+      expect(meta.format).toBe('jpeg');
+      expect([meta.width, meta.height]).toEqual([image.width, image.height]);
+      // A small synthetic photo fits at the configured quality and size.
+      expect(image).toMatchObject({ quality: 90, downscaled: false });
+    }
+    // The full image keeps its size; tiles are about half of it plus the overlap.
+    expect([result.images[0]!.width, result.images[0]!.height]).toEqual([3000, 2000]);
+    expect(result.images[1]!.width).toBe(1622);
   });
 
-  it('uses a different attempt id for every call by default', async () => {
+  it('keeps every image under FACE_INDEX_MAX_BYTES', async () => {
+    const maxBytes = 120_000;
+    const { result, sent } = await run('always', {
+      FACE_INDEX_MAX_BYTES: String(maxBytes),
+      // FaceConfig refuses a limit the smallest size might not fit in.
+      FACE_ENCODE_MIN_LONG_EDGE: '160',
+    });
+    expect(sent.every((request) => request.image.bytes.length <= maxBytes)).toBe(true);
+    expect(result.images.every((image) => image.bytes <= maxBytes)).toBe(true);
+    expect(result.images.some((image) => image.quality < 90 || image.downscaled)).toBe(true);
+  });
+
+  it('caps the limit at what the provider accepts', async () => {
+    const { deps, sent } = await setup();
+    const indexOptions = { ...options({ tiling: 'never' }), maxBytes: 50 * 1024 * 1024 };
+    const result = await indexPhoto({ ...deps, maxImageBytes: 100_000 }, photo, indexOptions);
+    expect(result.images[0]!.bytes).toBeLessThanOrEqual(100_000);
+    expect(sent[0]!.image.bytes.length).toBeLessThanOrEqual(100_000);
+  });
+
+  it('lets the evaluation harness raise the provider limit, which the fake then enforces', async () => {
+    const fake = new FakeFaceProvider(world, { maxImageBytes: 100_000 });
+    await fake.createCollection('pg-test');
+    const big = { ...options({ tiling: 'never' }), maxBytes: 150_000 };
+    const error = await failure(indexPhoto({ provider: fake, maxImageBytes: 150_000 }, photo, big));
+    expect(error.cause).toBeInstanceOf(ImageTooLargeError);
+    expect(error.leftFaces).toBe(false);
+  });
+
+  it('builds a fresh attempt id for every call, or the injected one', async () => {
     const { deps } = await setup();
+    const ids = ['attempt-a', 'attempt-b'];
+    const pinned = { ...deps, newAttemptId: () => ids.shift()! };
+    expect((await indexPhoto(pinned, photo, options({ tiling: 'never' }))).attemptId).toBe(
+      'attempt-a',
+    );
+    expect((await indexPhoto(pinned, photo, options({ tiling: 'never' }))).attemptId).toBe(
+      'attempt-b',
+    );
     const results = await Promise.all(
       Array.from({ length: 3 }, () => indexPhoto(deps, photo, options({ tiling: 'never' }))),
     );
     expect(new Set(results.map((r) => r.attemptId)).size).toBe(3);
   });
 
-  // Before attempt ids, both attempts used tmp/index/file-1.jpg, and whichever finished first
-  // deleted the image the other one was still indexing.
   it('keeps concurrent attempts for one file apart', async () => {
-    const { deps } = await setup();
-    const store = new MemoryTempImageStore();
-    const provider = new FakeFaceProvider(world, store);
-    await provider.createCollection('pg-test');
-    // Hold every put until both attempts have stored their full image, so they overlap.
-    let release!: () => void;
-    const bothStored = new Promise<void>((resolve) => (release = resolve));
-    const overlapping = {
-      maxBytes: store.maxBytes,
-      put: async (key: string, bytes: Uint8Array): Promise<ImageInput> => {
-        const image = await store.put(key, bytes);
-        if (store.keys().length >= 2) release();
-        await bothStored;
-        return image;
-      },
-      delete: (key: string) => store.delete(key),
-    };
+    const { fake, deps } = await setup();
     const results = await Promise.all(
-      [0, 1].map(() =>
-        indexPhoto(
-          { ...deps, provider, tempStore: overlapping },
-          photo,
-          options({ tiling: 'always' }),
-        ),
-      ),
+      [0, 1].map(() => indexPhoto(deps, photo, options({ tiling: 'always' }))),
     );
-    const [a, b] = results.map((r) => r.attemptId);
-    expect(a).not.toBe(b);
-    expect(new Set(store.putKeys).size).toBe(store.putKeys.length);
-    expect(store.putKeys.filter((key) => key.endsWith('/full.jpg'))).toHaveLength(2);
-    expect(store.keys()).toEqual([]);
-    // Both attempts indexed every image they stored.
-    expect(provider.calls.indexFaces).toBe(10);
-  });
-
-  it('refuses a key function that ignores the attempt id', async () => {
-    const { deps, fake } = await setup();
-    const shared: IndexTempKey = ({ fileId, part }) => `tmp/index/${fileId}-${part}.jpg`;
-    const error = await failure(
-      indexPhoto({ ...deps, tempKey: shared }, photo, options({ tiling: 'never' })),
-    );
-    expect(String(error.cause)).toMatch(/tempKey must give every attempt and part its own key/);
-    expect(fake.calls.indexFaces).toBe(0);
-  });
-
-  it('fails the attempt and deletes its faces when a temporary image cannot be deleted', async () => {
-    const { fake, tempStore, deps } = await setup();
-    const s3Down = new Error('S3 DeleteObject failed');
-    tempStore.failNext('delete', s3Down);
-    const error = await failure(indexPhoto(deps, photo, options({ tiling: 'never' })));
-    expect(error.cause).toBeInstanceOf(TempImageCleanupError);
-    expect((error.cause as TempImageCleanupError).key).toBe(
-      `tmp/index/file-1/${error.attemptId}/full.jpg`,
-    );
-    expect((error.cause as TempImageCleanupError).cause).toBe(s3Down);
-    expect(fake.storedFaces('pg-test')).toEqual([]);
-    expect(error.orphanFaceIds).toEqual([]);
-    expect(error.leftFaces).toBe(false);
-  });
-
-  it('reports a failed temporary image delete next to the error that failed the attempt', async () => {
-    const { fake, tempStore, deps } = await setup();
-    const invalid = Object.assign(new Error('Invalid image'), {
-      name: 'InvalidImageFormatException',
-    });
-    fake.failNext('indexFaces', invalid);
-    tempStore.failNext('delete', new Error('S3 DeleteObject failed'));
-    const error = await failure(indexPhoto(deps, photo, options({ tiling: 'never' })));
-    expect(error.cause).toBe(invalid);
-    expect(error.cleanupErrors).toHaveLength(1);
-    expect(error.cleanupErrors[0]).toBeInstanceOf(TempImageCleanupError);
-  });
-
-  it('still deletes the temporary image after a failed put, which may have stored it', async () => {
-    const { tempStore, deps } = await setup();
-    tempStore.failNext('put', new Error('S3 PutObject timed out'));
-    const error = await failure(indexPhoto(deps, photo, options({ tiling: 'never' })));
-    expect((error.cause as Error).message).toBe('S3 PutObject timed out');
-    expect(tempStore.deleteKeys).toEqual(tempStore.putKeys);
+    expect(results[0]!.attemptId).not.toBe(results[1]!.attemptId);
+    expect(fake.calls.indexFaces).toBe(10);
+    const ids = results.flatMap((r) => r.faces.map((face) => face.faceId));
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });
 
 describe('indexPhoto failures', () => {
   it('deletes the faces of a failed attempt', async () => {
-    const { fake, tempStore, deps } = await setup();
+    const { fake, deps } = await setup();
     const internal = Object.assign(new Error('boom'), { name: 'AccessDeniedException' });
     // The full image and tile 0 succeed, tile 1 fails.
     fake.failNext('indexFaces', internal, { after: 2 });
@@ -324,7 +289,6 @@ describe('indexPhoto failures', () => {
       leftFaces: false,
     });
     expect(fake.storedFaces('pg-test')).toEqual([]);
-    expect(tempStore.keys()).toEqual([]);
   });
 
   it('reports the faces it could not delete instead of hiding the failure', async () => {

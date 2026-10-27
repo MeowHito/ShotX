@@ -10,15 +10,19 @@ import { fileExtension } from './media-types';
  *                                                          Tiering on AWS, STANDARD on R2)
  *   derived/{photographerId}/{fileId}/{variant file}       thumb.webp, preview.webp, web.jpg,
  *                                                          poster.jpg, preview.mp4
- *   tmp/index/{fileId}/{attemptId}/{part}.jpg              part: full | t{n}   (ADR 0004)
  *   tmp/zips/{jobId}.zip                                   tmp/ is lifecycle-expired
+ *   tmp/reconcile/...                                      worker's orphan-face scans (ADR 0006)
+ *
+ * There is no tmp/index/ any more (ADR 0004 is superseded by ADR 0008 section 5): index images
+ * and tiles go to Rekognition as bytes and are never written to the bucket.
  */
 export const S3_PREFIXES = {
   originals: 'originals/',
   derived: 'derived/',
   tmp: 'tmp/',
-  tmpIndex: 'tmp/index/',
   tmpZips: 'tmp/zips/',
+  /** The worker's reconciliation scan files (faces.reconcile.daily), with their own rule. */
+  tmpReconcile: 'tmp/reconcile/',
 } as const;
 
 /** File names of the derivatives the worker writes for each upload. */
@@ -216,51 +220,9 @@ export function zipKey(jobId: string): string {
   return `${S3_PREFIXES.tmpZips}${segment('Zip job id', jobId)}.zip`;
 }
 
-/** The full index image of a photo. */
-export const INDEX_IMAGE_FULL = 'full';
-
-/** `full` for the whole photo, `t{n}` for tile n (0-based, the same index as `PhotoFace.tile`). */
-export type IndexImagePart = typeof INDEX_IMAGE_FULL | `t${number}`;
-
-const TILE_PART = /^t(0|[1-9][0-9]{0,2})$/;
-
-/** Part name of tile `tile` (0–999). */
-export function indexTilePart(tile: number): IndexImagePart {
-  if (!Number.isInteger(tile) || tile < 0 || tile > 999) {
-    throw new RangeError(`Tile index ${tile} must be an integer from 0 to 999`);
-  }
-  return `t${tile}`;
-}
-
-function isIndexImagePart(part: string): part is IndexImagePart {
-  return part === INDEX_IMAGE_FULL || TILE_PART.test(part);
-}
-
-export interface IndexImageKeyParts {
-  fileId: string;
-  /** Unique per indexing attempt, so concurrent attempts for one file never share a key. */
-  attemptId: string;
-  part: IndexImagePart;
-}
-
-/** `tmp/index/{fileId}/{attemptId}/{part}.jpg` (ADR 0004). */
-export function indexImageKey(parts: IndexImageKeyParts): string {
-  if (!isIndexImagePart(parts.part)) {
-    throw new RangeError(`Index image part ${JSON.stringify(parts.part)} must be full or t{n}`);
-  }
-  return `${indexImagePrefix(parts.fileId, parts.attemptId)}${parts.part}.jpg`;
-}
-
-/** `tmp/index/{fileId}/`, or `tmp/index/{fileId}/{attemptId}/` with an attempt id. */
-export function indexImagePrefix(fileId: string, attemptId?: string): string {
-  const base = `${S3_PREFIXES.tmpIndex}${segment('File id', fileId)}/`;
-  return attemptId === undefined ? base : `${base}${segment('Attempt id', attemptId)}/`;
-}
-
 export type ParsedS3Key =
   | { kind: 'original'; photographerId: string; fileId: string; originalName: string }
   | { kind: 'derived'; photographerId: string; fileId: string; variant: DerivedVariant }
-  | { kind: 'index'; fileId: string; attemptId: string; part: IndexImagePart }
   | { kind: 'zip'; jobId: string };
 
 const VARIANT_BY_FILE_NAME = new Map<string, DerivedVariant>(
@@ -286,12 +248,6 @@ export function parseS3Key(key: string): ParsedS3Key | null {
     const variant = VARIANT_BY_FILE_NAME.get(fileName);
     if (!safe(photographerId, fileId) || variant === undefined) return null;
     return { kind: 'derived', photographerId, fileId, variant };
-  }
-  if (s[0] === 'tmp' && s[1] === 'index' && s.length === 5) {
-    const [, , fileId = '', attemptId = '', fileName = ''] = s;
-    const part = fileName.endsWith('.jpg') ? fileName.slice(0, -'.jpg'.length) : '';
-    if (!safe(fileId, attemptId) || !isIndexImagePart(part)) return null;
-    return { kind: 'index', fileId, attemptId, part };
   }
   if (s[0] === 'tmp' && s[1] === 'zips' && s.length === 3) {
     const fileName = s[2] ?? '';

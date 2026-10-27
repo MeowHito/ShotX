@@ -76,7 +76,6 @@
       },
       "storage": {
         "abortIncompleteMultipartUploadDays": 2,
-        "tmpIndexExpirationDays": 1,
         "tmpZipsExpirationDays": 2,
         "tmpReconcileExpirationDays": 3,
         "tmpOtherExpirationDays": 3,

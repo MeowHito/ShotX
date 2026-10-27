@@ -1,12 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  type FaceConfig,
-  INDEX_IMAGE_FULL,
-  type IndexImageKeyParts,
-  type IndexImagePart,
-  indexTilePart,
-  type TilingMode,
-} from '@shotx/shared';
+import type { FaceConfig, TilingMode } from '@shotx/shared';
 import { countDistinct, tileBoxToImage, tileRects, touchesInnerEdge } from './geometry';
 import {
   type EncodedImage,
@@ -15,8 +8,12 @@ import {
   type JpegOptions,
   orientedSize,
 } from './image';
-import { type FaceProvider, IndexFacesOutcomeUnknownError } from './provider';
-import type { TempImageStore } from './temp-store';
+import {
+  type FaceProvider,
+  ImageTooLargeError,
+  IndexFacesOutcomeUnknownError,
+  REKOGNITION_INLINE_MAX_BYTES,
+} from './provider';
 import type { IndexedFace, IndexFacesResult, QualityFilter } from './types';
 
 // Defined once in packages/shared (FACE_INDEX_TILING); re-exported so `@shotx/face` keeps them.
@@ -31,24 +28,21 @@ export interface SmallFaceDetector {
   faceWidths(image: EncodedImage): Promise<number[]>;
 }
 
-/** Which temporary index image of an attempt: `full`, or `t{n}` for tile n (0-based). */
-export type IndexTempPart = IndexImagePart;
-
-/**
- * Builds the object key of a temporary index image, `tmp/index/{fileId}/{attemptId}/{part}.jpg`.
- * Production passes `indexImageKey` from `@shotx/shared` (ADR 0004). Keys must differ for
- * different attempts and parts, so concurrent attempts for one file never overwrite or delete
- * each other's images.
- */
-export type IndexTempKey = (image: IndexImageKeyParts) => string;
-
 export interface IndexPhotoDeps {
   provider: FaceProvider;
-  tempStore: TempImageStore;
-  tempKey: IndexTempKey;
   smallFaceDetector?: SmallFaceDetector | undefined;
-  /** A fresh id for every indexPhoto call. Defaults to a random UUID; tests may pin it. */
+  /**
+   * A fresh id for every indexPhoto call, for logs and IndexPhotoError. Defaults to a random UUID;
+   * tests may pin it.
+   */
   newAttemptId?: (() => string) | undefined;
+  /**
+   * Largest image the provider accepts; `maxBytes` is capped at it. Defaults to
+   * REKOGNITION_INLINE_MAX_BYTES (Rekognition `Image.Bytes`). Only the evaluation harness raises
+   * it, to replay the old 15 MiB S3 path against FakeFaceProvider; Rekognition itself refuses
+   * larger images (ImageTooLargeError).
+   */
+  maxImageBytes?: number | undefined;
 }
 
 export interface IndexPhotoOptions {
@@ -62,6 +56,10 @@ export interface IndexPhotoOptions {
   previousFaceIds?: readonly string[] | undefined;
   longEdge: number;
   jpegQuality: number;
+  /**
+   * Largest encoded image or tile (FACE_INDEX_MAX_BYTES). Images are sent as bytes, so this is
+   * capped at the provider's limit (`IndexPhotoDeps.maxImageBytes`).
+   */
   maxBytes: number;
   maxFaces: number;
   qualityFilter: QualityFilter;
@@ -112,6 +110,20 @@ export interface PhotoFace extends IndexedFace {
   tile: number | null;
 }
 
+/** One image sent to IndexFaces: the full photo or a tile, as encoded. */
+export interface IndexImage {
+  /** Index of the tile, or null for the full image. */
+  tile: number | null;
+  /** Encoded size; never more than the attempt's byte limit. */
+  bytes: number;
+  width: number;
+  height: number;
+  /** JPEG quality used; below FACE_INDEX_JPEG_QUALITY when the image had to fit the limit. */
+  quality: number;
+  /** The long edge had to shrink below FACE_INDEX_LONG_EDGE (or the tile size) to fit. */
+  downscaled: boolean;
+}
+
 export interface TileSignal {
   /** Rekognition skipped faces as too small or too many. */
   rekognition: boolean;
@@ -132,17 +144,8 @@ export interface IndexPhotoResult {
   /** Faces of `previousFaceIds` deleted before indexing. */
   replacedFaces: number;
   indexCalls: number;
-}
-
-/** A temporary index image could not be deleted. The `tmp/` lifecycle rule is only a backstop. */
-export class TempImageCleanupError extends Error {
-  constructor(
-    readonly key: string,
-    cause: unknown,
-  ) {
-    super(`Temporary index image ${key} could not be deleted`, { cause });
-    this.name = 'TempImageCleanupError';
-  }
+  /** Every image sent to IndexFaces, in call order: the full image, then the tiles. */
+  images: IndexImage[];
 }
 
 export interface IndexPhotoFailure {
@@ -164,7 +167,7 @@ export interface IndexPhotoFailure {
  * - `untrackedFacesPossible`: an IndexFaces call may have indexed faces whose ids never came back
  *   (IndexFacesOutcomeUnknownError). Only `reconcileCollection` finds them; schedule it for the
  *   collection.
- * - `cleanupErrors`: every cleanup step that failed after `cause` (DeleteFaces, temporary images).
+ * - `cleanupErrors`: every cleanup step that failed after `cause` (DeleteFaces).
  */
 export class IndexPhotoError extends Error implements IndexPhotoFailure {
   readonly collectionId: string;
@@ -210,8 +213,9 @@ export class IndexPhotoError extends Error implements IndexPhotoFailure {
  * it. On failure, faces indexed by this attempt are deleted again and an IndexPhotoError reports
  * whatever could not be cleaned up.
  *
- * Each call is a new attempt with its own id and its own temporary image keys, so concurrent or
- * retried attempts for one file never touch each other's images.
+ * Every image (the full photo and each tile) is encoded in memory under `maxBytes`, capped at the
+ * provider's limit (5 MiB for Rekognition `Image.Bytes`), and sent as bytes: nothing is written to
+ * storage. Each call is a new attempt with its own id, which IndexPhotoError reports.
  *
  * Re-indexing a file: pass the face ids its rows hold as `previousFaceIds`. They are deleted
  * before anything is indexed, so if that fails the rows still track every face. After success,
@@ -250,7 +254,7 @@ export async function indexPhoto(
       const size = await orientedSize(original);
       for (const [i, rect] of tileRects(size, options.tileGrid, options.tileOverlap).entries()) {
         const tile = await encodeJpeg(original, attempt.jpeg, rect);
-        const result = await attempt.indexImage(tile.bytes, indexTilePart(i));
+        const result = await attempt.indexImage(tile, i);
         indexCalls++;
         for (const face of result.faces) {
           if (touchesInnerEdge(face.bbox, rect, size, options.tileEdgeEpsilon)) {
@@ -275,17 +279,18 @@ export async function indexPhoto(
       discardedFaces: discarded.length,
       replacedFaces,
       indexCalls,
+      images: attempt.images,
     };
   } catch (error) {
     throw await attempt.fail(error);
   }
 }
 
-/** One indexPhoto call: its temporary images, the faces it indexed, and what cleanup failed. */
+/** One indexPhoto call: the images it sent, the faces it indexed, and what cleanup failed. */
 class IndexAttempt {
   /** Faces this attempt indexed, in the order IndexFaces returned them. */
   private readonly indexedIds: string[] = [];
-  private readonly keys = new Set<string>();
+  readonly images: IndexImage[] = [];
   private readonly cleanupErrors: unknown[] = [];
   private untrackedFacesPossible = false;
   readonly jpeg: JpegOptions;
@@ -298,7 +303,7 @@ class IndexAttempt {
     this.jpeg = {
       longEdge: options.longEdge,
       quality: options.jpegQuality,
-      maxBytes: Math.min(options.maxBytes, deps.tempStore.maxBytes),
+      maxBytes: Math.min(options.maxBytes, deps.maxImageBytes ?? REKOGNITION_INLINE_MAX_BYTES),
       encode: options.encode,
     };
   }
@@ -313,42 +318,37 @@ class IndexAttempt {
 
   async indexFull(original: Uint8Array) {
     const full = await encodeJpeg(original, this.jpeg);
-    return { full, fullResult: await this.indexImage(full.bytes, INDEX_IMAGE_FULL) };
+    return { full, fullResult: await this.indexImage(full, null) };
   }
 
-  /**
-   * Indexes one image through a temporary object and deletes the object again. A failed delete
-   * fails the attempt even when IndexFaces succeeded: the object is a copy of an event photo, and
-   * the `tmp/` lifecycle rule is only a backstop.
-   */
-  async indexImage(bytes: Uint8Array, part: IndexTempPart): Promise<IndexFacesResult> {
-    const key = this.tempKey(part);
-    let outcome: { result: IndexFacesResult } | { error: unknown };
+  /** Sends one encoded image (the full photo, or tile `tile`) to IndexFaces as bytes. */
+  async indexImage(image: EncodedImage, tile: number | null): Promise<IndexFacesResult> {
+    // encodeJpeg guarantees this; checked again because the bytes go straight to the provider.
+    if (image.bytes.length > this.jpeg.maxBytes) {
+      throw new ImageTooLargeError(image.bytes.length, this.jpeg.maxBytes);
+    }
+    this.images.push({
+      tile,
+      bytes: image.bytes.length,
+      width: image.width,
+      height: image.height,
+      quality: image.quality,
+      downscaled: image.downscaled,
+    });
     try {
-      const image = await this.deps.tempStore.put(key, bytes);
       const result = await this.deps.provider.indexFaces({
         collectionId: this.options.collectionId,
-        image,
+        image: { bytes: image.bytes },
         externalImageId: this.options.fileId,
         maxFaces: this.options.maxFaces,
         qualityFilter: this.options.qualityFilter,
       });
       this.indexedIds.push(...result.faces.map((face) => face.faceId));
-      outcome = { result };
+      return result;
     } catch (error) {
       if (error instanceof IndexFacesOutcomeUnknownError) this.untrackedFacesPossible = true;
-      outcome = { error };
+      throw error;
     }
-    // Also after a failed put: the object may have been written before the error.
-    try {
-      await this.deps.tempStore.delete(key);
-    } catch (deleteError) {
-      const cleanupError = new TempImageCleanupError(key, deleteError);
-      if ('result' in outcome) throw cleanupError;
-      this.cleanupErrors.push(cleanupError);
-    }
-    if ('error' in outcome) throw outcome.error;
-    return outcome.result;
   }
 
   /** Deletes what this attempt indexed and describes what is left behind. */
@@ -374,15 +374,5 @@ class IndexAttempt {
       },
       cause,
     );
-  }
-
-  private tempKey(part: IndexTempPart): string {
-    const key = this.deps.tempKey({ fileId: this.options.fileId, attemptId: this.id, part });
-    // Shared keys let concurrent attempts delete each other's images.
-    if (!key.includes(this.id) || this.keys.has(key)) {
-      throw new Error(`tempKey must give every attempt and part its own key, got ${key}`);
-    }
-    this.keys.add(key);
-    return key;
   }
 }

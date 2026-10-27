@@ -237,9 +237,11 @@ describe('LocalStack init script', () => {
   });
 
   it('mirrors the per-prefix tmp/ lifecycle rules', () => {
-    for (const prefix of ['tmp/index/', 'tmp/zips/', 'tmp/reconcile/', 'tmp/']) {
+    for (const prefix of ['tmp/zips/', 'tmp/reconcile/', 'tmp/']) {
       expect(script, prefix).toContain(`{"Prefix": "${prefix}"}`);
     }
+    // IndexFaces gets bytes (ADR 0008 section 5): no tmp/index/ rule.
+    expect(script).not.toContain('tmp/index/');
   });
 });
 

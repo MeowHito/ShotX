@@ -139,6 +139,23 @@ describe('migrations', () => {
     expect(at('"files_requeues_nonnegative"')).toBeGreaterThan(at('ADD COLUMN "faces_requeues"'));
   });
 
+  it('0007 is faces_coverage_scan: one partial index, nothing else', () => {
+    expect(journal.entries[7]?.tag).toBe('0007_faces_coverage_scan');
+    const list = statements(sqlOf('0007_faces_coverage_scan'));
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatch(
+      /^CREATE INDEX "files_unindexed_ready_idx" ON "files" .*\("folder_id","id"\) WHERE /,
+    );
+    for (const term of [
+      '"status" = \'ready\'',
+      '"face_count" IS NULL',
+      '"faces_queued_at" IS NULL',
+      '"deleted_at" IS NULL',
+    ]) {
+      expect(list[0], term).toContain(term);
+    }
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

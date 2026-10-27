@@ -3,8 +3,9 @@ import {
   CreateCollectionCommand,
   DescribeCollectionCommand,
   InternalServerError,
+  ImageTooLargeException,
+  InvalidImageFormatException,
   InvalidParameterException,
-  InvalidS3ObjectException,
   ListFacesCommand,
   ProvisionedThroughputExceededException,
   type RekognitionClient,
@@ -16,7 +17,12 @@ import {
 } from '@aws-sdk/client-rekognition';
 import { loadFaceConfig } from '@shotx/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { IndexFacesOutcomeUnknownError, NoFaceDetectedError } from './provider';
+import {
+  ImageTooLargeError,
+  IndexFacesOutcomeUnknownError,
+  NoFaceDetectedError,
+  REKOGNITION_INLINE_MAX_BYTES,
+} from './provider';
 import {
   type RekognitionLimiters,
   type RekognitionOperation,
@@ -185,9 +191,10 @@ describe('indexing and collections', () => {
         UnindexedFaces: [{ Reasons: ['SMALL_BOUNDING_BOX'], FaceDetail: {} }],
       },
     ]);
+    const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
     const result = await provider.indexFaces({
       collectionId: 'pg-1',
-      image: { s3: { bucket: 'b', key: 'tmp/index/x.jpg' } },
+      image: { bytes },
       externalImageId: 'file-1',
       maxFaces: 100,
       qualityFilter: 'LOW',
@@ -201,9 +208,8 @@ describe('indexing and collections', () => {
       ],
     });
     expect(acquired).toEqual(['IndexFaces']);
-    expect((send.mock.calls[0]![0] as IndexFacesCommand).input.Image).toEqual({
-      S3Object: { Bucket: 'b', Name: 'tmp/index/x.jpg' },
-    });
+    // ADR 0008 section 5: the image goes as bytes, never as an S3 object.
+    expect((send.mock.calls[0]![0] as IndexFacesCommand).input.Image).toEqual({ Bytes: bytes });
   });
 
   it('deletes faces in batches of 4096', async () => {
@@ -238,7 +244,7 @@ describe('indexing and collections', () => {
 describe('IndexFaces retries', () => {
   const request = {
     collectionId: 'pg-1',
-    image: { s3: { bucket: 'b', key: 'tmp/index/file-1/a/full.jpg' } },
+    image: { bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]) },
     externalImageId: 'file-1',
     maxFaces: 100,
     qualityFilter: 'LOW' as const,
@@ -285,7 +291,8 @@ describe('IndexFaces retries', () => {
 
   it('passes rejected requests through unchanged', async () => {
     for (const error of [
-      new InvalidS3ObjectException({ ...meta, message: 'cannot read object' }),
+      new InvalidImageFormatException({ ...meta, message: 'unsupported image' }),
+      new ImageTooLargeException({ ...meta, message: 'image too large' }),
       badMaxFaces(),
       new ResourceNotFoundException({ ...meta, message: 'no collection' }),
     ]) {
@@ -378,5 +385,40 @@ describe('rekognitionRetryOptions', () => {
       baseDelayMs: 200,
       maxDelayMs: 10_000,
     });
+  });
+});
+
+describe('image size', () => {
+  const limit = REKOGNITION_INLINE_MAX_BYTES;
+  const index = (bytes: number) => ({
+    collectionId: 'pg-1',
+    image: { bytes: new Uint8Array(bytes) },
+    externalImageId: 'file-1',
+    maxFaces: 100,
+    qualityFilter: 'LOW' as const,
+  });
+
+  it('is the 5 MiB Image.Bytes limit that packages/shared caps FACE_INDEX_MAX_BYTES with', () => {
+    expect(limit).toBe(5_242_880);
+    expect(loadFaceConfig({}).index.maxBytes).toBe(limit);
+  });
+
+  it('sends an image of exactly the limit', async () => {
+    const { provider, send } = setup([{ FaceRecords: [] }]);
+    await provider.indexFaces(index(limit));
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses larger images before taking a token or sending, for IndexFaces and selfies', async () => {
+    const { provider, send, acquired } = setup([]);
+    const indexError = await provider.indexFaces(index(limit + 1)).catch((e: unknown) => e);
+    // Not IndexFacesOutcomeUnknownError: nothing was sent, so nothing can have been indexed.
+    expect(indexError).toBeInstanceOf(ImageTooLargeError);
+    expect(indexError).toMatchObject({ bytes: limit + 1, maxBytes: limit });
+    await expect(
+      provider.searchFacesByImage({ ...search, image: new Uint8Array(limit + 1) }),
+    ).rejects.toBeInstanceOf(ImageTooLargeError);
+    expect(send).not.toHaveBeenCalled();
+    expect(acquired).toEqual([]);
   });
 });

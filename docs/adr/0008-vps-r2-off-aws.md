@@ -260,7 +260,12 @@ CloudWatch alarms and WAF go away. Their replacements are required before launch
   this together with the consent texts and backup retention against data-subject deletion.
 - **To verify against real R2 before launch:** `response-content-disposition` on presigned GETs,
   presigned `UploadPart` from a browser with CORS, `ListMultipartUploads`/`AbortMultipartUpload`,
-  lifecycle rules.
+  lifecycle rules, `DeleteObjects` with the checksum the SDK sends, CORS responses carrying
+  `Vary: Origin`, which public-access calls R2 answers, and the token permissions the bucket setup
+  script needs.
+- **To verify against real Rekognition before launch:** one `IndexFaces` with `Image.Bytes` of
+  exactly 5,242,880 bytes. AWS documents the limit as "5 MB"; if it means 5,000,000 bytes,
+  lower `FACE_INDEX_MAX_BYTES` to 5,000,000.
 
 ## Open questions for the owner
 

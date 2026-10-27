@@ -5,7 +5,6 @@ import {
   DeleteFacesCommand,
   DescribeCollectionCommand,
   type FaceMatch as AwsFaceMatch,
-  type Image,
   IndexFacesCommand,
   type IndexFacesCommandOutput,
   ListFacesCommand,
@@ -14,15 +13,17 @@ import {
   SearchFacesByImageCommand,
   SearchFacesCommand,
 } from '@aws-sdk/client-rekognition';
-import type { FaceConfig } from '@shotx/shared';
+import { type AwsClientConfig, awsClientOptions, type FaceConfig } from '@shotx/shared';
 import {
   type FaceProvider,
+  ImageTooLargeError,
   IndexFacesOutcomeUnknownError,
   type IndexFacesRequest,
   type ListFacesPage,
   type ListFacesRequest,
   NoFaceDetectedError,
   REKOGNITION_DELETE_FACES_BATCH,
+  REKOGNITION_INLINE_MAX_BYTES,
   type SearchByFaceRequest,
   type SearchByImageRequest,
 } from './provider';
@@ -32,7 +33,7 @@ import type {
   RekognitionProfile,
 } from './rekognition-limits';
 import { RateLimitedError, type RetryOptions, withRetry } from './throttling';
-import type { BoundingBox, FaceMatch, ImageInput, IndexFacesResult } from './types';
+import type { BoundingBox, FaceMatch, IndexFacesResult } from './types';
 
 /**
  * One Rekognition request took longer than `requestTimeoutMs` and was aborted. The request may
@@ -146,6 +147,21 @@ export function rekognitionClientConfig(
   };
 }
 
+/**
+ * The full SDK client config: `rekognitionClientConfig` plus the client's region, endpoint and
+ * credentials from `loadRekognitionClientConfig` (packages/shared, ADR 0008 section 1). The
+ * endpoint and the credentials are set only when configured: without an endpoint the SDK uses
+ * Rekognition's regional endpoint, and without credentials the default chain (on AWS: the task
+ * role). Off AWS the shared loader requires keys and refuses AWS_ENDPOINT_URL. Contains the secret
+ * key: never log it.
+ */
+export function rekognitionSdkConfig(
+  config: FaceConfig['rekognition'],
+  client: AwsClientConfig,
+): RekognitionClientConfig {
+  return { ...rekognitionClientConfig(config), ...awsClientOptions(client) };
+}
+
 export interface RekognitionProviderOptions {
   client: RekognitionClient;
   /** Every call takes a token from its operation's limiter, keeping under the per-operation TPS. */
@@ -165,16 +181,19 @@ export class RekognitionFaceProvider implements FaceProvider {
 
   /**
    * Builds the provider for one process. Pass limiters from `createRedisRekognitionLimiters` with
-   * the same profile in production. Retries happen here (behind the limiters), so the SDK's own
-   * retries are turned off; every request is bounded by `config.requestTimeoutMs`.
+   * the same profile in production, and `client` from `loadRekognitionClientConfig(env)`, so the
+   * endpoint and credentials are explicit and never come from AWS_ENDPOINT_URL. Retries happen
+   * here (behind the limiters), so the SDK's own retries are turned off; every request is bounded
+   * by `config.requestTimeoutMs`.
    */
   static create(
     config: FaceConfig['rekognition'],
     profile: RekognitionProfile,
     limiters: RekognitionLimiters,
+    client: AwsClientConfig,
   ): RekognitionFaceProvider {
     return new RekognitionFaceProvider({
-      client: new RekognitionClient(rekognitionClientConfig(config)),
+      client: new RekognitionClient(rekognitionSdkConfig(config, client)),
       limiters,
       retry: rekognitionRetryOptions(config, profile),
       requestTimeoutMs: config.requestTimeoutMs,
@@ -211,9 +230,11 @@ export class RekognitionFaceProvider implements FaceProvider {
    * IndexFaces is not idempotent, so only throttling is retried: a throttled request was
    * rejected. After a 5xx, a timeout (`requestTimeoutMs` included) or a dropped connection the
    * faces may already be indexed, and a retry would index them twice, so the call fails with
-   * IndexFacesOutcomeUnknownError instead.
+   * IndexFacesOutcomeUnknownError instead. Images above REKOGNITION_INLINE_MAX_BYTES fail with
+   * ImageTooLargeError before anything is sent.
    */
   async indexFaces(request: IndexFacesRequest): Promise<IndexFacesResult> {
+    assertInlineSize(request.image.bytes);
     let out: IndexFacesCommandOutput;
     try {
       out = await this.call(
@@ -222,7 +243,7 @@ export class RekognitionFaceProvider implements FaceProvider {
           this.options.client.send(
             new IndexFacesCommand({
               CollectionId: request.collectionId,
-              Image: toImage(request.image),
+              Image: { Bytes: request.image.bytes },
               ExternalImageId: request.externalImageId,
               MaxFaces: request.maxFaces,
               QualityFilter: request.qualityFilter,
@@ -255,6 +276,7 @@ export class RekognitionFaceProvider implements FaceProvider {
   }
 
   async searchFacesByImage(request: SearchByImageRequest): Promise<FaceMatch[]> {
+    assertInlineSize(request.image);
     try {
       const out = await this.call('SearchFacesByImage', (http) =>
         this.options.client.send(
@@ -370,10 +392,11 @@ async function withRequestTimeout<T>(
   }
 }
 
-function toImage(image: ImageInput): Image {
-  return 'bytes' in image
-    ? { Bytes: image.bytes }
-    : { S3Object: { Bucket: image.s3.bucket, Name: image.s3.key } };
+/** Rekognition rejects larger `Image.Bytes` with ImageTooLargeException; fail before the token. */
+function assertInlineSize(bytes: Uint8Array): void {
+  if (bytes.length > REKOGNITION_INLINE_MAX_BYTES) {
+    throw new ImageTooLargeError(bytes.length, REKOGNITION_INLINE_MAX_BYTES);
+  }
 }
 
 function toBox(box: AwsBoundingBox | undefined): BoundingBox {

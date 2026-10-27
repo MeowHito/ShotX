@@ -2,14 +2,11 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { SESv2Client } from '@aws-sdk/client-sesv2';
 import { SQSClient, type SQSClientConfig } from '@aws-sdk/client-sqs';
 import { createDb, createPool } from '@shotx/db';
-import {
-  createRedisRekognitionLimiters,
-  RekognitionFaceProvider,
-  S3TempImageStore,
-} from '@shotx/face';
-import { QUEUE_NAMES, type QueueName, storageS3ClientOptions } from '@shotx/shared';
+import { createRedisRekognitionLimiters, RekognitionFaceProvider } from '@shotx/face';
+import { awsClientOptions, QUEUE_NAMES, type QueueName } from '@shotx/shared';
 import { Redis } from 'ioredis';
 import { S3ObjectStore } from './aws/object-store';
+import { workerS3ClientOptions } from './aws/s3-client';
 import { SqsQueueClient } from './aws/queue-client';
 import { createEmailProvider } from './billing/email';
 import { createRenewalGateway } from './billing/gateway';
@@ -129,7 +126,7 @@ async function main(): Promise<void> {
   };
   // Media storage has its own endpoint and keys (ADR 0008 section 1): with STORAGE_ENDPOINT_URL
   // (R2) neither AWS_ENDPOINT_URL nor the default credential chain is consulted.
-  const s3 = new S3Client(storageS3ClientOptions(config.storage));
+  const s3 = new S3Client(workerS3ClientOptions(config.storage));
   const store = new S3ObjectStore(s3, config.storage.bucket);
   const runtime = createQueueRuntime(config, aws, log);
   const queues = runtime.sender;
@@ -147,7 +144,14 @@ async function main(): Promise<void> {
   // Rekognition behind FaceProvider (ADR 0001): background profile, rate limits shared through
   // Redis with every api and worker task.
   const limiters = createRedisRekognitionLimiters(redis, config.face.rekognition, 'background');
-  const provider = RekognitionFaceProvider.create(config.face.rekognition, 'background', limiters);
+  // Explicit region, endpoint and keys (loadRekognitionClientConfig), never AWS_ENDPOINT_URL or
+  // the default chain off AWS (ADR 0008 section 1).
+  const provider = RekognitionFaceProvider.create(
+    config.face.rekognition,
+    'background',
+    limiters,
+    config.rekognitionClient,
+  );
 
   const budget = checkFacesBudget(config.face, worker.maxProcessingMs.faces, runtime.facesHold);
   for (const problem of budget.problems) log.error(`faces time budget: ${problem}`);
@@ -179,7 +183,6 @@ async function main(): Promise<void> {
       queues,
       facesQueueUrl: runtime.destinations.faces,
       provider,
-      tempStore: new S3TempImageStore(s3, config.storage.bucket),
       collections: new CollectionRegistry(provider),
       face: config.face,
       features: config.features,
@@ -206,6 +209,7 @@ async function main(): Promise<void> {
       destinations: { media: runtime.destinations.media, faces: runtime.destinations.faces },
       sweeps: worker.sweeps,
       authSessionRetentionDays: config.retention.authSessionRetentionDays,
+      faceSearchEnabled: config.features.faceSearch,
       ledger: new RedisJobRunLedger(
         redis,
         `shotx:${config.app.stage}:worker:jobs:done`,
@@ -214,7 +218,11 @@ async function main(): Promise<void> {
       trashRetentionDays: config.retention.trashRetentionDays,
       subscriptions: {
         gateway: createRenewalGateway(config.paymentGateway),
-        email: createEmailProvider(config.email, () => new SESv2Client(aws)),
+        email: createEmailProvider(config.email, () => {
+          // Only called with EMAIL_PROVIDER=ses, which is when sesClient is loaded.
+          if (config.sesClient === null) throw new Error('EMAIL_PROVIDER=ses without SES client');
+          return new SESv2Client(awsClientOptions(config.sesClient));
+        }),
         billing: config.billing,
         lifecycle: config.retention.subscription,
         publicBaseUrl: config.app.publicBaseUrl,

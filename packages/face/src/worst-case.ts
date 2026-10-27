@@ -12,8 +12,8 @@ import { retryBackoffCapMs } from './throttling';
  *
  * Not included, because they are outside the provider's control: the Redis round trip of each
  * rate-limit reservation, timer and event-loop lateness (a sleep or the request timeout firing
- * late), and everything around the calls (temporary image puts and deletes, encoding, the local
- * detector, database writes). Add a margin for them.
+ * late), and everything around the calls (encoding the image and tiles, the local detector,
+ * database writes). Add a margin for them.
  */
 
 export interface RekognitionCallWorstCase {

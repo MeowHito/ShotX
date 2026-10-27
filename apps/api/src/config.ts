@@ -20,6 +20,7 @@ import {
   loadAppConfig,
   loadAuthProviderConfig,
   apiIssuesTokens,
+  type AwsClientConfig,
   loadAwsConfig,
   loadBffAuthConfig,
   loadBillingConfig,
@@ -36,6 +37,8 @@ import {
   loadPaymentGatewayConfig,
   loadQueueBackendConfig,
   loadRedisConfig,
+  loadRekognitionClientConfig,
+  loadSesClientConfig,
   loadRetentionConfig,
   loadSentryConfig,
   loadServerConfig,
@@ -56,6 +59,7 @@ import {
   type ShotxAuthConfig,
   type TrustedProxyConfig,
   type UploadConfig,
+  runsOffAws,
 } from '@shotx/shared';
 
 /** Port the API listens on when PORT is unset (infra sets 4000 too; health is `/api/health`). */
@@ -130,6 +134,19 @@ export interface ApiConfig {
   bff: BffAuthConfig | null;
   /** TRUSTED_PROXY_ADDRESSES: reverse proxies whose X-Forwarded-For is trusted. */
   trustedProxies: TrustedProxyConfig;
+  /**
+   * runsOffAws: AUTH_PROVIDER=shotx/local or STORAGE_ENDPOINT_URL set (the VPS, and local runs
+   * like it). There is no task role then: every AWS client gets explicit keys, and nothing may use
+   * AWS_ENDPOINT_URL or the default credential chain (wiring refuses SQS and AWS S3 there).
+   */
+  offAws: boolean;
+  /** Rekognition (face search and deletion): REKOGNITION_* (explicit keys off AWS). Secret. */
+  rekognitionClient: AwsClientConfig;
+  /**
+   * SES with EMAIL_PROVIDER=ses (SES_*), else null. Validated here; the api builds no SES client
+   * yet (SesEmailProvider is wired without one). Secret.
+   */
+  sesClient: AwsClientConfig | null;
   sentry: SentryConfig;
   limits: ApiLimits;
   features: FeatureFlags;
@@ -168,6 +185,9 @@ export function loadApiConfig(env: Env): ApiConfig {
     shotxAuth: apiIssuesTokens(auth.provider) ? loadShotxAuthConfig(env) : null,
     bff: loadBffAuthConfig(env),
     trustedProxies: loadTrustedProxyConfig(env),
+    offAws: runsOffAws(env),
+    rekognitionClient: loadRekognitionClientConfig(env),
+    sesClient: loadSesClientConfig(env),
     sentry: loadSentryConfig(env),
     limits: loadApiLimitsConfig(env),
     features: loadFeatureFlags(env),

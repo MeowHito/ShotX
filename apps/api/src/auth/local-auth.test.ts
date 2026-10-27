@@ -1,15 +1,23 @@
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { bucketedExpiry, S3_PRESIGN_MAX_EXPIRES_SECONDS } from '@shotx/shared';
+import { RekognitionFaceProvider, type RekognitionLimiters } from '@shotx/face';
 import { describe, expect, it } from 'vitest';
 import { CloudFrontMediaUrlSigner } from '../infra/cloudfront-signer';
 import { S3PresignMediaUrlSigner } from '../infra/s3-presign-signer';
 import { SqsQueueSender } from '../infra/sqs-queue';
 import { BullMqQueueSender } from '../infra/bullmq-queue';
 import { apiSendsMediaJobs } from '../config';
-import { testConfig } from '../testing/fakes';
+import { testConfig, testPrivateKeyPem } from '../testing/fakes';
 import { shotxEnv, TEST_SHOTX_AUTH_ENV } from '../testing/shotx-auth';
-import { mediaUrlSigner, queueSender, tokenVerifier } from '../wiring';
+import {
+  assertExplicitStorage,
+  interactiveFaceProvider,
+  mediaSignerSummary,
+  mediaUrlSigner,
+  queueSender,
+  tokenVerifier,
+} from '../wiring';
 import { CognitoTokenVerifier } from './cognito-verifier';
 import { ShotxTokenVerifier } from './shotx-tokens';
 
@@ -209,6 +217,9 @@ describe('adapter wiring', () => {
       testConfig({ ...local, STORAGE_ACCESS_KEY_ID: '', STORAGE_SECRET_ACCESS_KEY: '' }),
     ).toThrow(/STORAGE_ACCESS_KEY_ID/);
     const r2 = testConfig({
+      REKOGNITION_ACCESS_KEY_ID: 'AKIATESTREKOGNITION0',
+      REKOGNITION_SECRET_ACCESS_KEY: 'test-rekognition-secret',
+      AWS_IGNORE_CONFIGURED_ENDPOINT_URLS: 'true',
       MEDIA_URL_SIGNER: 's3-presign',
       STORAGE_ENDPOINT_URL: 'https://0123456789abcdef.r2.cloudflarestorage.com',
       STORAGE_REGION: 'auto',
@@ -234,5 +245,112 @@ describe('adapter wiring', () => {
       /localhost/,
     );
     expect(() => testConfig({ ...local, APP_STAGE: 'staging', NODE_ENV: 'test' })).toThrow();
+  });
+});
+
+describe('off AWS: no AWS_ENDPOINT_URL, no default credential chain (ADR 0008 §1)', () => {
+  const vps = {
+    ...TEST_SHOTX_AUTH_ENV,
+    AUTH_PROVIDER: 'shotx',
+    APP_STAGE: 'staging',
+    TRUSTED_PROXY_ADDRESSES: '172.18.0.2',
+    QUEUE_BACKEND: 'bullmq',
+    MEDIA_URL_SIGNER: 's3-presign',
+    STORAGE_ENDPOINT_URL: 'https://0123456789abcdef.r2.cloudflarestorage.com',
+    STORAGE_REGION: 'auto',
+    STORAGE_ACCESS_KEY_ID: 'r2key',
+    STORAGE_SECRET_ACCESS_KEY: 'r2secret',
+    STORAGE_ORIGINALS_CLASS: 'STANDARD',
+    CLOUDFRONT_MEDIA_BASE_URL: '',
+    CLOUDFRONT_KEY_PAIR_ID: '',
+    CLOUDFRONT_PRIVATE_KEY: '',
+  };
+
+  it('gives Rekognition explicit region and keys, and signs with the storage or signing token', () => {
+    const config = testConfig(vps);
+    expect(config.offAws).toBe(true);
+    expect(config.rekognitionClient).toEqual({
+      region: 'ap-southeast-1',
+      endpointUrl: null,
+      credentials: {
+        accessKeyId: 'AKIATESTREKOGNITION0',
+        secretAccessKey: 'test-rekognition-secret',
+      },
+    });
+    expect(config.sesClient).toBeNull(); // EMAIL_PROVIDER=fake in tests
+    expect(config.storage.client).toMatchObject({ explicit: true, region: 'auto' });
+    expect(() => assertExplicitStorage(config)).not.toThrow();
+    expect(mediaSignerSummary(config)).toBe(
+      'media URLs: s3-presign on https://0123456789abcdef.r2.cloudflarestorage.com, keySource=storage',
+    );
+    const signing = testConfig({
+      ...vps,
+      STORAGE_SIGNING_ACCESS_KEY_ID: 'r2readonly',
+      STORAGE_SIGNING_SECRET_ACCESS_KEY: 'r2readonlysecret',
+    });
+    const summary = mediaSignerSummary(signing);
+    expect(summary).toMatch(/keySource=signing$/);
+    expect(summary).not.toMatch(/r2readonly|r2secret|r2key/);
+    const url = new URL(
+      mediaUrlSigner(signing).sign(
+        'derived/0199b2a0-0000-7000-8000-000000000001/0199b2a0-0000-7000-8000-000000000002/thumb.webp',
+        new Date(Date.now() + 600_000),
+      ),
+    );
+    expect(url.searchParams.get('X-Amz-Credential')).toMatch(/^r2readonly\//);
+  });
+
+  it('builds the interactive Rekognition client from REKOGNITION_* (explicit region and keys)', async () => {
+    const config = testConfig({ ...vps, REKOGNITION_REGION: 'ap-southeast-1' });
+    const provider = interactiveFaceProvider(config, null as never, {} as RekognitionLimiters);
+    expect(provider).toBeInstanceOf(RekognitionFaceProvider);
+    const client = (
+      provider as unknown as {
+        options: {
+          client: {
+            config: {
+              region: () => Promise<string>;
+              credentials: () => Promise<{ accessKeyId: string }>;
+            };
+          };
+        };
+      }
+    ).options.client;
+    expect(await client.config.region()).toBe('ap-southeast-1');
+    expect((await client.config.credentials()).accessKeyId).toBe('AKIATESTREKOGNITION0');
+  });
+
+  it('refuses Rekognition without keys, AWS_ENDPOINT_URL, SQS and AWS S3 off AWS', () => {
+    expect(() =>
+      testConfig({ ...vps, REKOGNITION_ACCESS_KEY_ID: '', REKOGNITION_SECRET_ACCESS_KEY: '' }),
+    ).toThrow(/REKOGNITION_ACCESS_KEY_ID and REKOGNITION_SECRET_ACCESS_KEY are required off AWS/);
+    expect(() => testConfig({ ...vps, AWS_ENDPOINT_URL: 'http://localhost:4566' })).toThrow(
+      /AWS_ENDPOINT_URL must be unset off AWS/,
+    );
+    expect(() => queueSender(testConfig({ ...vps, QUEUE_BACKEND: 'sqs' }))).toThrow(
+      /AWS stacks only/,
+    );
+    // AUTH_PROVIDER=shotx with storage on AWS S3 (default chain): refused.
+    const s3 = testConfig({
+      ...vps,
+      MEDIA_URL_SIGNER: 'cloudfront',
+      CLOUDFRONT_MEDIA_BASE_URL: 'https://photos.example.com/media',
+      CLOUDFRONT_KEY_PAIR_ID: 'K2JCJMDEHXQW5F',
+      CLOUDFRONT_PRIVATE_KEY: testPrivateKeyPem(),
+      STORAGE_ENDPOINT_URL: '',
+      STORAGE_REGION: '',
+      STORAGE_ACCESS_KEY_ID: '',
+      STORAGE_SECRET_ACCESS_KEY: '',
+      STORAGE_ORIGINALS_CLASS: 'INTELLIGENT_TIERING',
+    });
+    expect(() => assertExplicitStorage(s3)).toThrow(/STORAGE_ENDPOINT_URL/);
+  });
+
+  it('keeps the AWS stacks as they are (task role, S3, SQS)', () => {
+    const aws = testConfig();
+    expect(aws.offAws).toBe(false);
+    expect(aws.rekognitionClient.credentials).toBeNull();
+    expect(() => assertExplicitStorage(aws)).not.toThrow();
+    expect(mediaSignerSummary(aws)).toBe('media URLs: cloudfront');
   });
 });

@@ -1,10 +1,11 @@
 import {
   AUTH_SIGNING_KEY_ENV,
+  AWS_CLIENT_ENV,
   BULLMQ_QUEUE_ENV,
   PAYMENT_GATEWAY_SECRET_NAMES,
-  S3_PREFIXES,
   SCHEDULE_TIMEZONE_ENV,
   SCHEDULED_JOB_ENV,
+  STORAGE_LIFECYCLE_ENV,
 } from '@shotx/shared';
 
 /**
@@ -87,13 +88,6 @@ export const FACE_SEARCH_CONTENT_TYPE = 'multipart/form-data';
 export const ECS_MAX_STOP_TIMEOUT_SECONDS = 120;
 
 /**
- * Scan files of the reconciliation jobs (worker only). packages/shared has no constant for this
- * prefix yet, so it is built from S3_PREFIXES.tmp here; the worker must write under exactly this
- * prefix, the only part of tmp/ it may read back and delete besides tmp/index/.
- */
-export const TMP_RECONCILE_PREFIX = `${S3_PREFIXES.tmp}reconcile/`;
-
-/**
  * Environment variables infra sets from typed context values, stack resources or secrets.
  * `services.env` must not set them, so each has exactly one source.
  */
@@ -153,4 +147,13 @@ export const INFRA_OWNED_ENV = [
   'STORAGE_ACCESS_KEY_ID',
   'STORAGE_SECRET_ACCESS_KEY',
   'STORAGE_ORIGINALS_CLASS',
+  // The read-only signing token of MEDIA_URL_SIGNER=s3-presign (R2). AWS signs with CloudFront.
+  'STORAGE_SIGNING_ACCESS_KEY_ID',
+  'STORAGE_SIGNING_SECRET_ACCESS_KEY',
+  // Bucket lifecycle and CORS of the R2 deploy script (deploy/r2). The AWS bucket's come from
+  // cdk.json `storage`; a value here would be ignored.
+  ...Object.values(STORAGE_LIFECYCLE_ENV),
+  // Rekognition and SES clients off AWS (static keys, endpoint, region). The AWS stacks use the
+  // task role and the stack region; keys here would be plaintext secrets in the task definition.
+  ...Object.values(AWS_CLIENT_ENV).flatMap((names) => Object.values(names)),
 ] as const;

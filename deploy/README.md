@@ -13,15 +13,19 @@ for a rehearsal):
   - `GET`/`HEAD` (the share sheet's `navigator.share` fetches signed downloads; simple requests,
     no credentials).
 - **Lifecycle** (ADR 0006): abort incomplete multipart uploads after
-  `storage.abortIncompleteMultipartUploadDays`, and expire `tmp/zips/`, `tmp/reconcile/` and the
-  rest of `tmp/` after their `storage.tmp*ExpirationDays`. There is no `tmp/index/` rule (the VPS
-  doesn't write index images, ADR 0008 section 5; leftovers fall under the `tmp/` catch-all) and
-  no Intelligent-Tiering transition (R2 has none).
+  `STORAGE_ABORT_INCOMPLETE_MULTIPART_UPLOAD_DAYS`, and expire `tmp/zips/`, `tmp/reconcile/` and
+  the rest of `tmp/` after `STORAGE_TMP_ZIPS_EXPIRATION_DAYS`,
+  `STORAGE_TMP_RECONCILE_EXPIRATION_DAYS` and `STORAGE_TMP_OTHER_EXPIRATION_DAYS`. There is no
+  `tmp/index/` rule, because IndexFaces gets the image as bytes and nothing is written there
+  (ADR 0008 section 5). There is no Intelligent-Tiering transition either (R2 has none).
 
-The days and the CORS max age come from `infra/cdk.json` (`context.shotx.storage`), the same values
-the AWS bucket uses. The zip, signed-URL, worker and face settings come from the environment, read
-with the same `@shotx/shared` loaders api and worker use. Before anything is sent the script
-re-runs ADR 0006's checks (CDK synth runs them for the AWS bucket) and stops if one fails:
+Everything comes from the environment, read with the `@shotx/shared` loaders:
+
+- the lifecycle days and the CORS max age (`STORAGE_UPLOAD_CORS_MAX_AGE_SECONDS`) through
+  `loadStorageLifecycleConfig`. Unset values default to `STORAGE_LIFECYCLE_DEFAULTS`, the values
+  the AWS bucket uses;
+- the zip, signed-URL, worker and face settings through the same loaders api and worker use. Before anything is sent the script
+  re-runs ADR 0006's checks (CDK synth runs them for the AWS bucket) and stops if one fails:
 
 - `tmp/zips/` covers `WORKER_ZIP_MAX_PROCESSING_SECONDS + ZIP_RESULT_TTL_SECONDS +
 SIGNED_URL_DOWNLOAD_TTL_SECONDS + SIGNED_URL_EXPIRY_BUCKET_SECONDS`;
@@ -65,7 +69,8 @@ Use the same values api and worker run with on the VPS (source their env file), 
 
 The zip and signed-URL settings (`ZIP_RESULT_TTL_SECONDS`, `SIGNED_URL_DOWNLOAD_TTL_SECONDS`,
 `SIGNED_URL_EXPIRY_BUCKET_SECONDS`), `WORKER_ZIP_MAX_PROCESSING_SECONDS` and
-`FACE_ORPHAN_GRACE_MS` fall back to their code defaults when unset. If api and worker use
+`FACE_ORPHAN_GRACE_MS` fall back to their code defaults when unset, as do the `STORAGE_*` lifecycle
+values above. If api and worker use
 different env files, run the dry run with each one: the checks need the larger values.
 
 **Token.** Changing bucket CORS and lifecycle needs an R2 API token with admin (bucket settings)
@@ -85,9 +90,6 @@ pnpm --filter @shotx/deploy r2:setup-bucket --dry-run   # checks and prints the 
 pnpm --filter @shotx/deploy r2:setup-bucket             # checks public access, then applies
 ```
 
-`--config <path>` reads `context.shotx.storage` from another cdk.json. pnpm runs the script in
-`deploy/`, so a relative path resolves from there.
-
 ### Rehearsal on LocalStack
 
 With `docker compose` up and the repo's `.env` (`APP_STAGE=local`, `STORAGE_ENDPOINT_URL=http://localhost:4566`):
@@ -98,13 +100,12 @@ pnpm --filter @shotx/deploy r2:setup-bucket
 ```
 
 This replaces the local bucket's lifecycle rules with the R2 set. The LocalStack init hook keeps
-the AWS set, including `tmp/index/` and Intelligent-Tiering. To restore it, run the hook again:
+the AWS set, including Intelligent-Tiering. To restore it, run the hook again:
 `docker exec <localstack container> bash /etc/localstack/init/ready.d/init-aws.sh`. The CORS rules
 are the same in both.
 
 ### Tests
 
 `pnpm --filter @shotx/deploy test` covers rule building, the ADR 0006 checks, the public-access
-decisions and idempotent apply against a fake bucket. `test/infra-parity.test.ts` keeps the ADR
-0006 math equal to `infra/lib/worker-limits.ts`. Delete it together with `infra/`. At that point
-the lifecycle days also need a new home, because they are read from `infra/cdk.json` today.
+decisions and idempotent apply against a fake bucket. The settings and the ADR 0006 math are
+tested in packages/shared (`config/lifecycle.test.ts`), which infra/ uses too.

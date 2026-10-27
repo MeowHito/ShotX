@@ -42,7 +42,7 @@ export function serviceFaceConfig(env: ServiceEnvGroups, service: 'api' | 'worke
 export interface FacesJobBudget {
   /** CreateCollection, then DescribeCollection when the collection already exists. */
   readonly collectionCallsPerJob: number;
-  /** Decode, tile encodes, tmp/index/ puts and deletes, local detector and DB writes. */
+  /** Decode, image and tile encodes (to fit FACE_INDEX_MAX_BYTES), local detector, DB writes. */
   readonly processingSeconds: number;
 }
 

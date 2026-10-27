@@ -1,17 +1,21 @@
 import {
   AUTH_SIGNING_KEY_ENV,
+  AWS_CLIENT_ENV,
   BULLMQ_QUEUE_ENV,
   loadAuthProviderConfig,
   loadBffAuthConfig,
   loadMediaStorageConfig,
   loadMediaUrlSignerConfig,
   loadQueueBackendConfig,
+  loadRekognitionClientConfig,
+  runsOffAws,
   loadShotxAuthConfig,
   loadTrustedProxyConfig,
   QUEUE_NAMES,
   QUEUE_URL_ENV,
   SCHEDULE_TIMEZONE_ENV,
   SCHEDULED_JOB_ENV,
+  STORAGE_LIFECYCLE_ENV,
 } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
 import { parseConfig } from '../lib/config';
@@ -41,7 +45,8 @@ const LOCAL_ONLY = {
  * the BullMQ/schedule settings (cdk.json `queues` and `schedules` are their AWS source), the
  * API-issued sign-in keys and secrets (AWS stays on Cognito, with no secret wiring for them) and
  * the trusted reverse proxy (on AWS the client address is CloudFront-Viewer-Address), plaintext
- * Redis credentials (ElastiCache is TLS only) and non-AWS media storage (STORAGE_*).
+ * Redis credentials (ElastiCache is TLS only), non-AWS media storage (STORAGE_*, its signing token
+ * and the R2 lifecycle settings) and static Rekognition/SES client keys (AWS uses task roles).
  */
 const VPS_ONLY = [
   'QUEUE_BACKEND',
@@ -62,6 +67,10 @@ const VPS_ONLY = [
   'STORAGE_ACCESS_KEY_ID',
   'STORAGE_SECRET_ACCESS_KEY',
   'STORAGE_ORIGINALS_CLASS',
+  'STORAGE_SIGNING_ACCESS_KEY_ID',
+  'STORAGE_SIGNING_SECRET_ACCESS_KEY',
+  ...Object.values(STORAGE_LIFECYCLE_ENV),
+  ...Object.values(AWS_CLIENT_ENV).flatMap((names) => Object.values(names)),
 ];
 
 /** Stands in for a CloudFormation token; queue URLs get a URL so the SQS loader can parse them. */
@@ -157,6 +166,13 @@ describe('local development stand-ins never reach a deployed stage', () => {
         const backend = loadQueueBackendConfig(env, queues);
         expect(backend.backend).toBe('sqs');
         for (const q of queues) queuesSeen.add(q);
+        // On AWS: task-role credentials and regional endpoints for Rekognition.
+        expect(runsOffAws(env)).toBe(false);
+        expect(loadRekognitionClientConfig(env)).toEqual({
+          region: 'ap-southeast-1',
+          endpointUrl: null,
+          credentials: null,
+        });
         // Media on AWS S3 through the task role, originals in Intelligent-Tiering.
         if (env.MEDIA_BUCKET !== undefined) {
           const storage = loadMediaStorageConfig(env);

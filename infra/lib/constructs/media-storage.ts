@@ -3,7 +3,6 @@ import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import type { PlatformConfig } from '../config';
-import { TMP_RECONCILE_PREFIX } from '../constants';
 
 export interface MediaStorageProps {
   readonly config: PlatformConfig;
@@ -52,12 +51,8 @@ export class MediaStorage extends Construct {
           ),
         },
         // One rule per tmp/ prefix. Where rules overlap S3 applies the shortest expiration, so
-        // the tmp/ catch-all is at least as long as every specific rule (checked in config).
-        {
-          id: 'expire-tmp-index',
-          prefix: S3_PREFIXES.tmpIndex,
-          expiration: Duration.days(storage.tmpIndexExpirationDays),
-        },
+        // the tmp/ catch-all is at least as long as every specific rule (checked in config). No
+        // tmp/index/ rule: IndexFaces gets bytes (ADR 0008 section 5), nothing is written there.
         {
           // Kept for at least ZIP_RESULT_TTL_SECONDS after the zip completes (config).
           id: 'expire-tmp-zips',
@@ -66,7 +61,7 @@ export class MediaStorage extends Construct {
         },
         {
           id: 'expire-tmp-reconcile',
-          prefix: TMP_RECONCILE_PREFIX,
+          prefix: S3_PREFIXES.tmpReconcile,
           expiration: Duration.days(storage.tmpReconcileExpirationDays),
         },
         {

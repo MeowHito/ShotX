@@ -20,7 +20,7 @@ export interface OrphanScanStore {
   remove(photographerId: string): Promise<void>;
 }
 
-export const RECONCILE_SCAN_PREFIX = `${S3_PREFIXES.tmp}reconcile/`;
+export const RECONCILE_SCAN_PREFIX = S3_PREFIXES.tmpReconcile;
 
 /** `tmp/reconcile/{photographerId}.json` (see the CONTRACT CHANGE REQUEST above). */
 export function reconcileScanKey(photographerId: string): string {

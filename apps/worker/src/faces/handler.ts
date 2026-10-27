@@ -32,7 +32,8 @@ async function loadFolder(deps: FacesDeps, folderId: string) {
  * covers. Each batch sets the files' outbox marks (`faces_queued_at`) before it is sent, so a lost
  * message is re-sent by faces.sweep. Duplicates are harmless (index.file skips indexed files), so a
  * retry may resend. When the fan-out is done (or there is nothing to do) the folder's own mark
- * (`face_index_queued_at`, set by the API) is cleared, unless it changed meanwhile.
+ * (`face_index_queued_at`, set by the API) is cleared, unless it changed meanwhile, or face search
+ * is off (FACE_SEARCH_ENABLED=false: the job is acknowledged and the mark kept).
  */
 async function indexFolder(
   deps: FacesDeps,
@@ -75,7 +76,9 @@ async function indexFolder(
     }
     log.info('folder indexing fanned out', { folderId, files: queued });
   }
-  if (folder?.queuedAt != null) {
+  // While FACE_SEARCH_ENABLED is false nothing was fanned out: the mark stays, and faces.sweep
+  // re-sends it once indexing is back on.
+  if (deps.features.faceSearch && folder?.queuedAt != null) {
     await deps.db
       .update(folders)
       .set({ faceIndexQueuedAt: null })
@@ -165,8 +168,9 @@ export function createFacesHandler(deps: FacesDeps): MessageHandler {
         const log = context.log.child({ jobType: job.type, fileId: job.fileId });
         const mark = await fileMark(deps, job.fileId);
         const outcome = await indexFile(deps, job.fileId, log, signal);
-        // The job ended (any outcome; a throw keeps the mark for a retry or faces.sweep).
-        if (mark !== null) await clearFileMark(deps, job.fileId, mark);
+        // The job ended (any outcome but flag-off, which indexed nothing: that mark stays for
+        // faces.sweep to re-send when indexing is back on; a throw keeps it for a retry).
+        if (mark !== null && outcome !== 'flag-off') await clearFileMark(deps, job.fileId, mark);
         log.info('index job finished', { outcome });
         return;
       }

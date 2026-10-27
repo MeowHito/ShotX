@@ -16,7 +16,8 @@ export interface PrefixScopedOacOriginProps extends cloudfront.OriginProps {
  *
  * `S3BucketOrigin.withOriginAccessControl` grants s3:GetObject on the whole bucket. This origin
  * grants it only on the listed prefixes and only to this distribution (AWS:SourceArn), so the
- * face-index scratch images under tmp/index/ can't be served even with a valid signed URL.
+ * rest of the bucket (tmp/reconcile/ scan files, anything else under tmp/) can't be served even
+ * with a valid signed URL.
  */
 export class PrefixScopedOacOrigin extends origins.S3BucketOrigin {
   private readonly mediaBucket: s3.IBucket;

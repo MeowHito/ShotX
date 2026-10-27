@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   type AclGrant,
@@ -168,9 +167,6 @@ describe('applying the plan', () => {
 });
 
 describe('prepareSetup', () => {
-  const cdkJson: unknown = JSON.parse(
-    readFileSync(new URL('../../infra/cdk.json', import.meta.url), 'utf8'),
-  );
   const r2Env = {
     NODE_ENV: 'production',
     APP_STAGE: 'prod',
@@ -186,7 +182,7 @@ describe('prepareSetup', () => {
   };
 
   it('builds the plan for R2 from the env and cdk.json', () => {
-    const setup = prepareSetup(r2Env, cdkJson);
+    const setup = prepareSetup(r2Env);
     expect(setup).toMatchObject({ bucket: 'shotx-prod-media', r2: true, local: false });
     expect(setup.plan.cors.flatMap((r) => r.AllowedOrigins)).toEqual([
       'https://photos.example.com',
@@ -208,31 +204,43 @@ describe('prepareSetup', () => {
     ]) {
       delete aws[key];
     }
-    expect(() => prepareSetup(aws, cdkJson)).toThrow(/managed by infra\//);
+    expect(() => prepareSetup(aws)).toThrow(/managed by infra\//);
   });
 
   it('refuses unsafe lifecycle rules before any request', () => {
-    expect(() =>
-      prepareSetup({ ...r2Env, ZIP_RESULT_TTL_SECONDS: String(2 * 86_400) }, cdkJson),
-    ).toThrow(/unsafe \(ADR 0006\)[\s\S]*tmpZipsExpirationDays/);
+    expect(() => prepareSetup({ ...r2Env, ZIP_RESULT_TTL_SECONDS: String(2 * 86_400) })).toThrow(
+      /unsafe \(ADR 0006\)[\s\S]*STORAGE_TMP_ZIPS_EXPIRATION_DAYS/,
+    );
+  });
+
+  it('reads the lifecycle days from the env', () => {
+    const setup = prepareSetup({
+      ...r2Env,
+      ZIP_RESULT_TTL_SECONDS: String(2 * 86_400),
+      STORAGE_TMP_ZIPS_EXPIRATION_DAYS: '3',
+    });
+    expect(setup.plan.lifecycle.find((r) => r.Filter.Prefix === 'tmp/zips/')?.Expiration).toEqual({
+      Days: 3,
+    });
+    // The shared loader keeps the catch-all at least the per-prefix rules.
+    expect(() => prepareSetup({ ...r2Env, STORAGE_TMP_OTHER_EXPIRATION_DAYS: '2' })).toThrow(
+      /STORAGE_TMP_OTHER_EXPIRATION_DAYS must be at least/,
+    );
   });
 
   it('works against LocalStack on APP_STAGE=local', () => {
-    const setup = prepareSetup(
-      {
-        APP_STAGE: 'local',
-        PUBLIC_BASE_URL: 'http://localhost:3000',
-        ADMIN_BASE_URL: 'http://localhost:3001',
-        MEDIA_BUCKET: 'shotx-local-media',
-        STORAGE_ENDPOINT_URL: 'http://localhost:4566',
-        STORAGE_REGION: 'ap-southeast-1',
-        STORAGE_ACCESS_KEY_ID: 'test',
-        STORAGE_SECRET_ACCESS_KEY: 'test',
-        STORAGE_ORIGINALS_CLASS: 'STANDARD',
-        S3_FORCE_PATH_STYLE: 'true',
-      },
-      cdkJson,
-    );
+    const setup = prepareSetup({
+      APP_STAGE: 'local',
+      PUBLIC_BASE_URL: 'http://localhost:3000',
+      ADMIN_BASE_URL: 'http://localhost:3001',
+      MEDIA_BUCKET: 'shotx-local-media',
+      STORAGE_ENDPOINT_URL: 'http://localhost:4566',
+      STORAGE_REGION: 'ap-southeast-1',
+      STORAGE_ACCESS_KEY_ID: 'test',
+      STORAGE_SECRET_ACCESS_KEY: 'test',
+      STORAGE_ORIGINALS_CLASS: 'STANDARD',
+      S3_FORCE_PATH_STYLE: 'true',
+    });
     expect(setup).toMatchObject({ r2: false, local: true });
     expect(setup.plan.cors[0]?.AllowedOrigins).toEqual(['http://localhost:3000']);
   });

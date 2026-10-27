@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEFAULT_AWS_REGION } from './aws';
+import { AWS_CLIENT_ENV, loadAwsClientConfig } from './aws-clients';
 import { type Env, parseEnv } from './env';
 import {
   int,
@@ -23,6 +23,28 @@ export type QualityFilter = (typeof QUALITY_FILTERS)[number];
  */
 export const TILING_MODES = ['never', 'signal', 'always'] as const;
 export type TilingMode = (typeof TILING_MODES)[number];
+
+/**
+ * Rekognition's limit on an image passed as bytes (`Image.Bytes`): 5 MiB (5,242,880 bytes). Since
+ * ADR 0008 section 5 every image goes as bytes (selfies, IndexFaces images and tiles), so it is
+ * also the ceiling of FACE_INDEX_MAX_BYTES. packages/face's REKOGNITION_INLINE_MAX_BYTES is the
+ * same number.
+ */
+export const REKOGNITION_INLINE_IMAGE_MAX_BYTES = 5 * MiB;
+
+/**
+ * Upper bound on the bytes per pixel of any JPEG the face encoder writes (sharp, 4:2:0 chroma,
+ * even pure noise at quality 100 stays well below this): 1.5 x raw 8-bit RGB. With it,
+ * `faceEncodeFloorBytes(FACE_ENCODE_MIN_LONG_EDGE)` bounds a square image at the smallest long
+ * edge the encode loop may shrink to, so the loop is guaranteed to land under a byte limit at
+ * least that large.
+ */
+export const JPEG_WORST_CASE_BYTES_PER_PIXEL = 4.5;
+
+/** Worst-case JPEG size of a square image with this long edge (see JPEG_WORST_CASE_BYTES_PER_PIXEL). */
+export function faceEncodeFloorBytes(minLongEdge: number): number {
+  return Math.ceil(minLongEdge * minLongEdge * JPEG_WORST_CASE_BYTES_PER_PIXEL);
+}
 
 const percent = z.coerce.number().min(0).max(100);
 const ratio = z.coerce.number().min(0).max(1);
@@ -56,7 +78,14 @@ const faceEnvSchema = z
     FACE_SELFIE_JPEG_QUALITY: int(50, 100).default(90),
     FACE_INDEX_LONG_EDGE: int(640, 8192).default(3500),
     FACE_INDEX_JPEG_QUALITY: int(50, 100).default(90),
-    FACE_INDEX_MAX_BYTES: int(1, 15 * MiB).default(15 * MiB),
+    /**
+     * Largest IndexFaces image or tile, sent as `Image.Bytes` (ADR 0008 section 5): at most
+     * Rekognition's 5 MiB inline limit, which is the default. The encoder lowers JPEG quality,
+     * then the long edge, until an image fits.
+     */
+    FACE_INDEX_MAX_BYTES: int(1, REKOGNITION_INLINE_IMAGE_MAX_BYTES).default(
+      REKOGNITION_INLINE_IMAGE_MAX_BYTES,
+    ),
     FACE_INDEX_MAX_FACES: int(1, 100).default(100),
     FACE_INDEX_QUALITY_FILTER: z.enum(QUALITY_FILTERS).default('LOW'),
     FACE_INDEX_TILING: z.enum(TILING_MODES).default('signal'),
@@ -101,7 +130,6 @@ const faceEnvSchema = z
     FACE_SEARCH_RATE_PER_SHARE_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
     FACE_SEARCH_RATE_PER_VIEWER: requests.default(10),
     FACE_SEARCH_RATE_PER_VIEWER_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
-    AWS_REGION: z.string().min(1).default(DEFAULT_AWS_REGION),
   })
   .refine((env) => env.FACE_STRONG >= env.FACE_MAYBE, {
     error: 'FACE_STRONG must be greater than or equal to FACE_MAYBE',
@@ -115,6 +143,13 @@ const faceEnvSchema = z
   .refine((env) => env.FACE_ENCODE_MIN_LONG_EDGE <= env.FACE_INDEX_LONG_EDGE, {
     error: 'FACE_ENCODE_MIN_LONG_EDGE must be less than or equal to FACE_INDEX_LONG_EDGE',
   })
+  .refine(
+    (env) => faceEncodeFloorBytes(env.FACE_ENCODE_MIN_LONG_EDGE) <= env.FACE_INDEX_MAX_BYTES,
+    {
+      error:
+        'FACE_INDEX_MAX_BYTES is too small for FACE_ENCODE_MIN_LONG_EDGE: the encoder could fail to fit an image (needs at least FACE_ENCODE_MIN_LONG_EDGE² × 4.5 bytes)',
+    },
+  )
   .refine((env) => env.FACE_REKOGNITION_RETRY_BASE_MS <= env.FACE_REKOGNITION_RETRY_MAX_MS, {
     error:
       'FACE_REKOGNITION_RETRY_BASE_MS must be less than or equal to FACE_REKOGNITION_RETRY_MAX_MS',
@@ -180,6 +215,7 @@ export interface FaceConfig {
   index: {
     longEdge: number;
     jpegQuality: number;
+    /** FACE_INDEX_MAX_BYTES: at most REKOGNITION_INLINE_IMAGE_MAX_BYTES (Image.Bytes). */
     maxBytes: number;
     maxFaces: number;
     qualityFilter: QualityFilter;
@@ -213,6 +249,11 @@ export interface FaceConfig {
     minLongEdge: number;
   };
   rekognition: {
+    /**
+     * REKOGNITION_REGION, else AWS_REGION, else ap-southeast-1. The client's endpoint and
+     * credentials are loadRekognitionClientConfig (aws-clients.ts), loaded separately so callers
+     * that never call Rekognition (deploy, face-eval reports) need no keys.
+     */
     region: string;
     /** Token buckets in Redis, shared by every API and worker instance. */
     rateLimit: {
@@ -259,8 +300,17 @@ export interface FaceConfig {
   };
 }
 
+/**
+ * Reads the FACE_* settings and the Rekognition region (REKOGNITION_REGION, else AWS_REGION, else
+ * ap-southeast-1); the other REKOGNITION_* values are validated but not required here. The
+ * client's endpoint and keys: loadRekognitionClientConfig.
+ */
 export function loadFaceConfig(env: Env): FaceConfig {
   const e = parseEnv(faceEnvSchema, env, 'face');
+  // Validates every REKOGNITION_* value; the keys are enforced by loadRekognitionClientConfig.
+  const { region } = loadAwsClientConfig(env, AWS_CLIENT_ENV.rekognition, 'face', {
+    required: false,
+  });
   return {
     thresholds: { strong: e.FACE_STRONG, maybe: e.FACE_MAYBE },
     search: {
@@ -312,7 +362,7 @@ export function loadFaceConfig(env: Env): FaceConfig {
       minLongEdge: e.FACE_ENCODE_MIN_LONG_EDGE,
     },
     rekognition: {
-      region: e.AWS_REGION,
+      region,
       rateLimit: {
         keyPrefix: e.FACE_REKOGNITION_RATE_LIMIT_PREFIX,
         burstSeconds: e.FACE_REKOGNITION_BURST_SECONDS,
@@ -355,9 +405,6 @@ export function faceDeletionAlertDue(
 ): boolean {
   return deletionsInWindow >= alert.perShare;
 }
-
-/** Rekognition's limit on an image passed as bytes (SearchFacesByImage with a selfie). */
-export const REKOGNITION_INLINE_IMAGE_MAX_BYTES = 5 * MiB;
 
 const faceSearchUploadEnvSchema = z
   .object({

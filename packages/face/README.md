@@ -13,10 +13,21 @@ reconciliation, background profile) and `tools/face-eval`.
 ```ts
 const face = loadFaceConfig(process.env);
 const limiters = createRedisRekognitionLimiters(redis, face.rekognition, 'background');
-const provider = RekognitionFaceProvider.create(face.rekognition, 'background', limiters);
+const provider = RekognitionFaceProvider.create(
+  face.rekognition,
+  'background',
+  limiters,
+  loadRekognitionClientConfig(process.env), // @shotx/shared, ADR 0008 section 1
+);
 ```
 
-The api passes `'interactive'` for both. `create` turns off the SDK's own retries (the provider
+The api passes `'interactive'` for both. The client config gives the client its region, its
+endpoint (`REKOGNITION_ENDPOINT_URL`, set only for tests and LocalStack) and its keys
+(`REKOGNITION_ACCESS_KEY_ID` / `REKOGNITION_SECRET_ACCESS_KEY`, required off AWS). Each is passed
+to the SDK only when configured (`rekognitionSdkConfig`): no endpoint means Rekognition's
+regional endpoint, no keys means the default chain, which is only right on the AWS stacks (the
+task role). The shared loader refuses `AWS_ENDPOINT_URL` off AWS, because the SDK would apply it
+to a client without an explicit endpoint. `create` turns off the SDK's own retries (the provider
 retries behind the rate limiters) and bounds every request by
 `FACE_REKOGNITION_REQUEST_TIMEOUT_MS` in two places:
 
@@ -29,6 +40,27 @@ A request that times out fails with `RekognitionRequestTimeoutError` (name `Time
 Calls that are safe to repeat retry it like any other transient error. IndexFaces doesn't: the
 request may have reached Rekognition, so a timeout ends the call with
 `IndexFacesOutcomeUnknownError`.
+
+## Images go as bytes (ADR 0008 section 5)
+
+Every image reaches Rekognition as `Image.Bytes`, whose limit is 5 MiB (5,242,880 bytes,
+`REKOGNITION_INLINE_MAX_BYTES`). Nothing is written to storage: the S3Object path, the temporary
+index images under `tmp/index/` and the `TempImageStore` adapters are gone.
+
+- `indexPhoto` encodes the full photo and every tile in memory with `encodeJpeg` under
+  `FACE_INDEX_MAX_BYTES` (default and maximum 5 MiB), capped at the provider's limit. The loop
+  lowers JPEG quality by `FACE_ENCODE_QUALITY_STEP` down to `FACE_ENCODE_MIN_QUALITY`, then
+  shrinks the long edge by `FACE_ENCODE_SHRINK_FACTOR`, trying `FACE_ENCODE_MIN_LONG_EDGE` itself
+  last. FaceConfig only accepts a limit that a square image of that edge fits at any quality, so
+  the loop always lands. Each photo decodes once per size, not once per quality step.
+- `IndexPhotoResult.images` reports every image sent (tile, bytes, size, quality used, whether it
+  was downscaled). face-eval aggregates it; the worker may log counts from it.
+- `RekognitionFaceProvider` refuses images above the limit with `ImageTooLargeError` before it
+  takes a rate-limit token or sends anything, for IndexFaces and selfies alike, and
+  `FakeFaceProvider` enforces the same limit.
+- Noisy photos (high ISO, foliage, crowds) that went at quality 90 under the old 15 MiB S3 limit
+  now go at a lower quality; `src/encode-limit.test.ts` covers pure-noise worst cases for full
+  images and tiles. `tools/face-eval` measures what that does to accuracy.
 
 ## Rate limits: what the token bucket guarantees
 
@@ -79,8 +111,8 @@ At the defaults:
 | Smallest grace for that (2 × attempt)        | 4,796,400 ms first indexing, **5,481,600 ms** re-index         |
 
 Not included, because the provider doesn't bound them: the Redis round trip of each
-reservation, timers firing late, and the work around the calls (temporary image puts and
-deletes in S3, decoding and encoding, the local detector, database writes). Measure those and
+reservation, timers firing late, and the work around the calls (decoding and encoding the image
+and its tiles, the local detector, database writes). Measure those and
 add a margin. CreateCollection/DescribeCollection, if the job makes sure the collection exists,
 are two more calls.
 
@@ -166,11 +198,10 @@ delete the faces it indexed. What it reports as left behind:
 - `untrackedFacesPossible`: an IndexFaces call ended with `IndexFacesOutcomeUnknownError`, so
   faces may exist whose ids nobody knows. Only `reconcileCollection` finds them; it runs daily
   anyway, so there is nothing else to do beyond logging it.
-- `cleanupErrors`: every cleanup step that failed after `cause` (DeleteFaces, temporary image
-  deletes), for logs. Log error names and counts only, never image bytes.
+- `cleanupErrors`: every cleanup step that failed after `cause` (DeleteFaces), for logs. Log
+  error names and counts only, never image bytes.
 
-After an `IndexPhotoError` the job may retry: the next attempt has a new attempt id and its own
-temporary image keys.
+After an `IndexPhotoError` the job may retry: the next attempt has a new attempt id.
 
 ### 5. Pass `previousFaceIds` when re-indexing
 

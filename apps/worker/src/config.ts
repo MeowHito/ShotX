@@ -1,6 +1,7 @@
 import { type DatabaseConfig, loadDatabaseConfig } from '@shotx/db';
 import {
   type AppConfig,
+  type AwsClientConfig,
   type AwsConfig,
   type BillingConfig,
   type BullMqQueueSettings,
@@ -20,8 +21,10 @@ import {
   loadQueueBackendConfig,
   loadQueueVisibilityTimeouts,
   loadRedisConfig,
+  loadRekognitionClientConfig,
   loadRetentionConfig,
   loadScheduledJobsConfig,
+  loadSesClientConfig,
   loadShareConfig,
   loadUploadConfig,
   loadWorkerSettings,
@@ -65,7 +68,15 @@ export type WorkerQueueConfig =
 
 export interface WorkerConfig {
   app: AppConfig;
+  /** AWS_REGION and AWS_ENDPOINT_URL (LocalStack): the SQS client on the AWS stacks only. */
   aws: AwsConfig;
+  /**
+   * Rekognition's region, endpoint and keys (ADR 0008 section 1): explicit, never
+   * AWS_ENDPOINT_URL or the default chain off AWS. Secret: never log it.
+   */
+  rekognitionClient: AwsClientConfig;
+  /** The SES client with EMAIL_PROVIDER=ses, else null. Secret: never log it. */
+  sesClient: AwsClientConfig | null;
   storage: MediaStorageConfig;
   database: DatabaseConfig;
   redis: RedisConfig;
@@ -94,6 +105,8 @@ export function loadWorkerConfig(env: Env): WorkerConfig {
   return {
     app: loadAppConfig(env),
     aws: loadAwsConfig(env),
+    rekognitionClient: loadRekognitionClientConfig(env),
+    sesClient: loadSesClientConfig(env),
     storage: loadMediaStorageConfig(env),
     database: loadDatabaseConfig(env),
     redis: loadRedisConfig(env),

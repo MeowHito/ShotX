@@ -13,6 +13,8 @@ import {
 import type { CallCounts } from './counting-provider';
 import { totalCalls } from './counting-provider';
 import type { describeDataset } from './dataset';
+import { isDeployableSize, sizeLabel } from './encoding';
+import { indexKey } from './evaluate';
 import type { FailureSummary } from './failures';
 import type { Summary, Thresholds } from './metrics';
 
@@ -33,10 +35,12 @@ export interface ReportInput {
 
 export const SYNTHETIC_DISCLAIMER = [
   '> **SYNTHETIC DATA: NOT A BASIS FOR PRODUCTION THRESHOLDS.**',
-  '> Every number below comes from a synthetic dataset (`face-eval synth`) scored by the',
-  '> deterministic FakeFaceProvider, not by Amazon Rekognition. It shows that the harness works and',
-  '> how to read the report. Choose FACE_STRONG, FACE_MAYBE and the pipeline options only from a',
-  '> run on the real event dataset (see tools/face-eval/README.md).',
+  '> Every number below comes from a synthetic dataset (`face-eval synth`: coloured squares as',
+  '> faces) scored by the deterministic FakeFaceProvider, not by Amazon Rekognition. No real event',
+  '> photo or real face was used: there is no real dataset yet (Phase 0 needs one event and 20–30',
+  '> consenting volunteers). It shows that the harness works and how to read the report. Choose',
+  '> FACE_STRONG, FACE_MAYBE, FACE_INDEX_MAX_BYTES and the other pipeline options only from a run on',
+  '> the real event dataset (see tools/face-eval/README.md).',
 ];
 
 const pct = (v: number | null | undefined, digits = 1) =>
@@ -55,14 +59,25 @@ function table(headers: string[], rows: Array<Array<string | number>>): string {
 
 const DIMENSION_LABEL: Record<Dimension, string> = {
   longEdge: 'Index long edge',
+  maxBytes: 'Index image byte limit',
   qualityFilter: 'IndexFaces QualityFilter',
   tiling: 'Tiling',
   expansionSeeds: 'Expansion',
   selfies: 'Selfies per scan',
 };
 
+function byteLimit(bytes: number): string {
+  return isDeployableSize(bytes)
+    ? `${sizeLabel(bytes)} (bytes)`
+    : `${sizeLabel(bytes)} (old S3 path, reference only)`;
+}
+
+const mib = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
+const gib = (bytes: number) => `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+
 function optionValue(dimension: Dimension, value: string | number): string {
   if (dimension === 'longEdge') return `${value} px`;
+  if (dimension === 'maxBytes') return byteLimit(Number(value));
   if (dimension === 'expansionSeeds') return value === 0 ? 'off' : `on (${value} seeds)`;
   return String(value);
 }
@@ -92,6 +107,8 @@ function costLine(cost: CallEstimate, assumptions: CostAssumptions): string[] {
       `(${dec(cost.searchCallsPerScan)} calls per scan). About ${usd(p.callsUsd)} (${thb(p.callsThb)}), ` +
       `plus ${usd(p.storageUsdPerMonth)} per month to keep ${int(p.faces)} faces indexed ` +
       `(${thb(p.storageThbForRetention)} over ${assumptions.retentionMonths} months).`,
+    `- **Upload to Rekognition per 1,000 photos:** ${gib(p.uploadBytes)} of index images ` +
+      `(${mib(cost.uploadBytesPerPhoto)} per photo, full image and tiles), sent from the worker.`,
   ];
 }
 
@@ -109,6 +126,12 @@ function recommendationTable(input: ReportInput): string {
         '`FACE_INDEX_LONG_EDGE`',
         `${rec.index.longEdge} px`,
         `${config.index.longEdge} px`,
+      ],
+      [
+        'Index image byte limit',
+        '`FACE_INDEX_MAX_BYTES`',
+        byteLimit(rec.index.maxBytes),
+        byteLimit(config.index.maxBytes),
       ],
       [
         'IndexFaces QualityFilter',
@@ -275,12 +298,13 @@ function costTable(input: ReportInput): string {
         thb(p.callsThb),
         int(p.faces),
         usd(p.storageUsdPerMonth),
+        gib(p.uploadBytes),
       ]);
     }
   }
   return table(
     [
-      'Option (`le<px>-<filter>-<tiling>/s<selfies>-x<seeds>`)',
+      'Option (`le<px>-<limit>-<filter>-<tiling>/s<selfies>-x<seeds>`)',
       'IndexFaces / photo',
       'DeleteFaces / photo',
       'Search calls / scan',
@@ -291,6 +315,46 @@ function costTable(input: ReportInput): string {
       'THB',
       'Faces stored / 1,000 photos',
       'Face storage USD / month',
+      'Upload / 1,000 photos',
+    ],
+    rows,
+  );
+}
+
+function encodingTable(input: ReportInput): string {
+  const share = (n: number, of: number) => `${int(n)} (${pct(of ? n / of : null)})`;
+  const seen = new Set<string>();
+  const rows: Array<Array<string | number>> = [];
+  for (const c of input.analysis.combos) {
+    const key = indexKey(c.index);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const e = c.stats.encoding;
+    rows.push([
+      `\`${key}\`${key === indexKey(input.analysis.recommended.index) ? ' **(recommended)**' : ''}`,
+      byteLimit(c.index.maxBytes),
+      int(e.images),
+      share(e.degradedFullImages, e.photos),
+      share(e.degradedPhotos, e.photos),
+      share(e.degradedImages, e.images),
+      int(e.downscaledImages),
+      e.minQuality ?? '–',
+      e.images ? mib(e.totalBytes / e.images) : '–',
+      mib(e.largestImageBytes),
+    ]);
+  }
+  return table(
+    [
+      'Index option',
+      'Byte limit',
+      'Images sent',
+      'Photos: full image degraded',
+      'Photos: any image degraded',
+      'Images degraded',
+      'Images downscaled',
+      'Lowest quality',
+      'Mean image',
+      'Largest image',
     ],
     rows,
   );
@@ -405,7 +469,7 @@ export function renderReport(input: ReportInput): string {
     `- Provider: ${input.provider}${input.faceModelVersion ? `, face model ${input.faceModelVersion}` : ''}.`,
     `- Dataset: ${dataset.photos} photos (${dataset.photosWithoutVolunteers} without any volunteer), ` +
       `${dataset.persons} volunteers (${dataset.personsAbsent} in no photo), ${dataset.appearances} labelled appearances, ${dataset.selfies} selfies.`,
-    `- Grid: index long edge ${index} px; QualityFilter ${[...new Set(analysis.combos.map((c) => c.index.qualityFilter))].join(', ')}; ` +
+    `- Grid: index long edge ${index} px; byte limit ${[...new Set(analysis.combos.map((c) => c.index.maxBytes))].map(sizeLabel).join(', ')}; QualityFilter ${[...new Set(analysis.combos.map((c) => c.index.qualityFilter))].join(', ')}; ` +
       `tiling ${[...new Set(analysis.combos.map((c) => c.index.tiling))].join(', ')}; ` +
       `expansion seeds ${[...new Set(analysis.combos.map((c) => c.search.expansionSeeds))].join(', ')}; ` +
       `selfies ${[...new Set(analysis.combos.map((c) => c.search.selfies))].join(', ')}; ` +
@@ -446,6 +510,7 @@ export function renderReport(input: ReportInput): string {
     '- **Zero-result rate** is the share of volunteers who appear in the event but got nothing back. Production tracks the same number per scan.',
     '- **95% CI** is a Wilson interval on the micro rate. It treats every (volunteer, photo) pair as independent, so the real uncertainty is larger, especially with few volunteers.',
     '- Each option has its **own operating point**: the lowest FACE_STRONG whose strong precision meets the target at that value and every value above it, then the lowest FACE_MAYBE that does the same for strong+maybe precision.',
+    `- **Index image byte limit** (FACE_INDEX_MAX_BYTES): every full image and tile is encoded under it and sent to Rekognition as bytes, at most 5 MiB (ADR 0008 section 5); the encoder lowers JPEG quality (to FACE_ENCODE_MIN_QUALITY), then the size. Limits above 5 MiB replay the old 15 MiB S3 path with the fake provider only and are never recommended. An image that wasn't **degraded** (quality or size lowered) is byte-identical under any larger limit, so two limits can only differ on the degraded images the encoding table counts. For a real dataset, \`face-eval encode\` measures that share for 15 MiB versus 5 MiB without calling AWS.`,
     `- **Calls per 1,000 photos** = indexing calls measured on this dataset, scaled to 1,000 photos, + ${int(assumptions.scansPer1000Photos)} scans × search calls per scan (an assumption: replace it with production scan counts). USD uses REKOGNITION_CALL = $${assumptions.cost.rekognitionCall} and REKOGNITION_FACE_MONTH = $${assumptions.cost.rekognitionFaceMonth}; THB uses USD_THB = ${assumptions.cost.usdThb}.`,
     '',
     `## Threshold sweep (recommended pipeline)`,
@@ -470,6 +535,12 @@ export function renderReport(input: ReportInput): string {
     `This evaluation itself made ${int(totalCalls(input.harnessCalls))} provider calls ` +
       `(${int(input.harnessCalls.indexFaces)} IndexFaces, ${int(input.harnessCalls.searchFacesByImage)} SearchFacesByImage, ` +
       `${int(input.harnessCalls.searchFaces)} SearchFaces, ${int(input.harnessCalls.deleteFaces)} DeleteFaces).`,
+    '',
+    '## Index image encoding',
+    '',
+    `Images sent to IndexFaces per index option (photos that failed to index are not counted). **Degraded** means the encoder lowered the JPEG quality below FACE_INDEX_JPEG_QUALITY = ${input.config.index.jpegQuality} or the size below the long edge to fit the byte limit.`,
+    '',
+    encodingTable(input),
     '',
     `## Failure analysis (recommended pipeline at ${t.strong} / ${t.maybe})`,
     '',

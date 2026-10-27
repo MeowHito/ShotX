@@ -14,8 +14,8 @@ It runs the production code from `@shotx/face` (`indexPhoto`, `selectSeeds`, `co
 - **Faces are sensitive personal data (PDPA section 26).** Datasets and raw run output never go into
   git, chat, shared drives, tickets or AI tools. The CLI refuses to read a dataset or write output
   inside the repository unless git ignores the folder (`data/` and `runs/` are ignored).
-- Selfies are read only from the dataset folder, kept in memory, and never copied, uploaded to S3 or
-  logged. Logs and reports contain counts, never image data, names or file contents.
+- Selfies and photos are read only from the dataset folder, kept in memory, and never copied,
+  written to storage or logged. Rekognition gets them as bytes (ADR 0008 section 5). Logs and reports contain counts, never image data, names or file contents.
 - Committed reports (`reports/`) hold aggregate numbers only.
 - Never use InsightFace pretrained models. Recognition goes through `FaceProvider`.
 - Rekognition runs only with `--provider rekognition --i-understand-this-calls-aws`, on an approved
@@ -30,13 +30,18 @@ about Rekognition**. Every synthetic report starts with that warning.
 ```sh
 pnpm install
 pnpm face-eval synth          # 120 photos, 24 volunteers → tools/face-eval/data/synthetic (~15 s)
-pnpm face-eval run            # 72 option combinations → tools/face-eval/runs/<timestamp>-synthetic (~3 min)
+pnpm face-eval run            # 144 option combinations → tools/face-eval/runs/<timestamp>-synthetic (~6 min)
 pnpm face-eval run --report tools/face-eval/reports/synthetic-sample.md   # also refresh the sample report
 pnpm face-eval help           # every option
 ```
 
 `synth` options: `--photos`, `--volunteers`, `--absent` (volunteers in no photo), `--bystanders`,
 `--seed`, `--width`, `--height`, `--out`, `--force`.
+
+With the fake provider the grid also replays the old 15 MiB S3 limit next to `FACE_INDEX_MAX_BYTES`
+(5 MiB), as a reference that is never recommended. Synthetic photos are far below 5 MiB (about
+370 KB at 3,500 px), so both limits send byte-identical images and give identical numbers: the
+synthetic data says nothing about what 5 MiB does to real photos.
 
 ## Prepare the real dataset
 
@@ -119,23 +124,52 @@ Keep it in `tools/face-eval/data/<event>/` (git-ignored) or outside the reposito
 disk. Don't copy it anywhere else, and delete the dataset, `runs/` output and any kept collections
 when the retention period ends.
 
-## Run the real evaluation (later, with approval)
+## Measure the 5 MiB limit on the real dataset (no AWS)
 
-This calls Amazon Rekognition: it is billed and sends the photos and selfies to AWS. Selfies are sent
-inline and never stored. Photos are sent inline (up to 5 MB) or, with `--temp-bucket`, through
-`s3://<bucket>/tmp/index/<photo>/<attempt>/<part>.jpg`, which the bucket's `tmp/` lifecycle rule
-expires. Each object is deleted right after IndexFaces; if that delete fails, the photo counts as
-failed and the log says so.
+Since ADR 0008 section 5 every image goes to Rekognition as bytes, at most 5 MiB
+(`FACE_INDEX_MAX_BYTES`); before, index images went through S3 with a 15 MiB limit. The S3 path is
+gone, so Rekognition can no longer compare the two directly. It doesn't need to: an image that fits
+5 MiB at `FACE_INDEX_JPEG_QUALITY` and `FACE_INDEX_LONG_EDGE` is byte-identical under 15 MiB, so
+accuracy can only differ on the images the encoder had to **degrade** (lower quality, then a
+smaller size). Count them locally first:
 
 ```sh
-export AWS_REGION=ap-southeast-1          # plus credentials for the approved evaluation account
+pnpm face-eval encode --dataset tools/face-eval/data/<event> > tools/face-eval/runs/<event>-encode.json
+```
+
+It encodes every photo (full image and all 2×2 tiles) under 15 MiB and 5 MiB (`--index-max-bytes`,
+`--long-edges` to change them) without calling any provider and prints counts only: the share of
+photos whose full image is degraded, the lowest quality used, how many tiles are degraded, and the
+full-image size distribution without a limit. Keep the JSON under `runs/` (git-ignored).
+
+- If almost nothing is degraded, the 5 MiB results stand for the old path as well.
+- If many photos are degraded, run the evaluation below with `--index-max-bytes 2.5MiB,5MiB`: if
+  recall barely moves between 2.5 and 5 MiB, the step from 5 to 15 MiB would not have mattered
+  either. If it drops, tiling (`FACE_INDEX_TILING=always`) is the first lever (ADR 0008).
+
+## Run the real evaluation (later, with approval)
+
+This calls Amazon Rekognition: it is billed and sends the photos and selfies to AWS
+`ap-southeast-1`. Photos (full image and tiles) and selfies are sent as bytes of at most 5 MiB and
+never stored. The Rekognition client is built from `loadRekognitionClientConfig` (ADR 0008
+section 1), with stricter rules for the evaluation: it needs the evaluation account's own keys
+(never the default credential chain) and refuses any endpoint that isn't AWS. The local `.env`
+points `REKOGNITION_ENDPOINT_URL` and `AWS_ENDPOINT_URL` at LocalStack, so override them:
+
+```sh
+set -a; source .env; set +a
+unset AWS_ENDPOINT_URL AWS_ENDPOINT_URL_REKOGNITION REKOGNITION_ENDPOINT_URL
+export REKOGNITION_REGION=ap-southeast-1
+export REKOGNITION_ACCESS_KEY_ID=<evaluation IAM user>      # Rekognition on collection/pg-eval-* only
+export REKOGNITION_SECRET_ACCESS_KEY=<its secret>
 pnpm face-eval run \
   --dataset tools/face-eval/data/<event> \
   --provider rekognition --i-understand-this-calls-aws \
-  --temp-bucket <bucket> \
   --report tools/face-eval/reports/<event>.md
 ```
 
+- **Byte limits:** `--index-max-bytes` defaults to `FACE_INDEX_MAX_BYTES` (5 MiB) for Rekognition.
+  Limits above 5 MiB are refused (use `face-eval encode` for the 15 MiB comparison).
 - **Cost:** the full grid indexes the event 18 times. Before any call, the CLI prints an upper bound
   on provider calls. On the synthetic data the full grid made about 51 IndexFaces calls per photo,
   so budget about 50,000 calls (about $50) per 1,000 photos. Narrow the grid to spend less, for
@@ -173,6 +207,9 @@ pnpm face-eval run \
 - **Go / no-go**: both precision targets, strong+maybe recall ≥ `--min-recall` (80%), and a
   zero-result rate ≤ `--max-zero-result` (10%). With 20–30 volunteers, read the 95% intervals:
   they assume independent (volunteer, photo) pairs, so the real uncertainty is wider.
+- **Index image byte limit** and **Index image encoding**: per option, how many photos had their full
+  image or any tile degraded to fit the limit, the lowest JPEG quality used, and the bytes sent.
+  "Upload per 1,000 photos" is the VPS bandwidth that indexing sends to Rekognition.
 - **Calls per 1,000 photos**: indexing calls measured on the dataset, scaled to 1,000 photos, plus
   `--scans-per-1000-photos` (default 100, an assumption) × search calls per scan. USD and THB come
   from `REKOGNITION_CALL`, `REKOGNITION_FACE_MONTH` and `USD_THB` in `packages/shared`.

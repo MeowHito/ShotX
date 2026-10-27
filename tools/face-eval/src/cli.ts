@@ -3,10 +3,18 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { TILING_MODES, type TilingMode } from '@shotx/face';
-import { loadCostConfig, loadFaceConfig, QUALITY_FILTERS, type QualityFilter } from '@shotx/shared';
+import {
+  type FaceConfig,
+  faceEncodeFloorBytes,
+  loadCostConfig,
+  loadFaceConfig,
+  QUALITY_FILTERS,
+  type QualityFilter,
+} from '@shotx/shared';
 import { format, resolveConfig } from 'prettier';
 import { analyze, type CostAssumptions, type Targets } from './analysis';
 import { describeDataset, loadDataset } from './dataset';
+import { LEGACY_S3_MAX_BYTES, sizeLabel, surveyEncoding } from './encoding';
 import { evaluate, type IndexOption, type SearchOption } from './evaluate';
 import { analyzeFailures } from './failures';
 import { parseGrid, scoreScans, summarize } from './metrics';
@@ -20,6 +28,7 @@ const USAGE = `face-eval: measure face search accuracy before building UI on it.
 Usage:
   pnpm face-eval synth [options]      Generate a synthetic dataset (git-ignored data/ folder)
   pnpm face-eval validate [options]   Check a dataset's layout and labels; prints counts only
+  pnpm face-eval encode [options]     Count index images each byte limit degrades (no AWS); counts only
   pnpm face-eval run [options]        Evaluate a dataset and write a report
 
 synth:
@@ -32,13 +41,25 @@ synth:
   --width <px> --height <px>  default 4000 × 2667
   --force                  replace a folder synth created before
 
-validate / run:
+validate / encode / run:
   --dataset <dir>          default ${relativeToRepo(DEFAULT_SYNTHETIC_DIR)}
+
+encode / run:
+  --index-max-bytes <list>      byte limits for index images, in bytes or with KiB/MiB
+                                (e.g. 15MiB,5MiB). Default for encode and the fake provider:
+                                15MiB (the old S3 path, reference only),FACE_INDEX_MAX_BYTES;
+                                for rekognition: FACE_INDEX_MAX_BYTES (images go as bytes, ≤ 5 MiB)
+
+encode:
+  --long-edges <list>           default FACE_INDEX_LONG_EDGE
+  --concurrency <n>             default 2
 
 run:
   --provider fake|rekognition   default fake (synthetic datasets only)
   --${AWS_ACKNOWLEDGEMENT}   required with --provider rekognition (billed AWS calls)
-  --temp-bucket <bucket>        rekognition only: pass index images through S3 tmp/index/
+                                Rekognition client: REKOGNITION_REGION and the evaluation account's
+                                REKOGNITION_ACCESS_KEY_ID / REKOGNITION_SECRET_ACCESS_KEY;
+                                AWS_ENDPOINT_URL and REKOGNITION_ENDPOINT_URL unset
   --long-edges <list>           default 1600,2400,FACE_INDEX_LONG_EDGE
   --quality-filters <list>      default LOW,MEDIUM
   --tiling <list>               default never,signal,always
@@ -129,6 +150,34 @@ function gitCommit(): string | undefined {
   }
 }
 
+const SIZE = /^(\d+(?:\.\d+)?)\s*(b|bytes|kib|mib)?$/i;
+const UNIT: Record<string, number> = { b: 1, bytes: 1, kib: 1024, mib: 1024 * 1024 };
+
+/** Byte limits from `15MiB,5242880`, each between the encoder's floor and the old S3 limit. */
+function byteLimits(value: string | undefined, fallback: number[], config: FaceConfig): number[] {
+  const floor = faceEncodeFloorBytes(config.encode.minLongEdge);
+  const sizes =
+    value === undefined
+      ? fallback
+      : value.split(',').map((item) => {
+          const match = SIZE.exec(item.trim());
+          const bytes = match ? Number(match[1]) * UNIT[(match[2] ?? 'b').toLowerCase()]! : NaN;
+          if (!Number.isInteger(bytes)) {
+            throw new Error(`--index-max-bytes: "${item}" is not a whole number of bytes`);
+          }
+          return bytes;
+        });
+  for (const bytes of sizes) {
+    if (bytes < floor || bytes > LEGACY_S3_MAX_BYTES) {
+      throw new Error(
+        `--index-max-bytes: ${bytes} must be from ${floor} (FACE_ENCODE_MIN_LONG_EDGE² × 4.5, the ` +
+          `smallest limit the encoder is sure to fit) to ${LEGACY_S3_MAX_BYTES} (the old S3 limit)`,
+      );
+    }
+  }
+  return [...new Set(sizes)].sort((a, b) => a - b);
+}
+
 async function writeMarkdown(path: string, markdown: string): Promise<void> {
   const options = (await resolveConfig(path)) ?? {};
   await mkdir(dirname(path), { recursive: true });
@@ -181,6 +230,52 @@ async function validateCommand(args: string[]): Promise<void> {
   process.stdout.write(`${JSON.stringify(describeDataset(dataset), null, 2)}\n`);
 }
 
+async function encodeCommand(args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    strict: true,
+    options: {
+      dataset: { type: 'string' },
+      'long-edges': { type: 'string' },
+      'index-max-bytes': { type: 'string' },
+      concurrency: { type: 'string' },
+    },
+  });
+  const config = loadFaceConfig(process.env);
+  const dir = resolve(values.dataset ?? DEFAULT_SYNTHETIC_DIR);
+  assertNotCommittable(dir, 'Dataset');
+  const dataset = await loadDataset(dir);
+  const sizes = byteLimits(
+    values['index-max-bytes'],
+    [LEGACY_S3_MAX_BYTES, config.index.maxBytes],
+    config,
+  );
+  const longEdges = integers(values['long-edges'], [config.index.longEdge], 'long-edges', 320);
+  log(
+    `Encoding ${dataset.photos.length} photos (full image and ${config.index.tileGrid ** 2} tiles) ` +
+      `at long edge ${longEdges.join(', ')} px under ${sizes.map(sizeLabel).join(', ')}; no provider calls.`,
+  );
+  const survey = await surveyEncoding({
+    dataset,
+    config,
+    longEdges,
+    sizes,
+    concurrency: number(values.concurrency, 2, 'concurrency', 1),
+    log,
+  });
+  for (const row of survey.rows) {
+    const share = (n: number) => `${((100 * n) / Math.max(1, row.full.photos)).toFixed(1)}%`;
+    log(
+      `  ${row.longEdge} px, ${row.size}${row.deployable ? '' : ' (old S3 path)'}: full image ` +
+        `degraded in ${row.full.degradedImages} photos (${share(row.full.degradedImages)}), lowest ` +
+        `quality ${row.full.minQuality ?? '–'}; tiles degraded ${row.tiles.degradedImages} of ${row.tiles.images}`,
+    );
+  }
+  process.stdout.write(
+    `${JSON.stringify({ synthetic: dataset.synthetic !== undefined, encodeQuality: config.index.jpegQuality, ...survey }, null, 2)}\n`,
+  );
+}
+
 async function runCommand(args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
@@ -189,7 +284,7 @@ async function runCommand(args: string[]): Promise<void> {
       dataset: { type: 'string' },
       provider: { type: 'string', default: 'fake' },
       [AWS_ACKNOWLEDGEMENT]: { type: 'boolean', default: false },
-      'temp-bucket': { type: 'string' },
+      'index-max-bytes': { type: 'string' },
       'long-edges': { type: 'string' },
       'quality-filters': { type: 'string' },
       tiling: { type: 'string' },
@@ -232,6 +327,13 @@ async function runCommand(args: string[]): Promise<void> {
     'long-edges',
     320,
   );
+  const maxBytesGrid = byteLimits(
+    values['index-max-bytes'],
+    values.provider === 'fake'
+      ? [LEGACY_S3_MAX_BYTES, config.index.maxBytes]
+      : [config.index.maxBytes],
+    config,
+  );
   const filters = list<QualityFilter>(
     values['quality-filters'],
     ['LOW', 'MEDIUM'],
@@ -256,8 +358,10 @@ async function runCommand(args: string[]): Promise<void> {
     ...new Set([...parseGrid(values.maybe ?? '70:95:1'), config.thresholds.maybe]),
   ].sort((a, b) => a - b);
   const indexOptions: IndexOption[] = longEdges.flatMap((longEdge) =>
-    filters.flatMap((qualityFilter) =>
-      tilings.map((tiling) => ({ longEdge, qualityFilter, tiling })),
+    maxBytesGrid.flatMap((maxBytes) =>
+      filters.flatMap((qualityFilter) =>
+        tilings.map((tiling) => ({ longEdge, maxBytes, qualityFilter, tiling })),
+      ),
     ),
   );
   const searchOptions: SearchOption[] = seeds.flatMap((expansionSeeds) =>
@@ -281,7 +385,8 @@ async function runCommand(args: string[]): Promise<void> {
     acknowledged: values[AWS_ACKNOWLEDGEMENT] === true,
     dataset,
     config,
-    tempBucket: values['temp-bucket'],
+    env: process.env,
+    maxIndexBytes: Math.max(...maxBytesGrid),
   });
   const tiles = config.index.tileGrid ** 2;
   const upperBound =
@@ -296,8 +401,9 @@ async function runCommand(args: string[]): Promise<void> {
   const stamp = started.toISOString().replace(/[-:]/g, '').replace(/\..*/, '').toLowerCase();
   const result = await evaluate({
     dataset,
-    provider: setup.provider,
-    tempStore: setup.tempStore,
+    providerFor: setup.providerFor,
+    collectionKey: setup.collectionKey,
+    maxImageBytes: setup.maxImageBytes,
     smallFaceDetector: setup.smallFaceDetector,
     config,
     indexOptions,
@@ -395,6 +501,8 @@ async function main(argv: string[]): Promise<void> {
       return synthCommand(args);
     case 'validate':
       return validateCommand(args);
+    case 'encode':
+      return encodeCommand(args);
     case 'run':
       return runCommand(args);
     case undefined:

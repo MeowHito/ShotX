@@ -11,7 +11,7 @@ export const TEST_DESTINATIONS = { media: 'test://media', faces: 'test://faces' 
  */
 export function testJobQueues(queues = new MemoryQueueClient()): Pick<
   JobsHandlerDeps,
-  'queues' | 'destinations' | 'sweeps' | 'authSessionRetentionDays'
+  'queues' | 'destinations' | 'sweeps' | 'authSessionRetentionDays' | 'faceSearchEnabled'
 > & {
   queues: MemoryQueueClient;
 } {
@@ -20,5 +20,6 @@ export function testJobQueues(queues = new MemoryQueueClient()): Pick<
     destinations: { ...TEST_DESTINATIONS },
     sweeps: loadWorkerSettings({}).sweeps,
     authSessionRetentionDays: 7,
+    faceSearchEnabled: true,
   };
 }

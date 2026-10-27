@@ -37,6 +37,7 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const ago = (ms: number) => new Date(Date.now() - ms);
 const SWEEPS: WorkerSweepSettings = loadWorkerSettings({}).sweeps;
+const ON = { faceSearch: true };
 
 function provider(): FakeFaceProvider {
   return new FakeFaceProvider(new SyntheticWorld({ persons: [], lookalikes: [] }));
@@ -270,6 +271,7 @@ describe('sweeps (ADR 0008 lost jobs)', () => {
       const result = await runFacesSweep(
         jobContext(db, new MemoryObjectStore(), queues, log),
         SWEEPS.faces,
+        ON,
       );
       expect(result).toMatchObject({ deletionsResent: 2, deletionsOverdue: 1 });
       expect(sentTo(queues, 'faces')).toEqual([
@@ -283,7 +285,7 @@ describe('sweeps (ADR 0008 lost jobs)', () => {
         deletionIds: overdue,
       });
       // No cap and no mark: every run re-sends until the faces consumer completes the deletion.
-      await runFacesSweep(jobContext(db, new MemoryObjectStore(), queues), SWEEPS.faces);
+      await runFacesSweep(jobContext(db, new MemoryObjectStore(), queues), SWEEPS.faces, ON);
       expect(sentTo(queues, 'faces')).toHaveLength(4);
       await db.delete(faceDeletions).where(eq(faceDeletions.photographerId, ownerId));
     });
@@ -323,6 +325,7 @@ describe('sweeps (ADR 0008 lost jobs)', () => {
       const result = await runFacesSweep(
         jobContext(db, new MemoryObjectStore(), queues, log),
         SWEEPS.faces,
+        ON,
       );
       expect(result).toMatchObject({
         filesRequeued: 1,
@@ -355,13 +358,135 @@ describe('sweeps (ADR 0008 lost jobs)', () => {
       expect(freshFolder.id).not.toBe(folder.id);
 
       // Within the window nothing is re-sent.
-      await runFacesSweep(jobContext(db, new MemoryObjectStore(), queues), SWEEPS.faces);
+      await runFacesSweep(jobContext(db, new MemoryObjectStore(), queues), SWEEPS.faces, ON);
       expect(sentTo(queues, 'faces')).toHaveLength(2);
       await db.update(files).set({ facesQueuedAt: null }).where(eq(files.ownerId, ownerId));
       await db
         .update(folders)
         .set({ faceIndexQueuedAt: null })
         .where(inArray(folders.id, [folder.id, freshFolder.id]));
+    });
+  });
+
+  describe('faces.sweep coverage scan', () => {
+    it('marks and sends covered, never-indexed photos without a mark, bounded per run', async () => {
+      const queues = new MemoryQueueClient();
+      const ownerId = await createPhotographer(db);
+      const indexed = await createFolder(db, ownerId, { faceIndexEnabled: true });
+      const child = await createFolder(db, ownerId, { parent: indexed });
+      const expired = await createFolder(db, ownerId, {
+        faceIndexEnabled: true,
+        faceIndexExpiresAt: ago(HOUR),
+      });
+      const plain = await createFolder(db, ownerId);
+      let n = 0;
+      const photo = (overrides: Parameters<typeof createFileRow>[2]) =>
+        createFileRow(db, ownerId, {
+          originalName: `cover-${++n}.jpg`,
+          status: 'ready',
+          verifiedAt: ago(DAY),
+          createdAt: ago(7 * HOUR),
+          ...overrides,
+        });
+      const a = await photo({ folderId: indexed.id });
+      const b = await photo({ folderId: child.id }); // covered by the parent's index
+      const c = await photo({ folderId: child.id });
+      // Not candidates:
+      await photo({ folderId: indexed.id, faceCount: 0 }); // indexed
+      await photo({ folderId: indexed.id, facesQueuedAt: ago(HOUR) }); // outstanding job
+      await photo({ folderId: indexed.id, createdAt: ago(HOUR) }); // too young
+      await photo({ folderId: indexed.id, mime: 'video/mp4', originalName: 'clip.mp4' });
+      await photo({ folderId: indexed.id, deletedAt: ago(HOUR) });
+      await photo({ folderId: indexed.id, status: 'processing' });
+      await photo({ folderId: expired.id });
+      await photo({ folderId: plain.id });
+      await photo({ folderId: null });
+
+      const settings = { ...SWEEPS.faces, batchSize: 2 };
+      const first = await runFacesSweep(
+        jobContext(db, new MemoryObjectStore(), queues),
+        settings,
+        ON,
+      );
+      expect(first.filesCovered).toBe(2);
+      await runFacesSweep(jobContext(db, new MemoryObjectStore(), queues), settings, ON);
+      const sent = sentTo(queues, 'faces').map((m) => ('fileId' in m ? m.fileId : null));
+      expect(sent.sort()).toEqual([a.id, b.id, c.id].sort());
+      for (const file of [a, b, c]) {
+        // Marked (so it leaves the scan), first send: no requeue counted.
+        const row = await fileById(db, file.id);
+        expect(row?.facesQueuedAt).toBeInstanceOf(Date);
+        expect(row?.facesRequeues).toBe(0);
+      }
+      // Everything is marked now: a third run sends nothing.
+      await runFacesSweep(jobContext(db, new MemoryObjectStore(), queues), settings, ON);
+      expect(sentTo(queues, 'faces')).toHaveLength(3);
+      await db.update(files).set({ facesQueuedAt: null }).where(eq(files.ownerId, ownerId));
+      await db.update(files).set({ faceCount: 0 }).where(eq(files.ownerId, ownerId));
+    });
+
+    it('with face search off re-sends only deletions and keeps every mark', async () => {
+      const queues = new MemoryQueueClient();
+      const ownerId = await createPhotographer(db);
+      const folder = await createFolder(db, ownerId, {
+        faceIndexEnabled: true,
+        faceIndexQueuedAt: ago(7 * HOUR),
+      });
+      const marked = await createFileRow(db, ownerId, {
+        originalName: 'off-marked.jpg',
+        status: 'ready',
+        verifiedAt: ago(DAY),
+        folderId: folder.id,
+        facesQueuedAt: ago(7 * HOUR),
+      });
+      await createFileRow(db, ownerId, {
+        originalName: 'off-unmarked.jpg',
+        status: 'ready',
+        verifiedAt: ago(DAY),
+        folderId: folder.id,
+        createdAt: ago(7 * HOUR),
+      });
+      const [deletion] = await db
+        .insert(faceDeletions)
+        .values({
+          photographerId: ownerId,
+          shareId: randomUUID(),
+          facesMatched: 1,
+          createdAt: ago(2 * HOUR),
+        })
+        .returning({ id: faceDeletions.id });
+
+      const result = await runFacesSweep(
+        jobContext(db, new MemoryObjectStore(), queues),
+        SWEEPS.faces,
+        { faceSearch: false },
+      );
+      expect(result).toMatchObject({
+        indexing: false,
+        deletionsResent: 1,
+        filesRequeued: 0,
+        foldersRequeued: 0,
+        filesCovered: 0,
+      });
+      expect(sentTo(queues, 'faces')).toEqual([{ type: 'delete.faces', deletionId: deletion!.id }]);
+      expect(await fileById(db, marked.id)).toMatchObject({ facesRequeues: 0 });
+      expect((await fileById(db, marked.id))!.facesQueuedAt!.getTime()).toBeLessThan(
+        Date.now() - 6 * HOUR,
+      );
+
+      // Back on: the kept marks are re-sent and the scan runs.
+      const on = await runFacesSweep(
+        jobContext(db, new MemoryObjectStore(), queues),
+        SWEEPS.faces,
+        ON,
+      );
+      expect(on).toMatchObject({ filesRequeued: 1, foldersRequeued: 1, filesCovered: 1 });
+      await db.delete(faceDeletions).where(eq(faceDeletions.photographerId, ownerId));
+      await db
+        .update(files)
+        .set({ facesQueuedAt: null, faceCount: 0 })
+        .where(eq(files.ownerId, ownerId));
+      await db.update(folders).set({ faceIndexQueuedAt: null }).where(eq(folders.id, folder.id));
     });
   });
 

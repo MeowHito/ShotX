@@ -49,6 +49,8 @@ export * from './config/queues';
 export * from './config/runtime';
 export * from './config/aws';
 export * from './config/storage';
+export * from './config/aws-clients';
+export * from './config/lifecycle';
 export * from './config/redis';
 export * from './config/cloudfront';
 export * from './config/cognito';

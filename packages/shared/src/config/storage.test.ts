@@ -194,11 +194,52 @@ describe('loadMediaUrlSignerConfig', () => {
       region: 'auto',
       accessKeyId: 'AKIDEXAMPLE',
       secretAccessKey: 's3cr3t-value',
+      keySource: 'storage',
     });
     expect(loadMediaUrlSignerConfig({ ...local, MEDIA_URL_SIGNER: 's3-presign' })).toMatchObject({
       signer: 's3-presign',
       endpointUrl: 'http://localhost:4566',
     });
+  });
+
+  it('signs with the read-only STORAGE_SIGNING_* keys when set', () => {
+    const signing = {
+      STORAGE_SIGNING_ACCESS_KEY_ID: 'readonly-id',
+      STORAGE_SIGNING_SECRET_ACCESS_KEY: 'readonly-secret',
+    };
+    expect(loadMediaUrlSignerConfig({ ...r2, ...signing, MEDIA_URL_SIGNER: 's3-presign' })).toEqual(
+      {
+        signer: 's3-presign',
+        endpointUrl: R2,
+        region: 'auto',
+        accessKeyId: 'readonly-id',
+        secretAccessKey: 'readonly-secret',
+        keySource: 'signing',
+      },
+    );
+    // The api's own keys are not needed for signing then (the storage loader still needs them).
+    const noApiKeys = without(r2, 'STORAGE_ACCESS_KEY_ID', 'STORAGE_SECRET_ACCESS_KEY');
+    expect(
+      loadMediaUrlSignerConfig({ ...noApiKeys, ...signing, MEDIA_URL_SIGNER: 's3-presign' }),
+    ).toMatchObject({ accessKeyId: 'readonly-id', keySource: 'signing' });
+    expect(() =>
+      loadMediaUrlSignerConfig({
+        ...r2,
+        STORAGE_SIGNING_ACCESS_KEY_ID: 'readonly-id',
+        MEDIA_URL_SIGNER: 's3-presign',
+      }),
+    ).toThrow(/set both STORAGE_SIGNING_ACCESS_KEY_ID and STORAGE_SIGNING_SECRET_ACCESS_KEY/);
+    expect(() => loadMediaUrlSignerConfig({ ...r2, ...signing })).toThrow(
+      /STORAGE_SIGNING_ACCESS_KEY_ID needs MEDIA_URL_SIGNER=s3-presign/,
+    );
+    expect(() =>
+      loadMediaUrlSignerConfig({
+        ...r2,
+        ...signing,
+        STORAGE_SIGNING_SECRET_ACCESS_KEY: ' ',
+        MEDIA_URL_SIGNER: 's3-presign',
+      }),
+    ).toThrow(/STORAGE_SIGNING_SECRET_ACCESS_KEY/);
   });
 
   it('never signs with AWS keys or without an explicit endpoint', () => {

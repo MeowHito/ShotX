@@ -13,16 +13,21 @@ import {
   type QualityFilter,
   selectSeeds,
   type SmallFaceDetector,
-  type TempImageStore,
   type TilingMode,
 } from '@shotx/face';
-import { type FaceConfig, indexImageKey } from '@shotx/shared';
-import { CountingFaceProvider, type CallCounts, diffCounts } from './counting-provider';
+import type { FaceConfig } from '@shotx/shared';
+import { type CallCounts, CountingFaceProvider, emptyCounts } from './counting-provider';
 import { type Dataset, type Person, readPhoto, readSelfies } from './dataset';
+import { addPhotoImages, emptyEncodingStats, type EncodingStats, sizeKey } from './encoding';
 
 /** Options applied when photos are indexed. Each one needs its own collection. */
 export interface IndexOption {
   longEdge: number;
+  /**
+   * FACE_INDEX_MAX_BYTES: every image and tile is encoded under it and sent as bytes. Above
+   * REKOGNITION_INLINE_MAX_BYTES only as a reference with the fake provider (the old S3 path).
+   */
+  maxBytes: number;
   qualityFilter: QualityFilter;
   tiling: TilingMode;
 }
@@ -35,6 +40,10 @@ export interface SearchOption {
 }
 
 export const indexKey = (o: IndexOption) =>
+  `le${o.longEdge}-${sizeKey(o.maxBytes)}-${o.qualityFilter.toLowerCase()}-${o.tiling}`;
+
+/** An index option's key without its byte limit. */
+export const indexKeyWithoutSize = (o: IndexOption) =>
   `le${o.longEdge}-${o.qualityFilter.toLowerCase()}-${o.tiling}`;
 export const searchKey = (o: SearchOption) => `s${o.selfies}-x${o.expansionSeeds}`;
 
@@ -47,6 +56,8 @@ export interface IndexStats {
   /** Distinct faces after IoU de-duplication, i.e. the sum of `face_count`. */
   distinctFaces: number;
   calls: CallCounts;
+  /** How the images sent to IndexFaces were encoded (photos that failed are not counted). */
+  encoding: EncodingStats;
 }
 
 export interface FileScore {
@@ -79,8 +90,20 @@ export interface ComboResult {
 
 export interface EvaluationInput {
   dataset: Dataset;
-  provider: FaceProvider;
-  tempStore: TempImageStore;
+  /**
+   * The provider for one index option. Fake runs build a fresh FakeFaceProvider per option, so
+   * options that send byte-identical images get identical face ids and so identical synthetic
+   * similarities; Rekognition runs return one shared provider.
+   */
+  providerFor: (option: IndexOption) => FaceProvider;
+  /**
+   * Names an index option's collection, `pg-{collectionTag}-{key}`. Must be unique per option
+   * for a shared provider (Rekognition); fake runs leave the byte limit out (`indexKeyWithoutSize`)
+   * so the face ids, which derive from the collection id, don't change with it.
+   */
+  collectionKey: (option: IndexOption) => string;
+  /** Largest image the provider accepts (`IndexPhotoDeps.maxImageBytes`). */
+  maxImageBytes: number;
   smallFaceDetector?: SmallFaceDetector | undefined;
   config: FaceConfig;
   indexOptions: IndexOption[];
@@ -119,7 +142,7 @@ async function pool<T>(items: readonly T[], size: number, run: (item: T) => Prom
  */
 export async function evaluate(input: EvaluationInput): Promise<EvaluationResult> {
   const { dataset, config, log } = input;
-  const provider = new CountingFaceProvider(input.provider);
+  const harnessCalls = emptyCounts();
   const indexStats: Record<string, IndexStats> = {};
   const combos: ComboResult[] = [];
   const maxSelfies = Math.max(...input.searchOptions.map((o) => o.selfies));
@@ -127,8 +150,10 @@ export async function evaluate(input: EvaluationInput): Promise<EvaluationResult
 
   for (const indexOption of input.indexOptions) {
     const key = indexKey(indexOption);
-    const collectionId = faceCollectionId(`${input.collectionTag}-${key}`);
-    const before = provider.snapshot();
+    const collectionId = faceCollectionId(
+      `${input.collectionTag}-${input.collectionKey(indexOption)}`,
+    );
+    const provider = new CountingFaceProvider(input.providerFor(indexOption));
     const created = await provider.createCollection(collectionId);
     faceModelVersion ??= created.faceModelVersion;
     try {
@@ -139,20 +164,20 @@ export async function evaluate(input: EvaluationInput): Promise<EvaluationResult
         facesStored: 0,
         distinctFaces: 0,
       };
+      const encoding = emptyEncodingStats();
       const photoOfFace = new Map<string, string>();
-      // Everything else comes from the config, as in the worker; the grid overrides these three.
+      // Everything else comes from the config, as in the worker; the grid overrides these four.
       const options = (fileId: string) => ({
         ...indexPhotoOptions(config, { collectionId, fileId }),
         longEdge: indexOption.longEdge,
+        maxBytes: indexOption.maxBytes,
         qualityFilter: indexOption.qualityFilter,
         tiling: indexOption.tiling,
       });
       const deps = {
         provider,
-        tempStore: input.tempStore,
-        // The production key builder (ADR 0004), so --temp-bucket runs write the same keys.
-        tempKey: indexImageKey,
         smallFaceDetector: input.smallFaceDetector,
+        maxImageBytes: input.maxImageBytes,
       };
       await pool(dataset.photos, input.concurrency, async (photo) => {
         stats.photos++;
@@ -162,15 +187,17 @@ export async function evaluate(input: EvaluationInput): Promise<EvaluationResult
           stats.facesStored += result.faces.length;
           stats.distinctFaces += result.faceCount;
           if (result.tiled) stats.tiledPhotos++;
+          addPhotoImages(encoding, result.images, config.index.jpegQuality);
         } catch (error) {
           stats.failedPhotos++;
           log(`  ${photo.path}: ${describeFailure(error)}`);
         }
       });
-      const indexCalls = diffCounts(provider.snapshot(), before);
+      const indexCalls = provider.snapshot();
       log(
         `${key}: indexed ${stats.photos} photos, ${stats.facesStored} faces, ` +
-          `${stats.tiledPhotos} tiled, ${indexCalls.indexFaces} IndexFaces calls`,
+          `${stats.tiledPhotos} tiled, ${indexCalls.indexFaces} IndexFaces calls, ` +
+          `${encoding.degradedPhotos} photos with images degraded to fit ${indexOption.maxBytes} bytes`,
       );
 
       const scans = new Map<string, PersonScan[]>();
@@ -189,12 +216,16 @@ export async function evaluate(input: EvaluationInput): Promise<EvaluationResult
       for (const option of input.searchOptions) {
         combos.push({ index: indexOption, search: option, scans: scans.get(searchKey(option))! });
       }
-      indexStats[key] = { ...stats, calls: indexCalls };
+      indexStats[key] = { ...stats, calls: indexCalls, encoding };
     } finally {
       if (!input.keepCollections) await provider.deleteCollection(collectionId);
+      const counts = provider.snapshot();
+      for (const name of Object.keys(harnessCalls) as Array<keyof CallCounts>) {
+        harnessCalls[name] += counts[name];
+      }
     }
   }
-  return { indexStats, combos, harnessCalls: provider.snapshot(), faceModelVersion };
+  return { indexStats, combos, harnessCalls, faceModelVersion };
 }
 
 /**

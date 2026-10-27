@@ -9,7 +9,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1152.0",
     "@shotx/face": "workspace:*",
     "@shotx/shared": "workspace:*",
     "zod": "^4.6.7"

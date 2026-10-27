@@ -280,6 +280,13 @@ export const files = pgTable(
     index('files_faces_pending_idx')
       .on(t.facesQueuedAt)
       .where(sql`${t.facesQueuedAt} IS NOT NULL`),
+    // faces.sweep coverage scan (migration 0007): ready files never indexed and with no index.file
+    // outstanding, per folder. The scan's WHERE must repeat this predicate exactly.
+    index('files_unindexed_ready_idx')
+      .on(t.folderId, t.id)
+      .where(
+        sql`${t.status} = 'ready' AND ${t.faceCount} IS NULL AND ${t.facesQueuedAt} IS NULL AND ${t.deletedAt} IS NULL`,
+      ),
     unique('files_id_owner_unique').on(t.id, t.ownerId),
     foreignKey({
       name: 'files_folder_same_owner_fk',

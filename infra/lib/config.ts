@@ -296,10 +296,9 @@ export const configSchema = z
       /**
        * tmp/ has one lifecycle rule per prefix (S3 applies the shortest matching expiration, so a
        * single tmp/ rule would cut zips short). Every tmp/ rule stays within the spec's 1-3 days
-       * (TMP_LIFECYCLE_MAX_DAYS, ADR 0006). tmp/index/ holds face-index scratch images that are
-       * deleted right after IndexFaces: keep it short.
+       * (TMP_LIFECYCLE_MAX_DAYS, ADR 0006). There is no tmp/index/ rule: IndexFaces gets the
+       * image as bytes (ADR 0008 section 5), so nothing is written there.
        */
-      tmpIndexExpirationDays: tmpDays,
       /** tmp/zips/: at least ZIP_RESULT_TTL_SECONDS plus the margins in minZipExpirationDays. */
       tmpZipsExpirationDays: tmpDays,
       /**
@@ -387,12 +386,15 @@ export const configSchema = z
           .refine((q) => q.includes(CONTENT_DISPOSITION_QUERY_PARAM), {
             error: `must include ${CONTENT_DISPOSITION_QUERY_PARAM} (attachment downloads)`,
           }),
-        /** S3 prefixes CloudFront may read. tmp/index/ must never be listed. */
+        /**
+         * S3 prefixes CloudFront may read. tmp/reconcile/ (the worker's scan files, which list
+         * face ids) must never be covered.
+         */
         readablePrefixes: z
           .array(str.pipe(z.string().regex(/^[a-z0-9/_-]+\/$/)))
           .min(1)
-          .refine((p) => !p.some((x) => S3_PREFIXES.tmpIndex.startsWith(x)), {
-            error: 'CloudFront must not be able to read tmp/index/ (face-index scratch images)',
+          .refine((p) => !p.some((x) => S3_PREFIXES.tmpReconcile.startsWith(x)), {
+            error: 'CloudFront must not be able to read tmp/reconcile/ (reconciliation scans)',
           }),
         /**
          * Response headers on /media/*. User uploads are served from the main origin, so a file
@@ -772,11 +774,7 @@ export const configSchema = z
       }
     }
     const s = c.storage;
-    const longestTmp = Math.max(
-      s.tmpIndexExpirationDays,
-      s.tmpZipsExpirationDays,
-      s.tmpReconcileExpirationDays,
-    );
+    const longestTmp = Math.max(s.tmpZipsExpirationDays, s.tmpReconcileExpirationDays);
     if (s.tmpOtherExpirationDays < longestTmp) {
       ctx.addIssue({
         code: 'custom',

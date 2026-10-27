@@ -2,6 +2,7 @@ import { faceDeletions, files, folders } from '@shotx/db';
 import {
   FACE_DELETION_ALERT_EVENT,
   serializeQueueMessage,
+  UPLOAD_FILE_TYPES,
   type WorkerSweepSettings,
 } from '@shotx/shared';
 import { sql } from 'drizzle-orm';
@@ -21,6 +22,10 @@ export interface FacesSweepResult {
   foldersRequeued: number;
   /** Stale marks of folders with indexing off or trashed, cleared without a send. */
   foldersCleared: number;
+  /** Covered, never-indexed files without a mark: marked and sent `index.file` (first send). */
+  filesCovered: number;
+  /** False with FACE_SEARCH_ENABLED=false: only deletions were re-sent, every mark was kept. */
+  indexing: boolean;
   complete: boolean;
 }
 
@@ -31,6 +36,8 @@ export const FACE_DELETION_OVERDUE_SECONDS = 86_400;
 const MAX_LOGGED_IDS = 20;
 
 type Settings = WorkerSweepSettings['faces'];
+
+const IMAGE_MIMES = UPLOAD_FILE_TYPES.filter((t) => t.kind === 'image').map((t) => t.mime);
 
 /**
  * Open deletions older than FACES_SWEEP_DELETION_AGE_SECONDS: send `delete.faces` again, always
@@ -160,22 +167,97 @@ async function requeueFolders(
 }
 
 /**
- * `faces.sweep` (ADR 0008 section 3, "Lost jobs"): re-sends lost faces work. Deletions first and
- * whatever FACE_SEARCH_ENABLED says (PDPA); see SCHEDULED_JOB_TYPES in @shotx/shared for the
- * contract. Idempotent: the faces consumer tolerates duplicates of every job.
+ * The predicate of `files_unindexed_ready_idx` (migration 0007), repeated exactly so the planner
+ * can use the partial index: ready, never indexed, no `index.file` outstanding, not trashed.
+ */
+const UNINDEXED_READY = sql`"f"."status" = 'ready' AND "f"."face_count" IS NULL AND "f"."faces_queued_at" IS NULL AND "f"."deleted_at" IS NULL`;
+
+/**
+ * Coverage scan: ready photos that an active face index covers but that never got an outbox mark
+ * (rows from before migration 0006, a lost fan-out). Driven from the active index folders
+ * (folders_face_index_owner_idx), through their subtrees (`path <@`, GiST) to the files of each
+ * folder (files_unindexed_ready_idx), keyset-paginated by (folder_id, id). Each page is marked in a
+ * guarded UPDATE (`faces_queued_at IS NULL`) before its `index.file` jobs are sent; a first send,
+ * so `faces_requeues` is not bumped. At most FACES_SWEEP_BATCH_SIZE files per run.
+ */
+async function scanCoverage(ctx: JobContext, settings: Settings): Promise<number> {
+  let cursor = {
+    folderId: '00000000-0000-0000-0000-000000000000',
+    id: '00000000-0000-0000-0000-000000000000',
+  };
+  let sent = 0;
+  while (sent < settings.batchSize && mayContinue(ctx)) {
+    const limit = Math.min(ctx.batchSize, settings.batchSize - sent);
+    const page = await rows<{ id: string; folder_id: string }>(
+      ctx.db,
+      sql`SELECT DISTINCT "f"."folder_id", "f"."id"
+        FROM ${folders} AS "a"
+        JOIN ${folders} AS "fo" ON "fo"."owner_id" = "a"."owner_id" AND "fo"."path" <@ "a"."path"
+        JOIN ${files} AS "f" ON "f"."folder_id" = "fo"."id" AND "f"."owner_id" = "fo"."owner_id"
+        WHERE "a"."face_index_enabled"
+          AND "a"."face_index_expires_at" > now()
+          AND "a"."deleted_at" IS NULL
+          AND ${UNINDEXED_READY}
+          AND "f"."purge_requested_at" IS NULL
+          AND "f"."mime" IN (${sql.join(
+            IMAGE_MIMES.map((m) => sql`${m}`),
+            sql`, `,
+          )})
+          AND "f"."created_at" < now() - make_interval(secs => ${settings.indexAgeSeconds})
+          AND ("f"."folder_id", "f"."id") > (${cursor.folderId}::uuid, ${cursor.id}::uuid)
+        ORDER BY "f"."folder_id", "f"."id"
+        LIMIT ${limit}`,
+    );
+    if (page.length === 0) break;
+    const last = page.at(-1)!;
+    cursor = { folderId: last.folder_id, id: last.id };
+    const marked = await rows<{ id: string }>(
+      ctx.db,
+      sql`UPDATE ${files} AS "f" SET "faces_queued_at" = now()
+        WHERE "f"."id" IN (${sql.join(
+          page.map((r) => sql`${r.id}::uuid`),
+          sql`, `,
+        )})
+          AND ${UNINDEXED_READY}
+        RETURNING "f"."id"`,
+    );
+    if (marked.length > 0) {
+      await ctx.queues.sendMessages(
+        ctx.destinations.faces,
+        marked.map((f) => serializeQueueMessage('faces', { type: 'index.file', fileId: f.id })),
+      );
+      ctx.log.info('coverage scan queued never-marked photos for indexing', {
+        files: marked.length,
+      });
+    }
+    sent += marked.length;
+    if (page.length < limit) break;
+  }
+  return sent;
+}
+
+/**
+ * `faces.sweep` (ADR 0008 section 3, "Lost jobs"): re-sends lost faces work, deletions first and
+ * whatever FACE_SEARCH_ENABLED says (PDPA). With face search off nothing is indexed, so no
+ * `index.file` / `index.folder` is sent and no coverage scan runs: the marks are kept (not bumped
+ * towards the cap) and re-sent once it is back on. See SCHEDULED_JOB_TYPES in @shotx/shared.
+ * Idempotent: the faces consumer tolerates duplicates of every job.
  */
 export async function runFacesSweep(
   ctx: JobContext,
   settings: Settings,
+  options: { faceSearch: boolean },
 ): Promise<FacesSweepResult> {
   mayContinue(ctx);
   const deletions = await resendDeletions(ctx, settings);
-  const fileMarks = mayContinue(ctx)
-    ? await requeueFiles(ctx, settings)
-    : { requeued: 0, overCap: 0 };
-  const folderMarks = mayContinue(ctx)
-    ? await requeueFolders(ctx, settings)
-    : { requeued: 0, cleared: 0 };
+  const indexing = options.faceSearch;
+  const fileMarks =
+    indexing && mayContinue(ctx) ? await requeueFiles(ctx, settings) : { requeued: 0, overCap: 0 };
+  const folderMarks =
+    indexing && mayContinue(ctx)
+      ? await requeueFolders(ctx, settings)
+      : { requeued: 0, cleared: 0 };
+  const filesCovered = indexing && mayContinue(ctx) ? await scanCoverage(ctx, settings) : 0;
   return {
     deletionsResent: deletions.resent,
     deletionsOverdue: deletions.overdue,
@@ -183,6 +265,8 @@ export async function runFacesSweep(
     filesOverCap: fileMarks.overCap,
     foldersRequeued: folderMarks.requeued,
     foldersCleared: folderMarks.cleared,
+    filesCovered,
+    indexing,
     complete: ctx.now() < ctx.deadline,
   };
 }

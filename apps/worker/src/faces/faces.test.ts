@@ -2,14 +2,8 @@ import { testJobQueues } from '../testing/jobs';
 import { randomUUID } from 'node:crypto';
 import { faceDeletions, faces, files, folders, users } from '@shotx/db';
 import { faceCollectionId, IndexPhotoError } from '@shotx/face';
-import {
-  FakeFaceProvider,
-  MemoryTempImageStore,
-  renderScene,
-  type Scene,
-  SyntheticWorld,
-} from '@shotx/face/testing';
-import { type Env, loadFaceConfig, parseS3Key, serializeQueueMessage } from '@shotx/shared';
+import { FakeFaceProvider, renderScene, type Scene, SyntheticWorld } from '@shotx/face/testing';
+import { type Env, loadFaceConfig, serializeQueueMessage } from '@shotx/shared';
 import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from '../db';
@@ -58,7 +52,6 @@ describe('faces consumer', () => {
   let photo: Buffer;
   let store: MemoryObjectStore;
   let queues: MemoryQueueClient;
-  let tempStore: MemoryTempImageStore;
   let provider: FakeFaceProvider;
   let clock: { t: number };
 
@@ -73,8 +66,7 @@ describe('faces consumer', () => {
   beforeEach(() => {
     store = new MemoryObjectStore();
     queues = new MemoryQueueClient();
-    tempStore = new MemoryTempImageStore();
-    provider = new FakeFaceProvider(world, tempStore);
+    provider = new FakeFaceProvider(world);
     clock = { t: Date.now() };
   });
 
@@ -85,7 +77,6 @@ describe('faces consumer', () => {
       queues,
       facesQueueUrl: FACES_URL,
       provider,
-      tempStore,
       collections: new CollectionRegistry(provider),
       face: loadFaceConfig({ FACE_INDEX_TILING: 'never', ...env }),
       features: { faceSearch: true },
@@ -157,9 +148,8 @@ describe('faces consumer', () => {
       );
       expect(stored.every((f) => f.externalImageId === nested.id)).toBe(true);
       expect((await fileById(db, nested.id))?.faceCount).toBe(3);
-      // Temporary index images: shared keys under tmp/index/, all deleted again.
-      expect(tempStore.putKeys.every((k) => parseS3Key(k)?.kind === 'index')).toBe(true);
-      expect(tempStore.keys()).toEqual([]);
+      // Images went to Rekognition as bytes (ADR 0008 section 5): nothing written to tmp/.
+      expect([...store.objects.keys()].some((k) => k.startsWith('tmp/'))).toBe(false);
       // The covering folder's expiry moved to upload + 90 days (it was 1 day out).
       const [row] = await db.select().from(folders).where(eq(folders.id, folder.id));
       const created = (await fileById(db, nested.id))!.createdAt.getTime();
@@ -433,14 +423,41 @@ describe('faces consumer', () => {
       expect(row?.queuedAt).toBeNull();
     });
 
-    it('index.folder clears the folder mark with the flag off or the folder gone too', async () => {
+    it('keeps every mark while FACE_SEARCH_ENABLED is false (re-sent once it is on)', async () => {
+      const { folder, file } = await indexedFolderWithPhoto();
+      const queuedAt = new Date(Date.now() - 60_000);
+      await db
+        .update(folders)
+        .set({ faceIndexQueuedAt: queuedAt })
+        .where(eq(folders.id, folder.id));
+      await db.update(files).set(marked(queuedAt)).where(eq(files.id, file.id));
+      const off = createFacesHandler(deps({}, { features: { faceSearch: false } }));
+      await off(
+        serializeQueueMessage('faces', { type: 'index.folder', folderId: folder.id }),
+        context(),
+      );
+      await off(indexJob(file.id), context());
+      expect(queues.sent).toEqual([]);
+      expect(provider.calls.indexFaces).toBe(0);
+      const [row] = await db
+        .select({ queuedAt: folders.faceIndexQueuedAt })
+        .from(folders)
+        .where(eq(folders.id, folder.id));
+      expect(row?.queuedAt?.getTime()).toBe(queuedAt.getTime());
+      expect(await fileById(db, file.id)).toMatchObject({
+        facesQueuedAt: queuedAt,
+        facesRequeues: 2,
+      });
+    });
+
+    it('index.folder clears the folder mark when the folder is gone or trashed', async () => {
       const { folder } = await indexedFolderWithPhoto();
       await db
         .update(folders)
-        .set({ faceIndexQueuedAt: new Date(Date.now() - 60_000) })
+        .set({ faceIndexQueuedAt: new Date(Date.now() - 60_000), deletedAt: new Date() })
         .where(eq(folders.id, folder.id));
       const body = serializeQueueMessage('faces', { type: 'index.folder', folderId: folder.id });
-      await createFacesHandler(deps({}, { features: { faceSearch: false } }))(body, context());
+      await createFacesHandler(deps())(body, context());
       expect(queues.sent).toEqual([]);
       const [row] = await db
         .select({ queuedAt: folders.faceIndexQueuedAt })

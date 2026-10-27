@@ -1,3 +1,9 @@
+import {
+  createRedisRekognitionLimiters,
+  type RekognitionLimiters,
+  RekognitionFaceProvider,
+} from '@shotx/face';
+import { LOCAL_DEV_APP_STAGE } from '@shotx/shared';
 import { CognitoTokenVerifier, remoteJwks } from './auth/cognito-verifier';
 import { ShotxTokenVerifier } from './auth/shotx-tokens';
 import type { ApiConfig } from './config';
@@ -41,6 +47,11 @@ export interface QueueWiring {
 export function queueSender(config: ApiConfig): QueueWiring {
   const queues = config.queues;
   if (queues.backend === 'sqs') {
+    // The SQS client relies on AWS_ENDPOINT_URL and the default credential chain (the ECS task
+    // role): AWS stacks only.
+    if (config.offAws && config.app.stage !== LOCAL_DEV_APP_STAGE) {
+      throw new Error('QUEUE_BACKEND=sqs is for the AWS stacks only; off AWS use bullmq');
+    }
     const sqs = createSqsClient(config.aws);
     return {
       sender: new SqsQueueSender(sqs, queues.urls, queues.enqueueTimeoutMs),
@@ -87,4 +98,55 @@ export function mediaUrlSigner(config: ApiConfig, clock: Clock = systemClock): M
   }
   if (config.cloudFront === null) throw new Error('CloudFront signing configuration is missing');
   return new CloudFrontMediaUrlSigner(config.cloudFront);
+}
+
+/**
+ * Refuses AWS S3 through the default chain off AWS (outside APP_STAGE=local, where LocalStack via
+ * AWS_ENDPOINT_URL is fine): with no task role the SDK would pick up whatever AWS_* keys the
+ * environment has. Off AWS, storage must be an explicit STORAGE_ENDPOINT_URL with its own keys.
+ */
+export function assertExplicitStorage(config: ApiConfig): void {
+  if (
+    config.offAws &&
+    !config.storage.client.explicit &&
+    config.app.stage !== LOCAL_DEV_APP_STAGE
+  ) {
+    throw new Error(
+      'Off AWS, media storage needs STORAGE_ENDPOINT_URL and STORAGE_* keys (no default credential chain)',
+    );
+  }
+}
+
+/**
+ * The start-up line about media URL signing: the signer and, for s3-presign, which key pair
+ * signs (`signing`: the read-only STORAGE_SIGNING_* token; `storage`: the api's own keys) and
+ * the endpoint origin. Never a key.
+ */
+export function mediaSignerSummary(config: Pick<ApiConfig, 'mediaUrls'>): string {
+  const urls = config.mediaUrls;
+  if (urls.signer === 'cloudfront') return 'media URLs: cloudfront';
+  return `media URLs: s3-presign on ${new URL(urls.endpointUrl).origin}, keySource=${urls.keySource}`;
+}
+
+/**
+ * The api's Rekognition provider: face search (the only synchronous Rekognition use) and face
+ * deletion, on the `interactive` profile (fails fast). The client gets REKOGNITION_* region and
+ * keys explicitly (config.rekognitionClient; ADR 0008 §1), never AWS_ENDPOINT_URL or, off AWS,
+ * the default chain. `limiters` default to the Redis token buckets shared with the worker.
+ */
+export function interactiveFaceProvider(
+  config: Pick<ApiConfig, 'face' | 'rekognitionClient'>,
+  redis: Parameters<typeof createRedisRekognitionLimiters>[0],
+  limiters: RekognitionLimiters = createRedisRekognitionLimiters(
+    redis,
+    config.face.rekognition,
+    'interactive',
+  ),
+): RekognitionFaceProvider {
+  return RekognitionFaceProvider.create(
+    config.face.rekognition,
+    'interactive',
+    limiters,
+    config.rekognitionClient,
+  );
 }

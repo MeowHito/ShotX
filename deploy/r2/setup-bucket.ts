@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
@@ -9,6 +8,7 @@ import {
   loadFaceConfig,
   loadMediaStorageConfig,
   loadShareConfig,
+  loadStorageLifecycleConfig,
   loadWorkerSettings,
   storageS3ClientOptions,
 } from '@shotx/shared';
@@ -19,23 +19,20 @@ import {
   describeLifecycle,
   lifecycleIssues,
   mainOrigin,
-  storageSettingsFromCdkJson,
 } from './rules';
 import { s3BucketApi } from './s3-bucket-api';
 
 // Applies CORS and lifecycle rules to the S3-compatible media bucket (R2 on the VPS, LocalStack
 // for a rehearsal). ADR 0008 section 2. See deploy/README.md.
 
-const USAGE = `Usage: pnpm --filter @shotx/deploy r2:setup-bucket [--dry-run] [--config <cdk.json>]
+const USAGE = `Usage: pnpm --filter @shotx/deploy r2:setup-bucket [--dry-run]
 
-Reads APP_STAGE, PUBLIC_BASE_URL, ADMIN_BASE_URL, MEDIA_BUCKET, STORAGE_* and the zip, signed-URL,
-worker and face settings from the environment (the same values api and worker run with), and the
-lifecycle days from infra/cdk.json (context.shotx.storage).
+Reads everything from the environment, the same values api and worker run with: APP_STAGE,
+PUBLIC_BASE_URL, ADMIN_BASE_URL, MEDIA_BUCKET, STORAGE_* (including the lifecycle days,
+STORAGE_TMP_*_EXPIRATION_DAYS etc., which default to the values the AWS bucket uses) and the zip,
+signed-URL, worker and face settings.
 
-  --dry-run   check the configuration and print the rules; no request to the bucket
-  --config    path of the cdk.json holding context.shotx.storage (default: infra/cdk.json)`;
-
-const DEFAULT_CDK_JSON = new URL('../../infra/cdk.json', import.meta.url);
+  --dry-run   check the configuration and print the rules; no request to the bucket`;
 
 const REMINDER = [
   'Check by hand in the Cloudflare dashboard (the S3 API cannot tell):',
@@ -58,7 +55,7 @@ export interface PreparedSetup {
  * Reads and checks everything without touching the bucket. Throws with every problem found.
  * Refuses AWS S3 (no STORAGE_ENDPOINT_URL): that bucket belongs to infra/ (CDK).
  */
-export function prepareSetup(env: Env, cdkJson: unknown): PreparedSetup {
+export function prepareSetup(env: Env): PreparedSetup {
   const app = loadAppConfig(env);
   const storage = loadMediaStorageConfig(env);
   if (!storage.client.explicit || storage.client.endpointUrl === null) {
@@ -67,7 +64,7 @@ export function prepareSetup(env: Env, cdkJson: unknown): PreparedSetup {
         'The AWS media bucket is managed by infra/ (CDK).',
     );
   }
-  const settings = storageSettingsFromCdkJson(cdkJson);
+  const settings = loadStorageLifecycleConfig(env);
   const share = loadShareConfig(env);
   const issues = lifecycleIssues(settings, {
     worker: loadWorkerSettings(env),
@@ -97,7 +94,6 @@ async function main(argv: string[]): Promise<number> {
     args: argv,
     options: {
       'dry-run': { type: 'boolean', default: false },
-      config: { type: 'string' },
       help: { type: 'boolean', default: false },
     },
   });
@@ -105,8 +101,7 @@ async function main(argv: string[]): Promise<number> {
     console.log(USAGE);
     return 0;
   }
-  const cdkJson: unknown = JSON.parse(readFileSync(values.config ?? DEFAULT_CDK_JSON, 'utf8'));
-  const setup = prepareSetup(process.env, cdkJson);
+  const setup = prepareSetup(process.env);
 
   console.log(`Bucket ${setup.bucket} on ${setup.endpointUrl}${setup.r2 ? ' (R2)' : ''}`);
   console.log('\nCORS rules:');

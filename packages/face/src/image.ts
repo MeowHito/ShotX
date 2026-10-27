@@ -1,10 +1,14 @@
 import type { FaceConfig } from '@shotx/shared';
-import sharp, { type OutputInfo } from 'sharp';
+import sharp from 'sharp';
 import { REKOGNITION_INLINE_MAX_BYTES } from './provider';
 import type { PixelRect, Size } from './types';
 
 export interface EncodedImage extends Size {
   bytes: Buffer;
+  /** JPEG quality the image was written with: lower than requested when it had to fit. */
+  quality: number;
+  /** True when the long edge had to shrink below the requested one to fit the byte limit. */
+  downscaled: boolean;
 }
 
 /** How an image is squeezed under its byte limit: lower the quality first, then the size. */
@@ -36,10 +40,41 @@ export async function orientedSize(input: Uint8Array): Promise<Size> {
   }
 }
 
+interface RawImage {
+  data: Buffer;
+  width: number;
+  height: number;
+  channels: 1 | 2 | 3 | 4;
+}
+
+/** Decodes, orients, crops and downsizes once per size; every quality step re-encodes these pixels. */
+async function decode(input: Uint8Array, longEdge: number, region?: PixelRect): Promise<RawImage> {
+  try {
+    let pipeline = sharp(input, { autoOrient: true });
+    if (region) pipeline = pipeline.extract(region);
+    const { data, info } = await pipeline
+      .resize({ width: longEdge, height: longEdge, fit: 'inside', withoutEnlargement: true })
+      .flatten({ background: '#ffffff' })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    return { data, width: info.width, height: info.height, channels: info.channels };
+  } catch (error) {
+    throw new UnreadableImageError(error);
+  }
+}
+
+function toJpeg(raw: RawImage, quality: number): Promise<Buffer> {
+  const { data, width, height, channels } = raw;
+  return sharp(data, { raw: { width, height, channels } }).jpeg({ quality }).toBuffer();
+}
+
 /**
  * Encodes `input`, or `region` of it in oriented pixels, as an auto-oriented JPEG whose long edge
  * is at most `longEdge` (never upscaled). All metadata, GPS included, is dropped. Quality and then
- * size go down until the result fits in `maxBytes`.
+ * size go down until the result fits in `maxBytes`: quality in `qualityStep`s down to
+ * `minQuality`, then the long edge by `shrinkFactor`, with `minLongEdge` itself as the last size
+ * tried. FaceConfig guarantees that a square image of `minLongEdge` fits FACE_INDEX_MAX_BYTES at
+ * any quality (`faceEncodeFloorBytes`), so with the configured options this never gives up.
  */
 export async function encodeJpeg(
   input: Uint8Array,
@@ -51,33 +86,27 @@ export async function encodeJpeg(
   if (!(qualityStep >= 1 && shrinkFactor > 0 && shrinkFactor < 1 && minLongEdge >= 1)) {
     throw new RangeError('Invalid JPEG encode options');
   }
+  if (!(options.maxBytes >= 1)) throw new RangeError('maxBytes must be at least 1');
   let quality = options.quality;
   let longEdge = options.longEdge;
+  let downscaled = false;
   for (;;) {
-    let output: { data: Buffer; info: OutputInfo };
-    try {
-      let pipeline = sharp(input, { autoOrient: true });
-      if (region) pipeline = pipeline.extract(region);
-      output = await pipeline
-        .resize({ width: longEdge, height: longEdge, fit: 'inside', withoutEnlargement: true })
-        .flatten({ background: '#ffffff' })
-        .jpeg({ quality })
-        .toBuffer({ resolveWithObject: true });
-    } catch (error) {
-      throw new UnreadableImageError(error);
-    }
-    const { data, info } = output;
-    if (data.length <= options.maxBytes) {
-      return { bytes: data, width: info.width, height: info.height };
-    }
-    if (quality - qualityStep >= minQuality) {
-      quality -= qualityStep;
-    } else {
-      longEdge = Math.floor(Math.max(info.width, info.height) * shrinkFactor);
-      if (longEdge < minLongEdge) {
-        throw new RangeError(`Image does not fit in ${options.maxBytes} bytes`);
+    const raw = await decode(input, longEdge, region);
+    for (;;) {
+      const bytes = await toJpeg(raw, quality);
+      if (bytes.length <= options.maxBytes) {
+        return { bytes, width: raw.width, height: raw.height, quality, downscaled };
       }
+      if (quality - qualityStep < minQuality) break;
+      quality -= qualityStep;
     }
+    const current = Math.max(raw.width, raw.height);
+    if (current <= minLongEdge) {
+      throw new RangeError(`Image does not fit in ${options.maxBytes} bytes`);
+    }
+    // Never skip minLongEdge itself: it is the size the configuration guarantees to fit.
+    longEdge = Math.max(minLongEdge, Math.floor(current * shrinkFactor));
+    downscaled = true;
   }
 }
 

@@ -50,8 +50,6 @@ storage = json.load(open(sys.argv[1]))["context"]["shotx"]["storage"]
 print(json.dumps({"Rules": [
     {"ID": "abort-incomplete-multipart-uploads", "Status": "Enabled", "Filter": {"Prefix": ""},
      "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": storage["abortIncompleteMultipartUploadDays"]}},
-    {"ID": "expire-tmp-index", "Status": "Enabled", "Filter": {"Prefix": "tmp/index/"},
-     "Expiration": {"Days": storage["tmpIndexExpirationDays"]}},
     {"ID": "expire-tmp-zips", "Status": "Enabled", "Filter": {"Prefix": "tmp/zips/"},
      "Expiration": {"Days": storage["tmpZipsExpirationDays"]}},
     {"ID": "expire-tmp-reconcile", "Status": "Enabled", "Filter": {"Prefix": "tmp/reconcile/"},
