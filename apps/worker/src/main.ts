@@ -14,7 +14,13 @@ import { BullMqConsumer } from './bullmq/consumer';
 import { createBullMqConnection } from './bullmq/options';
 import { syncJobSchedulers } from './bullmq/schedules';
 import { BullMqQueueSender } from './bullmq/sender';
-import { CONSUMED_QUEUES, loadWorkerConfig, type WorkerConfig } from './config';
+import {
+  assertOffAwsQueue,
+  assertOffAwsStorage,
+  CONSUMED_QUEUES,
+  loadWorkerConfig,
+  type WorkerConfig,
+} from './config';
 import { checkFacesBudget, type QueueHold } from './faces/budget';
 import { CollectionRegistry } from './faces/deps';
 import { createFacesHandler } from './faces/handler';
@@ -45,6 +51,7 @@ interface QueueRuntime {
 /** The one place that picks the queue backend (ADR 0008 section 1). */
 function createQueueRuntime(config: WorkerConfig, aws: SQSClientConfig, log: Logger): QueueRuntime {
   const { worker, queue } = config;
+  assertOffAwsQueue(config);
   if (queue.backend === 'sqs') {
     const client = new SqsQueueClient(new SQSClient(aws));
     return {
@@ -126,6 +133,7 @@ async function main(): Promise<void> {
   };
   // Media storage has its own endpoint and keys (ADR 0008 section 1): with STORAGE_ENDPOINT_URL
   // (R2) neither AWS_ENDPOINT_URL nor the default credential chain is consulted.
+  assertOffAwsStorage(config);
   const s3 = new S3Client(workerS3ClientOptions(config.storage));
   const store = new S3ObjectStore(s3, config.storage.bucket);
   const runtime = createQueueRuntime(config, aws, log);

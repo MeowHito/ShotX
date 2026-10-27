@@ -56,6 +56,8 @@ export const TEST_SHOTX_AUTH_ENV: Env = {
   GOOGLE_OAUTH_CLIENT_ID: TEST_GOOGLE_CLIENT_ID,
   GOOGLE_OAUTH_CLIENT_SECRET: TEST_GOOGLE_CLIENT_SECRET,
   ADMIN_TOTP_ENCRYPTION_KEY: TEST_TOTP_KEY,
+  // Off AWS there is no WAF: rate limits only (captcha tests switch on turnstile).
+  CAPTCHA_PROVIDER: 'none',
   // Off AWS (AUTH_PROVIDER=shotx/local) Rekognition needs explicit keys (no task role).
   REKOGNITION_ACCESS_KEY_ID: 'AKIATESTREKOGNITION0',
   REKOGNITION_SECRET_ACCESS_KEY: 'test-rekognition-secret',

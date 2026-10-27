@@ -101,6 +101,14 @@ describe('rate limiters', () => {
       await store.setWithTtl(`once:${key}`, 'v', 30);
       expect(await store.take(`once:${key}`)).toBe('v');
       expect(await store.take(`once:${key}`)).toBeNull();
+      // decrementIfPositive keeps the TTL and stops at zero.
+      await store.setWithTtl(`grant:${key}`, '2', 30);
+      expect(await store.decrementIfPositive(`grant:${key}`)).toBe(1);
+      expect(await store.decrementIfPositive(`grant:${key}`)).toBe(0);
+      expect(await store.decrementIfPositive(`grant:${key}`)).toBeNull();
+      expect(await redis.ttl(`${prefix}grant:${key}`)).toBeGreaterThan(0);
+      expect(await store.decrementIfPositive(`missing:${key}`)).toBeNull();
+      await redis.del(`${prefix}grant:${key}`);
     } finally {
       redis.disconnect();
     }

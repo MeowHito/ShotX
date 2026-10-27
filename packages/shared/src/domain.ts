@@ -106,6 +106,22 @@ export type ConsentPurpose = (typeof CONSENT_PURPOSES)[number];
 export const FEATURES = ['face_search'] as const;
 export type Feature = (typeof FEATURES)[number];
 
+// --- Abuse controls (ADR 0008 section 7) ---------------------------------------------------------
+
+/** Turnstile `action` of each route a challenge guards (the widget's `action`, checked server-side). */
+export const CAPTCHA_ACTIONS = ['face_search', 'face_deletion'] as const;
+export type CaptchaAction = (typeof CAPTCHA_ACTIONS)[number];
+
+/**
+ * Why a captcha token didn't unlock a rate-limited request (RateLimitedDetails `captcha.rejected`):
+ * - `expired`: older than 300 s or already used (siteverify `timeout-or-duplicate`): solve again;
+ * - `invalid`: forged or malformed, or solved for another hostname or action: solve again;
+ * - `unavailable`: siteverify failed, timed out or refused the secret: wait and retry. The api
+ *   fails closed: no grant without a verified token.
+ */
+export const CAPTCHA_REJECT_REASONS = ['expired', 'invalid', 'unavailable'] as const;
+export type CaptchaRejectReason = (typeof CAPTCHA_REJECT_REASONS)[number];
+
 // --- Billing (Phase 4) ---------------------------------------------------------------------------
 
 /**

@@ -109,9 +109,25 @@ describe('client config', () => {
     });
     // FACE_MAX_SELFIES, FACE_SELFIE_* come from share meta.
     expect(Object.keys(clientFaceConfig({ FACE_SELFIE_LONG_EDGE: '1024' })).sort()).toEqual([
+      'captcha',
       'detector',
       'gate',
     ]);
+  });
+
+  it('passes only the public Turnstile settings to the share page', () => {
+    expect(clientFaceConfig({}).captcha).toEqual({ provider: 'waf' });
+    const config = clientFaceConfig({
+      CAPTCHA_PROVIDER: 'turnstile',
+      TURNSTILE_SITE_KEY: '0x4AAAAAAABkMYinukE8nzYS',
+      TURNSTILE_SECRET_KEY: '0x4AAAAAAABkMYinukE8nzYS_secret_value',
+    });
+    expect(config.captcha).toEqual({
+      provider: 'turnstile',
+      siteKey: '0x4AAAAAAABkMYinukE8nzYS',
+      scriptUrl: 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit',
+    });
+    expect(JSON.stringify(config)).not.toContain('secret');
   });
 
   it('rejects CDN or cross-origin asset locations', () => {

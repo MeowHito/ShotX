@@ -165,8 +165,17 @@ export async function indexFile(
     }
     throw error;
   }
+  const degraded = result.images.filter(
+    (image) => image.downscaled || image.quality < deps.face.index.jpegQuality,
+  );
   log.info('file indexed', {
     faces: result.faces.length,
+    // Counts only: how many images had to be squeezed under the 5 MiB Image.Bytes limit.
+    images: result.images.length,
+    imagesDegraded: degraded.length,
+    imagesDownscaled: result.images.filter((image) => image.downscaled).length,
+    lowestQuality:
+      result.images.length === 0 ? null : Math.min(...result.images.map((i) => i.quality)),
     faceCount: result.faceCount,
     tiled: result.tiled,
     indexCalls: result.indexCalls,

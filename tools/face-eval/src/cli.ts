@@ -59,7 +59,8 @@ run:
   --${AWS_ACKNOWLEDGEMENT}   required with --provider rekognition (billed AWS calls)
                                 Rekognition client: REKOGNITION_REGION and the evaluation account's
                                 REKOGNITION_ACCESS_KEY_ID / REKOGNITION_SECRET_ACCESS_KEY;
-                                AWS_ENDPOINT_URL and REKOGNITION_ENDPOINT_URL unset
+                                REKOGNITION_ENDPOINT_URL unset or an AWS host (the client
+                                always gets an explicit AWS endpoint)
   --long-edges <list>           default 1600,2400,FACE_INDEX_LONG_EDGE
   --quality-filters <list>      default LOW,MEDIUM
   --tiling <list>               default never,signal,always

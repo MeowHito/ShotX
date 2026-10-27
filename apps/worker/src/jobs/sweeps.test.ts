@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { authSessions, faceDeletions, files, folders } from '@shotx/db';
+import { authSessions, faceDeletions, faces, files, folders } from '@shotx/db';
 import { FakeFaceProvider, SyntheticWorld } from '@shotx/face/testing';
 import {
   FACE_DELETION_ALERT_EVENT,
@@ -401,6 +401,20 @@ describe('sweeps (ADR 0008 lost jobs)', () => {
       await photo({ folderId: expired.id });
       await photo({ folderId: plain.id });
       await photo({ folderId: null });
+      // A face deletion is open for it: index.file would end as deletion-pending every run.
+      const pending = await photo({ folderId: indexed.id });
+      const [open] = await db
+        .insert(faceDeletions)
+        .values({ photographerId: ownerId, shareId: randomUUID(), facesMatched: 1 })
+        .returning({ id: faceDeletions.id });
+      await db.insert(faces).values({
+        fileId: pending.id,
+        ownerId,
+        rekognitionFaceId: randomUUID(),
+        bbox: { left: 0.1, top: 0.1, width: 0.2, height: 0.2 },
+        confidence: 99,
+        deletionId: open!.id,
+      });
 
       const settings = { ...SWEEPS.faces, batchSize: 2 };
       const first = await runFacesSweep(

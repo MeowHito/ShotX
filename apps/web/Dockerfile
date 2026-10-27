@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
 #
-# @shotx/web: Next.js standalone server for ECS Fargate (ARM64).
+# @shotx/web: Next.js standalone server for ECS Fargate (ARM64, CI builds with --platform
+# linux/arm64) and the VPS (deploy/docker-compose.yml, the host's architecture).
 # Build from the repository root:
 #   docker build --platform linux/arm64 -f apps/web/Dockerfile -t shotx-web .
 # Runtime configuration comes from the task environment (infra/lib/constructs/services.ts); the
@@ -8,7 +9,7 @@
 
 ARG NODE_IMAGE=node:24-bookworm-slim
 
-FROM --platform=linux/arm64 ${NODE_IMAGE} AS base
+FROM ${NODE_IMAGE} AS base
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     NEXT_TELEMETRY_DISABLED=1 \
@@ -31,7 +32,7 @@ COPY --from=prune /repo/out/full/ ./
 COPY tsconfig.base.json ./
 RUN pnpm --filter @shotx/web build
 
-FROM --platform=linux/arm64 ${NODE_IMAGE} AS runner
+FROM ${NODE_IMAGE} AS runner
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \

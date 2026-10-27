@@ -309,7 +309,8 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
         .where(eq(faces.ownerId, owner.id))
     ).map((f) => f.id);
     for (const id of faceIds) expect(text).not.toContain(id);
-    expect(text).not.toMatch(/similarity|bbox|boundingBox/i);
+    // As JSON keys (quoted): signed URL signatures are random base64 and may contain the letters.
+    expect(text).not.toMatch(/"(similarity|bbox|boundingBox)"/i);
     expect(body.strong[0]?.thumbUrl).toContain('Signature=');
 
     // The result is stored as fileId -> similarity, with a TTL.

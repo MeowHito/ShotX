@@ -203,7 +203,8 @@ export interface FaceConfig {
   /**
    * Request limits for face search, enforced by the API before any Rekognition call. One request
    * counts once however many selfies it carries. Face deletion requests count against the same
-   * limits. A viewer is the logged-in user or, when
+   * limits. Over a limit, CAPTCHA_PROVIDER=turnstile lets a solved challenge buy a bounded grant of
+   * extra attempts (config/captcha.ts; RATE_LIMITED details say so). A viewer is the logged-in user or, when
    * anonymous, the `anon_id` cookie.
    */
   searchRateLimits: {

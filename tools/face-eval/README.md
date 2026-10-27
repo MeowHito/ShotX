@@ -153,12 +153,16 @@ This calls Amazon Rekognition: it is billed and sends the photos and selfies to 
 `ap-southeast-1`. Photos (full image and tiles) and selfies are sent as bytes of at most 5 MiB and
 never stored. The Rekognition client is built from `loadRekognitionClientConfig` (ADR 0008
 section 1), with stricter rules for the evaluation: it needs the evaluation account's own keys
-(never the default credential chain) and refuses any endpoint that isn't AWS. The local `.env`
-points `REKOGNITION_ENDPOINT_URL` and `AWS_ENDPOINT_URL` at LocalStack, so override them:
+(never the default credential chain), refuses a `REKOGNITION_ENDPOINT_URL` that isn't AWS, and
+always gives the client an explicit endpoint: that AWS URL, or else
+`https://rekognition.<REKOGNITION_REGION>.amazonaws.com`. AWS SDK v3 applies `AWS_ENDPOINT_URL`,
+`AWS_ENDPOINT_URL_REKOGNITION` and `endpoint_url` from `~/.aws/config` only to clients without an
+explicit endpoint, so none of them can send an evaluation elsewhere, on any `APP_STAGE`. The local
+`.env` points `REKOGNITION_ENDPOINT_URL` at LocalStack, so unset it:
 
 ```sh
 set -a; source .env; set +a
-unset AWS_ENDPOINT_URL AWS_ENDPOINT_URL_REKOGNITION REKOGNITION_ENDPOINT_URL
+unset REKOGNITION_ENDPOINT_URL
 export REKOGNITION_REGION=ap-southeast-1
 export REKOGNITION_ACCESS_KEY_ID=<evaluation IAM user>      # Rekognition on collection/pg-eval-* only
 export REKOGNITION_SECRET_ACCESS_KEY=<its secret>

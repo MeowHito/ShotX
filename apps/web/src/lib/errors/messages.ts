@@ -9,6 +9,7 @@ import {
   nameTakenDetailsSchema,
   noFaceDetectedDetailsSchema,
   quotaExceededDetailsSchema,
+  rateLimitedDetailsSchema,
   shareExpiredDetailsSchema,
   subscriptionInactiveDetailsSchema,
   unsupportedFileTypeDetailsSchema,
@@ -182,6 +183,27 @@ export function messageForCode(
               timeZone: TIME_ZONE,
             }).format(new Date(d.data.expiresAt)),
           },
+        };
+      }
+      break;
+    }
+    case ErrorCode.RATE_LIMITED: {
+      // Face search and face deletion: a Turnstile challenge can unlock more attempts, or only
+      // waiting helps (captcha null, or Cloudflare unreachable at the API).
+      const d = rateLimitedDetailsSchema.safeParse(details);
+      if (d.success) {
+        const captcha = d.data.captcha;
+        if (captcha !== null && captcha.rejected !== 'unavailable') {
+          const keys = {
+            none: 'details.captchaRequired',
+            expired: 'details.captchaExpired',
+            invalid: 'details.captchaInvalid',
+          } as const;
+          return { key: keys[captcha.rejected ?? 'none'] };
+        }
+        return {
+          key: 'details.rateLimitedWait',
+          values: { minutes: Math.max(1, Math.ceil(d.data.retryAfterSeconds / 60)) },
         };
       }
       break;

@@ -1,4 +1,4 @@
-import { faceDeletions, files, folders } from '@shotx/db';
+import { faceDeletions, faces, files, folders } from '@shotx/db';
 import {
   FACE_DELETION_ALERT_EVENT,
   serializeQueueMessage,
@@ -199,6 +199,12 @@ async function scanCoverage(ctx: JobContext, settings: Settings): Promise<number
           AND "a"."deleted_at" IS NULL
           AND ${UNINDEXED_READY}
           AND "f"."purge_requested_at" IS NULL
+          -- index.file ends as deletion-pending (without face_count) while a face deletion is
+          -- open for the file; the deletion re-index path, not the scan, handles those.
+          AND NOT EXISTS (
+            SELECT 1 FROM ${faces} AS "fa"
+            WHERE "fa"."file_id" = "f"."id" AND "fa"."deletion_id" IS NOT NULL
+          )
           AND "f"."mime" IN (${sql.join(
             IMAGE_MIMES.map((m) => sql`${m}`),
             sql`, `,

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { awsClientOptions, loadWorkerSettings, storageS3ClientOptions } from '@shotx/shared';
-import { loadWorkerConfig } from './config';
+import {
+  assertOffAwsQueue,
+  assertOffAwsStorage,
+  loadWorkerConfig,
+  type WorkerConfig,
+} from './config';
 import { checkFacesBudget } from './faces/budget';
 import { createJsonLogger, errorFields } from './logger';
 
@@ -235,6 +240,52 @@ describe('worker config with R2 storage', () => {
     expect(() => loadWorkerConfig({ ...r2, AWS_ENDPOINT_URL: 'http://localstack:4566' })).toThrow(
       /AWS_ENDPOINT_URL must be unset/,
     );
+  });
+});
+
+describe('off-AWS guards (as the api)', () => {
+  const base = {
+    app: { stage: 'prod' },
+    queue: { backend: 'bullmq' },
+    storage: { client: { explicit: true } },
+  } as unknown as WorkerConfig;
+  const sqs = { ...base, queue: { backend: 'sqs' } } as unknown as WorkerConfig;
+  const awsS3 = { ...base, storage: { client: { explicit: false } } } as unknown as WorkerConfig;
+
+  it('refuses SQS and default-chain S3 off AWS, outside APP_STAGE=local', () => {
+    expect(() => assertOffAwsQueue({ ...sqs, offAws: true })).toThrow(/QUEUE_BACKEND=sqs/);
+    expect(() => assertOffAwsStorage({ ...awsS3, offAws: true })).toThrow(/STORAGE_ENDPOINT_URL/);
+    // On AWS, off AWS with bullmq and explicit storage, and locally (LocalStack): fine.
+    for (const config of [
+      { ...sqs, offAws: false },
+      { ...awsS3, offAws: false },
+      { ...base, offAws: true },
+      { ...sqs, ...awsS3, offAws: true, app: { stage: 'local' } } as unknown as WorkerConfig,
+    ]) {
+      expect(() => assertOffAwsQueue(config)).not.toThrow();
+      expect(() => assertOffAwsStorage(config)).not.toThrow();
+    }
+  });
+
+  it('derives offAws from the environment', () => {
+    expect(loadWorkerConfig(env).offAws).toBe(false);
+    const vps = loadWorkerConfig({
+      ...env,
+      STORAGE_ENDPOINT_URL: 'https://0123456789abcdef.r2.cloudflarestorage.com',
+      STORAGE_REGION: 'auto',
+      STORAGE_ACCESS_KEY_ID: 'worker-key',
+      STORAGE_SECRET_ACCESS_KEY: 'worker-secret',
+      STORAGE_ORIGINALS_CLASS: 'STANDARD',
+      REKOGNITION_ACCESS_KEY_ID: 'AKIAREKOGNITIONWORKER',
+      REKOGNITION_SECRET_ACCESS_KEY: 'rekognition-secret',
+      SES_ACCESS_KEY_ID: 'AKIASESWORKERKEY0001',
+      SES_SECRET_ACCESS_KEY: 'ses-secret',
+      AWS_IGNORE_CONFIGURED_ENDPOINT_URLS: 'true',
+    });
+    expect(vps.offAws).toBe(true);
+    // env still has the SQS URLs and no QUEUE_BACKEND: such a VPS worker is refused.
+    expect(() => assertOffAwsQueue(vps)).toThrow(/QUEUE_BACKEND=sqs/);
+    expect(() => assertOffAwsStorage(vps)).not.toThrow();
   });
 });
 

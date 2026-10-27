@@ -1,0 +1,448 @@
+# ShotX production on one VPS (ADR 0008 section 6). See deploy/README.md.
+#
+#   cd deploy
+#   docker compose --env-file .env.production up -d --build
+#
+# Only the proxy publishes ports (Docker-published ports bypass ufw). Every other service is on
+# private networks:
+#   edge   proxy, web, api               the proxy has a fixed address: api trusts X-Forwarded-For
+#                                        only from it (TRUSTED_PROXY_ADDRESSES)
+#   data   postgres, redis and their     internal: no route out
+#          clients
+#   egress worker, backup, monitor       outbound only (R2, Rekognition, SES, the alert webhook)
+# App settings come from env/*.env (mode 0600, never committed; see env/*.env.example). The
+# `environment:` entries below are fixed for this deployment and win over the env files.
+
+name: shotx
+
+x-logging:
+  &logging # Docker's local driver: compressed, rotated. Request bodies are never logged by anything here.
+  driver: local
+  options:
+    max-size: ${LOG_MAX_SIZE:-20m}
+    max-file: '${LOG_MAX_FILES:-5}'
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+x-env-common: &env-common
+  path: ${SHOTX_ENV_DIR:-./env}/common.env
+  required: true
+
+services:
+  proxy:
+    image: caddy:${CADDY_VERSION:-2.10-alpine}
+    restart: unless-stopped
+    <<: *hardening
+    cap_add:
+      - NET_BIND_SERVICE
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      SHOTX_DOMAIN: ${SHOTX_DOMAIN:?set SHOTX_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+      PROXY_API_MAX_BODY: ${PROXY_API_MAX_BODY:-2MB}
+      PROXY_SELFIE_MAX_BODY: ${PROXY_SELFIE_MAX_BODY:-16MB}
+      PROXY_WEB_MAX_BODY: ${PROXY_WEB_MAX_BODY:-2MB}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      edge:
+        ipv4_address: ${SHOTX_PROXY_IP:-172.30.0.10}
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8081/healthz']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '${PROXY_CPUS:-0.5}'
+          memory: ${PROXY_MEMORY:-256m}
+    logging: *logging
+
+  web:
+    image: ${SHOTX_IMAGE_PREFIX:-shotx}/web:${SHOTX_IMAGE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    <<: *hardening
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /app/apps/web/.next/cache:size=256m
+    env_file:
+      - *env-common
+      - path: ${SHOTX_ENV_DIR:-./env}/web.env
+        required: true
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      AUTH_PROVIDER: shotx
+      MEDIA_URL_SIGNER: s3-presign
+      API_INTERNAL_URL: http://api:4000
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '${WEB_CPUS:-1}'
+          memory: ${WEB_MEMORY:-768m}
+    logging: *logging
+
+  api:
+    image: ${SHOTX_IMAGE_PREFIX:-shotx}/api:${SHOTX_IMAGE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    <<: *hardening
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    env_file:
+      - *env-common
+      - path: ${SHOTX_ENV_DIR:-./env}/api.env
+        required: true
+    environment: &backend-env
+      NODE_ENV: production
+      PORT: '4000'
+      QUEUE_BACKEND: bullmq
+      AUTH_PROVIDER: shotx
+      MEDIA_URL_SIGNER: s3-presign
+      # AWS SDK v3 must never take an endpoint from the environment: Rekognition and SES get
+      # their own, storage its STORAGE_ENDPOINT_URL (ADR 0008 section 1).
+      AWS_IGNORE_CONFIGURED_ENDPOINT_URLS: 'true'
+      REDIS_URL: redis://redis:6379
+      REDIS_USERNAME: shotx-app
+      REDIS_ALLOW_PLAINTEXT_AUTH: 'true'
+      PGHOST: postgres
+      PGPORT: '5432'
+      PGSSLMODE: disable
+      # Exactly the proxy's address on the edge network (one address, never a range: web shares
+      # the network).
+      TRUSTED_PROXY_ADDRESSES: ${SHOTX_PROXY_IP:-172.30.0.10}
+    networks:
+      - edge
+      - data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '${API_CPUS:-1.5}'
+          memory: ${API_MEMORY:-1280m}
+    logging: *logging
+
+  worker:
+    image: ${SHOTX_IMAGE_PREFIX:-shotx}/worker:${SHOTX_IMAGE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    <<: *hardening
+    # Not read_only: sharp and ffmpeg may write temporary files; the scratch volume holds videos.
+    env_file:
+      - *env-common
+      - path: ${SHOTX_ENV_DIR:-./env}/worker.env
+        required: true
+    environment:
+      <<: *backend-env
+      # The worker serves no HTTP and trusts no proxy.
+      PORT: ''
+      TRUSTED_PROXY_ADDRESSES: none
+      WORKER_TMP_DIR: /tmp/worker
+      WORKER_SHUTDOWN_GRACE_SECONDS: '${WORKER_SHUTDOWN_GRACE_SECONDS:-20}'
+      # libvips (sharp) threads; with the CPU limit this keeps image work from starving the API.
+      VIPS_CONCURRENCY: '${WORKER_VIPS_CONCURRENCY:-2}'
+    volumes:
+      # Video originals are staged here for ffmpeg: on disk, not in RAM.
+      - worker-tmp:/tmp/worker
+    networks:
+      - data
+      - egress
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    # Must exceed WORKER_SHUTDOWN_GRACE_SECONDS + 5 s so running jobs can hand back their locks.
+    stop_grace_period: ${WORKER_STOP_GRACE_PERIOD:-30s}
+    deploy:
+      resources:
+        limits:
+          cpus: '${WORKER_CPUS:-2}'
+          memory: ${WORKER_MEMORY:-2g}
+    logging: *logging
+
+  migrate:
+    image: ${SHOTX_IMAGE_PREFIX:-shotx}/ops:${SHOTX_IMAGE_TAG:-latest}
+    build: &ops-build
+      context: ..
+      dockerfile: deploy/ops/Dockerfile
+    restart: 'no'
+    <<: *hardening
+    command: ['migrate']
+    env_file:
+      - *env-common
+      - path: ${SHOTX_ENV_DIR:-./env}/migrate.env
+        required: true
+    environment:
+      PGHOST: postgres
+      PGPORT: '5432'
+      PGSSLMODE: disable
+    networks:
+      - data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512m
+    logging: *logging
+
+  # One scheduled job now (restore runbook, operations): with the worker's credentials, e.g.
+  #   docker compose --profile tools run --rm run-job quota.reconcile.nightly
+  run-job:
+    image: ${SHOTX_IMAGE_PREFIX:-shotx}/ops:${SHOTX_IMAGE_TAG:-latest}
+    build: *ops-build
+    profiles: ['tools']
+    restart: 'no'
+    <<: *hardening
+    entrypoint: ['/usr/bin/tini', '--', 'node', '--import', 'tsx', 'ops/cli.ts', 'run-job']
+    env_file:
+      - *env-common
+      - path: ${SHOTX_ENV_DIR:-./env}/worker.env
+        required: true
+    environment: *backend-env
+    networks:
+      - data
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256m
+    logging: *logging
+
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-18-alpine}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - path: ${SHOTX_ENV_DIR:-./env}/postgres.env
+        required: true
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-512MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-1536MB}
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-100}
+      - -c
+      - log_min_duration_statement=${PG_LOG_MIN_DURATION_MS:-2000}
+      - -c
+      - log_parameter_max_length=0
+      # Statement texts can hold parameters: log them only when slow, never on errors with data.
+      - -c
+      - log_min_error_statement=panic
+    shm_size: 256m
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./postgres:/docker-entrypoint-initdb.d:ro
+    networks:
+      - data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          psql -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc
+          "select 1 from pg_extension where extname = 'ltree'" | grep -q 1
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '${POSTGRES_CPUS:-1.5}'
+          memory: ${POSTGRES_MEMORY:-1536m}
+    logging: *logging
+
+  redis:
+    image: redis:${REDIS_VERSION:-7.2-alpine}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - redis-server
+      - --aclfile
+      - /usr/local/etc/redis/users.acl
+      # ADR 0008 section 3: writes fail when full instead of evicting jobs, grants or rate-limit
+      # windows; an explicit cap so the kernel never OOM-kills Redis on a box shared with Postgres.
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-512mb}
+      - --maxmemory-policy
+      - noeviction
+      - --appendonly
+      - 'yes'
+      - --appendfsync
+      - everysec
+      - --save
+      - ''
+      # The default user is off (users.acl), so protected mode has nothing to protect.
+      - --protected-mode
+      - 'no'
+    volumes:
+      - ${REDIS_ACL_FILE:-./redis/users.acl}:/usr/local/etc/redis/users.acl:ro
+      - redis-data:/data
+    networks:
+      - data
+    healthcheck:
+      test:
+        ['CMD', 'redis-cli', '--user', 'healthcheck', '--pass', 'x', '--no-auth-warning', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '${REDIS_CPUS:-0.5}'
+          # Above maxmemory: AOF rewrites fork, and copy-on-write needs headroom.
+          memory: ${REDIS_MEMORY:-896m}
+    logging: *logging
+
+  backup:
+    image: ${SHOTX_IMAGE_PREFIX:-shotx}/ops:${SHOTX_IMAGE_TAG:-latest}
+    build: *ops-build
+    restart: unless-stopped
+    <<: *hardening
+    command: ['backup']
+    env_file:
+      - path: ${SHOTX_ENV_DIR:-./env}/backup.env
+        required: true
+    environment:
+      PGHOST: postgres
+      PGPORT: '5432'
+      PGSSLMODE: disable
+    volumes:
+      - ops-state:/var/lib/shotx-ops
+    networks:
+      - data
+      - egress
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512m
+    logging: *logging
+
+  monitor:
+    image: ${SHOTX_IMAGE_PREFIX:-shotx}/ops:${SHOTX_IMAGE_TAG:-latest}
+    build: *ops-build
+    restart: unless-stopped
+    <<: *hardening
+    command: ['monitor']
+    env_file:
+      - *env-common
+      - path: ${SHOTX_ENV_DIR:-./env}/monitor.env
+        required: true
+    environment:
+      REDIS_URL: redis://redis:6379
+      REDIS_USERNAME: shotx-monitor
+      REDIS_ALLOW_PLAINTEXT_AUTH: 'true'
+      PGHOST: postgres
+      PGPORT: '5432'
+      PGSSLMODE: disable
+      PGUSER: shotx_monitor
+      # statfs on this volume reports the host filesystem Docker keeps its volumes on.
+      MONITOR_DISK_PATHS: /var/lib/shotx-ops
+    volumes:
+      - ops-state:/var/lib/shotx-ops:ro
+    networks:
+      - data
+      - egress
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 192m
+    logging: *logging
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: ${SHOTX_EDGE_SUBNET:-172.30.0.0/24}
+          # Docker hands out dynamic addresses only from here, so SHOTX_PROXY_IP (.10) stays free.
+          ip_range: ${SHOTX_EDGE_IP_RANGE:-172.30.0.128/25}
+  data:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${SHOTX_DATA_SUBNET:-172.30.1.0/24}
+  egress:
+    ipam:
+      config:
+        - subnet: ${SHOTX_EGRESS_SUBNET:-172.30.2.0/24}
+
+volumes:
+  caddy-data:
+  caddy-config:
+  postgres-data:
+  redis-data:
+  worker-tmp:
+  ops-state:

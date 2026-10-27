@@ -28,6 +28,7 @@ import {
   loadShareConfig,
   loadUploadConfig,
   loadWorkerSettings,
+  LOCAL_DEV_APP_STAGE,
   type MediaConfig,
   type MediaStorageConfig,
   type PaymentGatewayConfig,
@@ -35,6 +36,7 @@ import {
   type QueueName,
   type RedisConfig,
   type RetentionConfig,
+  runsOffAws,
   type ScheduledJobsConfig,
   type ShareConfig,
   SQS_MAX_VISIBILITY_TIMEOUT_SECONDS,
@@ -77,6 +79,11 @@ export interface WorkerConfig {
   rekognitionClient: AwsClientConfig;
   /** The SES client with EMAIL_PROVIDER=ses, else null. Secret: never log it. */
   sesClient: AwsClientConfig | null;
+  /**
+   * runsOffAws: the VPS of ADR 0008 (or local development like it). No task role there, so no
+   * client may fall back to the default credential chain (assertOffAwsQueue, assertOffAwsStorage).
+   */
+  offAws: boolean;
   storage: MediaStorageConfig;
   database: DatabaseConfig;
   redis: RedisConfig;
@@ -107,6 +114,7 @@ export function loadWorkerConfig(env: Env): WorkerConfig {
     aws: loadAwsConfig(env),
     rekognitionClient: loadRekognitionClientConfig(env),
     sesClient: loadSesClientConfig(env),
+    offAws: runsOffAws(env),
     storage: loadMediaStorageConfig(env),
     database: loadDatabaseConfig(env),
     redis: loadRedisConfig(env),
@@ -140,4 +148,32 @@ export function loadWorkerQueueConfig(env: Env): WorkerQueueConfig {
     }
   }
   return { backend: 'sqs', urls: backend.urls, visibilityTimeoutSeconds };
+}
+
+type OffAwsChecked = Pick<WorkerConfig, 'offAws' | 'app'>;
+
+/**
+ * Refuses QUEUE_BACKEND=sqs off AWS outside APP_STAGE=local (as the api does): the SQS client
+ * relies on AWS_ENDPOINT_URL and the default credential chain, i.e. the ECS task role.
+ */
+export function assertOffAwsQueue(config: OffAwsChecked & Pick<WorkerConfig, 'queue'>): void {
+  if (config.queue.backend === 'sqs' && config.offAws && config.app.stage !== LOCAL_DEV_APP_STAGE) {
+    throw new Error('QUEUE_BACKEND=sqs is for the AWS stacks only; off AWS use bullmq');
+  }
+}
+
+/**
+ * Refuses AWS S3 through the default chain off AWS outside APP_STAGE=local (as the api does): off
+ * AWS, media storage must be an explicit STORAGE_ENDPOINT_URL with its own STORAGE_* keys.
+ */
+export function assertOffAwsStorage(config: OffAwsChecked & Pick<WorkerConfig, 'storage'>): void {
+  if (
+    config.offAws &&
+    !config.storage.client.explicit &&
+    config.app.stage !== LOCAL_DEV_APP_STAGE
+  ) {
+    throw new Error(
+      'Off AWS, media storage needs STORAGE_ENDPOINT_URL and STORAGE_* keys (no default credential chain)',
+    );
+  }
 }

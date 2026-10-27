@@ -1,3 +1,4 @@
+import type { CaptchaClientConfig } from '@shotx/shared';
 import type { SelfieGateConfig } from './quality-gate';
 
 /**
@@ -14,6 +15,11 @@ export interface ClientFaceConfig {
    * `vision_wasm_internal.{js,wasm}` and the face detector model file.
    */
   detector: { wasmBasePath: string; modelPath: string };
+  /**
+   * The challenge face search and face deletion may ask for after a rate-limit hit
+   * (loadCaptchaClientConfig): with `turnstile`, the public site key and script URL.
+   */
+  captcha: CaptchaClientConfig;
 }
 
 /** The API's selfie limits, from share meta or face-deletion info. */

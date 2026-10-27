@@ -1,0 +1,14 @@
+# BuildKit reads this file for deploy/ops/Dockerfile (context: the repository root).
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+!packages/shared/
+!packages/db/
+!deploy/package.json
+!deploy/tsconfig.json
+!deploy/ops/
+**/node_modules
+**/*.test.ts
+**/.turbo

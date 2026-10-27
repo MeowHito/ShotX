@@ -10,3 +10,7 @@
 .env.*
 data
 runs
+# Production secrets, the Redis ACL and load-test selfies (biometric) never enter a build.
+deploy/
+**/.env
+**/.env.*

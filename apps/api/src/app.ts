@@ -23,6 +23,7 @@ import { BffGuard } from './auth/bff.guard';
 import type { OidcDeps } from './auth/oidc';
 import { PhotographerGuard, UserGuard } from './auth/photographer.guard';
 import { createShotxAuth, SHOTX_AUTH } from './auth/shotx-auth';
+import { CAPTCHA_VERIFIER, type CaptchaVerifier, TurnstileVerifier } from './public/captcha';
 import { OriginGuard, PublicGuard } from './auth/public.guard';
 import { BillingController } from './billing/billing.controller';
 import { BillingService } from './billing/billing.service';
@@ -97,6 +98,11 @@ export interface ApiDeps {
    * default: fetch and Google's remote JWKS. Tests pass local fakes (never the network).
    */
   oidc?: Partial<OidcDeps>;
+  /**
+   * Turnstile verification (CAPTCHA_PROVIDER=turnstile); default TurnstileVerifier on
+   * siteverify. Tests pass FakeCaptchaVerifier (never the network).
+   */
+  captchaVerifier?: CaptchaVerifier;
   /** Structured alert events; default StdoutEventLog. Tests pass a MemoryEventLog. */
   events?: EventLog;
   /** Closes pools and clients when the app shuts down. */
@@ -167,6 +173,13 @@ export class AppModule {
         },
         { provide: EMAIL_PROVIDER, useValue: deps.email ?? createEmailProvider(deps.config.email) },
         { provide: SHOTX_AUTH, useValue: createShotxAuth(deps.config, deps.clock, deps.oidc) },
+        {
+          provide: CAPTCHA_VERIFIER,
+          useValue:
+            deps.config.captcha.provider === 'turnstile'
+              ? (deps.captchaVerifier ?? new TurnstileVerifier(deps.config.captcha))
+              : null,
+        },
         { provide: SHUTDOWN, useValue: deps.onShutdown ?? (() => Promise.resolve()) },
         ShutdownHook,
         PhotographerGuard,

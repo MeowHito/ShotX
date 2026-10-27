@@ -23,6 +23,7 @@ import { z } from 'zod';
 import {
   CONTEXT_KEY,
   FACES_MIN_VISIBILITY_TIMEOUT_SECONDS,
+  AWS_CAPTCHA_PROVIDER,
   INFRA_OWNED_ENV,
   MIN_VISIBILITY_TIMEOUT_SECONDS,
   PRODUCTION_STAGE,
@@ -717,6 +718,11 @@ export const configSchema = z
         if ((INFRA_OWNED_ENV as readonly string[]).includes(key)) {
           envIssue(
             `${group}: ${key} is set by infra (runtime, features, consent, billing, email, secrets, buckets, queues, schedules) or doesn't apply to AWS stacks (local development, ADR 0008 VPS settings)`,
+          );
+        }
+        if (key === 'CAPTCHA_PROVIDER' && vars[key] !== AWS_CAPTCHA_PROVIDER) {
+          envIssue(
+            `${group}: CAPTCHA_PROVIDER must be ${AWS_CAPTCHA_PROVIDER} on the AWS stacks (turnstile and none are for the VPS, ADR 0008 section 7)`,
           );
         }
         if (group !== 'common' && readsUploadKey(key)) {

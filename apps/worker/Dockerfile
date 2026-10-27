@@ -5,7 +5,8 @@
 #
 #   docker buildx build --platform linux/arm64 -f apps/worker/Dockerfile -t shotx-worker .
 #
-# Fargate runs it on ARM64 (infra/cdk.json services.cpuArchitecture). The build stage bundles the
+# Fargate runs it on ARM64 (infra/cdk.json services.cpuArchitecture; CI builds with --platform
+# linux/arm64); the VPS builds it for its own architecture. The build stage bundles the
 # worker (and the TypeScript of its workspace packages) into dist/main.js with esbuild; the runtime
 # image runs that with plain node (no tsx) and holds only production node_modules. It ships ffmpeg
 # (video posters and previews) and the RDS CA bundle that NODE_EXTRA_CA_CERTS points at, so
@@ -14,7 +15,7 @@
 ARG NODE_VERSION=24.11
 ARG PNPM_VERSION=12.3.4
 
-FROM --platform=linux/arm64 node:${NODE_VERSION}-bookworm-slim AS base
+FROM node:${NODE_VERSION}-bookworm-slim AS base
 ARG PNPM_VERSION
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH CI=true
 RUN npm install --global "pnpm@${PNPM_VERSION}" && npm cache clean --force
@@ -40,7 +41,7 @@ RUN pnpm --filter @shotx/worker run build \
  && cp -r apps/worker/dist /out/dist
 
 # --- Runtime ---------------------------------------------------------------------------------
-FROM --platform=linux/arm64 node:${NODE_VERSION}-bookworm-slim AS runtime
+FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 # ffmpeg (with libx264 and AAC) for videos; tini forwards SIGTERM so the worker can release its
 # in-flight messages (visibility 0) within WORKER_SHUTDOWN_GRACE_SECONDS (ECS stopTimeout is that
 # plus 10 s).

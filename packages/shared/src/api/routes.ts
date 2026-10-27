@@ -57,6 +57,7 @@ import {
   faceFeedbackBodySchema,
   faceSearchResponseSchema,
   giveConsentBodySchema,
+  captchaHeadersSchema,
   SELFIE_FIELD_NAME,
   SELFIE_MIME_TYPES,
   shareItemsQuerySchema,
@@ -560,6 +561,8 @@ export const PUBLIC_SHARE_ROUTES = {
     auth: 'public',
     params: shareTokenParamsSchema,
     multipart: SELFIE_UPLOAD,
+    /** The optional Turnstile token, read only over a rate limit (config/captcha.ts). */
+    headers: captchaHeadersSchema,
     response: faceSearchResponseSchema,
     errors: errors(
       ...SHARE_GATE_ERRORS,
@@ -602,6 +605,8 @@ export const PUBLIC_SHARE_ROUTES = {
     auth: 'public',
     params: shareTokenParamsSchema,
     multipart: SELFIE_UPLOAD,
+    /** The optional Turnstile token, read only over a rate limit (config/captcha.ts). */
+    headers: captchaHeadersSchema,
     response: faceDeletionResponseSchema,
     errors: errors(ErrorCode.NOT_FOUND, ...SELFIE_SCAN_ERRORS),
   },

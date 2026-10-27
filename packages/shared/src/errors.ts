@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  CAPTCHA_ACTIONS,
+  CAPTCHA_REJECT_REASONS,
   CHECKOUT_CHANGE_TYPES,
   FEATURES,
   OIDC_PROVIDERS,
@@ -14,6 +16,10 @@ export const ErrorCode = {
   SHARE_EXPIRED: 'SHARE_EXPIRED',
   CONSENT_REQUIRED: 'CONSENT_REQUIRED',
   NO_FACE_DETECTED: 'NO_FACE_DETECTED',
+  /**
+   * Too many requests. On face search and face deletion: details RateLimitedDetails (whether a
+   * Turnstile challenge can unlock more attempts, and why a sent token was refused).
+   */
   RATE_LIMITED: 'RATE_LIMITED',
   /** The request body is over its limit (413). The WAF returns it for face search too. */
   PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
@@ -311,6 +317,30 @@ export const zipTooLargeDetailsSchema = z.object({
   bytes: z.number().int().nonnegative(),
 });
 export type ZipTooLargeDetails = z.output<typeof zipTooLargeDetailsSchema>;
+
+/**
+ * RATE_LIMITED on face search and face deletion (POST /s/:token/face-search and
+ * /s/:token/face-deletion); other routes send no details. `Retry-After` carries the same seconds.
+ * See config/captcha.ts for the whole flow.
+ */
+export const rateLimitedDetailsSchema = z.object({
+  /** Seconds until the limit that was hit lets requests through again. */
+  retryAfterSeconds: z.number().int().nonnegative(),
+  /**
+   * Set when solving a challenge unlocks more attempts now (CAPTCHA_PROVIDER=turnstile and the
+   * client IP has grants left): show the widget with `action` and repeat the request with the
+   * token in CAPTCHA_TOKEN_HEADER. Null when only waiting helps.
+   */
+  captcha: z
+    .object({
+      provider: z.literal('turnstile'),
+      action: z.enum(CAPTCHA_ACTIONS),
+      /** Why the token sent with this request was not accepted; null when none was sent. */
+      rejected: z.enum(CAPTCHA_REJECT_REASONS).nullable(),
+    })
+    .nullable(),
+});
+export type RateLimitedDetails = z.output<typeof rateLimitedDetailsSchema>;
 
 export const featureDisabledDetailsSchema = z.object({ feature: z.enum(FEATURES) });
 export type FeatureDisabledDetails = z.output<typeof featureDisabledDetailsSchema>;

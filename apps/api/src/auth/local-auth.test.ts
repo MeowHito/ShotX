@@ -217,6 +217,7 @@ describe('adapter wiring', () => {
       testConfig({ ...local, STORAGE_ACCESS_KEY_ID: '', STORAGE_SECRET_ACCESS_KEY: '' }),
     ).toThrow(/STORAGE_ACCESS_KEY_ID/);
     const r2 = testConfig({
+      CAPTCHA_PROVIDER: 'none',
       REKOGNITION_ACCESS_KEY_ID: 'AKIATESTREKOGNITION0',
       REKOGNITION_SECRET_ACCESS_KEY: 'test-rekognition-secret',
       AWS_IGNORE_CONFIGURED_ENDPOINT_URLS: 'true',

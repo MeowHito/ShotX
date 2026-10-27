@@ -1,16 +1,23 @@
 'use client';
 
-import { type ConsentPolicyVersion, ErrorCode, type FaceSearchResponse } from '@shotx/shared';
+import {
+  type CaptchaAction,
+  type ConsentPolicyVersion,
+  ErrorCode,
+  type FaceSearchResponse,
+  rateLimitedDetailsSchema,
+} from '@shotx/shared';
 import { Alert, Button } from '@shotx/ui';
 import { XIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { isApiError } from '@/lib/api/errors';
+import { ApiError, isApiError } from '@/lib/api/errors';
 import type { SelfieLimits } from '@/lib/face/config';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { SELFIE_ANGLES, type SelfieIssue } from '@/lib/face/quality-gate';
 import { processSelfie, type SelfieSource } from '@/lib/face/selfie';
 import { useFaceDeletion, useFaceSearch, useInvalidateShare } from '@/lib/share/queries';
+import { CaptchaChallenge, type CaptchaFailure } from './captcha-challenge';
 import { ConsentScreen, knownPolicyVersion } from './consent-screen';
 import { useFaceTools } from './face-tools';
 import { SelfieCapture } from './selfie-capture';
@@ -41,6 +48,12 @@ export interface ScanConsent {
  *
  * A scan answered with CONSENT_REQUIRED or CONSENT_VERSION_MISMATCH brings the consent screen
  * back with the version from the error details.
+ *
+ * Over a rate limit the API answers RATE_LIMITED before it reads any selfie. When its details
+ * offer a Turnstile challenge (`captcha`, not `unavailable`), the selfies stay in memory, the
+ * widget is shown (its script loads only now) and the same selfies are sent again with the token;
+ * an expired or invalid token shows why and a fresh widget. Otherwise only waiting helps: the
+ * wait message is shown and the selfies are dropped.
  */
 export function ScanFlow({
   token,
@@ -74,6 +87,13 @@ export function ScanFlow({
   const [issue, setIssue] = useState<SelfieIssue | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleted, setDeleted] = useState<number | null>(null);
+  /** A Turnstile challenge the API asked for; `attempt` remounts the widget for a fresh token. */
+  const [challenge, setChallenge] = useState<{
+    action: CaptchaAction;
+    attempt: number;
+    failed: boolean;
+  } | null>(null);
+  const captcha = tools.config.captcha;
   const selfiesRef = useRef(selfies);
   useEffect(() => {
     selfiesRef.current = selfies;
@@ -129,20 +149,51 @@ export function ScanFlow({
     if (next.length === 0) setAdding(true);
   }
 
-  async function submit() {
+  /** The Turnstile action the API offers for this error, or null when only waiting helps. */
+  function challengeFor(err: unknown): CaptchaAction | null {
+    if (!isApiError(err, ErrorCode.RATE_LIMITED)) return null;
+    const details = rateLimitedDetailsSchema.safeParse(err.details);
+    const offered = details.success ? details.data.captcha : null;
+    if (offered === null || offered.rejected === 'unavailable') return null;
+    if (captcha.provider !== 'turnstile' || tools.loadTurnstile === null) return null;
+    return offered.action;
+  }
+
+  /**
+   * A RATE_LIMITED this flow can't answer with a challenge, described as "wait": the API may
+   * offer one that web isn't set up for (another CAPTCHA_PROVIDER here).
+   */
+  function waitOnly(err: unknown): unknown {
+    if (!isApiError(err, ErrorCode.RATE_LIMITED)) return err;
+    const details = rateLimitedDetailsSchema.safeParse(err.details);
+    if (!details.success) return err;
+    return new ApiError(err.status, err.code, err.message, { ...details.data, captcha: null });
+  }
+
+  async function submit(captchaToken?: string) {
     setError(null);
     const blobs = selfies.map((s) => s.blob);
     try {
       if (purpose === 'search') {
-        const results = await search.mutateAsync(blobs);
+        const results = await search.mutateAsync({ selfies: blobs, captchaToken });
+        setChallenge(null);
         dropSelfies();
         onResults?.(results);
       } else {
-        const res = await deletion.mutateAsync(blobs);
+        const res = await deletion.mutateAsync({ selfies: blobs, captchaToken });
+        setChallenge(null);
         dropSelfies();
         setDeleted(res.facesMatched);
       }
     } catch (err) {
+      const action = challengeFor(err);
+      if (action !== null) {
+        // The API refused before reading the selfies: keep them (in memory) for the retry.
+        setChallenge((prev) => ({ action, attempt: (prev?.attempt ?? 0) + 1, failed: false }));
+        setError(describe(err));
+        return;
+      }
+      setChallenge(null);
       // The selfies were looked at by the server either way; never keep them for a retry
       // unless the request never got through.
       if (!(err instanceof Error && err.name === 'NetworkError')) dropSelfies();
@@ -161,7 +212,18 @@ export function ScanFlow({
           return;
         }
       }
-      setError(describe(err));
+      setError(describe(waitOnly(err)));
+    }
+  }
+
+  function onCaptchaFailure(failure: CaptchaFailure) {
+    if (failure === 'expired') {
+      // The challenge timed out before a token: a fresh widget.
+      setError(t('errors.details.captchaExpired'));
+      setChallenge((prev) => (prev === null ? null : { ...prev, attempt: prev.attempt + 1 }));
+    } else {
+      setError(t('errors.client.captchaUnavailable'));
+      setChallenge((prev) => (prev === null ? null : { ...prev, failed: true }));
     }
   }
 
@@ -226,7 +288,35 @@ export function ScanFlow({
             ))}
           </ul>
         ) : null}
-        {adding ? (
+        {challenge !== null && captcha.provider === 'turnstile' && tools.loadTurnstile !== null ? (
+          <div className="space-y-3">
+            {error !== null ? <Alert variant="warning">{error}</Alert> : null}
+            {busy ? (
+              <p role="status" className="text-sm">
+                {t('capture.captchaVerifying')}
+              </p>
+            ) : challenge.failed ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setError(null);
+                  setChallenge({ ...challenge, attempt: challenge.attempt + 1, failed: false });
+                }}
+              >
+                {t('capture.captchaRetry')}
+              </Button>
+            ) : (
+              <CaptchaChallenge
+                key={challenge.attempt}
+                loader={tools.loadTurnstile}
+                siteKey={captcha.siteKey}
+                action={challenge.action}
+                onToken={(token) => void submit(token)}
+                onFailure={onCaptchaFailure}
+              />
+            )}
+          </div>
+        ) : adding ? (
           <>
             {maxAngles > 1 ? (
               <p className="text-sm text-muted-foreground">
@@ -270,7 +360,7 @@ export function ScanFlow({
           </p>
         ) : null}
         {issue !== null ? <Alert variant="warning">{t(`capture.issues.${issue}`)}</Alert> : null}
-        {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
+        {error !== null && challenge === null ? <Alert variant="destructive">{error}</Alert> : null}
       </div>
     );
   }

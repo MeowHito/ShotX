@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, type ReactNode, useContext, useState } from 'react';
+import { createTurnstileLoader, type TurnstileLoader } from '@/lib/captcha/turnstile';
 import type { ClientFaceConfig } from '@/lib/face/config';
 import { createMediaPipeDetectorLoader, type DetectorLoader } from '@/lib/face/detector';
 import { browserCanvasOps, type CanvasOps } from '@/lib/face/selfie';
@@ -11,6 +12,8 @@ export interface FaceTools {
   canvas: CanvasOps;
   loadDetector: DetectorLoader;
   navigator: Navigator | undefined;
+  /** Turnstile, loaded only when the API asks for a challenge; null without `turnstile`. */
+  loadTurnstile: TurnstileLoader | null;
 }
 
 const FaceToolsContext = createContext<FaceTools | null>(null);
@@ -35,6 +38,11 @@ export function FaceToolsProvider({
     canvas: overrides?.canvas ?? browserCanvasOps,
     // MediaPipe is imported only when the first selfie is checked.
     loadDetector: overrides?.loadDetector ?? createMediaPipeDetectorLoader(config),
+    loadTurnstile:
+      overrides?.loadTurnstile ??
+      (config.captcha.provider === 'turnstile'
+        ? createTurnstileLoader(config.captcha.scriptUrl)
+        : null),
     navigator:
       overrides && 'navigator' in overrides
         ? overrides.navigator

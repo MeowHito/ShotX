@@ -1,0 +1,84 @@
+# ShotX reverse proxy (ADR 0008 sections 1 and 6). Caddy gets and renews the TLS certificate.
+#
+# - Routes mirror CloudFront's behaviours: /api/* -> api, everything else (including /bff/*) -> web.
+# - X-Forwarded-For is the TCP peer only, never appended to: the client's copy is stripped below,
+#   and with no trusted_proxies Caddy's reverse_proxy sets it to {remote_host}. api
+#   (TRUSTED_PROXY_ADDRESSES) and web take the last entry.
+# - Headers only web may set on calls to the api are stripped from every request.
+# - Request bodies are streamed (Caddy never buffers them to disk) and never logged; selfies on
+#   /api/s/*/face-search and /api/s/*/face-deletion stay in memory only.
+# Reload: `docker compose restart proxy` (the admin API is off).
+{
+	email {$ACME_EMAIL}
+	admin off
+	# No trusted_proxies: Caddy treats every client as untrusted and ignores its X-Forwarded-*.
+}
+
+# Container healthcheck only; not published.
+http://:8081 {
+	respond /healthz 200
+}
+
+{$SHOTX_DOMAIN} {
+	# Never trust what a client sends here.
+	request_header -X-Shotx-Bff-Key
+	request_header -X-Shotx-Client-Ip
+	request_header -X-Forwarded-For
+	request_header -X-Real-Ip
+	request_header -Forwarded
+	request_header -Cf-Connecting-Ip
+	request_header -True-Client-Ip
+	request_header -Cloudfront-Viewer-Address
+	request_header -X-Amz-Cf-Id
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	# Access log without headers or bodies. Share tokens (/s/<token>) and query strings (OAuth
+	# codes, cursors) are masked. Docker's log driver rotates it.
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>headers delete
+				request>tls delete
+				resp_headers delete
+				request>uri regexp (/s/)[^/?]+|\?.* ${1}[redacted]
+				request>remote_ip ip_mask 24 48
+				request>client_ip ip_mask 24 48
+			}
+		}
+	}
+
+	@selfie path_regexp selfie ^/api/s/[^/]+/face-(search|deletion)$
+
+	# `route` keeps this order; the first matching `handle` wins.
+	route {
+		handle @selfie {
+			request_body {
+				max_size {$PROXY_SELFIE_MAX_BODY}
+			}
+			# reverse_proxy streams request bodies unless request_buffers is set: the selfie is
+			# never buffered, in memory or on disk.
+			reverse_proxy api:4000
+		}
+
+		handle /api/* {
+			request_body {
+				max_size {$PROXY_API_MAX_BODY}
+			}
+			reverse_proxy api:4000
+		}
+
+		# /bff/* and everything else.
+		handle {
+			request_body {
+				max_size {$PROXY_WEB_MAX_BODY}
+			}
+			reverse_proxy web:3000
+		}
+	}
+}

@@ -73,6 +73,22 @@ describe('error message map', () => {
     );
   });
 
+  it('maps RATE_LIMITED details: a challenge, why a token was refused, or how long to wait', () => {
+    const limited = (captcha: unknown, retryAfterSeconds = 61) =>
+      render(messageForCode(ErrorCode.RATE_LIMITED, { retryAfterSeconds, captcha }));
+    const offer = (rejected: string | null) => ({
+      provider: 'turnstile',
+      action: 'face_search',
+      rejected,
+    });
+    expect(limited(offer(null))).toBe(th.errors.details.captchaRequired);
+    expect(limited(offer('expired'))).toBe(th.errors.details.captchaExpired);
+    expect(limited(offer('invalid'))).toBe(th.errors.details.captchaInvalid);
+    expect(limited(offer('unavailable'))).toBe('ส่งคำขอบ่อยเกินไป กรุณารออีก 2 นาทีแล้วลองใหม่');
+    expect(limited(null, 0)).toBe('ส่งคำขอบ่อยเกินไป กรุณารออีก 1 นาทีแล้วลองใหม่');
+    expect(limited(null, 600)).toBe('ส่งคำขอบ่อยเกินไป กรุณารออีก 10 นาทีแล้วลองใหม่');
+  });
+
   it('says "ลิงก์นี้หมดอายุ" for every SHARE_EXPIRED reason', () => {
     for (const reason of SHARE_UNAVAILABLE_REASONS) {
       const text = render(messageForCode(ErrorCode.SHARE_EXPIRED, { reason }));

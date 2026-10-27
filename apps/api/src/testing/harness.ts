@@ -34,6 +34,7 @@ import { MemoryKeyValueStore, MemoryRateLimiter } from '../infra/redis';
 import { MemoryQueueSender } from '../infra/sqs-queue';
 import type { RateLimiter, TokenVerifier } from '../tokens';
 import type { OidcDeps } from '../auth/oidc';
+import type { CaptchaVerifier } from '../public/captcha';
 import { tokenVerifier } from '../wiring';
 import { testWorld } from './faces';
 import {
@@ -116,6 +117,8 @@ export class TestApi {
       faceProvider?: FaceProvider;
       /** Fake LINE/Google endpoints (FakeOidcProviders.deps) for AUTH_PROVIDER=shotx or local. */
       oidc?: (clock: TestClock) => Partial<OidcDeps>;
+      /** CAPTCHA_PROVIDER=turnstile: the verifier (FakeCaptchaVerifier; never the network). */
+      captchaVerifier?: CaptchaVerifier;
     } = {},
   ): Promise<TestApi> {
     const config = testConfig(options.env, options.limits);
@@ -154,6 +157,9 @@ export class TestApi {
         email,
         events,
         oidc: options.oidc?.(clock) ?? {},
+        ...(options.captchaVerifier === undefined
+          ? {}
+          : { captchaVerifier: options.captchaVerifier }),
       },
       logger,
     );

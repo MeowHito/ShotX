@@ -220,6 +220,28 @@ export type ConsentResponse = z.output<typeof consentResponseSchema>;
  * API streams the body, keeps selfies in memory only and never logs them (docs/TODO-api.md).
  */
 export const SELFIE_FIELD_NAME = 'selfie';
+
+/**
+ * Request header that carries a Turnstile token on face search and face deletion (ADR 0008
+ * section 7). A header, not a multipart field, so the api decides before it reads any selfie. It
+ * is read only when the request is over a FACE_SEARCH_RATE_* limit (see config/captcha.ts).
+ */
+export const CAPTCHA_TOKEN_HEADER = 'x-shotx-captcha-token';
+
+/** Longest captcha token accepted (Turnstile tokens are at most 2048 characters). */
+export const CAPTCHA_TOKEN_MAX_LENGTH = 2048;
+
+/** A captcha token as the header carries it (printable ASCII). Values are never echoed. */
+export const captchaTokenSchema = z
+  .string()
+  .min(1)
+  .max(CAPTCHA_TOKEN_MAX_LENGTH)
+  .regex(/^[\x21-\x7e]+$/, { error: 'must be a captcha token' });
+
+/** Request headers of face search and face deletion: the optional captcha token. */
+export const captchaHeadersSchema = z.object({
+  [CAPTCHA_TOKEN_HEADER]: captchaTokenSchema.optional(),
+});
 export const SELFIE_MIME_TYPES = ['image/jpeg', 'image/png'] as const;
 
 /**

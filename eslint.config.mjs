@@ -12,6 +12,8 @@ export default defineConfig(
       '**/cdk.out/',
       'data/',
       'runs/',
+      // k6 scripts run in k6's JavaScript runtime (k6/* modules), not Node.
+      'deploy/loadtest/',
     ],
   },
   js.configs.recommended,

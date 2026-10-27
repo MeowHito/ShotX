@@ -8,6 +8,8 @@ import {
   loadAwsConfig,
   loadBffAuthConfig,
   loadBillingConfig,
+  loadCaptchaClientConfig,
+  loadCaptchaConfig,
   loadCloudFrontSigningConfig,
   loadCognitoConfig,
   loadConsentConfig,
@@ -104,6 +106,10 @@ const SAMPLES: Record<string, string> = {
   COGNITO_ADMIN_DOMAIN: 'https://shotx-prod-admin-auth.auth.ap-southeast-1.amazoncognito.com',
   SENTRY_DSN: 'https://publickey@o1.ingest.sentry.io/123',
   WAF_CAPTCHA_API_KEY: 'captcha-api-key',
+  // Turnstile (VPS only): production-format keys, since .env.example's are Cloudflare's test keys,
+  // which the loaders accept only on APP_STAGE=local with a non-production NODE_ENV.
+  TURNSTILE_SITE_KEY: '0x4AAAAAAAexampleSiteKey',
+  TURNSTILE_SECRET_KEY: '0x4AAAAAAAexampleSecretKeyxxxxxxxxxxxx',
   WAF_CAPTCHA_SCRIPT_URL: 'https://abc.ap-southeast-1.captcha-sdk.awswaf.com/abc/jsapi.js',
   PGHOST: 'shotx.cluster.ap-southeast-1.rds.amazonaws.com',
   PGPORT: '5432',
@@ -132,6 +138,8 @@ const SERVICE_LOADERS: Record<ServiceName, Loader[]> = {
     loadAwsConfig,
     loadUploadConfig,
     loadMediaStorageConfig,
+    // The share page's captcha (the default `waf` on AWS).
+    loadCaptchaClientConfig,
   ],
   admin: [
     loadAppConfig,
@@ -161,6 +169,7 @@ const SERVICE_LOADERS: Record<ServiceName, Loader[]> = {
     loadBillingConfig,
     loadPaymentGatewayConfig,
     loadEmailConfig,
+    loadCaptchaConfig,
   ],
   worker: [
     loadAppConfig,
@@ -223,6 +232,9 @@ const ALL_LOADERS: Loader[] = [
   loadRekognitionClientConfig,
   loadSesClientConfig,
   loadStorageLifecycleConfig,
+  // Turnstile (ADR 0008 section 7) as on APP_STAGE=local, where Cloudflare's test keys are allowed.
+  (e) => loadCaptchaConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
+  (e) => loadCaptchaClientConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
 ];
 
 const throws = (loader: Loader, env: Env) => {

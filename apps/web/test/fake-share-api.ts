@@ -1,4 +1,7 @@
 import {
+  CAPTCHA_TOKEN_HEADER,
+  type CaptchaAction,
+  type CaptchaRejectReason,
   CONSENT_POLICY_VERSIONS,
   type CreateShareBody,
   DRIVE_ROUTES,
@@ -64,6 +67,16 @@ export interface PublicShareFixture {
   noFace: boolean;
   /** facesMatched of face deletion. */
   deletionMatches: number;
+  /**
+   * Face search and face deletion are over a FACE_SEARCH_RATE_* limit: RATE_LIMITED before any
+   * selfie is read. With `captcha`, a token in CAPTCHA_TOKEN_HEADER is judged by `tokens`
+   * (unknown tokens are `invalid`); an `ok` token lifts the limit (the API's grant).
+   */
+  rateLimit: {
+    captcha: boolean;
+    retryAfterSeconds: number;
+    tokens: Record<string, 'ok' | CaptchaRejectReason>;
+  } | null;
 }
 
 /** A ready image as the share page sees it. */
@@ -115,6 +128,7 @@ export function createPublicShare(
     grant: new Set(),
     noFace: false,
     deletionMatches: 0,
+    rateLimit: null,
     ...rest,
     items,
   };
@@ -185,6 +199,28 @@ function faceGate(share: PublicShareFixture) {
 }
 
 /** Checks the selfie parts like the API (count, field name, type) and records sizes only. */
+/** RATE_LIMITED (RateLimitedDetails) unless the share is under its limit or the token passes. */
+function rateGate(
+  api: FakeApi,
+  share: PublicShareFixture,
+  headers: Record<string, string | undefined>,
+  action: CaptchaAction,
+) {
+  const limit = share.rateLimit;
+  const token = headers[CAPTCHA_TOKEN_HEADER];
+  if (token !== undefined) api.captchaTokens.push(token);
+  if (limit === null) return;
+  const verdict = limit.captcha && token !== undefined ? (limit.tokens[token] ?? 'invalid') : null;
+  if (verdict === 'ok') {
+    share.rateLimit = null;
+    return;
+  }
+  throw new Fail('RATE_LIMITED', {
+    retryAfterSeconds: limit.retryAfterSeconds,
+    captcha: limit.captcha ? { provider: 'turnstile', action, rejected: verdict } : null,
+  });
+}
+
 function selfies(api: FakeApi, form: FormData | undefined, kind: 'search' | 'deletion') {
   const names = [...(form?.keys() ?? [])];
   const parts = form?.getAll(SELFIE_FIELD_NAME) ?? [];
@@ -440,6 +476,7 @@ export function handlePhase3(
         share.consented = false;
         throw new Fail('CONSENT_VERSION_MISMATCH', { policyVersion: share.serverPolicyVersion });
       }
+      rateGate(api, share, extra.headers, 'face_search');
       const count = selfies(api, extra.form, 'search');
       if (share.noFace) {
         throw new Fail('NO_FACE_DETECTED', { selfies: count, selfiesWithoutFace: count });
@@ -462,6 +499,7 @@ export function handlePhase3(
       if (!share.deletionConsented) {
         throw new Fail('CONSENT_REQUIRED', { policyVersion: share.serverPolicyVersion });
       }
+      rateGate(api, share, extra.headers, 'face_deletion');
       const count = selfies(api, extra.form, 'deletion');
       if (share.noFace) {
         throw new Fail('NO_FACE_DETECTED', { selfies: count, selfiesWithoutFace: count });

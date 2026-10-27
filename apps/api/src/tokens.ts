@@ -151,6 +151,12 @@ export interface KeyValueStore {
   hashTake(key: string, field: string): Promise<string | null>;
   /** GETDEL: read a string key and delete it in one step (one-time values); null when missing. */
   take(key: string): Promise<string | null>;
+  /**
+   * Atomically (one Lua script in Redis): when the key holds a number above 0, DECR it (the TTL
+   * stays) and return the new value; otherwise null (missing, expired or used up). Counted
+   * allowances such as captcha grants.
+   */
+  decrementIfPositive(key: string): Promise<number | null>;
 }
 
 /** A message body as serializeQueueMessage accepts it. */

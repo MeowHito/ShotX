@@ -51,6 +51,7 @@ export * from './config/aws';
 export * from './config/storage';
 export * from './config/aws-clients';
 export * from './config/lifecycle';
+export * from './config/captcha';
 export * from './config/redis';
 export * from './config/cloudfront';
 export * from './config/cognito';

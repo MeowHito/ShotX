@@ -1,7 +1,172 @@
 # deploy/
 
-Setup for the VPS deployment (ADR 0008). Unlike `infra/` (AWS CDK), nothing here runs at deploy
-time on its own: each script is run by hand by the operator.
+Production on one VPS (ADR 0008 section 6): `docker-compose.yml` and its proxy, Postgres and Redis
+configuration, the ops image (`ops/`: migrate, backup, monitor, run-job), the R2 bucket setup
+script (`r2/`), the restore runbook ([RESTORE.md](RESTORE.md)) and the face-search load test
+([LOADTEST.md](LOADTEST.md)). Unlike `infra/` (AWS CDK), nothing here deploys by itself: the
+operator runs every step.
+
+## What the owner provides
+
+- **Domain:** DNS `A`/`AAAA` records for `SHOTX_DOMAIN` pointing at the VPS. Ports 80 and 443 must be
+  reachable for the certificate (Let's Encrypt HTTP-01/TLS-ALPN).
+- **VPS:** size (open question 2; the defaults fit 4 vCPU / 8 GB), with an encrypted volume.
+- **Cloudflare R2:** the media bucket and a separate backup bucket with a bucket lock, both with
+  location hint `apac`. Tokens: api (Object Read & Write, media bucket), worker (same), an
+  optional read-only signing token, backup (Object Read & Write, backup bucket only), and a
+  short-lived admin token for `r2/setup-bucket.ts`.
+- **AWS (ap-southeast-1):** IAM users `shotx-<stage>-api` and `shotx-<stage>-worker`, limited to the
+  Rekognition actions in `env/api.env.example` / `env/worker.env.example` on `collection/pg-*`,
+  plus `ses:SendEmail`/`ses:SendRawEmail` from the verified identity. Turn on CloudTrail and an AWS
+  Budgets alarm, and rotate the keys.
+- **age key pair** for the backups: `age-keygen -o key.txt` on the owner's machine. Only the public
+  key (`age1...`) goes into `env/backup.env`. Keep a second, break-glass key offline too and list
+  both.
+- **Alerts:** a webhook URL (`ALERT_WEBHOOK_URL`) and an external uptime check (below). Optionally a
+  heartbeat URL (`MONITOR_HEARTBEAT_URL`).
+- **Sign-in, mail, payments:** the LINE Login channel, the Google OAuth client, the Cloudflare
+  Turnstile keys, SES sending, and the Omise keys.
+
+## First deploy
+
+On the VPS, as a non-root user in the `docker` group, with the repository checked out:
+
+```sh
+cd deploy
+cp .env.production.example .env.production
+for f in env/*.env.example; do cp "$f" "${f%.example}"; done
+chmod 600 .env.production env/*.env
+# Fill in every REPLACE_ME (the services refuse to start while one is left). Generate secrets with
+# `openssl rand -base64 48`; signing keys as the comments say.
+
+# Redis ACL from two new passwords (the app's goes into env/api.env and env/worker.env as
+# REDIS_PASSWORD, the monitor's into env/monitor.env):
+REDIS_APP_PASSWORD=... REDIS_MONITOR_PASSWORD=... \
+  docker compose --env-file .env.production run --rm --no-deps -e REDIS_APP_PASSWORD \
+  -e REDIS_MONITOR_PASSWORD migrate redis-acl > redis/users.acl
+chmod 600 redis/users.acl
+
+docker compose --env-file .env.production build
+docker compose --env-file .env.production up -d     # migrate runs before api and worker
+docker compose --env-file .env.production ps
+```
+
+Then:
+
+- Apply the R2 bucket settings: `r2/setup-bucket.ts` (below), with the admin token.
+- Create the first admin: `docker compose --env-file .env.production exec api node
+dist/cli/admin.js create --email ... --name ...` (password on stdin), then enrol TOTP.
+- Run one backup now (`docker compose --env-file .env.production run --rm backup backup --once`)
+  and the restore test in [RESTORE.md](RESTORE.md) before launch.
+
+Postgres's init script (`postgres/01-init.sh`) only runs on an empty volume. It creates the
+`shotx` role, which owns the database and is not a superuser, and the `shotx_monitor` role. With
+an existing volume, create both by hand with the same SQL.
+
+## Services
+
+| service  | image                 | networks                      | notes                                                              |
+| -------- | --------------------- | ----------------------------- | ------------------------------------------------------------------ |
+| proxy    | caddy                 | edge (fixed `SHOTX_PROXY_IP`) | the only published ports (80, 443 TCP/UDP); automatic TLS          |
+| web      | apps/web              | edge                          | reads the client address from the proxy's X-Forwarded-For          |
+| api      | apps/api              | edge, data                    | `TRUSTED_PROXY_ADDRESSES` = the proxy address                      |
+| worker   | apps/worker           | data, egress                  | concurrency in `env/worker.env`; `stop_grace_period` ≥ grace + 5 s |
+| migrate  | ops                   | data                          | one-off before api/worker: migrations, plan seed, monitor grants   |
+| postgres | postgres 18           | data                          | ltree; `shotx` owns the database                                   |
+| redis    | redis 7.2             | data                          | `noeviction`, `maxmemory`, AOF `everysec`, `users.acl`             |
+| backup   | ops                   | data, egress                  | daily at `BACKUP_TIME_UTC`                                         |
+| monitor  | ops                   | data, egress                  | checks every minute, alerts to the webhook                         |
+| run-job  | ops (profile `tools`) | data                          | `--profile tools run --rm run-job <type>`                          |
+
+`data` is an internal network: Postgres and Redis can't reach the internet, and nothing outside
+can reach them. Every service has CPU and memory limits, a restart policy, rotated logs (Docker's
+`local` driver) and `no-new-privileges`. The app containers also drop all capabilities.
+
+**Client IP (ADR 0008 section 1).** Caddy strips any client-sent `X-Forwarded-For`,
+`x-shotx-bff-key`, `x-shotx-client-ip`, `CF-Connecting-IP` and the CloudFront headers. It then sets
+`X-Forwarded-For` to the TCP peer. The api trusts that header only from `SHOTX_PROXY_IP`, and trusts
+web's `x-shotx-client-ip` only with the BFF key. If Cloudflare's proxied DNS is turned on later
+(open question 6), `CF-Connecting-IP` handling and a firewall that admits Cloudflare's ranges
+only must come first. Until then, leave it off.
+
+**Selfies.** `/api/s/*/face-search` and `/api/s/*/face-deletion` bodies are streamed to the api:
+Caddy never buffers request bodies to disk, and there is no `request_buffers`. Nothing logs bodies.
+Caddy's access log drops headers, masks share tokens and query strings, and is rotated with the
+other container logs. Swap must be off (or encrypted), so selfie buffers in memory never reach a
+plain disk.
+
+## Monitoring (ADR 0008 section 7)
+
+The `monitor` service checks every `MONITOR_INTERVAL_SECONDS` and POSTs JSON to
+`ALERT_WEBHOOK_URL` when a check fires or resolves. Firing alerts repeat every
+`MONITOR_REPEAT_SECONDS`. Alerts carry counts and row ids only: never names, emails, file names,
+faces or IP addresses.
+
+| alert id                                                       | fires when                                                                                                 |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `queue.<q>.failed`                                             | a BullMQ queue keeps more than `MONITOR_QUEUE_FAILED_MAX` failed jobs (the DLQ)                            |
+| `queue.<q>.age`                                                | its oldest waiting job is older than `MONITOR_QUEUE_MAX_WAIT_SECONDS` (or `MONITOR_<Q>_MAX_WAIT_SECONDS`)  |
+| `redis.memory` / `redis.maxmemory`                             | used memory ≥ `MONITOR_REDIS_MEMORY_PERCENT` of maxmemory / maxmemory is 0                                 |
+| `files.processing_stuck`                                       | `processing` files the media sweep has stopped re-sending (past `MEDIA_SWEEP_MAX_REQUEUES`)                |
+| `faces.deletion_open`                                          | a face deletion is open longer than `MONITOR_FACE_DELETION_MAX_AGE_SECONDS` (1 day, PDPA)                  |
+| `faces.deletion_burst`                                         | a share reaches `FACE_DELETION_ALERT_PER_SHARE` deletions in the window (ADR 0007's `face_deletion.alert`) |
+| `backup.age`                                                   | no successful backup within `MONITOR_BACKUP_MAX_AGE_SECONDS`                                               |
+| `host.memory` / `host.load` / `host.disk.<path>` / `host.swap` | host memory, 5-min load per CPU, the Docker volume disk, swap on                                           |
+| `monitor.<check>`                                              | the monitor could not run a check (e.g. the database is down)                                              |
+
+The monitor uses its own Postgres role (SELECT on a few columns of `files` and `face_deletions`
+only) and its own Redis user (read-only keys, `INFO` and a handful of read commands). It can't
+read personal data or change anything.
+
+**External uptime check (required).** The monitor runs on the VPS, so it can't report the VPS
+being down. Configure any external service (UptimeRobot, Better Stack, healthchecks.io, a cron
+on another machine) to:
+
+- GET `https://<SHOTX_DOMAIN>/api/health` every minute and expect 200 (the api through the proxy);
+- GET `https://<SHOTX_DOMAIN>/healthz` and expect 200 (web);
+- alert on a TLS certificate expiring in less than 14 days;
+- optionally, expect the monitor's heartbeat (`MONITOR_HEARTBEAT_URL`) at least every 5 minutes.
+
+Errors still go to Sentry (`SENTRY_DSN`).
+
+## Host hardening checklist
+
+Before the first deploy, and re-checked after any provider change:
+
+- [ ] **SSH:** keys only (`PasswordAuthentication no`, `KbdInteractiveAuthentication no`), no root
+      login (`PermitRootLogin no`), and a named user for each operator.
+- [ ] **Unattended security upgrades** on (`unattended-upgrades` on Debian/Ubuntu), with reboots
+      in a maintenance window (`Unattended-Upgrade::Automatic-Reboot-Time`).
+- [ ] **Firewall:** default deny inbound; allow 22 (from operator IPs if possible), 80 and 443
+      (TCP and UDP). Docker-published ports bypass ufw/iptables INPUT rules, so the only defence is
+      that only the proxy publishes. `docker compose config` (and `test/compose.test.ts`) checks
+      that. Never add `ports:` to another service; use `docker compose exec` instead.
+- [ ] **Swap** off (`swapoff -a`, remove it from `/etc/fstab`), or on the encrypted volume only. The
+      monitor alerts while swap is on (`MONITOR_ALLOW_SWAP=false`).
+- [ ] **Volume encryption at rest:** the provider's encrypted volume, or LUKS for `/var/lib/docker`
+      and the repository checkout.
+- [ ] **Secrets:** `deploy/.env.production`, `deploy/env/*.env` and `deploy/redis/users.acl` mode
+      0600, owned by the deploy user, never committed (`deploy/.gitignore`). Anyone in the `docker`
+      group can read them through `docker inspect`, so keep that group to the operators.
+- [ ] **Time:** NTP on (`timedatectl`): signed URLs, tokens and TOTP depend on it.
+- [ ] **Docker:** current Engine and Compose; `live-restore` on; no TCP socket exposed.
+- [ ] **Backups:** the backup bucket has a bucket lock of at least `BACKUP_RETENTION_DAYS`, the age
+      private key is not on the VPS, and the restore test in [RESTORE.md](RESTORE.md) passed.
+- [ ] **R2:** the `r2.dev` URL is disabled and no custom domain is connected to either bucket.
+
+## Validating changes
+
+```sh
+cd deploy
+docker compose --env-file .env.production.example config --quiet   # with env/*.env present
+pnpm --filter @shotx/deploy lint typecheck test
+```
+
+`test/compose.test.ts` runs `docker compose config` on the example files when Docker is installed.
+It checks that only the proxy publishes ports, the trusted proxy address, the api and worker
+settings, the Redis flags, the limits and the logging. It also runs every shared loader of web,
+api, worker, migrate, monitor and backup on the example env, with the `REPLACE_ME` secrets filled
+in, and checks that the api refuses to start while they are left.
 
 ## `r2/setup-bucket.ts`: CORS and lifecycle on the R2 media bucket
 

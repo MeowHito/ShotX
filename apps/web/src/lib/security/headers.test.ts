@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { formActionOrigins, mediaBrowserOrigins } from '../server/config';
+import { captchaCsp, formActionOrigins, mediaBrowserOrigins } from '../server/config';
 import { buildCsp, securityHeaders } from './headers';
 
 function directives(csp: string): Record<string, string> {
@@ -85,6 +85,51 @@ describe('CSP', () => {
       mediaBrowserOrigins({ AWS_ENDPOINT_URL: 'http://localhost:4566', MEDIA_BUCKET: 'b-1' })
         .upload,
     ).toEqual(['https://b-1.s3.ap-southeast-1.amazonaws.com', 'http://localhost:4566']);
+  });
+});
+
+describe('Turnstile (share pages, CAPTCHA_PROVIDER=turnstile)', () => {
+  const turnstileEnv = {
+    APP_STAGE: 'prod',
+    NODE_ENV: 'production',
+    CAPTCHA_PROVIDER: 'turnstile',
+    TURNSTILE_SITE_KEY: '0x4AAAAAAABkMYinukE8nzYS',
+  };
+  const shareCsp = (captcha = captchaCsp(turnstileEnv)) =>
+    directives(
+      buildCsp({
+        nonce: 'abc',
+        isDev: false,
+        https: true,
+        uploadOrigins: [],
+        allowWasm: true,
+        captcha,
+      }),
+    );
+
+  it('adds challenges.cloudflare.com to script-src and frame-src, keeping nonce and strict-dynamic', () => {
+    const d = shareCsp();
+    expect(d['script-src']).toBe(
+      "'self' 'nonce-abc' 'strict-dynamic' https://challenges.cloudflare.com 'wasm-unsafe-eval'",
+    );
+    expect(d['frame-src']).toBe("'self' https://challenges.cloudflare.com");
+    // The widget talks to Cloudflare from its own iframe.
+    expect(d['connect-src']).toBe("'self'");
+    expect(d['frame-ancestors']).toBe("'none'");
+  });
+
+  it('adds nothing with waf or none, and no frame-src at all', () => {
+    for (const provider of ['waf', 'none']) {
+      const d = shareCsp(captchaCsp({ APP_STAGE: 'local', CAPTCHA_PROVIDER: provider }));
+      expect(d['script-src']).toBe("'self' 'nonce-abc' 'strict-dynamic' 'wasm-unsafe-eval'");
+      expect('frame-src' in d).toBe(false);
+    }
+  });
+
+  it('refuses turnstile without a site key', () => {
+    expect(() => captchaCsp({ ...turnstileEnv, TURNSTILE_SITE_KEY: undefined })).toThrow(
+      /TURNSTILE_SITE_KEY/,
+    );
   });
 });
 

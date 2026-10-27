@@ -11,6 +11,7 @@ import {
   AWS_ACKNOWLEDGEMENT,
   createProvider,
   evaluationClientConfig,
+  rekognitionRegionalEndpoint,
 } from './providers';
 
 const realDataset: Dataset = {
@@ -53,15 +54,28 @@ const localDotEnv: Env = {
 };
 
 describe('evaluationClientConfig', () => {
-  it('takes the evaluation account keys and the regional endpoint', () => {
+  const keys = {
+    accessKeyId: 'AKIAEVALUATIONTEST01',
+    secretAccessKey: 'evaluation-secret-not-real',
+  };
+
+  it('takes the evaluation account keys and always sets the regional endpoint explicitly', () => {
     expect(evaluationClientConfig(evalKeys)).toEqual({
       region: 'ap-southeast-1',
-      endpointUrl: null,
-      credentials: {
-        accessKeyId: 'AKIAEVALUATIONTEST01',
-        secretAccessKey: 'evaluation-secret-not-real',
-      },
+      endpointUrl: 'https://rekognition.ap-southeast-1.amazonaws.com',
+      credentials: keys,
     });
+  });
+
+  it('keeps an AWS REKOGNITION_ENDPOINT_URL', () => {
+    const fips = 'https://rekognition-fips.us-east-1.amazonaws.com';
+    expect(
+      evaluationClientConfig({
+        ...evalKeys,
+        REKOGNITION_REGION: 'us-east-1',
+        REKOGNITION_ENDPOINT_URL: fips,
+      }),
+    ).toMatchObject({ region: 'us-east-1', endpointUrl: fips });
   });
 
   it('never falls back to the default credential chain', () => {
@@ -74,13 +88,27 @@ describe('evaluationClientConfig', () => {
     expect(() => evaluationClientConfig(localDotEnv)).toThrow(/not AWS/);
   });
 
-  it('refuses AWS_ENDPOINT_URL, which the SDK would apply without an explicit endpoint', () => {
-    const withoutOverride = { ...localDotEnv, ...evalKeys };
-    delete withoutOverride.REKOGNITION_ENDPOINT_URL;
-    expect(() => evaluationClientConfig(withoutOverride)).toThrow(/Unset AWS_ENDPOINT_URL/);
-    expect(() =>
-      evaluationClientConfig({ ...evalKeys, AWS_ENDPOINT_URL_REKOGNITION: 'http://localhost:1' }),
-    ).toThrow(/Unset AWS_ENDPOINT_URL_REKOGNITION/);
+  // An explicit endpoint wins over AWS_ENDPOINT_URL, AWS_ENDPOINT_URL_REKOGNITION and a profile's
+  // endpoint_url, which the SDK applies only to clients without one; also on APP_STAGE=local.
+  it('pins the endpoint even when the environment would redirect the SDK', () => {
+    const redirecting: Env = {
+      ...localDotEnv,
+      ...evalKeys,
+      REKOGNITION_ENDPOINT_URL: undefined,
+      AWS_ENDPOINT_URL_REKOGNITION: 'http://localhost:1',
+    };
+    expect(evaluationClientConfig(redirecting).endpointUrl).toBe(
+      'https://rekognition.ap-southeast-1.amazonaws.com',
+    );
+  });
+
+  it('builds the regional endpoint for every partition', () => {
+    expect(rekognitionRegionalEndpoint('ap-southeast-1')).toBe(
+      'https://rekognition.ap-southeast-1.amazonaws.com',
+    );
+    expect(rekognitionRegionalEndpoint('cn-north-1')).toBe(
+      'https://rekognition.cn-north-1.amazonaws.com.cn',
+    );
   });
 });
 
@@ -120,7 +148,7 @@ describe('createProvider', () => {
       dataset: realDataset,
     });
     expect(setup.maxImageBytes).toBe(REKOGNITION_INLINE_MAX_BYTES);
-    expect(setup.description).toContain('ap-southeast-1');
+    expect(setup.description).toContain('endpoint rekognition.ap-southeast-1.amazonaws.com');
     expect(setup.description).toContain('as bytes');
     const option = {
       longEdge: 3500,

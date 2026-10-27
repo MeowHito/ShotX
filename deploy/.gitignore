@@ -1,0 +1,8 @@
+# Server secrets: never committed (the examples are).
+/.env.production
+!/.env.production.example
+/env/*.env
+/redis/users.acl
+# Load-test selfies are biometric data of volunteers: never committed.
+/loadtest/selfies/
+/loadtest/results/

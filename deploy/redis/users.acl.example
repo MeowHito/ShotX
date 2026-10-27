@@ -1,0 +1,8 @@
+# Generated, never committed (password hashes). Create the real file with:
+#   REDIS_APP_PASSWORD=... REDIS_MONITOR_PASSWORD=... \
+#     pnpm --silent --filter @shotx/deploy ops redis-acl > deploy/redis/users.acl
+# Shape (hashes are SHA-256 of the passwords):
+user default off resetpass resetkeys resetchannels -@all
+user shotx-app on resetpass #<sha256 of REDIS_APP_PASSWORD> resetkeys ~* resetchannels &* +@all -@dangerous
+user shotx-monitor on resetpass #<sha256 of REDIS_MONITOR_PASSWORD> resetkeys %R~* resetchannels -@all +ping +info +zcard +llen +lindex +hget +client|setname
+user healthcheck on nopass resetkeys resetchannels -@all +ping

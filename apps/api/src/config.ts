@@ -6,6 +6,7 @@ import {
   type AwsConfig,
   type BffAuthConfig,
   type BillingConfig,
+  type CaptchaConfig,
   type CloudFrontSigningConfig,
   type CognitoPoolConfig,
   type ConsentConfig,
@@ -24,6 +25,7 @@ import {
   loadAwsConfig,
   loadBffAuthConfig,
   loadBillingConfig,
+  loadCaptchaConfig,
   loadCloudFrontSigningConfig,
   loadCognitoConfig,
   loadConsentConfig,
@@ -147,6 +149,11 @@ export interface ApiConfig {
    * yet (SesEmailProvider is wired without one). Secret.
    */
   sesClient: AwsClientConfig | null;
+  /**
+   * CAPTCHA_PROVIDER: `turnstile` (the VPS) verifies a token after a FACE_SEARCH_RATE_* hit and
+   * grants more attempts; `waf` (AWS: the edge challenges) and `none` only rate-limit. Secret.
+   */
+  captcha: CaptchaConfig;
   sentry: SentryConfig;
   limits: ApiLimits;
   features: FeatureFlags;
@@ -188,6 +195,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     offAws: runsOffAws(env),
     rekognitionClient: loadRekognitionClientConfig(env),
     sesClient: loadSesClientConfig(env),
+    captcha: loadCaptchaConfig(env),
     sentry: loadSentryConfig(env),
     limits: loadApiLimitsConfig(env),
     features: loadFeatureFlags(env),

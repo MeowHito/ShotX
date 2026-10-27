@@ -1,11 +1,14 @@
 import {
   type AuthClientConfig,
+  type CaptchaCspSources,
+  captchaCspSources,
   type AuthProviderName,
   type CognitoPoolConfig,
   type Env,
   type MediaBrowserOrigins,
   loadAppConfig,
   loadAuthClientConfig,
+  loadCaptchaClientConfig,
   loadAuthProviderConfig,
   loadBffAuthConfig,
   loadCognitoConfig,
@@ -124,6 +127,23 @@ export function processFormActionOrigins(): string[] {
   return cachedFormActionOrigins;
 }
 
+/**
+ * CSP sources of the captcha (captchaCspSources): with CAPTCHA_PROVIDER=turnstile, the Turnstile
+ * origin in `script-src` and `frame-src`. The proxy adds them on share pages only, where the
+ * scan flow may show the widget.
+ */
+export function captchaCsp(env: Env = process.env): CaptchaCspSources {
+  return captchaCspSources(loadCaptchaClientConfig(env));
+}
+
+let cachedCaptchaCsp: CaptchaCspSources | undefined;
+
+/** {@link captchaCsp} of `process.env`, cached for the process. */
+export function processCaptchaCsp(): CaptchaCspSources {
+  cachedCaptchaCsp ??= captchaCsp(process.env);
+  return cachedCaptchaCsp;
+}
+
 /** A same-origin absolute path (`/x/y`): MediaPipe assets are self-hosted, never on a CDN. */
 const sameOriginPath = z
   .string()
@@ -179,6 +199,7 @@ export function clientFaceConfig(env: Env = process.env): ClientFaceConfig {
       wasmBasePath: e.FACE_DETECTOR_WASM_BASE_PATH.replace(/\/+$/, ''),
       modelPath: e.FACE_DETECTOR_MODEL_PATH,
     },
+    captcha: loadCaptchaClientConfig(env),
   };
 }
 

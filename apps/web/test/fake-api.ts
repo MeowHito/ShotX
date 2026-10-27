@@ -115,6 +115,8 @@ export class FakeApi {
   feedback: { token: string; fileId: string }[] = [];
   /** Selfie parts received per face request (sizes and types only). */
   selfieUploads: { route: 'search' | 'deletion'; sizes: number[]; types: string[] }[] = [];
+  /** Every CAPTCHA_TOKEN_HEADER value received on face search and face deletion. */
+  captchaTokens: string[] = [];
   zipJobs = new Map<string, { job: ZipJobView; polls: number; token: string }>();
   zipKeys = new Map<string, { ids: string; jobId: string }>();
   /** Plans, subscription and payments of the billing routes. */

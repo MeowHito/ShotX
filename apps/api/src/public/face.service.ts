@@ -10,7 +10,13 @@ import {
 } from '@shotx/face';
 import { faceDeletions, faceFeedback, faces, files, searchableFaceSql } from '@shotx/db';
 import {
+  CAPTCHA_TOKEN_HEADER,
+  type CaptchaAction,
+  type CaptchaRejectReason,
+  captchaTokenSchema,
   type ConsentPurpose,
+  type RateLimitedDetails,
+  TURNSTILE_ACTIONS,
   FACE_DELETION_ALERT_EVENT,
   faceDeletionAlertDue,
   type FaceDeletionResponse,
@@ -23,9 +29,10 @@ import { and, eq, gt, inArray, sql } from 'drizzle-orm';
 import type { Request } from 'express';
 import { recordActivity, shareEventSource } from '../activity/activity';
 import type { PublicContext } from '../auth/public.guard';
-import type { ApiConfig } from '../config';
+import { type ApiConfig, clientIpTrust } from '../config';
 import { type Db, pgErrorInfo, SQLSTATE } from '../db/db';
 import { ApiError } from '../http/api-error';
+import { clientIp, sha256Hex } from '../http/client';
 import { readSelfies } from '../http/multipart';
 import type { EventLog } from '../infra/events';
 import { SignedUrls } from '../media/signed-urls';
@@ -46,7 +53,15 @@ import {
   type RateLimiter,
 } from '../tokens';
 import { scopedItemRows, shareItemsScope, toShareItem } from './share-items';
+import { CAPTCHA_VERIFIER, type CaptchaVerifier } from './captcha';
 import { enforceRate, faceSearchDisabled, SharePageService } from './share-page.service';
+
+/**
+ * Redis key of a captcha grant: attempts left for one share, viewer and client IP (ip_hash),
+ * hashed so the key carries no ids in the clear. Value: the count; TTL CAPTCHA_GRANT_TTL_SECONDS.
+ */
+export const captchaGrantKey = (shareId: string, viewer: string, ipHash: string) =>
+  `captcha-grant:${sha256Hex(`${shareId}|${viewer}|${ipHash}`)}`;
 
 /** Largest id list in one `= ANY(...)` lookup. */
 const FACE_ID_CHUNK = 5000;
@@ -83,6 +98,7 @@ export class FaceService {
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(API_LOGGER) private readonly logger: LoggerService,
     @Inject(EVENT_LOG) private readonly events: EventLog,
+    @Inject(CAPTCHA_VERIFIER) private readonly captchaVerifier: CaptchaVerifier | null,
   ) {}
 
   /**
@@ -101,12 +117,80 @@ export class FaceService {
     }
   }
 
-  /** FACE_SEARCH_RATE_* per IP, share and viewer; face search and face deletion share them. */
-  private async rateLimit(share: LoadedShare, ctx: PublicContext): Promise<void> {
+  /**
+   * FACE_SEARCH_RATE_* per IP, share and viewer; face search and face deletion share them. Runs
+   * before any selfie is read. Under the limits the captcha header is ignored. Over a limit
+   * (ADR 0008 section 7, config/captcha.ts):
+   *
+   * 1. a live captcha grant for this share, viewer and client IP lets the request through (one of
+   *    its CAPTCHA_GRANT_ATTEMPTS; the Rekognition buckets still apply);
+   * 2. else with CAPTCHA_PROVIDER=turnstile and CAPTCHA_GRANTS_PER_IP left for the IP: without a
+   *    token, RATE_LIMITED with `details.captcha` (solve and repeat); with one, siteverify, and on
+   *    a pass a new grant whose first attempt is this request; on a failure RATE_LIMITED with
+   *    `captcha.rejected` (fail closed, no grant);
+   * 3. else (waf, none, or the IP's grants used up) RATE_LIMITED with `captcha: null`.
+   */
+  private async rateLimit(
+    share: LoadedShare,
+    ctx: PublicContext,
+    req: Request,
+    action: CaptchaAction,
+  ): Promise<void> {
     const rules = this.config.face.searchRateLimits;
-    await enforceRate(this.limiter, `face-search:ip:${ctx.ipHash}`, rules.perIp);
-    await enforceRate(this.limiter, `face-search:share:${share.id}`, rules.perShare);
-    await enforceRate(this.limiter, `face-search:viewer:${viewerKey(ctx.viewer)}`, rules.perViewer);
+    const checks: [string, { limit: number; windowSeconds: number }][] = [
+      [`face-search:ip:${ctx.ipHash}`, rules.perIp],
+      [`face-search:share:${share.id}`, rules.perShare],
+      [`face-search:viewer:${viewerKey(ctx.viewer)}`, rules.perViewer],
+    ];
+    let retryAfterSeconds = 0;
+    for (const [key, rule] of checks) {
+      const result = await this.limiter.hit(key, rule.limit, rule.windowSeconds);
+      if (!result.allowed) {
+        retryAfterSeconds = result.retryAfterSeconds;
+        break;
+      }
+    }
+    if (retryAfterSeconds === 0) return;
+
+    const grantKey = captchaGrantKey(share.id, viewerKey(ctx.viewer), ctx.ipHash);
+    if ((await this.store.decrementIfPositive(grantKey)) !== null) return;
+
+    const captcha = this.config.captcha;
+    const limited = (details: RateLimitedDetails['captcha']) =>
+      new ApiError(
+        'RATE_LIMITED',
+        'Too many requests; try again later',
+        {
+          retryAfterSeconds,
+          captcha: details,
+        } satisfies RateLimitedDetails,
+        { 'Retry-After': String(retryAfterSeconds) },
+      );
+    if (captcha.provider !== 'turnstile' || this.captchaVerifier === null) throw limited(null);
+    const { grant } = captcha;
+    const perIpKey = `captcha-grants:ip:${ctx.ipHash}`;
+    if (!(await this.limiter.peek(perIpKey, grant.perIp, grant.perIpWindowSeconds)).allowed) {
+      throw limited(null);
+    }
+    const challenge = (rejected: CaptchaRejectReason | null) =>
+      limited({ provider: 'turnstile', action, rejected });
+
+    const header = req.headers[CAPTCHA_TOKEN_HEADER];
+    if (header === undefined) throw challenge(null);
+    const token = captchaTokenSchema.safeParse(Array.isArray(header) ? header[0] : header);
+    if (!token.success) throw challenge('invalid');
+    const verdict = await this.captchaVerifier.verify({
+      token: token.data,
+      remoteIp: clientIp(req, clientIpTrust(this.config)),
+      action,
+    });
+    if (!verdict.ok) throw challenge(verdict.reason);
+    // Counted at issue: a pass beyond the IP's budget (a concurrent one won) buys nothing.
+    if (!(await this.limiter.hit(perIpKey, grant.perIp, grant.perIpWindowSeconds)).allowed) {
+      throw limited(null);
+    }
+    // This request is the grant's first attempt.
+    await this.store.setWithTtl(grantKey, String(grant.attempts - 1), grant.ttlSeconds);
   }
 
   private readSelfies(req: Request): Promise<Buffer[]> {
@@ -154,7 +238,7 @@ export class FaceService {
       });
     }
     await this.requireConsent(share, ctx, 'face_search');
-    await this.rateLimit(share, ctx);
+    await this.rateLimit(share, ctx, req, TURNSTILE_ACTIONS.faceSearch);
 
     const selfies = await this.readSelfies(req);
     const selfieCount = selfies.length;
@@ -285,7 +369,7 @@ export class FaceService {
   ): Promise<FaceDeletionResponse> {
     const share = await this.access.byToken(token);
     await this.requireConsent(share, ctx, 'face_deletion');
-    await this.rateLimit(share, ctx);
+    await this.rateLimit(share, ctx, req, TURNSTILE_ACTIONS.faceDeletion);
 
     const selfies = await this.readSelfies(req);
     const [anyFace] = await this.db

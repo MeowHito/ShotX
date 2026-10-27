@@ -22,8 +22,16 @@ export type ProviderName = (typeof PROVIDERS)[number];
 /** The flag that must accompany `--provider rekognition`. */
 export const AWS_ACKNOWLEDGEMENT = 'i-understand-this-calls-aws';
 
-/** Environment variables AWS SDK v3 applies to a Rekognition client without an explicit endpoint. */
-const IMPLICIT_ENDPOINT_ENV = ['AWS_ENDPOINT_URL', 'AWS_ENDPOINT_URL_REKOGNITION'] as const;
+/**
+ * Rekognition's regional endpoint, from AWS's fixed naming scheme. face-eval always passes it (or
+ * an AWS REKOGNITION_ENDPOINT_URL) explicitly: AWS SDK v3 applies AWS_ENDPOINT_URL,
+ * AWS_ENDPOINT_URL_REKOGNITION and `endpoint_url` from ~/.aws/config only to clients without an
+ * explicit endpoint, so none of them can redirect an evaluation, on any APP_STAGE.
+ */
+export function rekognitionRegionalEndpoint(region: string): string {
+  const domain = region.startsWith('cn-') ? 'amazonaws.com.cn' : 'amazonaws.com';
+  return `https://rekognition.${region}.${domain}`;
+}
 
 export interface ProviderSetup {
   name: ProviderName;
@@ -57,7 +65,8 @@ export function assertProviderAllowed(name: string, acknowledged: boolean): Prov
  * The Rekognition client settings for an evaluation (ADR 0008 section 1), stricter than the
  * services: face-eval measures real Rekognition, so it needs the evaluation account's own keys
  * (never the default credential chain, which on a laptop is whatever profile is active) and an
- * AWS endpoint (never LocalStack, and never AWS_ENDPOINT_URL from a sourced `.env`).
+ * explicit AWS endpoint: REKOGNITION_ENDPOINT_URL when it is an AWS host, else the regional one
+ * (never LocalStack, AWS_ENDPOINT_URL from a sourced `.env`, or a profile's `endpoint_url`).
  */
 export function evaluationClientConfig(env: Env): AwsClientConfig {
   const client = loadRekognitionClientConfig(env);
@@ -67,23 +76,16 @@ export function evaluationClientConfig(env: Env): AwsClientConfig {
         "account's keys: face-eval never uses the default AWS credential chain.",
     );
   }
-  if (client.endpointUrl !== null) {
-    if (!isAwsEndpointHost(new URL(client.endpointUrl).hostname)) {
-      throw new Error(
-        `REKOGNITION_ENDPOINT_URL points to ${new URL(client.endpointUrl).host}, which is not AWS. ` +
-          'face-eval measures real Rekognition: unset it (the local .env points it at LocalStack).',
-      );
-    }
-  } else {
-    const leaking = IMPLICIT_ENDPOINT_ENV.filter((name) => (env[name] ?? '') !== '');
-    if (leaking.length > 0) {
-      throw new Error(
-        `Unset ${leaking.join(' and ')}: AWS SDK v3 would send Rekognition there instead of to ` +
-          `${client.region} (the local .env points AWS_ENDPOINT_URL at LocalStack).`,
-      );
-    }
+  if (client.endpointUrl !== null && !isAwsEndpointHost(new URL(client.endpointUrl).hostname)) {
+    throw new Error(
+      `REKOGNITION_ENDPOINT_URL points to ${new URL(client.endpointUrl).host}, which is not AWS. ` +
+        'face-eval measures real Rekognition: unset it (the local .env points it at LocalStack).',
+    );
   }
-  return client;
+  return {
+    ...client,
+    endpointUrl: client.endpointUrl ?? rekognitionRegionalEndpoint(client.region),
+  };
 }
 
 export interface ProviderRequest {
@@ -142,8 +144,8 @@ export function createProvider(request: ProviderRequest): ProviderSetup {
     maxImageBytes: REKOGNITION_INLINE_MAX_BYTES,
     // No YuNet detector is wired yet: "signal" tiling relies on Rekognition's unindexed reasons.
     smallFaceDetector: undefined,
-    description: `Amazon Rekognition (${client.region}${
-      client.endpointUrl === null ? '' : `, endpoint ${new URL(client.endpointUrl).host}`
+    description: `Amazon Rekognition (${client.region}, endpoint ${
+      new URL(client.endpointUrl!).host
     }), index images as bytes (≤ ${REKOGNITION_INLINE_MAX_BYTES} bytes)`,
   };
 }

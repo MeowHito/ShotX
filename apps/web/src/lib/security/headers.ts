@@ -15,6 +15,11 @@
  * - Share pages (`allowWasm`) add 'wasm-unsafe-eval' for MediaPipe's face detector. Its loader
  *   script is inserted by our own (nonced) code, which 'strict-dynamic' allows; its wasm and model
  *   are fetched from same-origin paths (connect-src 'self'); no CDN is allowed anywhere.
+ * - Share pages with CAPTCHA_PROVIDER=turnstile (`captcha`) add the Turnstile origin to
+ *   `script-src` and `frame-src`: the one exception to "no CDN" (ADR 0008 section 7). The
+ *   script is inserted by our nonced code after a rate-limit hit ('strict-dynamic' trusts it; the
+ *   host entry is for browsers without 'strict-dynamic'), and the widget is its iframe. Without
+ *   it there is no `frame-src` (frames fall back to `default-src 'self'`, as before).
  */
 
 export interface CspOptions {
@@ -31,6 +36,12 @@ export interface CspOptions {
   formActionOrigins?: readonly string[];
   /** Allow compiling WebAssembly (the share page's MediaPipe face detector). */
   allowWasm?: boolean;
+  /** captchaCspSources of the configured captcha (share pages only). */
+  captcha?: {
+    scriptSrc: readonly string[];
+    frameSrc: readonly string[];
+    connectSrc: readonly string[];
+  };
 }
 
 export function buildCsp(options: CspOptions): string {
@@ -41,7 +52,14 @@ export function buildCsp(options: CspOptions): string {
   const unique = (values: string[]) => [...new Set(values)].join(' ');
   const directives: Record<string, string> = {
     'default-src': "'self'",
-    'script-src': `'self' 'nonce-${options.nonce}' 'strict-dynamic'${options.allowWasm ? " 'wasm-unsafe-eval'" : ''}${options.isDev ? " 'unsafe-eval'" : ''}`,
+    'script-src': unique([
+      "'self'",
+      `'nonce-${options.nonce}'`,
+      "'strict-dynamic'",
+      ...(options.captcha?.scriptSrc ?? []),
+      ...(options.allowWasm ? ["'wasm-unsafe-eval'"] : []),
+      ...(options.isDev ? ["'unsafe-eval'"] : []),
+    ]),
     'style-src': "'self' 'unsafe-inline'",
     'img-src': unique([...self, ...(options.mediaOrigins ?? []), 'blob:', 'data:']),
     'media-src': unique([...self, ...(options.mediaOrigins ?? []), 'blob:']),
@@ -50,8 +68,12 @@ export function buildCsp(options: CspOptions): string {
       ...self,
       ...options.uploadOrigins,
       ...(options.mediaOrigins ?? []),
+      ...(options.captcha?.connectSrc ?? []),
       ...(options.isDev ? ['ws:', 'wss:'] : []),
     ]),
+    ...((options.captcha?.frameSrc.length ?? 0) > 0
+      ? { 'frame-src': unique(["'self'", ...(options.captcha?.frameSrc ?? [])]) }
+      : {}),
     'form-action': unique(["'self'", ...(options.formActionOrigins ?? [])]),
     'frame-ancestors': "'none'",
     'base-uri': "'self'",

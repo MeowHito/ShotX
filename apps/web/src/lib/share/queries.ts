@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  CAPTCHA_TOKEN_HEADER,
   type ConsentPolicyVersion,
   type ConsentPurpose,
   type FaceDeletionInfoResponse,
@@ -143,12 +144,30 @@ export function selfieForm(selfies: readonly Blob[]): FormData {
   return form;
 }
 
+/**
+ * The selfies of one face search or face deletion (in memory only), and the Turnstile token when
+ * the API asked for a challenge (RATE_LIMITED with `details.captcha`). The token travels in
+ * CAPTCHA_TOKEN_HEADER so the API decides before it reads any selfie.
+ */
+export interface SelfieRequest {
+  selfies: readonly Blob[];
+  captchaToken?: string;
+}
+
+function captchaHeaders(captchaToken: string | undefined) {
+  return captchaToken === undefined ? undefined : { [CAPTCHA_TOKEN_HEADER]: captchaToken };
+}
+
 export function useFaceSearch(token: string) {
   const { api } = useShareApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (selfies: readonly Blob[]) =>
-      api.call(PUBLIC_SHARE_ROUTES.faceSearch, { params: { token }, form: selfieForm(selfies) }),
+    mutationFn: ({ selfies, captchaToken }: SelfieRequest) =>
+      api.call(PUBLIC_SHARE_ROUTES.faceSearch, {
+        params: { token },
+        form: selfieForm(selfies),
+        headers: captchaHeaders(captchaToken),
+      }),
     // face_only items come from the new result.
     onSuccess: () => queryClient.invalidateQueries({ queryKey: shareKeys.items(token) }),
   });
@@ -157,8 +176,12 @@ export function useFaceSearch(token: string) {
 export function useFaceDeletion(token: string) {
   const { api } = useShareApi();
   return useMutation({
-    mutationFn: (selfies: readonly Blob[]) =>
-      api.call(PUBLIC_SHARE_ROUTES.faceDeletion, { params: { token }, form: selfieForm(selfies) }),
+    mutationFn: ({ selfies, captchaToken }: SelfieRequest) =>
+      api.call(PUBLIC_SHARE_ROUTES.faceDeletion, {
+        params: { token },
+        form: selfieForm(selfies),
+        headers: captchaHeaders(captchaToken),
+      }),
   });
 }
 

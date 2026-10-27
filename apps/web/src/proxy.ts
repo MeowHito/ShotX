@@ -2,7 +2,11 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { cookieNames } from './lib/auth/session';
 import { SERVER_CALL_HEADERS } from './lib/bff/client-ip';
 import { buildCsp, securityHeaders } from './lib/security/headers';
-import { processFormActionOrigins, processMediaBrowserOrigins } from './lib/server/config';
+import {
+  processCaptchaCsp,
+  processFormActionOrigins,
+  processMediaBrowserOrigins,
+} from './lib/server/config';
 
 /**
  * Runs before every page and route handler (not static assets or /healthz):
@@ -19,6 +23,8 @@ export function proxy(request: NextRequest) {
   const publicBaseUrl = env.PUBLIC_BASE_URL || undefined;
   const https = (publicBaseUrl ?? request.nextUrl.origin).startsWith('https://');
   const storage = processMediaBrowserOrigins();
+  // Only share pages run the face detector and may show the Turnstile widget.
+  const sharePage = request.nextUrl.pathname.startsWith('/s/');
   const csp = buildCsp({
     nonce,
     isDev: env.NODE_ENV === 'development',
@@ -27,8 +33,8 @@ export function proxy(request: NextRequest) {
     uploadOrigins: storage.upload,
     mediaOrigins: storage.media,
     formActionOrigins: processFormActionOrigins(),
-    // Only the share page runs the face detector.
-    allowWasm: request.nextUrl.pathname.startsWith('/s/'),
+    allowWasm: sharePage,
+    ...(sharePage ? { captcha: processCaptchaCsp() } : {}),
   });
   const headers = securityHeaders(csp, https);
 

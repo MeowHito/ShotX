@@ -4,6 +4,8 @@ import {
   BULLMQ_QUEUE_ENV,
   loadAuthProviderConfig,
   loadBffAuthConfig,
+  loadCaptchaClientConfig,
+  loadCaptchaConfig,
   loadMediaStorageConfig,
   loadMediaUrlSignerConfig,
   loadQueueBackendConfig,
@@ -71,6 +73,13 @@ const VPS_ONLY = [
   'STORAGE_SIGNING_SECRET_ACCESS_KEY',
   ...Object.values(STORAGE_LIFECYCLE_ENV),
   ...Object.values(AWS_CLIENT_ENV).flatMap((names) => Object.values(names)),
+  'TURNSTILE_SITE_KEY',
+  'TURNSTILE_SECRET_KEY',
+  'TURNSTILE_VERIFY_TIMEOUT_MS',
+  'CAPTCHA_GRANT_ATTEMPTS',
+  'CAPTCHA_GRANT_TTL_SECONDS',
+  'CAPTCHA_GRANTS_PER_IP',
+  'CAPTCHA_GRANTS_PER_IP_WINDOW_SECONDS',
 ];
 
 /** Stands in for a CloudFormation token; queue URLs get a URL so the SQS loader can parse them. */
@@ -113,6 +122,23 @@ describe('local development stand-ins never reach a deployed stage', () => {
       expect(VPS_ONLY.filter((key) => !refused(key))).toEqual([]);
     });
   }
+
+  it('accepts CAPTCHA_PROVIDER=waf only (turnstile and none are VPS-only)', () => {
+    for (const group of ['common', 'web', 'api']) {
+      for (const value of ['turnstile', 'none']) {
+        const c = withEdit((x) => {
+          at(x, 'services', 'env')[group] = { CAPTCHA_PROVIDER: value };
+        });
+        expect(() => parseConfig(c), `${group} ${value}`).toThrow(
+          new RegExp(`${group}: CAPTCHA_PROVIDER must be waf on the AWS stacks`),
+        );
+      }
+      const waf = withEdit((x) => {
+        at(x, 'services', 'env')[group] = { CAPTCHA_PROVIDER: 'waf' };
+      });
+      expect(() => parseConfig(waf), group).not.toThrow();
+    }
+  });
 
   it('gives every container NODE_ENV=production and resolves to Cognito and CloudFront', () => {
     const s = synthPlatform();
@@ -158,6 +184,9 @@ describe('local development stand-ins never reach a deployed stage', () => {
         for (const key of VPS_ONLY) expect(env[key], key).toBeUndefined();
         // No bff routes and no API-issued tokens: the token issuer refuses to start.
         expect(loadBffAuthConfig(env)).toBeNull();
+        // The WAF CAPTCHA, never Turnstile.
+        expect(loadCaptchaConfig(env)).toEqual({ provider: 'waf' });
+        expect(loadCaptchaClientConfig(env)).toEqual({ provider: 'waf' });
         // X-Forwarded-For is trusted from nobody.
         expect(loadTrustedProxyConfig(env)).toEqual({ addresses: [] });
         expect(() => loadShotxAuthConfig(env)).toThrow(/AUTH_PROVIDER must be shotx or local/);

@@ -1,3 +1,4 @@
+import { TURNSTILE_SCRIPT_URL } from '@shotx/shared';
 import { vi } from 'vitest';
 import { FaceDeletionPage } from '@/components/share/face-deletion-page';
 import { SharePage } from '@/components/share/share-view';
@@ -5,6 +6,7 @@ import { createPublicApiClient } from '@/lib/api/client';
 import type { ClientFaceConfig, ClientShareConfig } from '@/lib/face/config';
 import type { FaceBox } from '@/lib/face/quality-gate';
 import type { CanvasOps } from '@/lib/face/selfie';
+import type { TurnstileLoader } from '@/lib/captcha/turnstile';
 import type { FakeApi } from './fake-api';
 import { apiClientFor, renderWithProviders } from './render';
 
@@ -17,6 +19,17 @@ export const FACE_CONFIG: ClientFaceConfig = {
     maxNoseOffsetRatio: 0.35,
   },
   detector: { wasmBasePath: '/mediapipe/dist', modelPath: '/mediapipe/model.tflite' },
+  captcha: { provider: 'none' },
+};
+
+/** CAPTCHA_PROVIDER=turnstile with Cloudflare's always-passes test site key. */
+export const TURNSTILE_FACE_CONFIG: ClientFaceConfig = {
+  ...FACE_CONFIG,
+  captcha: {
+    provider: 'turnstile',
+    siteKey: '1x00000000000000000000AA',
+    scriptUrl: TURNSTILE_SCRIPT_URL,
+  },
 };
 
 export const SHARE_CONFIG: ClientShareConfig = {
@@ -111,7 +124,12 @@ function faceHarness(partial: Partial<FaceScenario> | undefined) {
 export function renderFaceDeletionPage(
   fake: FakeApi,
   token: string,
-  options: { nav?: Navigator; scenario?: Partial<FaceScenario> } = {},
+  options: {
+    nav?: Navigator;
+    scenario?: Partial<FaceScenario>;
+    faceConfig?: ClientFaceConfig;
+    loadTurnstile?: TurnstileLoader;
+  } = {},
 ) {
   const face = faceHarness(options.scenario);
   const onClose = vi.fn();
@@ -119,13 +137,14 @@ export function renderFaceDeletionPage(
     <FaceDeletionPage
       token={token}
       signedIn={false}
-      faceConfig={FACE_CONFIG}
+      faceConfig={options.faceConfig ?? FACE_CONFIG}
       testing={{
         publicApi: createPublicApiClient({ fetch: fake.fetch }),
         faceTools: {
           canvas: face.canvas,
           loadDetector: face.loadDetector,
           navigator: options.nav ?? fakeNavigator().nav,
+          ...(options.loadTurnstile !== undefined ? { loadTurnstile: options.loadTurnstile } : {}),
         },
         onClose,
       }}
@@ -143,6 +162,7 @@ export function renderSharePage(
     nav?: Navigator;
     scenario?: Partial<FaceScenario>;
     faceConfig?: ClientFaceConfig;
+    loadTurnstile?: TurnstileLoader;
   } = {},
 ) {
   const { scenario, canvas, detect, loadDetector, rendered, toJpeg } = faceHarness(
@@ -161,7 +181,12 @@ export function renderSharePage(
       shareConfig={SHARE_CONFIG}
       testing={{
         publicApi: createPublicApiClient({ fetch: fake.fetch }),
-        faceTools: { canvas, loadDetector, navigator: options.nav ?? fakeNavigator().nav },
+        faceTools: {
+          canvas,
+          loadDetector,
+          navigator: options.nav ?? fakeNavigator().nav,
+          ...(options.loadTurnstile !== undefined ? { loadTurnstile: options.loadTurnstile } : {}),
+        },
         runtime: {
           startDownload,
           navigator: () => options.nav,

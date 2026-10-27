@@ -88,6 +88,23 @@ export const FACE_SEARCH_CONTENT_TYPE = 'multipart/form-data';
 export const ECS_MAX_STOP_TIMEOUT_SECONDS = 120;
 
 /**
+ * The Turnstile settings of packages/shared config/captcha.ts (no exported list there yet):
+ * the web site key, the api secret and verify timeout, and the grant a solved challenge buys.
+ */
+export const TURNSTILE_ENV = [
+  'TURNSTILE_SITE_KEY',
+  'TURNSTILE_SECRET_KEY',
+  'TURNSTILE_VERIFY_TIMEOUT_MS',
+  'CAPTCHA_GRANT_ATTEMPTS',
+  'CAPTCHA_GRANT_TTL_SECONDS',
+  'CAPTCHA_GRANTS_PER_IP',
+  'CAPTCHA_GRANTS_PER_IP_WINDOW_SECONDS',
+] as const;
+
+/** The only CAPTCHA_PROVIDER the AWS stacks accept (the default): AWS WAF. */
+export const AWS_CAPTCHA_PROVIDER = 'waf';
+
+/**
  * Environment variables infra sets from typed context values, stack resources or secrets.
  * `services.env` must not set them, so each has exactly one source.
  */
@@ -156,4 +173,8 @@ export const INFRA_OWNED_ENV = [
   // Rekognition and SES clients off AWS (static keys, endpoint, region). The AWS stacks use the
   // task role and the stack region; keys here would be plaintext secrets in the task definition.
   ...Object.values(AWS_CLIENT_ENV).flatMap((names) => Object.values(names)),
+  // Cloudflare Turnstile and its grants (ADR 0008 section 7): the AWS stacks use the WAF CAPTCHA
+  // (WAF_CAPTCHA_*), and have no secret wiring for the Turnstile secret. CAPTCHA_PROVIDER itself
+  // may only say `waf` there (checked in lib/config.ts).
+  ...TURNSTILE_ENV,
 ] as const;

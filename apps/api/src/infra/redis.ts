@@ -143,6 +143,13 @@ end
 return written
 `;
 
+/** DECR a positive counter, keeping its TTL; -1 when missing or not positive. */
+const DECREMENT_IF_POSITIVE_SCRIPT = `
+local value = tonumber(redis.call('GET', KEYS[1]) or '0')
+if value and value > 0 then return redis.call('DECR', KEYS[1]) end
+return -1
+`;
+
 /** The most fields one merge script call carries (Lua's unpack and argument limits). */
 const MERGE_FIELDS_PER_CALL = 500;
 
@@ -221,6 +228,11 @@ export class RedisKeyValueStore implements KeyValueStore {
 
   async take(key: string): Promise<string | null> {
     return this.redis.getdel(this.k(key));
+  }
+
+  async decrementIfPositive(key: string): Promise<number | null> {
+    const value = Number(await this.redis.eval(DECREMENT_IF_POSITIVE_SCRIPT, 1, this.k(key)));
+    return value >= 0 ? value : null;
   }
 }
 
@@ -330,5 +342,14 @@ export class MemoryKeyValueStore implements KeyValueStore {
     if (typeof value !== 'string') return null;
     this.data.delete(key);
     return value;
+  }
+
+  async decrementIfPositive(key: string): Promise<number | null> {
+    await this.check();
+    const entry = this.live(key);
+    const current = typeof entry?.value === 'string' ? Number(entry.value) : NaN;
+    if (entry === undefined || !(current > 0)) return null;
+    entry.value = String(current - 1);
+    return current - 1;
   }
 }
