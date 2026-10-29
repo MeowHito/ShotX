@@ -134,8 +134,9 @@ export class FakeAuthApi {
       case AUTH_ROUTES.providers:
         return { oidc: this.oidc, devLogin: this.devLogin, adminLogin: false };
       case AUTH_ROUTES.oidcStart: {
-        const provider = AUTH_ROUTES.oidcStart.params.parse({ provider: path.split('/')[3] })
-          .provider;
+        const provider = AUTH_ROUTES.oidcStart.params.parse({
+          provider: path.split('/')[3],
+        }).provider;
         if (!this.oidc.includes(provider)) {
           throw new Fail(ErrorCode.AUTH_PROVIDER_UNAVAILABLE, { provider });
         }

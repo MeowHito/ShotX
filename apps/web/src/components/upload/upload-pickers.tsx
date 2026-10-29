@@ -1,22 +1,15 @@
 'use client';
 
-import { Button } from '@shotx/ui';
-import { FolderUpIcon, UploadIcon } from 'lucide-react';
-import { useTranslations } from 'next-intl';
 import { useEffect, useRef } from 'react';
 import { filesFromInput } from '@/lib/upload/dropped-files';
 import { UPLOAD_ACCEPT } from '@/lib/upload/precheck';
 import { useUploads } from './upload-context';
 
-/** "Upload files" and "Upload folder" (keeps relative paths) for the current folder. */
-export function UploadButtons({
-  folderId,
-  disabled,
-}: {
-  folderId: string | null;
-  disabled: boolean;
-}) {
-  const t = useTranslations('drive');
+/**
+ * Hidden file inputs for "upload files" and "upload folder" (keeps relative paths), and
+ * functions that open them. Picked files go to `folderId` (null: the drive root).
+ */
+export function useUploadPickers(folderId: string | null) {
   const { addFiles } = useUploads();
   const filesInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
@@ -33,21 +26,8 @@ export function UploadButtons({
     }
   }
 
-  return (
+  const inputs = (
     <>
-      <Button onClick={() => filesInput.current?.click()} disabled={disabled}>
-        <UploadIcon aria-hidden />
-        {t('uploadFiles')}
-      </Button>
-      <Button
-        variant="outline"
-        onClick={() => folderInput.current?.click()}
-        disabled={disabled}
-        className="hidden sm:inline-flex"
-      >
-        <FolderUpIcon aria-hidden />
-        {t('uploadFolder')}
-      </Button>
       <input
         ref={filesInput}
         type="file"
@@ -67,4 +47,10 @@ export function UploadButtons({
       />
     </>
   );
+
+  return {
+    inputs,
+    pickFiles: () => filesInput.current?.click(),
+    pickFolder: () => folderInput.current?.click(),
+  };
 }

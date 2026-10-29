@@ -6,13 +6,16 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 're
 /**
  * A virtualized grid of drive items (TanStack Virtual, window scrolling) with infinite scroll:
  * only the visible rows are in the DOM, and the next cursor page loads as the user nears the end.
- * Columns follow the container width (two on phones).
+ * Columns follow the container width (two on phones). The list layout is one column of fixed
+ * rows. `scrollToIndex` brings a keyboard-focused item into view (it may not be rendered yet).
  */
 
 const MIN_CELL_PX = 160;
 const GAP_PX = 12;
 /** Room under each square thumbnail for the name and status line. */
-const CAPTION_PX = 52;
+const CAPTION_PX = 64;
+/** Height of a row in the list layout (a 44 px touch target plus padding). */
+const LIST_ROW_PX = 56;
 
 export function columnsFor(width: number, minCellPx = MIN_CELL_PX, gapPx = GAP_PX): number {
   return Math.max(2, Math.floor((width + gapPx) / (minCellPx + gapPx)));
@@ -57,6 +60,11 @@ export interface DriveGridProps<T extends { id: string }> {
   /** Height under each square cell (default 52 px for name and status; 0 for photos only). */
   captionPx?: number;
   gapPx?: number;
+  layout?: 'grid' | 'list';
+  /** Scroll this item index into view (keyboard focus). */
+  scrollToIndex?: number | null;
+  /** Columns now shown (arrow keys move up and down by this). */
+  onColumnsChange?: (columns: number) => void;
 }
 
 export function DriveGrid<T extends { id: string }>({
@@ -70,13 +78,17 @@ export function DriveGrid<T extends { id: string }>({
   minCellPx = MIN_CELL_PX,
   captionPx = CAPTION_PX,
   gapPx = GAP_PX,
+  layout = 'grid',
+  scrollToIndex = null,
+  onColumnsChange,
 }: DriveGridProps<T>) {
-  const GAP = gapPx;
+  const list = layout === 'list';
+  const GAP = list ? 4 : gapPx;
   const containerRef = useRef<HTMLDivElement>(null);
   const { width, top } = useBox(containerRef);
-  const columns = columnsFor(width || 360, minCellPx, GAP);
+  const columns = list ? 1 : columnsFor(width || 360, minCellPx, GAP);
   const cellWidth = ((width || 360) - GAP * (columns - 1)) / columns;
-  const rowHeight = Math.round(cellWidth + captionPx + GAP);
+  const rowHeight = list ? LIST_ROW_PX + GAP : Math.round(cellWidth + captionPx + GAP);
   const rowCount = Math.ceil(items.length / columns);
 
   const virtualizer = useWindowVirtualizer({
@@ -89,6 +101,15 @@ export function DriveGrid<T extends { id: string }>({
   useEffect(() => {
     virtualizer.measure();
   }, [rowHeight, virtualizer]);
+
+  useEffect(() => {
+    onColumnsChange?.(columns);
+  }, [columns, onColumnsChange]);
+
+  useEffect(() => {
+    if (scrollToIndex === null || scrollToIndex < 0) return;
+    virtualizer.scrollToIndex(Math.floor(scrollToIndex / columns), { align: 'auto' });
+  }, [scrollToIndex, columns, virtualizer]);
 
   const virtualRows = virtualizer.getVirtualItems();
   const lastRow = virtualRows.at(-1)?.index ?? -1;

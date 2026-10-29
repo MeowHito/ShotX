@@ -49,6 +49,7 @@ import {
   loadShotxAuthConfig,
   loadTrustedProxyConfig,
   loadUploadConfig,
+  loadWorkerSettings,
   type MediaStorageConfig,
   type PaymentGatewayConfig,
   type QueueBackendConfig,
@@ -154,6 +155,12 @@ export interface ApiConfig {
    * grants more attempts; `waf` (AWS: the edge challenges) and `none` only rate-limit. Secret.
    */
   captcha: CaptchaConfig;
+  /**
+   * How long an owner zip job counts as active for DRIVE_ZIP_MAX_ACTIVE_JOBS (queued since
+   * created_at, running since started_at): WORKER_ZIP_MAX_PROCESSING_SECONDS, the worker's cap on
+   * one zip. Older queued or running jobs were lost or stuck and no longer count.
+   */
+  zipJobActiveMs: number;
   sentry: SentryConfig;
   limits: ApiLimits;
   features: FeatureFlags;
@@ -196,6 +203,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     rekognitionClient: loadRekognitionClientConfig(env),
     sesClient: loadSesClientConfig(env),
     captcha: loadCaptchaConfig(env),
+    zipJobActiveMs: loadWorkerSettings(env).maxProcessingMs.zip,
     sentry: loadSentryConfig(env),
     limits: loadApiLimitsConfig(env),
     features: loadFeatureFlags(env),

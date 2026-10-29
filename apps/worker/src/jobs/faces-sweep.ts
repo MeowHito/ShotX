@@ -18,6 +18,8 @@ export interface FacesSweepResult {
   filesRequeued: number;
   /** Outstanding `index.file` marks past FACES_SWEEP_MAX_REQUEUES (left for the operator). */
   filesOverCap: number;
+  /** Stale marks of withheld files (migration 0009), cleared without a send. */
+  filesWithheldCleared: number;
   /** `index.folder` re-sent for outstanding marks of folders with indexing on. */
   foldersRequeued: number;
   /** Stale marks of folders with indexing off or trashed, cleared without a send. */
@@ -78,15 +80,26 @@ async function resendDeletions(ctx: JobContext, settings: Settings) {
   return { resent: open.length, overdue: overdue.length };
 }
 
-const staleFileMark = (settings: Settings) => sql`
+const staleMark = (settings: Settings) => sql`
   ${files.facesQueuedAt} IS NOT NULL
   AND ${files.facesQueuedAt} < now() - make_interval(secs => ${settings.indexAgeSeconds})`;
+
+/** A stale mark of a file that may still be indexed (withheld files are never re-sent). */
+const staleFileMark = (settings: Settings) =>
+  sql`${staleMark(settings)} AND ${files.facesWithheldAt} IS NULL`;
 
 /**
  * Outstanding `index.file` marks older than FACES_SWEEP_INDEX_AGE_SECONDS below the cap: bump
  * the mark and the counter in one guarded UPDATE, then send. Marks at the cap are logged.
  */
 async function requeueFiles(ctx: JobContext, settings: Settings) {
+  // Withheld files (migration 0009) are never indexed: clear their marks, as index.file would.
+  const cleared = await rows<{ id: string }>(
+    ctx.db,
+    sql`UPDATE ${files} SET "faces_queued_at" = NULL, "faces_requeues" = 0
+      WHERE ${staleMark(settings)} AND ${files.facesWithheldAt} IS NOT NULL
+      RETURNING ${files.id} AS "id"`,
+  );
   const below = sql`${files.facesRequeues} < ${settings.maxRequeues}`;
   const updated = await rows<{ id: string }>(
     ctx.db,
@@ -124,7 +137,7 @@ async function requeueFiles(ctx: JobContext, settings: Settings) {
         .join(','),
     });
   }
-  return { requeued: updated.length, overCap: stuck.length };
+  return { requeued: updated.length, overCap: stuck.length, withheldCleared: cleared.length };
 }
 
 /**
@@ -167,10 +180,11 @@ async function requeueFolders(
 }
 
 /**
- * The predicate of `files_unindexed_ready_idx` (migration 0007), repeated exactly so the planner
- * can use the partial index: ready, never indexed, no `index.file` outstanding, not trashed.
+ * The predicate of `files_unindexed_ready_idx` (migrations 0007 and 0009), repeated exactly so the
+ * planner can use the partial index: ready, never indexed, no `index.file` outstanding, not
+ * trashed, not withheld.
  */
-const UNINDEXED_READY = sql`"f"."status" = 'ready' AND "f"."face_count" IS NULL AND "f"."faces_queued_at" IS NULL AND "f"."deleted_at" IS NULL`;
+const UNINDEXED_READY = sql`"f"."status" = 'ready' AND "f"."face_count" IS NULL AND "f"."faces_queued_at" IS NULL AND "f"."deleted_at" IS NULL AND "f"."faces_withheld_at" IS NULL`;
 
 /**
  * Coverage scan: ready photos that an active face index covers but that never got an outbox mark
@@ -258,7 +272,9 @@ export async function runFacesSweep(
   const deletions = await resendDeletions(ctx, settings);
   const indexing = options.faceSearch;
   const fileMarks =
-    indexing && mayContinue(ctx) ? await requeueFiles(ctx, settings) : { requeued: 0, overCap: 0 };
+    indexing && mayContinue(ctx)
+      ? await requeueFiles(ctx, settings)
+      : { requeued: 0, overCap: 0, withheldCleared: 0 };
   const folderMarks =
     indexing && mayContinue(ctx)
       ? await requeueFolders(ctx, settings)
@@ -269,6 +285,7 @@ export async function runFacesSweep(
     deletionsOverdue: deletions.overdue,
     filesRequeued: fileMarks.requeued,
     filesOverCap: fileMarks.overCap,
+    filesWithheldCleared: fileMarks.withheldCleared,
     foldersRequeued: folderMarks.requeued,
     foldersCleared: folderMarks.cleared,
     filesCovered,

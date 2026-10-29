@@ -1,5 +1,6 @@
 import { PGlite } from '@electric-sql/pglite';
 import { ltree } from '@electric-sql/pglite/contrib/ltree';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import * as dbModule from '@shotx/db';
 import {
   createDb,
@@ -20,9 +21,9 @@ export interface TestDatabase {
   close(): Promise<void>;
 }
 
-/** PostgreSQL 18 in process (WASM) with ltree, migrated. One connection: no real concurrency. */
+/** PostgreSQL 18 in process (WASM) with ltree and pg_trgm (migration 0008), migrated. One connection: no real concurrency. */
 export async function openPglite(): Promise<TestDatabase> {
-  const client = await PGlite.create({ extensions: { ltree } });
+  const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
   const db = drizzle({ client, schema: dbModule });
   await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
   return { name: 'PGlite', db: db as unknown as Db, close: () => client.close() };

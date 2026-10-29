@@ -7,7 +7,8 @@ set -eu
 
 for db in template1 "$POSTGRES_DB"; do
   psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$db" \
-    -c 'CREATE EXTENSION IF NOT EXISTS ltree;'
+    -c 'CREATE EXTENSION IF NOT EXISTS ltree;' \
+    -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm;'
 done
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \

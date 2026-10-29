@@ -118,7 +118,7 @@ export function ConsentScreen({
           <li key={point}>{t(`${key}.points.${point}`, values)}</li>
         ))}
       </ul>
-      <div className="flex items-start gap-3 rounded-lg border p-3">
+      <div className="flex items-start gap-3 rounded-xl border bg-sidebar p-4">
         <Checkbox
           id={checkboxId}
           checked={checked}

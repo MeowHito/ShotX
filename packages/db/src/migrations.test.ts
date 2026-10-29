@@ -156,6 +156,37 @@ describe('migrations', () => {
     }
   });
 
+  it('0008 is studio_copy_search_owner_zip: pg_trgm first, then the copy, search and owner zip changes', () => {
+    expect(journal.entries[8]?.tag).toBe('0008_studio_copy_search_owner_zip');
+    const list = statements(sqlOf('0008_studio_copy_search_owner_zip'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    expect(list[0]).toBe('CREATE EXTENSION IF NOT EXISTS pg_trgm;');
+    for (const name of ['files_name_trgm_idx', 'folders_name_trgm_idx']) {
+      expect(list[at(`CREATE INDEX "${name}"`)], name).toMatch(
+        /USING gin \(lower\("name" COLLATE "C"\) gin_trgm_ops\)/,
+      );
+    }
+    expect(at('ALTER COLUMN "share_id" DROP NOT NULL')).toBeGreaterThan(-1);
+    // The relaxed entry check is added after the old one is dropped.
+    expect(at('DROP CONSTRAINT "zip_job_entries_name_valid"')).toBeLessThan(
+      at('ADD CONSTRAINT "zip_job_entries_name_valid"'),
+    );
+    expect(list[at('ADD CONSTRAINT "zip_job_entries_name_valid"')]).toContain('(^|/)\\.\\.?(/|$)');
+  });
+
+  it('0009 is faces_withheld: the column, then the coverage index rebuilt to exclude it', () => {
+    expect(journal.entries[9]?.tag).toBe('0009_faces_withheld');
+    const list = statements(sqlOf('0009_faces_withheld'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    expect(list[at('ADD COLUMN "faces_withheld_at"')]).not.toContain('NOT NULL');
+    expect(at('DROP INDEX "files_unindexed_ready_idx"')).toBeLessThan(
+      at('CREATE INDEX "files_unindexed_ready_idx"'),
+    );
+    expect(list[at('CREATE INDEX "files_unindexed_ready_idx"')]).toContain(
+      '"files"."faces_withheld_at" IS NULL',
+    );
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

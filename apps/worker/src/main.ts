@@ -184,6 +184,8 @@ async function main(): Promise<void> {
       exifDefaultUtcOffset: worker.exifDefaultUtcOffset,
       tmpDir: worker.tmpDir,
       maxProcessingMs: worker.maxProcessingMs.media,
+      originalsStorageClass: config.storage.originalsStorageClass,
+      partBytes: config.multipartPartBytes,
     }),
     faces: createFacesHandler({
       db,

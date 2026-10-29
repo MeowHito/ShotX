@@ -7,6 +7,12 @@ import { z } from 'zod';
  * or that no active face index covers any more (isCoveredByFaceIndex: the file's folder or an
  * ancestor with face indexing enabled and not expired), and every index job while
  * FACE_SEARCH_ENABLED is false.
+ *
+ * Outcome `withheld` (PDPA, migration 0009): a file with `faces_withheld_at` set is never indexed.
+ * The worker checks it in the same read as the other skips, calls no Rekognition operation,
+ * clears the outbox mark (`faces_queued_at = NULL WHERE faces_withheld_at IS NOT NULL`) and
+ * acknowledges the job. This holds whenever the job was sent (the upload path, a copy, the
+ * index.folder fan-out, faces.sweep, or a face index re-enabled after it expired or was turned off).
  */
 export const indexFileJobSchema = z.object({
   type: z.literal('index.file'),
@@ -14,7 +20,8 @@ export const indexFileJobSchema = z.object({
 });
 
 /**
- * Index every ready, unindexed photo in a folder subtree. Sent by the API when a photographer
+ * Index every ready, unindexed photo in a folder subtree that isn't withheld
+ * (`faces_withheld_at IS NULL`). Sent by the API when a photographer
  * enables face indexing on a folder (`PATCH /drive/folders/:id/face-index`) that had no active
  * index; the worker fans out one `index.file` job per photo the subtree's index covers
  * (isCoveredByFaceIndex). Extending an active index sends nothing: it only moves
@@ -31,7 +38,8 @@ export const indexFolderJobSchema = z.object({
  * owner) itself, calls DeleteFaces in batches on the owner's collection, then deletes the `faces`
  * rows and sets `files.face_count` to null. Files still covered by another active folder (an
  * ancestor) keep their faces. Idempotent; does nothing if indexing was turned back on meanwhile.
- * `faces.expire.daily` does the same for folders past `face_index_expires_at`.
+ * `faces.expire.daily` does the same for folders past `face_index_expires_at`. Neither touches
+ * `faces_withheld_at`: a withheld file stays withheld when its index is later turned on again.
  */
 export const unindexFolderJobSchema = z.object({
   type: z.literal('unindex.folder'),
@@ -46,6 +54,14 @@ export const unindexFolderJobSchema = z.object({
  * `face_count` of the affected files from their remaining faces (IoU de-duplication, as in
  * indexing), and sets `face_deletions.faces_deleted` and `completed_at`. Idempotent: a completed
  * deletion is a no-op.
+ *
+ * In the same transaction that deletes the rows it sets `faces_withheld_at = now()` (where still
+ * null) on every file it removed faces from (PDPA, migration 0009), so the person is never
+ * re-indexed from those photos: not by a later index, not through a copy (copies inherit the mark,
+ * fileCopyMessageSchema). Withholding is per file and permanent: the photo is never findable by
+ * face again (the photographer can still share it normally). A copy made and indexed before the
+ * deletion has its own faces in the collection, so the deletion's search matches and withholds it
+ * as well.
  */
 export const deleteFacesJobSchema = z.object({
   type: z.literal('delete.faces'),

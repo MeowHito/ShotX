@@ -45,7 +45,7 @@ export function LoginButtons({ options, next }: LoginButtonsProps) {
         </div>
       ) : null}
       {options.devLogin ? (
-        <section aria-labelledby="dev-login-title" className="grid gap-4 rounded-lg border p-4">
+        <section aria-labelledby="dev-login-title" className="grid gap-4 rounded-xl border bg-sidebar p-4">
           <div className="space-y-1">
             <h2 id="dev-login-title" className="font-semibold">
               {t('dev.title')}

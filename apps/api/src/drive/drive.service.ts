@@ -75,7 +75,7 @@ interface ListQuery {
 type Row = { kind: 'folder'; row: Folder } | { kind: 'file'; row: DriveFileRow };
 
 /** Keyset condition and order of one table in a children listing (see drive/cursor). */
-function listingOrder(
+export function listingOrder(
   cols: { id: AnyPgColumn; name: AnyPgColumn },
   sort: DriveSort,
   order: SortOrder,

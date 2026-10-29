@@ -1,6 +1,6 @@
 import { files, folders } from '@shotx/db';
 import { parseQueueMessage, serializeQueueMessage } from '@shotx/shared';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { Logger } from '../logger';
 import type { MessageHandler } from '../sqs/consumer';
 import { deleteRequestedFaces } from './delete-faces';
@@ -168,9 +168,17 @@ export function createFacesHandler(deps: FacesDeps): MessageHandler {
         const log = context.log.child({ jobType: job.type, fileId: job.fileId });
         const mark = await fileMark(deps, job.fileId);
         const outcome = await indexFile(deps, job.fileId, log, signal);
-        // The job ended (any outcome but flag-off, which indexed nothing: that mark stays for
-        // faces.sweep to re-send when indexing is back on; a throw keeps it for a retry).
-        if (mark !== null && outcome !== 'flag-off') await clearFileMark(deps, job.fileId, mark);
+        if (outcome === 'withheld') {
+          // Never indexed again: drop any mark, whenever it was set.
+          await deps.db
+            .update(files)
+            .set({ facesQueuedAt: null, facesRequeues: 0 })
+            .where(and(eq(files.id, job.fileId), isNotNull(files.facesWithheldAt)));
+        } else if (mark !== null && outcome !== 'flag-off') {
+          // The job ended (any outcome but flag-off, which indexed nothing: that mark stays for
+          // faces.sweep to re-send when indexing is back on; a throw keeps it for a retry).
+          await clearFileMark(deps, job.fileId, mark);
+        }
         log.info('index job finished', { outcome });
         return;
       }

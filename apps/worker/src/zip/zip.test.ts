@@ -1,6 +1,11 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { files, shares, zipJobEntries, zipJobs } from '@shotx/db';
-import { derivedKey, serializeQueueMessage, zipKey } from '@shotx/shared';
+import {
+  contentDispositionAttachment,
+  derivedKey,
+  serializeQueueMessage,
+  zipKey,
+} from '@shotx/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import yauzl from 'yauzl';
@@ -295,5 +300,56 @@ describe('zip consumer', () => {
     expect((await jobRow(jobId)).status).toBe('running');
     await handler()(body, context(2));
     expect((await jobRow(jobId)).status).toBe('ready');
+  });
+  it('builds owner folder zips: no share, path entries, archive_name as Content-Disposition', async () => {
+    const ownerId = await createPhotographer(db);
+    const photos = [
+      await photo(ownerId, 'IMG_0001.jpg', 120_000),
+      await photo(ownerId, 'IMG_0002.jpg', 80_000),
+      await photo(ownerId, 'IMG_0003.jpg', 60_000),
+    ];
+    const paths = ['IMG_0001.jpg', 'Day 1/IMG_0002.jpg', 'Day 1/เส้นชัย/IMG_0003.jpg'];
+    const [created] = await db
+      .insert(zipJobs)
+      .values({
+        photographerId: ownerId,
+        shareId: null,
+        viewerId: ownerId,
+        archiveName: 'งานวิ่ง 2026.zip',
+        sourceFolderId: randomUUID(),
+        downloadSize: 'original',
+        fileCount: photos.length,
+        totalBytes: 260_000,
+      })
+      .returning({ id: zipJobs.id });
+    await db.insert(zipJobEntries).values(
+      photos.map((p, position) => ({
+        jobId: created!.id,
+        photographerId: ownerId,
+        position,
+        fileId: p.id,
+        name: paths[position]!,
+      })),
+    );
+    await handler()(
+      serializeQueueMessage('zip', { type: 'zip.create', jobId: created!.id }),
+      context(),
+    );
+
+    expect(await jobRow(created!.id)).toMatchObject({
+      status: 'ready',
+      resultKey: zipKey(created!.id),
+    });
+    const archive = store.objects.get(zipKey(created!.id))!;
+    expect(archive.contentDisposition).toBe(contentDispositionAttachment('งานวิ่ง 2026.zip'));
+    const entries = await readZip(archive.body);
+    expect(entries.map((e) => e.name)).toEqual(paths);
+    expect(entries.every((e) => e.compressionMethod === 0)).toBe(true); // STORE
+    entries.forEach((e, i) => expect(e.data.equals(photos[i]!.original)).toBe(true));
+
+    // Share jobs keep no stored name (the API names them when it signs).
+    const share = await job([10_000]);
+    await handler()(share.body, context());
+    expect(store.objects.get(zipKey(share.jobId))?.contentDisposition).toBeUndefined();
   });
 });

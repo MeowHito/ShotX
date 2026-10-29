@@ -16,6 +16,14 @@ async function openMenu(name: string) {
   await userEvent.click(await screen.findByRole('button', { name: `ตัวเลือกของ ${name}` }));
 }
 
+/** Opens an item's kebab menu and follows a path of (sub)menu items. */
+async function choose(name: string, ...path: string[]) {
+  await openMenu(name);
+  for (const label of path) {
+    await userEvent.click(await screen.findByRole('menuitem', { name: label }));
+  }
+}
+
 describe('onboarding', () => {
   it('asks GET /me and shows onboarding to a viewer, then the studio after POST /me/photographer', async () => {
     const fake = new FakeApi({ role: 'user' });
@@ -80,8 +88,7 @@ describe('share management', () => {
     const fake = new FakeApi();
     const folder = fake.addFolder('งานวิ่ง 2569');
     renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} />, { api: apiClientFor(fake.fetch) });
-    await openMenu(folder.name);
-    await userEvent.click(await screen.findByRole('menuitem', { name: th.drive.share }));
+    await choose(folder.name, th.itemMenu.share, th.itemMenu.createShare);
     const dialog = await screen.findByRole('dialog', { name: `แชร์ “${folder.name}”` });
     expect(within(dialog).getByText(th.shareDialog.none)).toBeInTheDocument();
     // Face search is off: no face_only option.
@@ -132,8 +139,7 @@ describe('share management', () => {
     const folder = fake.addFolder('Event');
     const file = fake.addFile('a.jpg');
     renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} />, { api: apiClientFor(fake.fetch) });
-    await openMenu(folder.name);
-    await userEvent.click(await screen.findByRole('menuitem', { name: th.drive.share }));
+    await choose(folder.name, th.itemMenu.share, th.itemMenu.createShare);
     let dialog = await screen.findByRole('dialog');
     await userEvent.click(
       within(dialog).getByRole('radio', { name: th.shareForm.modes.face_only }),
@@ -143,8 +149,7 @@ describe('share management', () => {
     expect(fake.callsTo(SHARE_ROUTES.create)[0]?.body).toMatchObject({ mode: 'face_only' });
     await userEvent.keyboard('{Escape}');
 
-    await openMenu(file.name);
-    await userEvent.click(await screen.findByRole('menuitem', { name: th.drive.share }));
+    await choose(file.name, th.itemMenu.share, th.itemMenu.createShare);
     dialog = await screen.findByRole('dialog', { name: `แชร์ “${file.name}”` });
     expect(within(dialog).queryByRole('radio', { name: th.shareForm.modes.face_only })).toBeNull();
     expect(within(dialog).getByText(th.shareForm.faceOnlyFolderOnly)).toBeInTheDocument();
@@ -190,8 +195,7 @@ describe('face index and owner download', () => {
     const fake = new FakeApi({ faceSearch: true });
     const folder = fake.addFolder('Event');
     renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} />, { api: apiClientFor(fake.fetch) });
-    await openMenu(folder.name);
-    await userEvent.click(await screen.findByRole('menuitem', { name: th.drive.faceIndex }));
+    await choose(folder.name, th.itemMenu.organize, th.itemMenu.faceIndex);
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(th.faceIndex.statusOff)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: th.faceIndex.enable }));
@@ -207,8 +211,7 @@ describe('face index and owner download', () => {
     });
     expect(await screen.findByText(th.faceIndex.badge)).toBeInTheDocument();
 
-    await openMenu(folder.name);
-    await userEvent.click(await screen.findByRole('menuitem', { name: th.drive.faceIndex }));
+    await choose(folder.name, th.itemMenu.organize, th.itemMenu.faceIndex);
     await userEvent.click(
       within(await screen.findByRole('dialog')).getByRole('button', { name: th.faceIndex.disable }),
     );
@@ -220,9 +223,9 @@ describe('face index and owner download', () => {
     const fake = new FakeApi({ faceSearch: false });
     const folder = fake.addFolder('Event');
     renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} />, { api: apiClientFor(fake.fetch) });
-    await openMenu(folder.name);
-    expect(await screen.findByRole('menuitem', { name: th.drive.share })).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: th.drive.faceIndex })).not.toBeInTheDocument();
+    await choose(folder.name, th.itemMenu.organize);
+    expect(await screen.findByRole('menuitem', { name: th.itemMenu.moveTo })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: th.itemMenu.faceIndex })).not.toBeInTheDocument();
   });
 
   it('downloads the owner original through GET /drive/files/:id/download', async () => {
@@ -232,8 +235,7 @@ describe('face index and owner download', () => {
     renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} startDownload={startDownload} />, {
       api: apiClientFor(fake.fetch),
     });
-    await openMenu(file.name);
-    await userEvent.click(await screen.findByRole('menuitem', { name: th.drive.download }));
+    await choose(file.name, th.itemMenu.download);
     await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(1));
     expect(startDownload).toHaveBeenCalledWith(expect.stringContaining(file.id), file.name);
     const call = fake.callsTo(DRIVE_ROUTES.downloadFile)[0];

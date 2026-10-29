@@ -7,6 +7,8 @@ export function folderHref(folderId: string | null): string {
 
 export const TRASH_HREF = '/studio/trash';
 
+export const RECENT_HREF = '/studio/recent';
+
 export const SHARES_HREF = '/studio/shares';
 
 /** The studio billing page (shared BILLING_PAGE_PATH; emails link to it too). */

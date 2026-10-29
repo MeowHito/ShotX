@@ -30,12 +30,20 @@ export const driveCursorSchema = z.object({
   v: z.literal(1),
   sort: z.enum(DRIVE_SORTS),
   order: z.enum(SORT_ORDERS),
-  phase: z.enum(['folders', 'files', 'trash']),
+  /**
+   * Which listing and part of it: children (`folders`, `files`), trash (`trash`), recent
+   * (`recent`: files ORDER BY id DESC, i.e. newest first, ids being uuidv7) or search
+   * (`search_folders`, `search_files`, in the requested sort, folders first). A cursor of another
+   * listing is VALIDATION_FAILED.
+   */
+  phase: z.enum(['folders', 'files', 'trash', 'recent', 'search_folders', 'search_files']),
   /** Sort key of the last item: its driveNameKey for `name`, deleted_at text for trash. */
   key: z.string().max(1024).nullable(),
   /** Kind of the last item (trash lists both kinds in one sequence). */
   kind: z.enum(['folder', 'file']),
   id: z.uuid(),
+  /** Search only: items returned so far, so the API stops at DRIVE_SEARCH_MAX_RESULTS. */
+  seen: z.number().int().nonnegative().optional(),
 });
 export type DriveCursor = z.output<typeof driveCursorSchema>;
 

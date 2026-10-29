@@ -1,5 +1,6 @@
 import {
   IDEMPOTENCY_KEY_HEADER,
+  DRIVE_ROUTES,
   PUBLIC_SHARE_ROUTES,
   type SignedDownload,
   type ZipJobView,
@@ -91,16 +92,43 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+export type ReadyZipJob = ZipJobView & { download: NonNullable<ZipJobView['download']> };
+
 /**
  * Polls GET /s/:token/zip-jobs/:id until the job is ready; the ready job has its download URL.
  * The route lives under the share's path so the share's unlock cookie reaches it.
  */
-export async function pollZipJob(
+export function pollZipJob(
   api: ApiClient,
   token: string,
   job: ZipJobView,
   options: PollOptions,
-): Promise<ZipJobView & { download: NonNullable<ZipJobView['download']> }> {
+): Promise<ReadyZipJob> {
+  return pollUntilReady(
+    (id, signal) => api.call(PUBLIC_SHARE_ROUTES.zipJob, { params: { token, id }, signal }),
+    job,
+    options,
+  );
+}
+
+/** The owner's ZIP (a folder from the studio): polls GET /drive/zip-jobs/:id the same way. */
+export function pollOwnerZipJob(
+  api: ApiClient,
+  job: ZipJobView,
+  options: PollOptions,
+): Promise<ReadyZipJob> {
+  return pollUntilReady(
+    (id, signal) => api.call(DRIVE_ROUTES.ownerZipJob, { params: { id }, signal }),
+    job,
+    options,
+  );
+}
+
+async function pollUntilReady(
+  fetchJob: (id: string, signal: AbortSignal | undefined) => Promise<ZipJobView>,
+  job: ZipJobView,
+  options: PollOptions,
+): Promise<ReadyZipJob> {
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
   const deadline = now() + options.timeoutMs;
@@ -114,10 +142,7 @@ export async function pollZipJob(
     if (current.status === 'expired') throw new ClientError('client.zipExpired');
     if (now() >= deadline) throw new ClientError('client.zipTimeout');
     await sleep(options.intervalMs, options.signal);
-    current = await api.call(PUBLIC_SHARE_ROUTES.zipJob, {
-      params: { token, id: current.id },
-      signal: options.signal,
-    });
+    current = await fetchJob(current.id, options.signal);
   }
 }
 

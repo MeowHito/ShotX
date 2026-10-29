@@ -48,7 +48,12 @@ async function requeueProcessing(
   settings: Settings,
 ): Promise<{ requeued: number; errors: number }> {
   const below = sql`${files.mediaRequeues} < ${settings.maxRequeues}`;
-  const updated = await rows<{ id: string; owner_id: string; s3_key: string }>(
+  const updated = await rows<{
+    id: string;
+    owner_id: string;
+    s3_key: string;
+    copied_from_file_id: string | null;
+  }>(
     ctx.db,
     sql`UPDATE ${files}
       SET "media_queued_at" = now(), "media_requeues" = ${files.mediaRequeues} + 1
@@ -59,21 +64,30 @@ async function requeueProcessing(
           LIMIT ${settings.batchSize}
         )
         AND ${staleProcessing(settings)} AND ${below}
-      RETURNING ${files.id} AS "id", ${files.ownerId} AS "owner_id", ${files.s3Key} AS "s3_key"`,
+      RETURNING ${files.id} AS "id", ${files.ownerId} AS "owner_id", ${files.s3Key} AS "s3_key",
+        ${files.copiedFromFileId} AS "copied_from_file_id"`,
   );
   const bodies: string[] = [];
   let errors = 0;
   for (const row of updated) {
     try {
       bodies.push(
-        serializeQueueMessage(
-          'media',
-          originalCompletedMessage({
-            fileId: row.id,
-            photographerId: row.owner_id,
-            key: row.s3_key,
-          }),
-        ),
+        row.copied_from_file_id === null
+          ? serializeQueueMessage(
+              'media',
+              originalCompletedMessage({
+                fileId: row.id,
+                photographerId: row.owner_id,
+                key: row.s3_key,
+              }),
+            )
+          : // A copy (POST /drive/files/:id/copy): its pipeline is the copy, not a render.
+            serializeQueueMessage('media', {
+              kind: 'file.copy',
+              fileId: row.id,
+              sourceFileId: row.copied_from_file_id,
+              photographerId: row.owner_id,
+            }),
       );
     } catch (error) {
       // A key this platform didn't build: no message can describe it.
@@ -86,7 +100,10 @@ async function requeueProcessing(
   }
   if (bodies.length > 0) await ctx.queues.sendMessages(ctx.destinations.media, bodies);
   for (const row of updated) {
-    ctx.log.info('re-sent original.completed for a stale processing file', { fileId: row.id });
+    ctx.log.info('re-sent the media message of a stale processing file', {
+      fileId: row.id,
+      kind: row.copied_from_file_id === null ? 'original.completed' : 'file.copy',
+    });
   }
   return { requeued: bodies.length, errors };
 }

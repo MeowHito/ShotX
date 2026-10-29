@@ -16,6 +16,7 @@ import {
   loadMediaBrowserOrigins,
   loadUploadConfig,
   parseEnv,
+  planCodeSchema,
 } from '@shotx/shared';
 import { z } from 'zod';
 import type { ClientIpSource } from '../bff/client-ip';
@@ -176,6 +177,13 @@ const webShareEnvSchema = z
     WEB_IOS_SHARE_MAX_FILES: z.coerce.number().int().min(1).max(100).default(20),
     /** How often the studio polls GET /billing/payments/:id while a payment is pending. */
     WEB_BILLING_POLL_INTERVAL_MS: z.coerce.number().int().min(500).max(60_000).default(3000),
+    /**
+     * The plan the pricing page highlights as recommended (a plan code; empty: none). A
+     * marketing choice, not a price: prices and plans always come from GET /plans.
+     */
+    WEB_PRICING_RECOMMENDED_PLAN: z.union([z.literal(''), planCodeSchema]).default('standard'),
+    /** How often a drive listing refreshes while it shows a file still processing (copies, uploads). */
+    WEB_DRIVE_PROCESSING_POLL_MS: z.coerce.number().int().min(1000).max(60_000).default(3000),
   })
   .refine((e) => e.WEB_FACE_GATE_MIN_BRIGHTNESS < e.WEB_FACE_GATE_MAX_BRIGHTNESS, {
     error: 'WEB_FACE_GATE_MIN_BRIGHTNESS must be below WEB_FACE_GATE_MAX_BRIGHTNESS',
@@ -210,6 +218,33 @@ export function clientShareConfig(env: Env = process.env): ClientShareConfig {
     zipPollIntervalMs: e.WEB_ZIP_POLL_INTERVAL_MS,
     zipPollTimeoutMs: e.WEB_ZIP_POLL_TIMEOUT_MS,
     iosShareMaxFiles: e.WEB_IOS_SHARE_MAX_FILES,
+  };
+}
+
+/** Studio drive tunables: the processing refresh, and the owner ZIP polling (as on share pages). */
+export interface ClientStudioConfig {
+  processingPollMs: number;
+  zipPollIntervalMs: number;
+  zipPollTimeoutMs: number;
+}
+
+export function clientStudioConfig(env: Env = process.env): ClientStudioConfig {
+  const e = parseEnv(webShareEnvSchema, env, 'web share');
+  return {
+    processingPollMs: e.WEB_DRIVE_PROCESSING_POLL_MS,
+    zipPollIntervalMs: e.WEB_ZIP_POLL_INTERVAL_MS,
+    zipPollTimeoutMs: e.WEB_ZIP_POLL_TIMEOUT_MS,
+  };
+}
+
+/** The pricing page's recommended plan code, or null for none. */
+export function clientPricingConfig(env: Env = process.env): {
+  recommendedPlanCode: string | null;
+} {
+  const e = parseEnv(webShareEnvSchema, env, 'web share');
+  return {
+    recommendedPlanCode:
+      e.WEB_PRICING_RECOMMENDED_PLAN === '' ? null : e.WEB_PRICING_RECOMMENDED_PLAN,
   };
 }
 

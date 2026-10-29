@@ -95,6 +95,8 @@ describe('media consumer', () => {
       },
       exifDefaultUtcOffset: '+07:00',
       maxProcessingMs: 60_000,
+      originalsStorageClass: 'INTELLIGENT_TIERING',
+      partBytes: 16 * 1024 * 1024,
     });
   });
 

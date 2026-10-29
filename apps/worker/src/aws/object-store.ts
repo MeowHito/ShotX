@@ -5,6 +5,9 @@ import { type Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import {
   AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CopyObjectCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -12,7 +15,10 @@ import {
   ListPartsCommand,
   PutObjectCommand,
   type S3Client,
+  type StorageClass,
+  UploadPartCopyCommand,
 } from '@aws-sdk/client-s3';
+import { multipartPlan, S3_MULTIPART_MAX_PART_BYTES } from '@shotx/shared';
 import { Upload } from '@aws-sdk/lib-storage';
 
 export interface ObjectHead {
@@ -24,8 +30,31 @@ export interface ListedObject {
   size: number;
 }
 
+export interface CopyObjectOptions {
+  /** The source's size (HeadObject or the files row): picks CopyObject or UploadPartCopy. */
+  size: number;
+  /** Preferred part size of a multipart copy (UPLOAD_PART_BYTES; grown as multipartPlan needs). */
+  partBytes: number;
+  /** Storage class of the copy (originals: STORAGE_ORIGINALS_CLASS); omitted: STANDARD. */
+  storageClass?: string;
+  signal?: AbortSignal;
+}
+
+/**
+ * Largest object one CopyObject may copy (S3 and R2: 5 GiB). Bigger objects are copied with
+ * UploadPartCopy, the same limit per part.
+ */
+export const COPY_OBJECT_MAX_BYTES = S3_MULTIPART_MAX_PART_BYTES;
+
+/** A copy source whose object doesn't exist (NoSuchKey on CopyObject or UploadPartCopy). */
+export class CopySourceMissingError extends Error {
+  override readonly name = 'CopySourceMissingError';
+}
+
 export interface UploadStreamOptions {
   contentType: string;
+  /** Stored as the object's Content-Disposition (served on GET). */
+  contentDisposition?: string;
   /** Size of every part except the last (5 MiB to 5 GiB; see multipartPlan in @shotx/shared). */
   partBytes: number;
   signal?: AbortSignal;
@@ -78,6 +107,13 @@ export interface ObjectStore {
   /** Aborts a multipart upload; an upload that no longer exists is fine. */
   abortMultipartUpload(key: string, uploadId: string): Promise<void>;
   /**
+   * Copies `source` to `target` inside the bucket, server-side (the bytes never pass through the
+   * worker): CopyObject up to COPY_OBJECT_MAX_BYTES, else a multipart upload of UploadPartCopy
+   * parts (aborted on failure). Content type and metadata are copied. Overwrites `target`.
+   * Throws CopySourceMissingError when the source doesn't exist.
+   */
+  copy(source: string, target: string, options: CopyObjectOptions): Promise<void>;
+  /**
    * True while the multipart upload is open (ListParts succeeds); false once it was completed or
    * aborted (NoSuchUpload). media.sweep and quota.reconcile.nightly use it to tell a live upload
    * from a completed one whose markCompleted was lost.
@@ -109,6 +145,8 @@ export class S3ObjectStore implements ObjectStore {
   constructor(
     private readonly s3: S3Client,
     private readonly bucket: string,
+    /** Tests lower it to exercise UploadPartCopy on small objects. */
+    private readonly copyObjectMaxBytes: number = COPY_OBJECT_MAX_BYTES,
   ) {}
 
   async head(key: string): Promise<ObjectHead | null> {
@@ -143,7 +181,15 @@ export class S3ObjectStore implements ObjectStore {
   async uploadStream(key: string, body: Readable, options: UploadStreamOptions): Promise<void> {
     const upload = new Upload({
       client: this.s3,
-      params: { Bucket: this.bucket, Key: key, Body: body, ContentType: options.contentType },
+      params: {
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentType: options.contentType,
+        ...(options.contentDisposition === undefined
+          ? {}
+          : { ContentDisposition: options.contentDisposition }),
+      },
       partSize: options.partBytes,
       queueSize: UPLOAD_STREAM_QUEUE_SIZE,
       // A failed upload is aborted, so no parts linger (the lifecycle rule is only a backstop).
@@ -254,6 +300,90 @@ export class S3ObjectStore implements ObjectStore {
       }
       token = response.IsTruncated === true ? response.NextContinuationToken : undefined;
     } while (token !== undefined);
+  }
+
+  /** `bucket/key` with each key segment URL-encoded, as CopySource expects. */
+  private copySource(key: string): string {
+    return `${this.bucket}/${key.split('/').map(encodeURIComponent).join('/')}`;
+  }
+
+  async copy(source: string, target: string, options: CopyObjectOptions): Promise<void> {
+    const storageClass =
+      options.storageClass === undefined
+        ? {}
+        : { StorageClass: options.storageClass as StorageClass };
+    const http = { abortSignal: options.signal };
+    try {
+      if (options.size <= this.copyObjectMaxBytes) {
+        await this.s3.send(
+          new CopyObjectCommand({
+            Bucket: this.bucket,
+            Key: target,
+            CopySource: this.copySource(source),
+            MetadataDirective: 'COPY',
+            ...storageClass,
+          }),
+          http,
+        );
+        return;
+      }
+      // Multipart copy: the content type is not copied, so read it first.
+      const head = await this.s3.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: source }),
+        http,
+      );
+      const created = await this.s3.send(
+        new CreateMultipartUploadCommand({
+          Bucket: this.bucket,
+          Key: target,
+          ContentType: head.ContentType,
+          ...storageClass,
+        }),
+        http,
+      );
+      const uploadId = created.UploadId;
+      if (uploadId === undefined) throw new ObjectStoreError('CreateMultipartUpload gave no id');
+      try {
+        const plan = multipartPlan(options.size, options.partBytes);
+        const parts: { PartNumber: number; ETag: string }[] = [];
+        for (let n = 1; n <= plan.partCount; n++) {
+          const start = (n - 1) * plan.partSize;
+          const end = Math.min(options.size, n * plan.partSize) - 1;
+          const out = await this.s3.send(
+            new UploadPartCopyCommand({
+              Bucket: this.bucket,
+              Key: target,
+              UploadId: uploadId,
+              PartNumber: n,
+              CopySource: this.copySource(source),
+              CopySourceRange: `bytes=${start}-${end}`,
+            }),
+            http,
+          );
+          const etag = out.CopyPartResult?.ETag;
+          if (etag === undefined) throw new ObjectStoreError(`UploadPartCopy ${n} gave no ETag`);
+          parts.push({ PartNumber: n, ETag: etag });
+        }
+        await this.s3.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: this.bucket,
+            Key: target,
+            UploadId: uploadId,
+            MultipartUpload: { Parts: parts },
+          }),
+          http,
+        );
+      } catch (error) {
+        await this.abortMultipartUpload(target, uploadId).catch(() => undefined);
+        throw error;
+      }
+    } catch (error) {
+      // Only a missing source key: a missing bucket (also a 404) is a configuration error to retry.
+      if (error instanceof Error && (error.name === 'NoSuchKey' || error.name === 'NotFound')) {
+        throw new CopySourceMissingError('The copy source does not exist');
+      }
+      throw error;
+    }
   }
 
   async multipartUploadExists(key: string, uploadId: string): Promise<boolean> {

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { ltree } from '@electric-sql/pglite/contrib/ltree';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { and, eq, type SQL, sql } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
@@ -20,6 +21,7 @@ import {
   isCoveredByFaceIndex,
   isFileInShareScope,
   zipKey,
+  driveSearchPattern,
 } from '@shotx/shared';
 import { driveNameKeySql } from './schema/columns';
 import * as schema from './schema/index';
@@ -48,7 +50,7 @@ interface Backend {
 }
 
 async function openPglite(): Promise<Backend> {
-  const client = await PGlite.create({ extensions: { ltree } });
+  const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
   const db = drizzlePglite({ client, schema });
   const run = () => migratePglite(db, { migrationsFolder: MIGRATIONS_FOLDER });
   await run();
@@ -853,9 +855,37 @@ for (const backend of backends) {
           await pgError(
             db()
               .insert(schema.zipJobEntries)
-              .values({ ...entry, position: 1, fileId: files[1]?.id ?? '', name: 'x'.repeat(256) }),
+              .values({
+                ...entry,
+                position: 1,
+                fileId: files[1]?.id ?? '',
+                name: 'x'.repeat(1025),
+              }),
           ),
         ).toEqual({ code: CHECK, constraint: 'zip_job_entries_name_valid' });
+        // Owner folder zips (migration 0008) keep relative paths, never escaping the archive.
+        for (const name of [
+          '/a.jpg',
+          'a/',
+          'a//b.jpg',
+          '../a.jpg',
+          'a/../b.jpg',
+          './a.jpg',
+          'a/./b.jpg',
+          '..',
+        ]) {
+          expect(
+            await pgError(
+              db()
+                .insert(schema.zipJobEntries)
+                .values({ ...entry, position: 1, fileId: files[1]?.id ?? '', name }),
+            ),
+            name,
+          ).toEqual({ code: CHECK, constraint: 'zip_job_entries_name_valid' });
+        }
+        await db()
+          .insert(schema.zipJobEntries)
+          .values({ ...entry, position: 1, fileId: files[1]?.id ?? '', name: 'Day 1/a.jpg' });
 
         // A requester is required, and Idempotency-Key is unique per share.
         expect(
@@ -871,6 +901,53 @@ for (const backend of backends) {
         expect(await pgError(job(keyed))).toEqual({
           code: UNIQUE,
           constraint: 'zip_jobs_idempotency_unique',
+        });
+      });
+
+      it('holds owner jobs (migration 0008): no share, the owner as viewer, an archive name', async () => {
+        const { owner, viewer, share } = await setup();
+        const ownerJob = {
+          photographerId: owner.id,
+          viewerId: owner.id,
+          downloadSize: 'original' as const,
+          fileCount: 1,
+          totalBytes: 0,
+          archiveName: 'งานวิ่ง 2026.zip',
+          sourceFolderId: randomUUID(),
+        };
+        const created = one(await job(ownerJob));
+        expect(created).toMatchObject({ shareId: null, archiveName: 'งานวิ่ง 2026.zip' });
+        for (const [values, constraint] of [
+          [{ viewerId: viewer.id }, 'zip_jobs_owner_job_shape'],
+          [{ anonId: randomUUID() }, 'zip_jobs_owner_job_shape'],
+          [{ archiveName: null }, 'zip_jobs_owner_job_shape'],
+          [{ archiveName: 'a/b.zip' }, 'zip_jobs_archive_name_valid'],
+          [{ archiveName: 'folder.tar' }, 'zip_jobs_archive_name_valid'],
+        ] as const) {
+          expect(await pgError(job({ ...ownerJob, ...values })), constraint).toEqual({
+            code: CHECK,
+            constraint,
+          });
+        }
+        // Share jobs never carry owner-job fields.
+        expect(
+          await pgError(
+            job({
+              photographerId: owner.id,
+              shareId: share.id,
+              anonId: randomUUID(),
+              downloadSize: 'web',
+              fileCount: 1,
+              totalBytes: 0,
+              archiveName: 'x.zip',
+            }),
+          ),
+        ).toEqual({ code: CHECK, constraint: 'zip_jobs_owner_job_shape' });
+        // Idempotency-Key: unique per photographer among owner jobs.
+        await job({ ...ownerJob, idempotencyKey: 'owner-k' });
+        expect(await pgError(job({ ...ownerJob, idempotencyKey: 'owner-k' }))).toEqual({
+          code: UNIQUE,
+          constraint: 'zip_jobs_owner_idempotency_unique',
         });
       });
 
@@ -902,6 +979,95 @@ for (const backend of backends) {
             .from(schema.zipJobEntries)
             .where(eq(schema.zipJobEntries.jobId, created.id)),
         ).toEqual([]);
+      });
+    });
+
+    describe('studio search and copies (migration 0008)', () => {
+      it('finds names containing the query, ignoring ASCII case, Thai as typed, per owner', async () => {
+        const owner = await newUser();
+        const stranger = await newUser();
+        const folder = await newFolder(owner.id, null, 'งานวิ่ง Bangkok 2026');
+        await newFile(owner.id, { folderId: folder.id, name: 'IMG_0001.JPG' });
+        await newFile(owner.id, { folderId: folder.id, name: 'ภาพวิ่ง_100%.jpg' });
+        await newFile(stranger.id, { folderId: null, name: 'img_0001.jpg' });
+        const names = async (q: string) =>
+          (
+            await db()
+              .select({ name: schema.files.name })
+              .from(schema.files)
+              .where(
+                and(
+                  eq(schema.files.ownerId, owner.id),
+                  sql`${driveNameKeySql(schema.files.name)} LIKE ${driveSearchPattern(q)} ESCAPE '\\'`,
+                ),
+              )
+          )
+            .map((r) => r.name)
+            .sort();
+        expect(await names('img_0001')).toEqual(['IMG_0001.JPG']);
+        expect(await names(' IMG ')).toEqual(['IMG_0001.JPG']);
+        expect(await names('วิ่ง')).toEqual(['ภาพวิ่ง_100%.jpg']);
+        // `%` and `_` are literal.
+        expect(await names('100%')).toEqual(['ภาพวิ่ง_100%.jpg']);
+        expect(await names('G_0')).toEqual(['IMG_0001.JPG']);
+        expect(await names('x_x')).toEqual([]);
+        const folders = await db()
+          .select({ id: schema.folders.id })
+          .from(schema.folders)
+          .where(
+            and(
+              eq(schema.folders.ownerId, owner.id),
+              sql`${driveNameKeySql(schema.folders.name)} LIKE ${driveSearchPattern('BANGKOK')} ESCAPE '\\'`,
+            ),
+          );
+        expect(folders.map((f) => f.id)).toEqual([folder.id]);
+      });
+
+      it('keeps withheld files out of the coverage scan (migration 0009)', async () => {
+        const owner = await newUser();
+        const folder = await newFolder(owner.id, null, 'Run');
+        const kept = await newFile(owner.id, {
+          folderId: folder.id,
+          name: 'a.jpg',
+          status: 'ready',
+        });
+        const withheld = await newFile(owner.id, {
+          folderId: folder.id,
+          name: 'b.jpg',
+          status: 'ready',
+          facesWithheldAt: new Date(),
+        });
+        // The scan's predicate, exactly as files_unindexed_ready_idx has it.
+        const candidates = await db()
+          .select({ id: schema.files.id })
+          .from(schema.files)
+          .where(
+            and(
+              eq(schema.files.folderId, folder.id),
+              sql`${schema.files.status} = 'ready' AND ${schema.files.faceCount} IS NULL AND ${schema.files.facesQueuedAt} IS NULL AND ${schema.files.deletedAt} IS NULL AND ${schema.files.facesWithheldAt} IS NULL`,
+            ),
+          );
+        expect(candidates.map((c) => c.id)).toEqual([kept.id]);
+        expect(withheld.facesWithheldAt).not.toBeNull();
+      });
+
+      it('records the source of a copy, never itself', async () => {
+        const owner = await newUser();
+        const source = await newFile(owner.id, { folderId: null, name: 'a.jpg' });
+        const copy = await newFile(owner.id, {
+          folderId: null,
+          name: 'a (2).jpg',
+          copiedFromFileId: source.id,
+        });
+        expect(copy.copiedFromFileId).toBe(source.id);
+        expect(
+          await pgError(
+            db()
+              .update(schema.files)
+              .set({ copiedFromFileId: copy.id })
+              .where(eq(schema.files.id, copy.id)),
+          ),
+        ).toEqual({ code: CHECK, constraint: 'files_copied_from_not_self' });
       });
     });
 
@@ -1590,7 +1756,7 @@ describe('migration 0001 on a database with 0000 and existing shares (PGlite)', 
   }
 
   async function at0000() {
-    const client = await PGlite.create({ extensions: { ltree } });
+    const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
     const db = drizzlePglite({ client, schema });
     const folder = migrationsUpTo(1);
     await migratePglite(db, { migrationsFolder: folder });
@@ -1689,7 +1855,7 @@ describe('migration 0003 on a database with 0002 and existing rows (PGlite)', ()
   }
 
   it('backfills part sizes, turns off unconfirmed face indexes and dedupes consents', async () => {
-    const client = await PGlite.create({ extensions: { ltree } });
+    const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
     try {
       const db = drizzlePglite({ client, schema });
       const folder = migrationsUpTo(3);
@@ -1771,7 +1937,7 @@ describe('migration 0003 on a database with 0002 and existing rows (PGlite)', ()
 
 describe('migration 0004 on a database with 0003 and existing rows (PGlite)', () => {
   it('backfills payment owners, period starts, legacy auto-renew and consent purposes', async () => {
-    const client = await PGlite.create({ extensions: { ltree } });
+    const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
     try {
       const db = drizzlePglite({ client, schema });
       const dir = mkdtempSync(join(tmpdir(), 'shotx-migrations-'));
@@ -2053,7 +2219,7 @@ describe('auth sessions and admin credentials (migration 0005, PGlite)', () => {
 
 describe('migration 0005 on a database with 0004 and existing users (PGlite)', () => {
   it('renames the identity columns and constraints and keeps the admin CHECK', async () => {
-    const client = await PGlite.create({ extensions: { ltree } });
+    const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
     try {
       const db = drizzlePglite({ client, schema });
       const dir = mkdtempSync(join(tmpdir(), 'shotx-migrations-'));

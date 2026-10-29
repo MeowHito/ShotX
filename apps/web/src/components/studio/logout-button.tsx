@@ -14,21 +14,19 @@ const VIEWER_SESSION_TIMEOUT_MS = 3000;
  * Logout: first `DELETE /api/me/viewer-session` straight to the API (the `shotx_vs` cookie is
  * scoped to /api, so only that request carries it and the API can end the session), then the
  * normal form POST to /auth/logout. Logout never waits more than a few seconds for the first step.
+ * `form` is the hidden form to render; `logout()` runs both steps (the account menu calls it).
  */
-export function LogoutButton({
+export function useLogout({
   publicApi,
   onSubmitForm,
 }: {
-  /** Tests inject the fake API and observe the form submission. */
   publicApi?: ApiClient;
   onSubmitForm?: (form: HTMLFormElement) => void;
-}) {
-  const t = useTranslations('studio');
+} = {}) {
   const formRef = useRef<HTMLFormElement>(null);
   const [busy, setBusy] = useState(false);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function logout() {
     if (busy) return;
     setBusy(true);
     const api = publicApi ?? createPublicApiClient();
@@ -44,8 +42,27 @@ export function LogoutButton({
     else form.submit();
   }
 
+  return { formRef, busy, logout };
+}
+
+export function LogoutButton({
+  publicApi,
+  onSubmitForm,
+}: {
+  /** Tests inject the fake API and observe the form submission. */
+  publicApi?: ApiClient;
+  onSubmitForm?: (form: HTMLFormElement) => void;
+}) {
+  const t = useTranslations('studio');
+  const { formRef, busy, logout } = useLogout({ publicApi, onSubmitForm });
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void logout();
+  }
+
   return (
-    <form ref={formRef} action={AUTH_PATHS.logout} method="post" onSubmit={(e) => void submit(e)}>
+    <form ref={formRef} action={AUTH_PATHS.logout} method="post" onSubmit={submit}>
       <Button type="submit" variant="ghost" size="sm" disabled={busy}>
         {t('logout')}
       </Button>

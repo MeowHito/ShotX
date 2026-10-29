@@ -114,8 +114,9 @@ export interface ReadyFields {
 const IMAGE_MIMES = UPLOAD_FILE_TYPES.filter((t) => t.kind === 'image').map((t) => t.mime);
 
 /**
- * True for a live, not yet indexed photo of the row being updated whose folder an active face
- * index covers now: the files that need an `index.file` job (videos are never indexed).
+ * True for a live, not yet indexed, not withheld (migration 0009) photo of the row being updated
+ * whose folder an active face index covers now: the files that need an `index.file` job (videos
+ * are never indexed).
  */
 function needsFaceIndexSql(now: Date): SQL {
   return sql`(${files.mime} IN (${sql.join(
@@ -125,6 +126,7 @@ function needsFaceIndexSql(now: Date): SQL {
     AND ${files.deletedAt} IS NULL
     AND ${files.purgeRequestedAt} IS NULL
     AND ${files.faceCount} IS NULL
+    AND ${files.facesWithheldAt} IS NULL
     AND EXISTS (
       SELECT 1 FROM ${folders} AS "fo"
       WHERE "fo"."id" = ${files.folderId} AND "fo"."owner_id" = ${files.ownerId}

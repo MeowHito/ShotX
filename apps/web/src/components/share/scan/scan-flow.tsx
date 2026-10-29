@@ -366,7 +366,10 @@ export function ScanFlow({
   }
 
   return (
-    <section className="space-y-4 rounded-xl border p-4" aria-label={title}>
+    <section
+      className="animate-pop-in space-y-4 rounded-2xl border bg-background p-5 shadow-card sm:p-6"
+      aria-label={title}
+    >
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">{title}</h2>
         <Button variant="ghost" size="icon" onClick={onClose} aria-label={t('common.close')}>

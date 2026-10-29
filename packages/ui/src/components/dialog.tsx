@@ -18,19 +18,19 @@ export function DialogContent({
 }) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50" />
+      <DialogPrimitive.Overlay className="fixed inset-0 z-50 animate-fade-in bg-band/45 backdrop-blur-[2px]" />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
           // Mobile-first: a bottom sheet on phones, a centered card from `sm` up.
-          'fixed inset-x-0 bottom-0 z-50 grid max-h-[90dvh] gap-4 overflow-y-auto rounded-t-xl border bg-background p-5 shadow-lg sm:inset-auto sm:top-1/2 sm:left-1/2 sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl',
+          'fixed inset-x-0 bottom-0 z-50 grid max-h-[90dvh] animate-sheet-bottom gap-4 overflow-y-auto rounded-t-3xl border bg-background p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-float sm:inset-auto sm:top-1/2 sm:left-1/2 sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:animate-fade-in sm:rounded-2xl sm:pb-6',
           className,
         )}
         {...props}
       >
         {children}
         <DialogPrimitive.Close
-          className="absolute top-3 right-3 rounded-sm p-1 opacity-70 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          className="absolute top-3.5 right-3.5 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           aria-label={closeLabel}
         >
           <XIcon className="size-5" aria-hidden />
@@ -57,7 +57,12 @@ export function DialogTitle({
   className,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Title>) {
-  return <DialogPrimitive.Title className={cn('text-lg font-semibold', className)} {...props} />;
+  return (
+    <DialogPrimitive.Title
+      className={cn('text-lg font-semibold tracking-[-0.01em]', className)}
+      {...props}
+    />
+  );
 }
 
 export function DialogDescription({

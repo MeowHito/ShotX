@@ -4,8 +4,10 @@ import {
   type DriveFile,
   type DriveFolder,
   type DriveUsageResponse,
+  availableDriveName,
   driveNameKey,
   ERROR_HTTP_STATUS,
+  IDEMPOTENCY_KEY_HEADER,
   type ErrorCode,
   ME_ROUTES,
   type MeResponse,
@@ -118,6 +120,15 @@ export class FakeApi {
   /** Every CAPTCHA_TOKEN_HEADER value received on face search and face deletion. */
   captchaTokens: string[] = [];
   zipJobs = new Map<string, { job: ZipJobView; polls: number; token: string }>();
+  /** Owner folder ZIPs (POST /drive/folders/:id/download), and their Idempotency-Keys. */
+  ownerZipJobs = new Map<string, { job: ZipJobView; polls: number }>();
+  ownerZipKeys = new Map<string, { folderId: string; jobId: string }>();
+  /** clientCopyId -> the copy it made (and its source and target), for idempotent copies. */
+  copies = new Map<string, { fileId: string; sourceId: string; target: string | null }>();
+  /** Copies still `processing`: listings left until the fake worker makes them `ready`. */
+  pendingCopies = new Map<string, number>();
+  /** Listings a copy stays `processing` for. */
+  copyReadyAfterListings = 1;
   zipKeys = new Map<string, { ids: string; jobId: string }>();
   /** Plans, subscription and payments of the billing routes. */
   billing = new FakeBilling();
@@ -264,6 +275,9 @@ export class FakeApi {
         billing !== NOT_HANDLED
           ? billing
           : handlePhase3(this, route, params as Record<string, string>, query, parsedBody, extra);
+      this.lastHeaders = Object.fromEntries(
+        Object.entries(extra.headers).filter((e): e is [string, string] => e[1] !== undefined),
+      );
       const result =
         phase3 === NOT_HANDLED
           ? this.handle(route, params as Record<string, string>, query, parsedBody)
@@ -352,6 +366,38 @@ export class FakeApi {
     return folder;
   }
 
+  /** Owner ZIP archive names (the folder's name + .zip). */
+  ownerZipNames = new Map<string, string>();
+  /** Headers of the request being handled (Idempotency-Key of the folder ZIP). */
+  private lastHeaders: Record<string, string> = {};
+
+  /** The fake worker: copies become `ready` (with a thumbnail) after a few listings. */
+  private advanceCopies() {
+    for (const [id, left] of this.pendingCopies) {
+      if (left > 1) {
+        this.pendingCopies.set(id, left - 1);
+        continue;
+      }
+      this.pendingCopies.delete(id);
+      const file = this.files.get(id);
+      if (file !== undefined) {
+        this.files.set(id, {
+          ...file,
+          status: 'ready',
+          thumbUrl: `${MEDIA}/derived/p/${id}/thumb.webp?Signature=x`,
+        });
+      }
+    }
+  }
+
+  /** Breadcrumbs of a file's location: down to (and including) its own folder. */
+  private fileAncestors(folderId: string | null) {
+    if (folderId === null) return [];
+    const folder = this.folders.get(folderId);
+    if (folder === undefined) return [];
+    return [...this.ancestors(folder), { id: folder.id, name: folder.name }];
+  }
+
   private ancestors(folder: DriveFolder | null) {
     const chain: { id: string; name: string }[] = [];
     let parentId = folder?.parentId ?? null;
@@ -417,6 +463,7 @@ export class FakeApi {
     const q = query as { cursor?: string; limit?: number };
     switch (route) {
       case DRIVE_ROUTES.listChildren: {
+        this.advanceCopies();
         const folderId = params.id === 'root' ? null : (params.id ?? null);
         const folder = this.folderOrFail(folderId);
         const items = [
@@ -526,6 +573,194 @@ export class FakeApi {
           }
         }
         return { folders, files, bytes };
+      }
+      case DRIVE_ROUTES.copyFile: {
+        const b = body as {
+          targetFolderId: string | null;
+          name?: string;
+          onNameConflict: 'rename' | 'fail';
+          clientCopyId?: string;
+        };
+        const source = this.files.get(params.id ?? '');
+        if (source === undefined || source.deletedAt !== null) throw new Fail('NOT_FOUND');
+        if (source.status !== 'ready') throw new Fail('CONFLICT');
+        this.folderOrFail(b.targetFolderId);
+        if (b.clientCopyId !== undefined) {
+          const previous = this.copies.get(b.clientCopyId);
+          if (previous !== undefined) {
+            if (previous.sourceId !== source.id || previous.target !== b.targetFolderId) {
+              throw new Fail('IDEMPOTENCY_KEY_REUSED');
+            }
+            return this.files.get(previous.fileId);
+          }
+        }
+        if (this.options.uploadsBlockedBy === 'SUBSCRIPTION_INACTIVE') {
+          throw new Fail('SUBSCRIPTION_INACTIVE', { status: 'expired' });
+        }
+        const siblings = this.live(this.files.values()).filter(
+          (f) => f.folderId === b.targetFolderId,
+        );
+        const taken = (name: string) =>
+          siblings.some((f) => driveNameKey(f.name) === driveNameKey(name));
+        const wanted = b.name ?? source.name;
+        if (b.onNameConflict === 'fail' && taken(wanted)) {
+          throw new Fail('NAME_TAKEN', { kind: 'file', name: wanted });
+        }
+        const copy = this.addFile(availableDriveName(wanted, 'file', taken), b.targetFolderId, {
+          mime: source.mime,
+          mediaKind: source.mediaKind,
+          sizeBytes: source.sizeBytes,
+          width: source.width,
+          height: source.height,
+          takenAt: source.takenAt,
+          status: 'processing',
+          thumbUrl: undefined,
+        });
+        this.pendingCopies.set(copy.id, this.copyReadyAfterListings);
+        if (b.clientCopyId !== undefined) {
+          this.copies.set(b.clientCopyId, {
+            fileId: copy.id,
+            sourceId: source.id,
+            target: b.targetFolderId,
+          });
+        }
+        return copy;
+      }
+      case DRIVE_ROUTES.downloadFolder: {
+        const folder = this.folderOrFail(params.id ?? null);
+        if (folder === null) throw new Fail('NOT_FOUND');
+        const files = this.live(this.files.values()).filter(
+          (f) =>
+            f.status === 'ready' && f.folderId !== null && this.isDescendant(f.folderId, folder.id),
+        );
+        if (files.length === 0) throw new Fail('CONFLICT');
+        const key = this.lastHeaders[IDEMPOTENCY_KEY_HEADER];
+        if (key !== undefined) {
+          const previous = this.ownerZipKeys.get(key);
+          if (previous !== undefined) {
+            if (previous.folderId !== folder.id) throw new Fail('IDEMPOTENCY_KEY_REUSED');
+            return { job: this.ownerZipJobs.get(previous.jobId)?.job };
+          }
+        }
+        const job: ZipJobView = {
+          id: crypto.randomUUID(),
+          status: 'queued',
+          fileCount: files.length,
+          totalBytes: files.reduce((sum, f) => sum + f.sizeBytes, 0),
+          createdAt: NOW,
+          download: null,
+          availableUntil: null,
+          errorCode: null,
+        };
+        this.ownerZipJobs.set(job.id, { job, polls: 0 });
+        if (key !== undefined) this.ownerZipKeys.set(key, { folderId: folder.id, jobId: job.id });
+        this.ownerZipNames.set(job.id, `${folder.name}.zip`);
+        return { job };
+      }
+      case DRIVE_ROUTES.ownerZipJob: {
+        const entry = this.ownerZipJobs.get(params.id ?? '');
+        if (entry === undefined) throw new Fail('NOT_FOUND');
+        entry.polls++;
+        if (entry.polls < this.options.zipPollsUntilDone) {
+          entry.job = { ...entry.job, status: 'running' };
+        } else {
+          entry.job = {
+            ...entry.job,
+            status: 'ready',
+            download: {
+              url: `${MEDIA}/tmp/zips/${entry.job.id}.zip?Signature=x`,
+              fileName: this.ownerZipNames.get(entry.job.id) ?? 'folder.zip',
+              expiresAt: '2099-01-01T00:00:00.000Z',
+            },
+            availableUntil: '2099-01-01T00:00:00.000Z',
+          };
+        }
+        return entry.job;
+      }
+      case DRIVE_ROUTES.recent: {
+        this.advanceCopies();
+        const files = this.live(this.files.values())
+          .filter((f) => f.status === 'ready' || f.status === 'processing')
+          .reverse();
+        const { slice, next } = this.page(files, q.cursor, q.limit);
+        return { items: slice, nextCursor: next };
+      }
+      case DRIVE_ROUTES.search: {
+        const sq = query as {
+          q?: string;
+          type: 'any' | 'image' | 'video';
+          takenFrom?: string;
+          takenTo?: string;
+          uploadedFrom?: string;
+          uploadedTo?: string;
+          folderId?: string;
+          cursor?: string;
+          limit?: number;
+        };
+        if (sq.folderId !== undefined) this.folderOrFail(sq.folderId);
+        const text = sq.q?.toLowerCase();
+        const within = (parentId: string | null) =>
+          sq.folderId === undefined ||
+          (parentId !== null && this.isDescendant(parentId, sq.folderId));
+        const inRange = (iso: string | null, from?: string, to?: string) =>
+          (from === undefined && to === undefined) ||
+          (iso !== null &&
+            (from === undefined || Date.parse(iso) >= Date.parse(from)) &&
+            (to === undefined || Date.parse(iso) < Date.parse(to)));
+        const filesOnly =
+          sq.type !== 'any' || sq.takenFrom !== undefined || sq.takenTo !== undefined;
+        const folders = filesOnly
+          ? []
+          : this.live(this.folders.values()).filter(
+              (f) =>
+                (text === undefined || f.name.toLowerCase().includes(text)) &&
+                within(f.parentId) &&
+                f.id !== sq.folderId &&
+                inRange(f.createdAt, sq.uploadedFrom, sq.uploadedTo),
+            );
+        const files = this.live(this.files.values()).filter(
+          (f) =>
+            (f.status === 'ready' || f.status === 'processing') &&
+            (text === undefined || f.name.toLowerCase().includes(text)) &&
+            (sq.type === 'any' || f.mediaKind === sq.type) &&
+            within(f.folderId) &&
+            inRange(f.takenAt, sq.takenFrom, sq.takenTo) &&
+            inRange(f.createdAt, sq.uploadedFrom, sq.uploadedTo),
+        );
+        const results = [...folders, ...files].map((item) => ({
+          item,
+          ancestors:
+            item.kind === 'folder' ? this.ancestors(item) : this.fileAncestors(item.folderId),
+        }));
+        const { slice, next } = this.page(results, sq.cursor, sq.limit);
+        return { items: slice, nextCursor: next, truncated: false };
+      }
+      case DRIVE_ROUTES.getFile: {
+        const file = this.files.get(params.id ?? '');
+        if (file === undefined) throw new Fail('NOT_FOUND');
+        return { file, ancestors: this.fileAncestors(file.folderId) };
+      }
+      case DRIVE_ROUTES.folderSummary: {
+        const folder = this.folderOrFail(params.id ?? null);
+        if (folder === null) throw new Fail('NOT_FOUND');
+        const files = this.live(this.files.values()).filter(
+          (f) =>
+            (f.status === 'ready' || f.status === 'processing') &&
+            f.folderId !== null &&
+            this.isDescendant(f.folderId, folder.id),
+        );
+        return {
+          folder,
+          ancestors: this.ancestors(folder),
+          fileCount: files.length,
+          imageCount: files.filter((f) => f.mediaKind === 'image').length,
+          videoCount: files.filter((f) => f.mediaKind === 'video').length,
+          folderCount: this.live(this.folders.values()).filter(
+            (f) =>
+              f.id !== folder.id && f.parentId !== null && this.isDescendant(f.parentId, folder.id),
+          ).length,
+          totalBytes: files.reduce((sum, f) => sum + f.sizeBytes, 0),
+        };
       }
       case DRIVE_ROUTES.usage: {
         const used = this.options.usedBytes;

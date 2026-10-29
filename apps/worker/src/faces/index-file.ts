@@ -25,6 +25,7 @@ export type IndexFileOutcome =
   | 'not-covered'
   | 'already-indexed'
   | 'deletion-pending'
+  | 'withheld'
   | 'indexed'
   | 'superseded';
 
@@ -57,6 +58,7 @@ interface FileForIndexing {
   deletedAt: Date | null;
   purgeRequestedAt: Date | null;
   faceCount: number | null;
+  facesWithheldAt: Date | null;
   createdAt: Date;
 }
 
@@ -70,6 +72,7 @@ const fileColumns = {
   deletedAt: files.deletedAt,
   purgeRequestedAt: files.purgeRequestedAt,
   faceCount: files.faceCount,
+  facesWithheldAt: files.facesWithheldAt,
   createdAt: files.createdAt,
 };
 
@@ -111,6 +114,8 @@ export async function indexFile(
   const { db } = deps;
   const [file] = await db.select(fileColumns).from(files).where(eq(files.id, fileId));
   if (file === undefined) return 'missing';
+  // PDPA (migration 0009): a "ขอลบใบหน้าของฉัน" deletion removed faces from it; never again.
+  if (file.facesWithheldAt !== null) return 'withheld';
   if (
     file.status !== 'ready' ||
     file.deletedAt !== null ||
@@ -372,6 +377,7 @@ export async function unindexedPhotosInSubtree(
         AND "f"."deleted_at" IS NULL
         AND "f"."purge_requested_at" IS NULL
         AND "f"."face_count" IS NULL
+        AND "f"."faces_withheld_at" IS NULL
         AND "f"."mime" IN (${sql.join(
           IMAGE_MIMES.map((m) => sql`${m}`),
           sql`, `,

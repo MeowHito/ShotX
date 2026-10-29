@@ -48,6 +48,19 @@ import {
 } from './drive';
 import { becomePhotographerBodySchema, meResponseSchema } from './me';
 import {
+  copyFileBodySchema,
+  copyFileResponseSchema,
+  downloadFolderBodySchema,
+  downloadFolderResponseSchema,
+  folderSummaryResponseSchema,
+  getFileResponseSchema,
+  listRecentQuerySchema,
+  listRecentResponseSchema,
+  ownerZipJobResponseSchema,
+  searchDriveQuerySchema,
+  searchDriveResponseSchema,
+} from './studio';
+import {
   consentResponseSchema,
   createDownloadBodySchema,
   createDownloadResponseSchema,
@@ -281,7 +294,10 @@ export const DRIVE_ROUTES = {
     response: signedDownloadSchema,
     errors: errors(ErrorCode.NOT_FOUND, ErrorCode.CONFLICT),
   },
-  /** Added (not in the spec's route list): the studio's storage meter. */
+  /**
+   * Added (not in the spec's route list): the studio's storage meter ("ใช้ไป X จาก Y": used +
+   * reserved of quota; the aside's "เพิ่มพื้นที่เก็บข้อมูล" goes to billing).
+   */
   usage: {
     method: 'GET',
     path: '/drive/usage',
@@ -289,6 +305,92 @@ export const DRIVE_ROUTES = {
     auth: 'photographer',
     response: driveUsageResponseSchema,
     errors: errors(),
+  },
+
+  // Wave 7: Drive-style studio (api/studio for the rules).
+  /** "ทำสำเนา" of one file (copyFileBodySchema). */
+  copyFile: {
+    method: 'POST',
+    path: '/drive/files/:id/copy',
+    status: 201,
+    auth: 'photographer',
+    params: idParamsSchema,
+    body: copyFileBodySchema,
+    response: copyFileResponseSchema,
+    errors: errors(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.CONFLICT,
+      ErrorCode.NAME_TAKEN,
+      ErrorCode.UNSUPPORTED_FILE_TYPE,
+      ErrorCode.QUOTA_EXCEEDED,
+      ErrorCode.SUBSCRIPTION_INACTIVE,
+      ErrorCode.IDEMPOTENCY_KEY_REUSED,
+    ),
+  },
+  /** The owner's folder as a ZIP (downloadFolderBodySchema); poll ownerZipJob. */
+  downloadFolder: {
+    method: 'POST',
+    path: '/drive/folders/:id/download',
+    status: 202,
+    auth: 'photographer',
+    params: idParamsSchema,
+    headers: downloadsHeadersSchema,
+    body: downloadFolderBodySchema,
+    response: downloadFolderResponseSchema,
+    errors: errors(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.CONFLICT,
+      ErrorCode.ZIP_TOO_LARGE,
+      ErrorCode.IDEMPOTENCY_KEY_REUSED,
+    ),
+  },
+  ownerZipJob: {
+    method: 'GET',
+    path: '/drive/zip-jobs/:id',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    response: ownerZipJobResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND),
+  },
+  /** "ล่าสุด". */
+  recent: {
+    method: 'GET',
+    path: '/drive/recent',
+    status: 200,
+    auth: 'photographer',
+    query: listRecentQuerySchema,
+    response: listRecentResponseSchema,
+    errors: errors(),
+  },
+  search: {
+    method: 'GET',
+    path: '/drive/search',
+    status: 200,
+    auth: 'photographer',
+    query: searchDriveQuerySchema,
+    response: searchDriveResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND),
+  },
+  /** "ข้อมูลไฟล์" of a file. */
+  getFile: {
+    method: 'GET',
+    path: '/drive/files/:id',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    response: getFileResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND),
+  },
+  /** "ข้อมูลไฟล์" of a folder. */
+  folderSummary: {
+    method: 'GET',
+    path: '/drive/folders/:id/summary',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    response: folderSummaryResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND),
   },
 } as const satisfies Record<string, RouteContract>;
 

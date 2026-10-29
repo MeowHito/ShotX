@@ -64,3 +64,25 @@ export async function storageCounters(
     .where(eq(storageUsage.photographerId, ownerId));
   return row ?? { usedBytes: 0, reservedBytes: 0 };
 }
+
+/**
+ * Reserves `bytes` against `quotaBytes` in one guarded statement (`used + reserved + bytes <=
+ * quota`, creating the counters row when missing). True when reserved; false when the quota
+ * doesn't allow it. Run it inside the transaction that inserts the row the bytes are for.
+ */
+export async function reserveQuotaBytes(
+  q: Queryable,
+  ownerId: string,
+  bytes: number,
+  quotaBytes: number,
+): Promise<boolean> {
+  const reserved = await q.execute(
+    sql`INSERT INTO ${storageUsage} (photographer_id, used_bytes, reserved_bytes)
+        SELECT ${ownerId}::uuid, 0, ${bytes}::bigint WHERE ${bytes}::bigint <= ${quotaBytes}::bigint
+        ON CONFLICT (photographer_id) DO UPDATE
+          SET reserved_bytes = ${storageUsage}.reserved_bytes + EXCLUDED.reserved_bytes
+          WHERE ${storageUsage}.used_bytes + ${storageUsage}.reserved_bytes + EXCLUDED.reserved_bytes <= ${quotaBytes}::bigint
+        RETURNING used_bytes::text`,
+  );
+  return (reserved as { rows: unknown[] }).rows.length > 0;
+}

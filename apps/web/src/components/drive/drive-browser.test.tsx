@@ -5,15 +5,18 @@ import { describe, expect, it } from 'vitest';
 import { FakeApi } from '../../../test/fake-api';
 import { apiClientFor, renderWithProviders } from '../../../test/render';
 import { th } from '@/messages/th';
+import { NewMenu } from '../studio/new-menu';
+import { StudioProvider } from '../studio/studio-context';
 import { UploadPanel } from '../upload/upload-panel';
 import { DriveBrowser } from './drive-browser';
 
 function renderDrive(fake: FakeApi, folderRef: string = DRIVE_ROOT) {
   return renderWithProviders(
-    <>
+    <StudioProvider>
+      <NewMenu />
       <DriveBrowser folderRef={folderRef} />
       <UploadPanel />
-    </>,
+    </StudioProvider>,
     {
       api: apiClientFor(fake.fetch),
       upload: {
@@ -86,7 +89,8 @@ describe('DriveBrowser', () => {
     renderDrive(fake);
     await screen.findByText('Day 1');
 
-    await user.click(screen.getByRole('button', { name: th.drive.newFolder }));
+    await user.click(screen.getByRole('button', { name: th.studio.new }));
+    await user.click(await screen.findByRole('menuitem', { name: th.drive.newFolder }));
     const dialog = await screen.findByRole('dialog', { name: th.createFolder.title });
     await user.type(within(dialog).getByLabelText(th.createFolder.nameLabel), 'day 1');
     await user.click(within(dialog).getByRole('button', { name: th.createFolder.submit }));
@@ -196,7 +200,11 @@ describe('DriveBrowser', () => {
     const fake = new FakeApi({ uploadsBlockedBy: 'SUBSCRIPTION_INACTIVE' });
     renderDrive(fake);
     expect(await screen.findByText(th.usage.blocked.SUBSCRIPTION_INACTIVE)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: th.drive.uploadFiles })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: th.studio.new }));
+    expect(await screen.findByRole('menuitem', { name: th.drive.uploadFiles })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
   });
 
   it('uploads picked files, rejecting HEIC with the hint, and refreshes the folder', async () => {

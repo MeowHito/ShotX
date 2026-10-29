@@ -145,6 +145,29 @@ describe('sweeps (ADR 0008 lost jobs)', () => {
     });
   });
 
+  describe('media.sweep: stale copies', () => {
+    it('re-sends file.copy, not original.completed, for processing copies', async () => {
+      const queues = new MemoryQueueClient();
+      const ownerId = await createPhotographer(db, { reservedBytes: 100 });
+      const sourceId = randomUUID();
+      const copy = await createFileRow(db, ownerId, {
+        originalName: 'copy-of-stale.jpg',
+        status: 'processing',
+        sizeBytes: 100,
+        copiedFromFileId: sourceId,
+        mediaQueuedAt: ago(7 * HOUR),
+      });
+      await runMediaSweep(jobContext(db, new MemoryObjectStore(), queues), SWEEPS.media);
+      expect(sentTo(queues, 'media')).toContainEqual({
+        kind: 'file.copy',
+        fileId: copy.id,
+        sourceFileId: sourceId,
+        photographerId: ownerId,
+      });
+      expect((await fileById(db, copy.id))?.mediaRequeues).toBe(1);
+    });
+  });
+
   describe('media.sweep: uploads whose markCompleted was lost', () => {
     it('completes them from the object; leaves live, missing, wrong-size and young ones', async () => {
       const store = new MemoryObjectStore();
@@ -314,6 +337,14 @@ describe('sweeps (ADR 0008 lost jobs)', () => {
         originalName: 'fresh.jpg',
         facesQueuedAt: ago(HOUR),
       });
+      // Withheld (migration 0009): its stale mark is cleared, never re-sent.
+      const withheld = await createFileRow(db, ownerId, {
+        ...ready,
+        originalName: 'withheld.jpg',
+        facesQueuedAt: ago(7 * HOUR),
+        facesRequeues: 1,
+        facesWithheldAt: ago(DAY),
+      });
       const capped = await createFileRow(db, ownerId, {
         ...ready,
         originalName: 'capped.jpg',
@@ -332,6 +363,11 @@ describe('sweeps (ADR 0008 lost jobs)', () => {
         filesOverCap: 1,
         foldersRequeued: 1,
         foldersCleared: 1,
+        filesWithheldCleared: 1,
+      });
+      expect(await fileById(db, withheld.id)).toMatchObject({
+        facesQueuedAt: null,
+        facesRequeues: 0,
       });
       const [off] = await db
         .select({ queuedAt: folders.faceIndexQueuedAt })
@@ -401,6 +437,7 @@ describe('sweeps (ADR 0008 lost jobs)', () => {
       await photo({ folderId: expired.id });
       await photo({ folderId: plain.id });
       await photo({ folderId: null });
+      await photo({ folderId: indexed.id, facesWithheldAt: ago(DAY) }); // PDPA: never indexed
       // A face deletion is open for it: index.file would end as deletion-pending every run.
       const pending = await photo({ folderId: indexed.id });
       const [open] = await db

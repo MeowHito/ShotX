@@ -2,11 +2,15 @@
 
 import {
   DRIVE_ROUTES,
+  type DriveFile,
   type DriveItem,
   type DriveItemRef,
   type FolderRef,
+  IDEMPOTENCY_KEY_HEADER,
   type ListChildrenResponse,
+  type SearchDriveQuery,
   type TrashItem,
+  type ZipJobView,
 } from '@shotx/shared';
 import {
   type InfiniteData,
@@ -22,13 +26,45 @@ export const driveKeys = {
   children: (ref: FolderRef) => ['drive', 'children', ref] as const,
   trash: ['drive', 'trash'] as const,
   usage: ['drive', 'usage'] as const,
+  recent: ['drive', 'recent'] as const,
+  search: (query: SearchDriveQuery | null) => ['drive', 'search', query] as const,
+  file: (id: string) => ['drive', 'file', id] as const,
+  folderSummary: (id: string) => ['drive', 'folder-summary', id] as const,
 };
 
-/** A folder's children, page by page (cursor pagination; folders first). */
-export function useFolderChildren(ref: FolderRef) {
+/** Still being made (an upload or a copy the worker is finishing): worth refreshing. */
+export function isPendingItem(item: DriveItem): boolean {
+  return item.kind === 'file' && (item.status === 'processing' || item.status === 'uploading');
+}
+
+/** A refetch interval that runs only while a page shows a pending item. */
+function whilePending<P>(pollMs: number | undefined, itemsOf: (page: P) => DriveItem[]) {
+  return (query: { state: { data?: { pages: P[] } } }) =>
+    pollMs !== undefined &&
+    (query.state.data?.pages ?? []).some((p) => itemsOf(p).some(isPendingItem))
+      ? pollMs
+      : false;
+}
+
+/** Calls once more when the first call got no response; safe with an idempotency id or key. */
+async function retryLostResponse<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof Error && error.name === 'NetworkError') return call();
+    throw error;
+  }
+}
+
+/**
+ * A folder's children, page by page (cursor pagination; folders first). With `processingPollMs`
+ * the listing refreshes while it shows a file still processing (an upload or a copy).
+ */
+export function useFolderChildren(ref: FolderRef, options: { processingPollMs?: number } = {}) {
   const api = useApiClient();
   const query = useInfiniteQuery({
     queryKey: driveKeys.children(ref),
+    refetchInterval: whilePending<ListChildrenResponse>(options.processingPollMs, (p) => p.items),
     queryFn: ({ pageParam, signal }) =>
       api.call(DRIVE_ROUTES.listChildren, {
         params: { id: ref },
@@ -162,6 +198,131 @@ export function useEmptyTrash() {
     mutationFn: () => api.call(DRIVE_ROUTES.emptyTrash),
     onSuccess: invalidate,
   });
+}
+
+export interface CopyResult {
+  copies: DriveFile[];
+  failures: { file: DriveFile; error: unknown }[];
+}
+
+/**
+ * Copy (itemMenu.copy) of files into a folder (null: the root), one POST each. Each file of one copy action
+ * gets its own `clientCopyId`, kept when a lost response is retried, so a retry never makes a
+ * second copy; a new paste is a new action with new ids. Names that are taken become "name (2)".
+ */
+export function useCopyFiles() {
+  const api = useApiClient();
+  const invalidate = useInvalidateDrive();
+  return useMutation({
+    mutationFn: async ({
+      files,
+      targetFolderId,
+    }: {
+      files: readonly DriveFile[];
+      targetFolderId: string | null;
+    }): Promise<CopyResult> => {
+      const results = await Promise.allSettled(
+        files.map((file) => {
+          const clientCopyId = crypto.randomUUID();
+          return retryLostResponse(() =>
+            api.call(DRIVE_ROUTES.copyFile, {
+              params: { id: file.id },
+              body: { targetFolderId, onNameConflict: 'rename', clientCopyId },
+            }),
+          );
+        }),
+      );
+      const copies: DriveFile[] = [];
+      const failures: CopyResult['failures'] = [];
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled') copies.push(r.value);
+        else failures.push({ file: files[i] as DriveFile, error: r.reason as unknown });
+      });
+      return { copies, failures };
+    },
+    onSettled: invalidate,
+  });
+}
+
+/** Starts the owner's ZIP of a folder (originals); poll the job with pollOwnerZipJob. */
+export function useDownloadFolder() {
+  const api = useApiClient();
+  return useMutation({
+    mutationFn: async ({
+      folderId,
+      idempotencyKey,
+    }: {
+      folderId: string;
+      idempotencyKey: string;
+    }): Promise<ZipJobView> => {
+      const res = await retryLostResponse(() =>
+        api.call(DRIVE_ROUTES.downloadFolder, {
+          params: { id: folderId },
+          headers: { [IDEMPOTENCY_KEY_HEADER]: idempotencyKey },
+          body: { size: 'original' },
+        }),
+      );
+      return res.job;
+    },
+  });
+}
+
+/** Recent: the newest files, page by page; refreshes while one is processing. */
+export function useRecent(options: { processingPollMs?: number } = {}) {
+  const api = useApiClient();
+  const query = useInfiniteQuery({
+    queryKey: driveKeys.recent,
+    queryFn: ({ pageParam, signal }) =>
+      api.call(DRIVE_ROUTES.recent, {
+        query: pageParam === null ? {} : { cursor: pageParam },
+        signal,
+      }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+    refetchInterval: whilePending<{ items: DriveFile[] }>(options.processingPollMs, (p) => p.items),
+  });
+  const items: DriveFile[] = query.data?.pages.flatMap((p) => p.items) ?? [];
+  return { ...query, items };
+}
+
+/** GET /drive/search, page by page; disabled while `query` is null (no criterion yet). */
+export function useDriveSearch(query: SearchDriveQuery | null) {
+  const api = useApiClient();
+  const result = useInfiniteQuery({
+    queryKey: driveKeys.search(query),
+    enabled: query !== null,
+    queryFn: ({ pageParam, signal }) =>
+      api.call(DRIVE_ROUTES.search, {
+        query: { ...query, ...(pageParam === null ? {} : { cursor: pageParam }) },
+        signal,
+      }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+  });
+  const pages = result.data?.pages ?? [];
+  return {
+    ...result,
+    results: pages.flatMap((p) => p.items),
+    truncated: pages.some((p) => p.truncated),
+  };
+}
+
+/** Item info (itemMenu.fileInfo) of a file (with its location) or a folder (with its summary); null: off. */
+export function useItemInfo(item: { kind: 'file' | 'folder'; id: string } | null) {
+  const api = useApiClient();
+  const file = useQuery({
+    queryKey: driveKeys.file(item?.id ?? ''),
+    enabled: item?.kind === 'file',
+    queryFn: ({ signal }) =>
+      api.call(DRIVE_ROUTES.getFile, { params: { id: item?.id ?? '' }, signal }),
+  });
+  const folder = useQuery({
+    queryKey: driveKeys.folderSummary(item?.id ?? ''),
+    enabled: item?.kind === 'folder',
+    queryFn: ({ signal }) =>
+      api.call(DRIVE_ROUTES.folderSummary, { params: { id: item?.id ?? '' }, signal }),
+  });
+  return { file, folder };
 }
 
 /** Ref of an item for trash/restore/move bodies. */

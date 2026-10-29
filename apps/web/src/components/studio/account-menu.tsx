@@ -1,0 +1,81 @@
+'use client';
+
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from '@shotx/ui';
+import { KeyboardIcon, LogOutIcon } from 'lucide-react';
+import { useTranslations } from 'next-intl';
+import { AUTH_PATHS } from '@/lib/auth/handlers';
+import type { ApiClient } from '@/lib/api/client';
+import { shortcutHint } from '@/lib/studio/shortcuts';
+import { useLogout } from './logout-button';
+import { useStudio } from './studio-context';
+
+export interface StudioUser {
+  name: string | null;
+  email: string | null;
+}
+
+/** The account button (initial) with the name, email, shortcuts help and logout. */
+export function AccountMenu({
+  user,
+  publicApi,
+  onSubmitLogout,
+}: {
+  user: StudioUser | null;
+  /** Tests inject the fake API and observe the logout form. */
+  publicApi?: ApiClient;
+  onSubmitLogout?: (form: HTMLFormElement) => void;
+}) {
+  const t = useTranslations('studio');
+  const studio = useStudio();
+  const { formRef, busy, logout } = useLogout({ publicApi, onSubmitForm: onSubmitLogout });
+  const display = user?.name ?? user?.email ?? null;
+  const initial = (display ?? '?').trim().charAt(0).toUpperCase() || '?';
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={t('accountMenu')}
+            className="flex size-11 shrink-0 items-center justify-center rounded-full bg-primary/12 text-base font-semibold text-primary outline-none hover:bg-primary/20 focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span aria-hidden>{initial}</span>
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" collisionPadding={12} className="min-w-64">
+          <DropdownMenuLabel className="space-y-0.5 py-2">
+            <span className="block text-xs">{t('account')}</span>
+            {user?.name ? (
+              <span className="block truncate text-sm font-semibold text-foreground">
+                {user.name}
+              </span>
+            ) : null}
+            {user?.email ? (
+              <span className="block truncate text-xs font-normal">{user.email}</span>
+            ) : null}
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={studio.showShortcuts}>
+            <KeyboardIcon aria-hidden />
+            {t('shortcuts')}
+            <DropdownMenuShortcut>{shortcutHint('help', studio.apple)}</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={busy} onSelect={() => void logout()}>
+            <LogOutIcon aria-hidden />
+            {t('logout')}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <form ref={formRef} action={AUTH_PATHS.logout} method="post" hidden />
+    </>
+  );
+}

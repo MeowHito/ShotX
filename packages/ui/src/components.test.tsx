@@ -4,7 +4,23 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   Button,
   Checkbox,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuShortcut,
+  ContextMenuTrigger,
   cn,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  Skeleton,
   Dialog,
   DialogContent,
   DialogTitle,
@@ -71,5 +87,64 @@ describe('Checkbox and Progress', () => {
   it('clamps the progress indicator', () => {
     render(<Progress value={150} aria-label="พื้นที่" />);
     expect(screen.getByRole('progressbar', { name: 'พื้นที่' })).toBeInTheDocument();
+  });
+});
+
+describe('menus', () => {
+  it('opens a context menu on right-click, with a shortcut hint outside the accessible name', async () => {
+    const onSelect = vi.fn();
+    render(
+      <ContextMenu>
+        <ContextMenuTrigger>
+          <div>item</div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onSelect={onSelect}>
+            Rename<ContextMenuShortcut>Ctrl+Alt+E</ContextMenuShortcut>
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>,
+    );
+    await userEvent.pointer({ keys: '[MouseRight]', target: screen.getByText('item') });
+    const item = await screen.findByRole('menuitem', { name: 'Rename' });
+    expect(item).toHaveTextContent('Ctrl+Alt+E');
+    await userEvent.click(item);
+    expect(onSelect).toHaveBeenCalledOnce();
+  });
+
+  it('opens a dropdown submenu with the keyboard', async () => {
+    render(
+      <DropdownMenu>
+        <DropdownMenuTrigger>open</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>Share</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem>Copy link</DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    screen.getByRole('button', { name: 'open' }).focus();
+    await userEvent.keyboard('{Enter}');
+    await screen.findByRole('menuitem', { name: 'Share' });
+    await userEvent.keyboard('{ArrowRight}');
+    expect(await screen.findByRole('menuitem', { name: 'Copy link' })).toBeInTheDocument();
+  });
+
+  it('renders a sheet from the bottom, and an aria-hidden skeleton', () => {
+    render(
+      <Sheet open>
+        <SheetContent side="bottom" closeLabel="Close" aria-describedby={undefined}>
+          <SheetTitle>Actions</SheetTitle>
+        </SheetContent>
+      </Sheet>,
+    );
+    const sheet = screen.getByRole('dialog', { name: 'Actions' });
+    expect(sheet.className).toContain('bottom-0');
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    const { container } = render(<Skeleton className="h-4" />);
+    expect(container.firstElementChild).toHaveAttribute('aria-hidden', 'true');
   });
 });

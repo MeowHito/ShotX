@@ -25,6 +25,8 @@ export interface StreamZipOptions {
   /** Multipart part size of the upload. */
   partBytes: number;
   signal: AbortSignal;
+  /** Content-Disposition stored on the archive object (owner jobs: `archive_name`). */
+  contentDisposition?: string;
 }
 
 /** Counts the bytes of all entries and fails the archive once they pass the limit. */
@@ -91,6 +93,9 @@ export async function streamZip(
     contentType: 'application/zip',
     partBytes: options.partBytes,
     signal,
+    ...(options.contentDisposition === undefined
+      ? {}
+      : { contentDisposition: options.contentDisposition }),
   });
   // An upload failure tears the archive down, so feeding stops instead of waiting forever for
   // an entry nobody reads (and the rejection is never left unhandled).

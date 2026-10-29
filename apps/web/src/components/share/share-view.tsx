@@ -58,7 +58,7 @@ export function SharePage({ testing, ...props }: SharePageProps) {
     <ShareApiProvider signedIn={props.signedIn} publicApi={testing?.publicApi}>
       <ShareRuntimeContext.Provider value={runtime}>
         <FaceToolsProvider config={props.faceConfig} overrides={testing?.faceTools}>
-          <main className="mx-auto max-w-5xl px-3 py-4 pb-40 sm:px-4">
+          <main className="mx-auto max-w-5xl px-4 pt-6 pb-40 sm:px-6 sm:pt-10">
             <ShareGate {...props} />
           </main>
         </FaceToolsProvider>
@@ -135,12 +135,12 @@ function ShareHeader({ meta }: { meta: ShareMetaResponse }) {
   const details = meta.details;
   if (details === null) return null;
   return (
-    <header className="mb-4 space-y-1">
-      <h1 className="text-xl font-bold break-words sm:text-2xl">{details.title}</h1>
+    <header className="mb-2 space-y-2">
+      {details.photographerName !== null ? (
+        <p className="eyebrow">{th('byPhotographer', { name: details.photographerName })}</p>
+      ) : null}
+      <h1 className="text-2xl leading-tight break-words sm:text-4xl">{details.title}</h1>
       <p className="flex flex-wrap gap-x-3 text-sm text-muted-foreground">
-        {details.photographerName !== null ? (
-          <span>{th('byPhotographer', { name: details.photographerName })}</span>
-        ) : null}
         {details.itemCount !== null ? (
           <span>{th('itemCount', { count: details.itemCount })}</span>
         ) : null}
@@ -250,7 +250,11 @@ function ShareContent({
 
   const scanButton =
     scanAvailable && !scanning ? (
-      <Button size="lg" className="w-full sm:w-auto" onClick={() => setScanning(true)}>
+      <Button
+        size="lg"
+        className="h-12 w-full rounded-full px-6 text-base sm:w-auto"
+        onClick={() => setScanning(true)}
+      >
         <ScanFaceIcon aria-hidden />
         {results === null ? t('share.scan') : t('share.scanAgain')}
       </Button>
@@ -262,7 +266,7 @@ function ShareContent({
 
       {faceOnly ? (
         scanAvailable ? (
-          <section className="space-y-2 rounded-xl bg-muted p-4">
+          <section className="space-y-2 rounded-xl border bg-sidebar p-5">
             <h2 className="font-semibold">{t('share.faceOnly.title')}</h2>
             <p className="text-sm text-muted-foreground">{t('share.faceOnly.body')}</p>
           </section>

@@ -37,7 +37,7 @@ import {
 import { shareItemsScope } from './share-items';
 import { browserViewers, enforceRate } from './share-page.service';
 
-type ZipJobRow = typeof zipJobs.$inferSelect;
+export type ZipJobRow = typeof zipJobs.$inferSelect;
 
 /** `zip_jobs` condition: the job belongs to one of this browser's identities. */
 function jobOfViewers(viewers: readonly Viewer[]): SQL {
@@ -339,33 +339,41 @@ export class DownloadsService {
     job: ZipJobRow,
     signed: { url: string; expiresAt: Date } | null,
   ): ZipJobView {
-    const expired =
-      job.status === 'ready' && job.expiresAt !== null && job.expiresAt <= this.clock.now();
-    const errorCode =
-      job.status === 'failed'
-        ? (ERROR_CODES as readonly string[]).includes(job.errorCode ?? '')
-          ? (job.errorCode as ErrorCode)
-          : 'INTERNAL_ERROR'
-        : null;
-    return {
-      id: job.id,
-      status: expired ? 'expired' : job.status,
-      fileCount: job.fileCount,
-      totalBytes: job.totalBytes,
-      createdAt: job.createdAt.toISOString(),
-      download:
-        signed === null
-          ? null
-          : {
-              url: signed.url,
-              fileName: zipFileName(share),
-              expiresAt: signed.expiresAt.toISOString(),
-            },
-      availableUntil:
-        job.status === 'ready' && !expired && job.expiresAt !== null
-          ? job.expiresAt.toISOString()
-          : null,
-      errorCode,
-    };
+    return zipJobView(job, zipFileName(share), signed, this.clock.now());
   }
+}
+
+/**
+ * The API view of a zip job (share or owner): `expired` once the archive's `expires_at` passed,
+ * the signed download (when given) under `fileName`, and a known error code for failed jobs.
+ */
+export function zipJobView(
+  job: ZipJobRow,
+  fileName: string,
+  signed: { url: string; expiresAt: Date } | null,
+  now: Date,
+): ZipJobView {
+  const expired = job.status === 'ready' && job.expiresAt !== null && job.expiresAt <= now;
+  const errorCode =
+    job.status === 'failed'
+      ? (ERROR_CODES as readonly string[]).includes(job.errorCode ?? '')
+        ? (job.errorCode as ErrorCode)
+        : 'INTERNAL_ERROR'
+      : null;
+  return {
+    id: job.id,
+    status: expired ? 'expired' : job.status,
+    fileCount: job.fileCount,
+    totalBytes: job.totalBytes,
+    createdAt: job.createdAt.toISOString(),
+    download:
+      signed === null
+        ? null
+        : { url: signed.url, fileName, expiresAt: signed.expiresAt.toISOString() },
+    availableUntil:
+      job.status === 'ready' && !expired && job.expiresAt !== null
+        ? job.expiresAt.toISOString()
+        : null,
+    errorCode,
+  };
 }

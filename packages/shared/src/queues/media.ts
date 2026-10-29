@@ -99,15 +99,57 @@ export const originalCompletedMessageSchema = z
 export type OriginalCompletedMessage = z.output<typeof originalCompletedMessageSchema>;
 
 /**
- * Body of a `media` queue message: an `original.completed` message (API and media.sweep), or what
- * S3 bucket notifications send (AWS stacks, kept until infra/ is removed).
+ * "Copy this file's objects" (Wave 7, `POST /drive/files/:id/copy`). The API has already, in one
+ * transaction, reserved the bytes and inserted the copy's `files` row (`processing`, a new
+ * `originals/` key built with originalKey, `copied_from_file_id = sourceFileId`, the source's
+ * metadata, no derivative keys, `verified_at` null). The worker copies the objects server-side
+ * (CopyObject, or UploadPartCopy above 5 GiB; bytes never pass through the API or the worker's
+ * disk): the source's original to the copy's `s3_key`, and each derivative the source has to
+ * derivedKey(copy, variant). Then, as for an upload, it checks the copy with HeadObject (size =
+ * `size_bytes`), sets `verified_at` and the derivative keys, moves the bytes from reserved to
+ * used, marks the row `ready`, and sends `index.file` (with the outbox mark) when a face index
+ * covers the copy's folder. Faces are never copied: the copy is indexed like any new photo.
+ *
+ * PDPA (migration 0009): the API copies the source's `faces_withheld_at` onto the copy row. Before
+ * it marks the copy `ready`, the worker re-checks the source and withholds the copy
+ * (`faces_withheld_at = now()`, no `index.file`) when the source has been withheld since (a
+ * deletion completed after the copy was requested) or has a deletion pending (`faces` rows with
+ * `deletion_id IS NOT NULL`). A withheld copy is never indexed.
+ *
+ * Idempotent: a verified or `ready` copy is a no-op; a re-run overwrites the same keys. If the
+ * source is gone (purged), not `ready`, or of another owner, the worker deletes whatever it
+ * copied, marks the copy `failed` and releases the reservation. media.sweep re-sends this message
+ * (not `original.completed`) for `processing` rows with `copied_from_file_id` set.
+ */
+export const fileCopyMessageSchema = z
+  .object({
+    kind: z.literal('file.copy'),
+    fileId: z.uuid(),
+    sourceFileId: z.uuid(),
+    photographerId: z.uuid(),
+  })
+  .refine((m) => m.fileId !== m.sourceFileId, {
+    error: 'fileId and sourceFileId must differ',
+    path: ['sourceFileId'],
+  });
+export type FileCopyMessage = z.output<typeof fileCopyMessageSchema>;
+
+/**
+ * Body of a `media` queue message: an `original.completed` message (API and media.sweep), a
+ * `file.copy` message (Wave 7), or what S3 bucket notifications send (AWS stacks, kept until
+ * infra/ is removed).
  */
 export const mediaQueueMessageSchema = z.union([
   originalCompletedMessageSchema,
+  fileCopyMessageSchema,
   s3EventNotificationSchema,
   s3TestEventSchema,
 ]);
 export type MediaQueueMessage = z.output<typeof mediaQueueMessageSchema>;
+
+export function isFileCopy(message: MediaQueueMessage): message is FileCopyMessage {
+  return 'kind' in message && message.kind === 'file.copy';
+}
 
 export function isS3TestEvent(message: MediaQueueMessage): message is S3TestEvent {
   return 'Event' in message;
@@ -150,6 +192,9 @@ export interface CreatedObject {
 export function createdObjects(message: MediaQueueMessage): CreatedObject[] {
   if (isOriginalCompleted(message)) {
     throw new RangeError('original.completed carries no S3 event records; use mediaOriginals');
+  }
+  if (isFileCopy(message)) {
+    throw new RangeError('file.copy carries no S3 event records; handle it with isFileCopy');
   }
   if (isS3TestEvent(message)) return [];
   return message.Records.map((r) => ({
@@ -252,6 +297,11 @@ export function mediaOriginals(
   message: MediaQueueMessage,
   mediaBucket: string,
 ): { originals: MediaOriginal[]; ignored: IgnoredMediaObject[] } {
+  if (isFileCopy(message)) {
+    // Not an original to verify and render: thrown, not ignored, so a consumer that predates the
+    // variant fails the job instead of dropping it.
+    throw new RangeError('file.copy is not an original; handle it with isFileCopy first');
+  }
   if (isOriginalCompleted(message)) {
     const parsed = parseS3Key(message.key);
     if (parsed?.kind !== 'original') throw new RangeError('Invalid original.completed key');

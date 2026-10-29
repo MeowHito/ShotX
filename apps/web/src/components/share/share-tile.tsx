@@ -28,7 +28,7 @@ export function ShareTile({ item, onOpen, selection, onNotMe, notMeBusy }: Share
       <button
         type="button"
         onClick={onOpen}
-        className="relative aspect-square w-full overflow-hidden rounded-md bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+        className="relative aspect-square w-full overflow-hidden rounded-lg bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         aria-label={t('share.open', { name: item.name })}
       >
         {/* Signed CloudFront URL under /media: served by the CDN, not resized by the web server. */}

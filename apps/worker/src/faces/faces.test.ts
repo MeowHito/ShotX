@@ -573,6 +573,8 @@ describe('faces consumer', () => {
       const stored = provider.storedFaces(faceCollectionId(ownerId)).map((f) => f.faceId);
       expect(stored).toEqual([rows[2]!.rekognitionFaceId]);
       expect((await fileById(db, file.id))?.faceCount).toBe(1);
+      // PDPA (migration 0009): the photo is withheld from face indexing for good.
+      expect((await fileById(db, file.id))?.facesWithheldAt).toBeInstanceOf(Date);
       const [done] = await db
         .select()
         .from(faceDeletions)
@@ -587,6 +589,74 @@ describe('faces consumer', () => {
         .from(faceDeletions)
         .where(eq(faceDeletions.id, deletion!.id));
       expect(again?.completedAt).toEqual(done?.completedAt);
+    });
+
+    it('never re-indexes a withheld photo: deletion, index expiry, folder re-enabled', async () => {
+      const { ownerId, folder, file } = await indexedFolderWithPhoto();
+      const other = await readyPhoto(ownerId, folder.id); // not matched by the deletion
+      await createFacesHandler(deps())(indexJob(file.id), context());
+      const [deletion] = await db
+        .insert(faceDeletions)
+        .values({ photographerId: ownerId, shareId: randomUUID(), facesMatched: 1 })
+        .returning();
+      const [first] = await faceRows(file.id);
+      await db.update(faces).set({ deletionId: deletion!.id }).where(eq(faces.id, first!.id));
+      await createFacesHandler(deps())(
+        serializeQueueMessage('faces', { type: 'delete.faces', deletionId: deletion!.id }),
+        context(),
+      );
+      expect((await fileById(db, file.id))?.facesWithheldAt).toBeInstanceOf(Date);
+      expect((await fileById(db, other.id))?.facesWithheldAt).toBeNull();
+
+      // The index expires: the rest of its faces go and face_count is null again.
+      await db
+        .update(folders)
+        .set({ faceIndexExpiresAt: new Date(Date.now() - 1000) })
+        .where(eq(folders.id, folder.id));
+      await runFacesExpire({
+        db,
+        store,
+        faces: provider,
+        ...testJobQueues(queues),
+        log: silentLogger,
+        now: Date.now,
+        batchSize: 10,
+        deadline: Date.now() + 3_600_000,
+        signal: new AbortController().signal,
+      });
+      expect(await fileById(db, file.id)).toMatchObject({ faceCount: null });
+      // Expiry never touches the mark.
+      expect((await fileById(db, file.id))?.facesWithheldAt).toBeInstanceOf(Date);
+
+      // The photographer turns indexing on again: the fan-out skips the withheld photo.
+      await db
+        .update(folders)
+        .set({ faceIndexExpiresAt: new Date(Date.now() + DAY) })
+        .where(eq(folders.id, folder.id));
+      queues.sent.length = 0;
+      await createFacesHandler(deps())(
+        serializeQueueMessage('faces', { type: 'index.folder', folderId: folder.id }),
+        context(),
+      );
+      const sent = queues.sent.map((m) => (JSON.parse(m.body) as { fileId: string }).fileId);
+      expect(sent).toEqual([other.id]);
+
+      // Even a direct index.file (e.g. an old message) ends as withheld: no Rekognition call.
+      await db
+        .update(files)
+        .set({ facesQueuedAt: new Date(), facesRequeues: 1 })
+        .where(eq(files.id, file.id));
+      const indexCalls = provider.calls.indexFaces;
+      const log = memoryLogger();
+      await createFacesHandler(deps())(indexJob(file.id), context(log));
+      expect(provider.calls.indexFaces).toBe(indexCalls);
+      expect(log.entries.at(-1)).toMatchObject({ fields: { outcome: 'withheld' } });
+      expect(await fileById(db, file.id)).toMatchObject({
+        faceCount: null,
+        facesQueuedAt: null,
+        facesRequeues: 0,
+      });
+      expect(await faceRows(file.id)).toEqual([]);
     });
 
     it('retries when DeleteFaces fails, and completes when the collection is gone', async () => {

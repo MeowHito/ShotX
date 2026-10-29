@@ -429,6 +429,18 @@ describe('activity events', () => {
         bytes: 18_734_112,
         meta: null,
       },
+      // An owner folder zip (Wave 7, GET /drive/zip-jobs/:id).
+      {
+        source: 'owner',
+        shareId: null,
+        photographerId: owner,
+        viewerId: null,
+        anonId: null,
+        type: 'zip',
+        fileId: null,
+        bytes: 2_000_000_000,
+        meta: { files: 300 },
+      },
     ]) {
       expect(activityEventInputSchema.safeParse(event).success).toBe(true);
     }
@@ -456,6 +468,40 @@ describe('activity events', () => {
       { ...share, shareId: null, type: 'download', fileId, bytes: 1, meta: null },
       { ...share, source: 'owner', type: 'download', fileId, bytes: 1, meta: null },
       { ...share, source: 'owner', type: 'view', fileId: null, bytes: 0, meta: { items: 1 } },
+      // Owner zips have no share and no viewer, and are still counts only.
+      { ...share, source: 'owner', type: 'zip', fileId: null, bytes: 1, meta: { files: 1 } },
+      {
+        ...share,
+        source: 'owner',
+        shareId: null,
+        anonId: null,
+        viewerId: owner,
+        type: 'zip',
+        fileId: null,
+        bytes: 1,
+        meta: { files: 1 },
+      },
+      {
+        source: 'owner',
+        shareId: null,
+        photographerId: owner,
+        viewerId: null,
+        anonId: null,
+        type: 'zip',
+        fileId,
+        bytes: 1,
+        meta: { files: 1 },
+      },
+      {
+        ...share,
+        source: 'owner',
+        shareId: null,
+        anonId: null,
+        type: 'scan',
+        fileId: null,
+        bytes: 0,
+        meta: { selfies: 1, strong: 0, maybe: 0 },
+      },
       { ...share, viewerId: owner, type: 'download', fileId, bytes: 1, meta: null },
       { ...share, anonId: null, type: 'download', fileId, bytes: 1, meta: null },
     ];

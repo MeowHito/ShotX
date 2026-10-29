@@ -14,12 +14,13 @@ import { ACTIVITY_SOURCES } from '../domain';
  * - `download`: one per single-file download URL, `file_id` set, `bytes` = the served object's
  *   size: `files.size_bytes` for `original`, `files.web_size_bytes` for `web` (0 when the worker
  *   hasn't recorded it).
- * - `zip`: one per finished-zip URL issued by `GET /s/:token/zip-jobs/:id`, `meta.files`, `bytes` = the
- *   archive size; `file_id` null.
+ * - `zip`: one per finished-zip URL issued by `GET /s/:token/zip-jobs/:id` (source `share`) or,
+ *   for an owner folder zip (Wave 7), by `GET /drive/zip-jobs/:id` (source `owner`); `meta.files`,
+ *   `bytes` = the archive size; `file_id` null.
  *
  * `source = 'share'` rows carry the share and the viewer (`viewer_id` or `anon_id`); `source =
- * 'owner'` rows are a photographer's downloads from their own drive (`share_id`, `viewer_id` and
- * `anon_id` null). See ACTIVITY_SOURCES for what the rollups count.
+ * 'owner'` rows are a photographer's downloads (single files and folder zips) from their own drive
+ * (`share_id`, `viewer_id` and `anon_id` null). Views and scans are share-only. See ACTIVITY_SOURCES for what the rollups count.
  *
  * The table is range-partitioned by month (UTC) with a default partition. Writers just insert;
  * `stats.rollup.hourly` calls `activity_events_ensure_partitions()` so future months exist, and
@@ -75,7 +76,11 @@ export const activityEventInputSchema = z
     }),
     z.strictObject({
       type: z.literal('zip'),
-      ...shareSource,
+      source: z.enum(ACTIVITY_SOURCES),
+      shareId: uuid.nullable(),
+      photographerId: uuid,
+      viewerId: uuid.nullable(),
+      anonId: uuid.nullable(),
       fileId: z.null(),
       bytes: count,
       meta: zipActivityMetaSchema,

@@ -1,4 +1,5 @@
 import { Alert } from '@shotx/ui';
+import Link from 'next/link';
 import { getTranslations } from 'next-intl/server';
 import { LoginButtons } from '@/components/auth/login-buttons';
 import { LOGIN_ERROR_CODES, LOGIN_ERROR_REASONS } from '@/lib/auth/handlers';
@@ -12,6 +13,7 @@ export default async function LoginPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const t = await getTranslations('login');
+  const tc = await getTranslations('common');
   const te = await getTranslations('errors');
   const params = await searchParams;
   const next = safeNextPath(typeof params.next === 'string' ? params.next : null);
@@ -28,17 +30,26 @@ export default async function LoginPage({
   const options = await loginOptions();
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center gap-6 px-6 py-12">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-bold">{t('title')}</h1>
-        <p className="text-muted-foreground">{t('subtitle')}</p>
+    <main className="flex min-h-dvh flex-col items-center justify-center bg-sidebar px-4 py-12">
+      <Link
+        href="/"
+        className="mb-6 rounded-md px-1 text-xl font-bold tracking-[-0.015em] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {tc('appName')}
+      </Link>
+      <div className="w-full max-w-sm space-y-6 rounded-2xl border bg-background p-6 shadow-float sm:p-8">
+        <div className="space-y-1.5">
+          <p className="eyebrow">{t('eyebrow')}</p>
+          <h1 className="text-2xl">{t('title')}</h1>
+          <p className="text-sm text-muted-foreground">{t('subtitle')}</p>
+        </div>
+        {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
+        {options === null ? (
+          <Alert variant="destructive">{t('unavailable')}</Alert>
+        ) : (
+          <LoginButtons options={options} next={next} />
+        )}
       </div>
-      {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
-      {options === null ? (
-        <Alert variant="destructive">{t('unavailable')}</Alert>
-      ) : (
-        <LoginButtons options={options} next={next} />
-      )}
     </main>
   );
 }

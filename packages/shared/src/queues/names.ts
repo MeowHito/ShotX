@@ -199,8 +199,9 @@ export const SCHEDULED_JOB_TYPES = [
    * Restart lost media work (ADR 0008 section 3, "Lost jobs"; WorkerSettings.sweeps.media):
    * - `processing` rows (verified or not) whose pipeline was last started (`media_queued_at`, else
    *   `created_at`) more than MEDIA_SWEEP_PROCESSING_AGE_SECONDS ago and that were re-sent fewer
-   *   than MEDIA_SWEEP_MAX_REQUEUES times: send `original.completed` again, setting
-   *   `media_queued_at = now()` and `media_requeues + 1` in the same guarded UPDATE first;
+   *   than MEDIA_SWEEP_MAX_REQUEUES times: send `original.completed` again (`file.copy` for rows
+   *   with `copied_from_file_id` set: copies of Wave 7), setting `media_queued_at = now()` and
+   *   `media_requeues + 1` in the same guarded UPDATE first;
    * - `uploading` rows with `upload_id` set created more than MEDIA_SWEEP_UPLOADING_AGE_SECONDS
    *   ago whose multipart upload is gone (ListParts: NoSuchUpload) but whose object exists with
    *   exactly `size_bytes` (HeadObject): the API crashed between CompleteMultipartUpload and
@@ -220,17 +221,20 @@ export const SCHEDULED_JOB_TYPES = [
    *   exist), and log `face_deletion.alert` when one is older than a day;
    * - files with `faces_queued_at` older than FACES_SWEEP_INDEX_AGE_SECONDS and
    *   `faces_requeues` below FACES_SWEEP_MAX_REQUEUES: send `index.file` again (bumping both);
+   *   withheld files are not re-sent (their mark is cleared instead, as index.file's `withheld`
+   *   outcome does);
    * - folders with `face_index_queued_at` older than FACES_SWEEP_INDEX_AGE_SECONDS: send
    *   `index.folder` again (bumping it);
    * - coverage scan (catches files whose outbox mark was never set, e.g. rows from before
    *   migration 0006 or a lost fan-out): `ready` image files (`mime` image/*) with
-   *   `face_count IS NULL`, `faces_queued_at IS NULL`, `deleted_at IS NULL`, created more than
+   *   `face_count IS NULL`, `faces_queued_at IS NULL`, `deleted_at IS NULL`, `faces_withheld_at
+   *   IS NULL` (migration 0009: a withheld file is never indexed), created more than
    *   FACES_SWEEP_INDEX_AGE_SECONDS ago, under an active face index (isCoveredByFaceIndex: a
    *   folder or ancestor with `face_index_enabled` and `face_index_expires_at` in the future).
    *   Drive it from the active folders (folders_face_index_owner_idx, then `path <@` on the GiST
    *   index) and read their files through `files_unindexed_ready_idx`, whose predicate the query
    *   must repeat exactly (`status = 'ready' AND face_count IS NULL AND faces_queued_at IS NULL
-   *   AND deleted_at IS NULL`), keyset-paginated by (folder_id, id). Set `faces_queued_at = now()`
+   *   AND deleted_at IS NULL AND faces_withheld_at IS NULL`), keyset-paginated by (folder_id, id). Set `faces_queued_at = now()`
    *   in a guarded UPDATE (`WHERE faces_queued_at IS NULL`) before sending `index.file`; this is a
    *   first send, so `faces_requeues` is not bumped.
    * At most FACES_SWEEP_BATCH_SIZE messages of each kind per run.

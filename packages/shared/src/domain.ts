@@ -64,8 +64,8 @@ export type ZipJobStatus = (typeof ZIP_JOB_STATUSES)[number];
 
 /**
  * Where an activity event comes from (`activity_events.source`): `share` for everything a share
- * link serves (views, scans, downloads, zips; `share_id` set), `owner` for downloads a
- * photographer makes from their own drive (`share_id` null). Viewer dashboards (daily_stats
+ * link serves (views, scans, downloads, zips; `share_id` set), `owner` for downloads and folder
+ * zips a photographer makes from their own drive (`share_id` null). Viewer dashboards (daily_stats
  * visitors, scanners, scans, downloads, unique downloaders, and share_daily_stats) count `share`
  * events only; `bytes_out` counts both, because it feeds cost estimates and the egress alert.
  */

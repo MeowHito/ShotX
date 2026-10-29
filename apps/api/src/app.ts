@@ -36,6 +36,8 @@ import type { Db } from './db/db';
 import { DriveController } from './drive/drive.controller';
 import { DriveService } from './drive/drive.service';
 import { DriveFileMapper } from './drive/media-urls';
+import { StudioController } from './drive/studio.controller';
+import { StudioService } from './drive/studio.service';
 import { ApiError } from './http/api-error';
 import { ApiExceptionFilter, errorResponse } from './http/exception.filter';
 import { jsonBodyMiddleware } from './http/json-body';
@@ -143,6 +145,7 @@ export class AppModule {
       controllers: [
         HealthController,
         DriveController,
+        StudioController,
         UploadController,
         MeController,
         SharesController,
@@ -189,6 +192,7 @@ export class AppModule {
         SignedUrls,
         DriveFileMapper,
         DriveService,
+        StudioService,
         UploadService,
         MeService,
         SharesService,

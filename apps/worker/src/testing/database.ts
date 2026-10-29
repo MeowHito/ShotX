@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { ltree } from '@electric-sql/pglite/contrib/ltree';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import {
   files,
   folderPath,
@@ -23,9 +24,9 @@ export interface TestDatabase {
   close(): Promise<void>;
 }
 
-/** PostgreSQL 18 (WASM, in process) with ltree and every migration applied. */
+/** PostgreSQL 18 (WASM, in process) with ltree, pg_trgm (migration 0008) and every migration applied. */
 export async function openTestDatabase(): Promise<TestDatabase> {
-  const client = await PGlite.create({ extensions: { ltree } });
+  const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
   const db = drizzle({ client, schema });
   await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
   return { db: db as unknown as Db, close: () => client.close() };

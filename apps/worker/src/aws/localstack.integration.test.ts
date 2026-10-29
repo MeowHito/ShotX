@@ -1,8 +1,10 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import {
   CompleteMultipartUploadCommand,
   CreateBucketCommand,
   CreateMultipartUploadCommand,
+  HeadObjectCommand,
   ListMultipartUploadsCommand,
   S3Client,
   UploadPartCommand,
@@ -13,10 +15,10 @@ import {
   ReceiveMessageCommand,
   SQSClient,
 } from '@aws-sdk/client-sqs';
-import { zipKey } from '@shotx/shared';
+import { contentDispositionAttachment, zipKey } from '@shotx/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { streamZip, ZipJobFailure } from '../zip/archive';
-import { S3ObjectStore } from './object-store';
+import { CopySourceMissingError, S3ObjectStore } from './object-store';
 import { SqsQueueClient } from './queue-client';
 
 /**
@@ -186,6 +188,43 @@ describe.skipIf(!endpoint)('S3 and SQS adapters against LocalStack', () => {
     await store.abortMultipartUpload(`${key}.b`, aborted.UploadId!);
     expect(await store.multipartUploadExists(`${key}.b`, aborted.UploadId!)).toBe(false);
     expect(await store.head(`${key}.b`)).toBeNull();
+  });
+
+  it('copies objects server-side: CopyObject with Thai names, UploadPartCopy for big ones', async () => {
+    const photographerId = randomUUID();
+    const source = `originals/${photographerId}/${randomUUID()}/งานวิ่ง IMG+1 (2).jpg`;
+    const body = randomBytes(11 * MiB);
+    await store.put(source, body, 'image/jpeg');
+
+    const small = `originals/${photographerId}/${randomUUID()}/สำเนา a+b.jpg`;
+    await store.copy(source, small, { size: body.length, partBytes: 5 * MiB });
+    expect(await store.head(small)).toEqual({ size: body.length });
+    expect(Buffer.from(await store.getRange(small, 0, 15)).equals(body.subarray(0, 16))).toBe(true);
+
+    // A low single-copy limit makes the same object go through UploadPartCopy (5 MiB parts).
+    const multipart = new S3ObjectStore(s3, bucket, 1 * MiB);
+    const big = `originals/${photographerId}/${randomUUID()}/big copy.jpg`;
+    await multipart.copy(source, big, { size: body.length, partBytes: 5 * MiB });
+    expect(await store.head(big)).toEqual({ size: body.length });
+    const tail = await store.getRange(big, body.length - 16, body.length - 1);
+    expect(Buffer.from(tail).equals(body.subarray(body.length - 16))).toBe(true);
+    const uploads = await s3.send(new ListMultipartUploadsCommand({ Bucket: bucket }));
+    expect((uploads.Uploads ?? []).filter((u) => u.Key === big)).toEqual([]);
+
+    await expect(
+      store.copy(`${source}.missing`, `${small}.x`, { size: 10, partBytes: 5 * MiB }),
+    ).rejects.toBeInstanceOf(CopySourceMissingError);
+  });
+
+  it('stores Content-Disposition on streamed uploads (owner zips)', async () => {
+    const key = zipKey(randomUUID());
+    await store.uploadStream(key, Readable.from([Buffer.from('zip')]), {
+      contentType: 'application/zip',
+      contentDisposition: contentDispositionAttachment('งาน.zip'),
+      partBytes: 5 * MiB,
+    });
+    const head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    expect(head.ContentDisposition).toBe(contentDispositionAttachment('งาน.zip'));
   });
 
   it('sends messages in SendMessageBatch calls of 10', async () => {

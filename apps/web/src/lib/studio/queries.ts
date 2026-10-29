@@ -44,11 +44,16 @@ export function useBecomePhotographer() {
   });
 }
 
-/** The caller's shares, newest first, optionally of one file or folder. */
-export function useShares(filter: Pick<ListSharesQuery, 'fileId' | 'folderId'> = {}) {
+/**
+ * The caller's shares, newest first, optionally of one file or folder. `null` disables the query
+ * (a menu that isn't about a single item).
+ */
+export function useShares(filterOrNull: Pick<ListSharesQuery, 'fileId' | 'folderId'> | null = {}) {
   const api = useApiClient();
+  const filter = filterOrNull ?? {};
   const query = useInfiniteQuery({
     queryKey: studioKeys.shareList(filter),
+    enabled: filterOrNull !== null,
     queryFn: ({ pageParam, signal }) =>
       api.call(SHARE_ROUTES.list, {
         query: { ...filter, ...(pageParam === null ? {} : { cursor: pageParam }) },

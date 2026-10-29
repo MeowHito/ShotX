@@ -1,5 +1,6 @@
 import { files, zipJobEntries, zipJobs } from '@shotx/db';
 import {
+  contentDispositionAttachment,
   downloadObject,
   ErrorCode,
   multipartPlan,
@@ -38,6 +39,11 @@ interface ClaimedJob {
   photographerId: string;
   downloadSize: 'web' | 'original';
   fileCount: number;
+  /**
+   * Owner jobs (`share_id` null, migration 0008): the archive's download name, stored on the
+   * object as Content-Disposition. Null for share jobs (the API names those when it signs).
+   */
+  archiveName: string | null;
 }
 
 /**
@@ -66,6 +72,7 @@ async function claim(
       photographerId: zipJobs.photographerId,
       downloadSize: zipJobs.downloadSize,
       fileCount: zipJobs.fileCount,
+      archiveName: zipJobs.archiveName,
     });
   if (claimed !== undefined) return claimed;
   const [job] = await db
@@ -224,6 +231,11 @@ async function runJob(
       maxBytes: zip.maxBytes,
       partBytes: plan.partSize,
       signal,
+      // Zip results are never renamed, so a stored name can't go stale; the API's signed URL
+      // still sets response-content-disposition (ADR 0008: verify it on R2 before launch).
+      ...(claimed.archiveName === null
+        ? {}
+        : { contentDisposition: contentDispositionAttachment(claimed.archiveName) }),
     });
     const done = await finish(db, jobId, attempt, {
       status: 'ready',

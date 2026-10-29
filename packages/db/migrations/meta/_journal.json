@@ -57,6 +57,20 @@
       "when": 1793053470690,
       "tag": "0007_faces_coverage_scan",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793129560785,
+      "tag": "0008_studio_copy_search_owner_zip",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793269448107,
+      "tag": "0009_faces_withheld",
+      "breakpoints": true
     }
   ]
 }

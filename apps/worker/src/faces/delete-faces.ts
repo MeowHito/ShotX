@@ -1,6 +1,6 @@
 import { faceDeletions, faces, files } from '@shotx/db';
 import { countDistinct, faceCollectionId } from '@shotx/face';
-import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { deleteFacesInBatches } from '../faces';
 import type { Logger } from '../logger';
 import type { FacesDeps } from './deps';
@@ -12,7 +12,8 @@ export type DeleteFacesOutcome = 'missing' | 'already-done' | 'done';
  * deletion id (hiding them from search). The worker deletes them from the photographer's
  * collection, then in one transaction deletes their rows, recomputes `face_count` of the affected
  * files from their remaining faces (IoU de-duplication, as indexing does; 0 when none are left,
- * so the photo is not indexed again), and completes the deletion with the number of rows deleted.
+ * so the photo is not indexed again), sets `faces_withheld_at` on those files (migration 0009: never
+ * indexed again, by any path), and completes the deletion with the number of rows deleted.
  *
  * Runs whatever FACE_SEARCH_ENABLED says (PDPA). Idempotent: a completed deletion is a no-op,
  * DeleteFaces ignores faces that are gone, and the rows and the completion commit together.
@@ -87,6 +88,13 @@ export async function deleteRequestedFaces(
           .set({ faceCount: countDistinct(boxes, deps.face.index.dedupeIou) })
           .where(and(eq(files.id, fileId), isNotNull(files.faceCount)));
       }
+    }
+    if (fileIds.length > 0) {
+      // PDPA (migration 0009): these photos are never indexed again, by any path.
+      await tx
+        .update(files)
+        .set({ facesWithheldAt: sql`now()` })
+        .where(and(inArray(files.id, fileIds), isNull(files.facesWithheldAt)));
     }
     await tx
       .update(faceDeletions)

@@ -8,7 +8,7 @@
 #   as shotx. Not a superuser, so a SQL injection can't read files or run programs.
 # - shotx_monitor: logs in with no privileges of its own; `ops migrate` grants it SELECT on
 #   exactly the columns it reads (deploy/ops/migrate.ts MONITOR_GRANTS).
-# ltree is created here by the superuser; the migrations' CREATE EXTENSION IF NOT EXISTS is then a
+# ltree and pg_trgm (drive search) are created here by the superuser; the migrations' CREATE EXTENSION IF NOT EXISTS is then a
 # no-op.
 set -eu
 
@@ -18,6 +18,7 @@ set -eu
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   -v app_password="$APP_DB_PASSWORD" -v monitor_password="$MONITOR_DB_PASSWORD" <<'SQL'
 CREATE EXTENSION IF NOT EXISTS ltree;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE ROLE shotx LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'app_password';
 ALTER DATABASE :"DBNAME" OWNER TO shotx;
 CREATE ROLE shotx_monitor LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT

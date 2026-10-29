@@ -111,6 +111,9 @@ export const folders = pgTable(
     index('folders_face_index_expiry_idx')
       .on(t.faceIndexExpiresAt)
       .where(sql`${t.faceIndexEnabled}`),
+    // GET /drive/search (migration 0008): "name contains", ASCII case folded as driveNameKey.
+    // Queries filter owner_id first; pg_trgm serves LIKE '%q%' on this expression.
+    index('folders_name_trgm_idx').using('gin', sql`${driveNameKeySql(t.name)} gin_trgm_ops`),
     // faces.sweep: index.folder jobs outstanding.
     index('folders_face_index_pending_idx')
       .on(t.faceIndexQueuedAt)
@@ -193,6 +196,15 @@ export const files = pgTable(
     status: fileStatus('status').notNull().default('uploading'),
     /** Distinct faces after tile de-duplication; null until indexed or after the index expires. */
     faceCount: integer('face_count'),
+    /**
+     * Set when a "ขอลบใบหน้าของฉัน" deletion removed faces from this file (migration 0009, PDPA):
+     * from then on the file is never indexed again, through no path (index.file, the index.folder
+     * fan-out, the faces.sweep coverage scan, a copy, or a face index that expires or is turned
+     * off and later on again). Permanent for this file: the photo is never findable by face
+     * again, though it can still be shared, viewed and downloaded normally. Copies inherit it.
+     * Null: the file may be indexed.
+     */
+    facesWithheldAt: timestamptz('faces_withheld_at'),
     /** S3 multipart UploadId while `uploading`; cleared on complete or abort. */
     uploadId: text('upload_id'),
     /**
@@ -232,6 +244,13 @@ export const files = pgTable(
     facesQueuedAt: timestamptz('faces_queued_at'),
     /** Times faces.sweep re-sent `index.file` (capped by FACES_SWEEP_MAX_REQUEUES). */
     facesRequeues: integer('faces_requeues').notNull().default(0),
+    /**
+     * The file this one was copied from (`POST /drive/files/:id/copy`, migration 0008); null for
+     * uploads. No foreign key: the source may be purged while the copy is still `processing`, and
+     * the worker then fails the copy (fileCopyMessageSchema). media.sweep re-sends `file.copy`
+     * for processing rows with it set.
+     */
+    copiedFromFileId: uuid('copied_from_file_id'),
     deletedAt: timestamptz('deleted_at'),
     /** The trashed folder that took this file to the trash; null if trashed directly. */
     trashedViaFolderId: uuid('trashed_via_folder_id'),
@@ -280,12 +299,19 @@ export const files = pgTable(
     index('files_faces_pending_idx')
       .on(t.facesQueuedAt)
       .where(sql`${t.facesQueuedAt} IS NOT NULL`),
-    // faces.sweep coverage scan (migration 0007): ready files never indexed and with no index.file
-    // outstanding, per folder. The scan's WHERE must repeat this predicate exactly.
+    // faces.sweep coverage scan (migration 0007; withheld files excluded since 0009): ready files
+    // never indexed, not withheld, with no index.file outstanding, per folder. The scan's WHERE
+    // must repeat this predicate exactly.
+    // GET /drive/recent: the owner's live, processing or ready files newest first (uuidv7 ids).
+    index('files_recent_idx')
+      .on(t.ownerId, t.id.desc())
+      .where(sql`${t.deletedAt} IS NULL AND ${t.status} IN ('processing', 'ready')`),
+    // GET /drive/search, as folders_name_trgm_idx.
+    index('files_name_trgm_idx').using('gin', sql`${driveNameKeySql(t.name)} gin_trgm_ops`),
     index('files_unindexed_ready_idx')
       .on(t.folderId, t.id)
       .where(
-        sql`${t.status} = 'ready' AND ${t.faceCount} IS NULL AND ${t.facesQueuedAt} IS NULL AND ${t.deletedAt} IS NULL`,
+        sql`${t.status} = 'ready' AND ${t.faceCount} IS NULL AND ${t.facesQueuedAt} IS NULL AND ${t.deletedAt} IS NULL AND ${t.facesWithheldAt} IS NULL`,
       ),
     unique('files_id_owner_unique').on(t.id, t.ownerId),
     foreignKey({
@@ -316,6 +342,10 @@ export const files = pgTable(
     ),
     check('files_web_size_nonnegative', sql`${t.webSizeBytes} IS NULL OR ${t.webSizeBytes} >= 0`),
     check('files_requeues_nonnegative', sql`${t.mediaRequeues} >= 0 AND ${t.facesRequeues} >= 0`),
+    check(
+      'files_copied_from_not_self',
+      sql`${t.copiedFromFileId} IS NULL OR ${t.copiedFromFileId} <> ${t.id}`,
+    ),
     check(
       'files_trash_fields_need_deleted',
       sql`${t.deletedAt} IS NOT NULL OR (${t.trashedViaFolderId} IS NULL AND ${t.purgeRequestedAt} IS NULL)`,

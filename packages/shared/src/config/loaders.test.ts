@@ -73,11 +73,40 @@ describe('loadUploadConfig', () => {
 
 describe('loadDriveConfig', () => {
   it('uses the defaults', () => {
-    expect(loadDriveConfig({})).toEqual({ pageSize: 100, maxFolderDepth: 32 });
+    expect(loadDriveConfig({})).toEqual({
+      pageSize: 100,
+      maxFolderDepth: 32,
+      recentPageSize: 50,
+      search: { pageSize: 50, maxResults: 1000 },
+      copyRate: { limit: 120, windowSeconds: 60 },
+      zipMaxActiveJobs: 3,
+    });
+    expect(
+      loadDriveConfig({
+        DRIVE_RECENT_PAGE_SIZE: '20',
+        DRIVE_SEARCH_PAGE_SIZE: '25',
+        DRIVE_SEARCH_MAX_RESULTS: '200',
+        DRIVE_COPY_RATE_PER_USER: '10',
+        DRIVE_COPY_RATE_WINDOW_SECONDS: '30',
+        DRIVE_ZIP_MAX_ACTIVE_JOBS: '1',
+      }),
+    ).toMatchObject({
+      recentPageSize: 20,
+      search: { pageSize: 25, maxResults: 200 },
+      copyRate: { limit: 10, windowSeconds: 30 },
+      zipMaxActiveJobs: 1,
+    });
+    for (const [key, value] of [
+      ['DRIVE_RECENT_PAGE_SIZE', '501'],
+      ['DRIVE_SEARCH_MAX_RESULTS', '0'],
+      ['DRIVE_ZIP_MAX_ACTIVE_JOBS', '101'],
+    ] as const) {
+      expect(() => loadDriveConfig({ [key]: value }), key).toThrow(new RegExp(key));
+    }
   });
 
   it('reads overrides', () => {
-    expect(loadDriveConfig({ DRIVE_PAGE_SIZE: '50', DRIVE_MAX_FOLDER_DEPTH: '10' })).toEqual({
+    expect(loadDriveConfig({ DRIVE_PAGE_SIZE: '50', DRIVE_MAX_FOLDER_DEPTH: '10' })).toMatchObject({
       pageSize: 50,
       maxFolderDepth: 10,
     });

@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
-import type {
-  ListedObject,
-  ObjectHead,
-  ObjectStore,
-  UploadStreamOptions,
+import {
+  type CopyObjectOptions,
+  CopySourceMissingError,
+  type ListedObject,
+  type ObjectHead,
+  type ObjectStore,
+  type UploadStreamOptions,
 } from '../aws/object-store';
 import {
   type QueueClient,
@@ -16,7 +18,10 @@ import {
 
 /** In-memory media bucket with call counters. */
 export class MemoryObjectStore implements ObjectStore {
-  readonly objects = new Map<string, { body: Buffer; contentType: string }>();
+  readonly objects = new Map<
+    string,
+    { body: Buffer; contentType: string; contentDisposition?: string }
+  >();
   /** Open multipart uploads by upload id. */
   readonly uploads = new Map<string, string>();
   readonly calls = {
@@ -25,6 +30,8 @@ export class MemoryObjectStore implements ObjectStore {
     aborted: [] as string[],
     /** Upload ids multipartUploadExists was asked about. */
     listedParts: [] as string[],
+    /** Every copy: source, target and storage class. */
+    copies: [] as Array<{ source: string; target: string; storageClass?: string }>,
     /** Streams opened by getStream, and how many were open at most at the same time. */
     streamsOpened: 0,
     maxOpenStreams: 0,
@@ -117,7 +124,13 @@ export class MemoryObjectStore implements ObjectStore {
     options.signal?.throwIfAborted();
     const data = Buffer.concat(chunks);
     this.calls.uploads.push({ key, partBytes: options.partBytes, bytes: data.length, maxChunk });
-    this.objects.set(key, { body: data, contentType: options.contentType });
+    this.objects.set(key, {
+      body: data,
+      contentType: options.contentType,
+      ...(options.contentDisposition === undefined
+        ? {}
+        : { contentDisposition: options.contentDisposition }),
+    });
   }
 
   getRange(key: string, start: number, end: number): Promise<Uint8Array> {
@@ -162,6 +175,21 @@ export class MemoryObjectStore implements ObjectStore {
       if (key.startsWith(prefix)) yield { key, size: object.body.length };
     }
     await Promise.resolve();
+  }
+
+  copy(source: string, target: string, options: CopyObjectOptions): Promise<void> {
+    options.signal?.throwIfAborted();
+    const object = this.objects.get(source);
+    if (object === undefined) {
+      return Promise.reject(new CopySourceMissingError('The copy source does not exist'));
+    }
+    this.calls.copies.push({
+      source,
+      target,
+      ...(options.storageClass === undefined ? {} : { storageClass: options.storageClass }),
+    });
+    this.objects.set(target, { ...object, body: Buffer.from(object.body) });
+    return Promise.resolve();
   }
 
   /** Opens a multipart upload, as CreateMultipartUpload did for an `uploading` row. */

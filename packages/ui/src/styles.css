@@ -1,12 +1,17 @@
 /*
  * Design tokens for @shotx/ui (shadcn/ui conventions, Tailwind v4). Apps import this after
  * `@import 'tailwindcss'` and add `@source` for this package so its classes are generated.
+ *
+ * ShotX look: quiet and editorial. White and mist surfaces, hairline borders, one deep indigo
+ * for what you press or what is selected, soft long shadows, calm motion. Contrast (WCAG 2.2 AA)
+ * is noted next to each text colour, against the surfaces it is used on.
  */
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
@@ -21,30 +26,166 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  /* System fonts with good Thai coverage; no web-font download on mobile networks. */
+  --color-surface: var(--surface);
+  --color-sidebar: var(--sidebar);
+  --color-band: var(--band);
+  --color-band-foreground: var(--band-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  /*
+   * Noto Sans Thai (variable, self-hosted by next/font in the app: --font-noto-thai) with Inter
+   * (--font-inter) for Latin and figures, then system fonts with Thai coverage.
+   */
   --font-sans:
-    'Noto Sans Thai', 'Sukhumvit Set', 'Thonburi', 'Leelawadee UI', ui-sans-serif, system-ui,
-    sans-serif;
+    var(--font-noto-thai, 'Noto Sans Thai'), var(--font-inter, 'Inter'), 'Sukhumvit Set',
+    'Thonburi', 'Leelawadee UI', ui-sans-serif, system-ui, sans-serif;
+  /* Soft long shadows: a large y-offset with a strongly negative spread, so a thin light pool. */
+  --shadow-card: var(--elevation-card);
+  --shadow-featured: var(--elevation-featured);
+  --shadow-float: var(--elevation-float);
+}
+
+@theme {
+  /* Thai has tall vowel and tone marks: 15 px body text, never below 12 px, loose line heights. */
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.6;
+  --text-sm: 0.9375rem;
+  --text-sm--line-height: 1.7;
+  --text-base: 1rem;
+  --text-base--line-height: 1.75;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.6;
+  --text-xl--line-height: 1.45;
+  --text-2xl--line-height: 1.3;
+  --text-3xl--line-height: 1.25;
+  --text-4xl--line-height: 1.2;
+  --text-5xl--line-height: 1.15;
+  /* Radius scale: inputs and buttons 8-10 px, cards 14 px, floating containers 16-28 px. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 18px;
+  --radius-3xl: 28px;
+  /* Motion: quick colour changes; panels and sheets ease out softly. */
+  --default-transition-duration: 180ms;
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-fade-in: fade-in 200ms ease-out;
+  --animate-pop-in: pop-in 180ms var(--ease-out-soft);
+  --animate-dialog-in: dialog-in 380ms var(--ease-out-soft);
+  --animate-sheet-left: sheet-left 420ms var(--ease-out-soft);
+  --animate-sheet-right: sheet-right 420ms var(--ease-out-soft);
+  --animate-sheet-bottom: sheet-bottom 420ms var(--ease-out-soft);
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.98);
+    }
+  }
+  @keyframes dialog-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px) scale(0.98);
+    }
+  }
+  @keyframes sheet-left {
+    from {
+      transform: translateX(-100%);
+    }
+  }
+  @keyframes sheet-right {
+    from {
+      transform: translateX(100%);
+    }
+  }
+  @keyframes sheet-bottom {
+    from {
+      transform: translateY(100%);
+    }
+  }
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --background: #ffffff;
+  /* Ink: 17.6:1 on white. */
+  --foreground: #111820;
+  /* Mist: alternating areas and the studio aside. */
+  --surface: #ffffff;
+  --sidebar: #f4f6f7;
+  /* Brand indigo: 10.4:1 on white, white text on it 10.4:1. */
+  --primary: #0c4369;
+  --primary-hover: #0a3858;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f6f7;
+  --secondary-foreground: #111820;
+  --muted: #f4f6f7;
+  /* Secondary text: 6.2:1 on white, 5.7:1 on mist (#697782 is 4.6 / 4.2, too low on mist). */
+  --muted-foreground: #59636a;
+  /* Selection and hover tint of the brand; brand text on it 9.0:1. */
+  --accent: #e8f0f6;
+  --accent-foreground: #0c4369;
+  /* 6.6:1 on white. */
+  --destructive: #b42318;
+  --destructive-foreground: #ffffff;
+  --warning: #d08a00;
+  /* 5.9:1 on white, 5.3:1 on its own 10% tint. */
+  --warning-foreground: #8a5a00;
+  --popover: #ffffff;
+  --popover-foreground: #111820;
+  /* Hairlines for cards and dividers (decorative). */
+  --border: #dfe5e8;
+  /* Form-control outlines: 3.2:1 on white (WCAG 1.4.11 non-text contrast). */
+  --input: #85919a;
+  /* Focus ring: the brand, 10.4:1 next to white (with a 2 px white offset on filled controls). */
+  --ring: #0c4369;
+  /* Dark editorial band. */
+  --band: #071a2b;
+  --band-foreground: #f5f7f8;
+  --elevation-card: 0 12px 28px -24px rgb(15 23 42 / 0.45);
+  --elevation-featured: 0 20px 46px -28px rgb(12 67 105 / 0.58);
+  --elevation-float: 0 12px 32px -22px rgb(15 23 42 / 0.25), 0 2px 6px -4px rgb(15 23 42 / 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0d1114;
+    /* 17.6:1 on the dark base. */
+    --foreground: #f5f7f8;
+    --surface: #11161a;
+    --sidebar: #11161a;
+    /* The light indigo accent: 10.1:1 on the base, and dark text on it 10.1:1. */
+    --primary: #9fc2d8;
+    --primary-hover: #b6d3e5;
+    --primary-foreground: #0d1114;
+    --secondary: #182027;
+    --secondary-foreground: #f5f7f8;
+    --muted: #182027;
+    /* Steel: 9.0:1 on the base, 8.6:1 on mist. */
+    --muted-foreground: #aab4bb;
+    --accent: #16293a;
+    --accent-foreground: #cfe2ee;
+    --destructive: #f97066;
+    --destructive-foreground: #0d1114;
+    --warning: #f5b544;
+    --warning-foreground: #f8cf80;
+    --popover: #141a1f;
+    --popover-foreground: #f5f7f8;
+    --border: #293138;
+    /* 3.2:1 on the base. */
+    --input: #5b6670;
+    --ring: #9fc2d8;
+    --band: #071a2b;
+    --band-foreground: #f5f7f8;
+    --elevation-card: 0 12px 28px -24px rgb(0 0 0 / 0.8);
+    --elevation-featured: 0 20px 46px -28px rgb(0 0 0 / 0.9);
+    --elevation-float: 0 16px 36px -20px rgb(0 0 0 / 0.75), 0 0 0 1px rgb(255 255 255 / 0.04);
+  }
 }
 
 @layer base {
@@ -55,5 +196,59 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
+    font-size: 1rem;
+    line-height: 1.7;
+    color-scheme: light dark;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Headings: 700 and 600 with a light negative tracking; Thai marks need the line heights below. */
+  h1,
+  h2,
+  h3 {
+    color: var(--color-foreground);
+    text-wrap: balance;
+  }
+  h1 {
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+  h2 {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  h3 {
+    font-weight: 600;
+    letter-spacing: -0.005em;
+  }
+}
+
+/* A small bold label above a heading, in the brand colour. */
+@utility eyebrow {
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--color-primary);
+}
+
+/*
+ * Touch: items with a long-press menu must not show the system callout (save image, copy) or
+ * start a text selection while the finger rests on them.
+ */
+@utility touch-menu {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* People who ask for less motion get none: no slides, no fades, instant colour changes. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
