@@ -75,7 +75,8 @@ describe('CI', () => {
   });
 
   it('runs PostgreSQL 18 for the packages/db integration tests', () => {
-    expect(checks).toMatch(/^\s{6}postgres:\n\s{8}image: postgres:18-alpine$/m);
+    // pgvector's image of PostgreSQL 18 (migration 0010, ADR 0009).
+    expect(checks).toMatch(/^\s{6}postgres:\n\s{8}image: pgvector\/pgvector:[0-9.]+-pg18$/m);
     expect(checks).toMatch(/--health-cmd "pg_isready/);
     expect(checks).toMatch(
       /^\s{6}TEST_DATABASE_URL: postgres:\/\/shotx:shotx@localhost:5432\/shotx_test$/m,
@@ -133,7 +134,8 @@ describe('.env.example', () => {
 
   it('uses the code defaults, with an orphan grace long enough for its own retry budget', () => {
     const face = loadFaceConfig(faceEnv);
-    expect(face).toEqual(loadFaceConfig({}));
+    // FACE_MODEL_DIR has no code default: the example points it at `pnpm face-models`' folder.
+    expect(face).toEqual(loadFaceConfig({ FACE_MODEL_DIR: faceEnv.FACE_MODEL_DIR }));
     // Same check as synth (lib/config.ts), with these values and the faces job budget.
     const worst = facesJobWorstCase(face, config.queues.faces.jobBudget);
     expect(face.index.orphanGraceMs, describeFacesWorstCase(worst)).toBeGreaterThanOrEqual(
@@ -180,7 +182,8 @@ describe('.env.example', () => {
   }
 
   it('lists the Phase 3 face, feature and consent keys', () => {
-    expect(env.FACE_DELETION_THRESHOLD).toBe('95');
+    // Empty: follows FACE_STRONG of the selected provider and model (ADR 0009).
+    expect(env.FACE_DELETION_THRESHOLD).toBe('');
     expect(env.FACE_SEARCH_ENABLED).toBe('false');
     expect(env.CONSENT_POLICY_VERSION).toBe(LATEST_CONSENT_POLICY_VERSION);
     // A local placeholder that loadConsentConfig accepts; on AWS it is a generated secret.

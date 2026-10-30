@@ -1,6 +1,6 @@
 import {
   CONTENT_DISPOSITION_QUERY_PARAM,
-  LATEST_CONSENT_POLICY_VERSION,
+  latestConsentPolicyVersion,
   QUEUE_NAMES,
   QUEUE_VISIBILITY_TIMEOUT_ENV,
   S3_PREFIXES,
@@ -806,7 +806,12 @@ describe('ECS', () => {
     for (const name of ['api', 'worker']) {
       expect(containerEnv(name).FACE_SEARCH_ENABLED, name).toBe('false');
     }
-    expect(containerEnv('api').CONSENT_POLICY_VERSION).toBe(LATEST_CONSENT_POLICY_VERSION);
+    expect(containerEnv('api').CONSENT_POLICY_VERSION).toBe(
+      latestConsentPolicyVersion('rekognition'),
+    );
+    for (const name of ['api', 'worker']) {
+      expect(containerEnv(name).FACE_PROVIDER, name).toBe('rekognition');
+    }
     for (const name of ['web', 'admin']) {
       expect(containerEnv(name).FACE_SEARCH_ENABLED, name).toBeUndefined();
     }

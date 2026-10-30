@@ -1,22 +1,30 @@
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import {
   createLocalRekognitionLimiters,
   type FaceProvider,
+  InMemoryFaceVectorStore,
+  OnnxFaceEngine,
   REKOGNITION_INLINE_MAX_BYTES,
   RekognitionFaceProvider,
+  SelfHostedFaceProvider,
   type SmallFaceDetector,
 } from '@shotx/face';
 import { FakeFaceProvider, SyntheticSmallFaceDetector, SyntheticWorld } from '@shotx/face/testing';
 import {
   type AwsClientConfig,
   type Env,
+  FACE_DETECTOR_MODELS,
+  FACE_RECOGNITION_MODELS,
   type FaceConfig,
   isAwsEndpointHost,
   loadRekognitionClientConfig,
 } from '@shotx/shared';
+import { PACKAGE_DIR } from './paths';
 import type { Dataset } from './dataset';
 import { type IndexOption, indexKey, indexKeyWithoutSize } from './evaluate';
 
-export const PROVIDERS = ['fake', 'rekognition'] as const;
+export const PROVIDERS = ['fake', 'rekognition', 'self-hosted'] as const;
 export type ProviderName = (typeof PROVIDERS)[number];
 
 /** The flag that must accompany `--provider rekognition`. */
@@ -106,7 +114,7 @@ export function createProvider(request: ProviderRequest): ProviderSetup {
     if (!synthetic) {
       throw new Error(
         'The fake provider only understands synthetic datasets (made by `face-eval synth`). ' +
-          `Real photos need --provider rekognition --${AWS_ACKNOWLEDGEMENT}.`,
+          `Real photos need --provider self-hosted, or --provider rekognition --${AWS_ACKNOWLEDGEMENT}.`,
       );
     }
     const world = new SyntheticWorld(synthetic.world);
@@ -121,6 +129,8 @@ export function createProvider(request: ProviderRequest): ProviderSetup {
       description: 'FakeFaceProvider (deterministic synthetic similarity model, no AWS calls)',
     };
   }
+
+  if (name === 'self-hosted') return selfHostedSetup(request);
 
   if (request.maxIndexBytes > REKOGNITION_INLINE_MAX_BYTES) {
     throw new Error(
@@ -147,5 +157,47 @@ export function createProvider(request: ProviderRequest): ProviderSetup {
     description: `Amazon Rekognition (${client.region}, endpoint ${
       new URL(client.endpointUrl!).host
     }), index images as bytes (≤ ${REKOGNITION_INLINE_MAX_BYTES} bytes)`,
+  };
+}
+
+/** `<repo>/.models/face`, where `pnpm face-models` puts the files when FACE_MODEL_DIR is unset. */
+export const DEFAULT_MODEL_DIR = resolve(PACKAGE_DIR, '..', '..', '.models', 'face');
+
+/**
+ * The self-hosted pipeline of the FACE_MODEL in `config` (ADR 0009 section 7): the production
+ * provider and engine with an exact in-memory vector store, so a comparison measures the model,
+ * not the HNSW index. Photos and selfies never leave the machine.
+ */
+function selfHostedSetup(request: ProviderRequest): ProviderSetup {
+  const selfHosted = {
+    ...request.config.selfHosted,
+    modelDir: request.config.selfHosted.modelDir ?? DEFAULT_MODEL_DIR,
+  };
+  const detector = FACE_DETECTOR_MODELS[selfHosted.detectorModel];
+  const model = FACE_RECOGNITION_MODELS[selfHosted.model];
+  for (const file of [detector.file, model.file]) {
+    if (!existsSync(join(selfHosted.modelDir, file))) {
+      throw new Error(
+        `Model file ${file} is not in ${selfHosted.modelDir}. Run \`pnpm face-models --all\` or set FACE_MODEL_DIR.`,
+      );
+    }
+  }
+  const engine = OnnxFaceEngine.fromConfig({ ...request.config, selfHosted });
+  // One store and provider; every index option gets its own collection (collectionKey).
+  const provider = new SelfHostedFaceProvider({
+    engine,
+    store: new InMemoryFaceVectorStore(),
+    maxImageBytes: request.maxIndexBytes,
+  });
+  return {
+    name: 'self-hosted',
+    providerFor: () => provider,
+    collectionKey: indexKey,
+    maxImageBytes: request.maxIndexBytes,
+    // The provider reports faces under FACE_MIN_FACE_PX as SMALL_BOUNDING_BOX itself.
+    smallFaceDetector: undefined,
+    description:
+      `self-hosted ${selfHosted.detectorModel} + ${selfHosted.model} (${model.licence}` +
+      `${model.production ? '' : ', not approved for production'}), exact in-memory search, no network`,
   };
 }

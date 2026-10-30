@@ -1,6 +1,7 @@
 # @shotx/face
 
 Face indexing and face search behind the `FaceProvider` interface (ADR 0001). Production uses
+`SelfHostedFaceProvider` (ADR 0009) or, with `FACE_PROVIDER=rekognition`,
 `RekognitionFaceProvider`; tests and the evaluation harness use `FakeFaceProvider` from
 `@shotx/face/testing`. Every tunable comes from `FaceConfig` (`loadFaceConfig` in
 `@shotx/shared`); only fixed Rekognition API limits are constants here.
@@ -8,7 +9,37 @@ Face indexing and face search behind the `FaceProvider` interface (ADR 0001). Pr
 Consumers: `apps/api` (face search, interactive profile), `apps/worker` (indexing, purges,
 reconciliation, background profile) and `tools/face-eval`.
 
-## Building the provider
+## Self-hosted provider (ADR 0009, the default)
+
+`FACE_PROVIDER=self-hosted` (default) runs face recognition in our own processes:
+
+- **Models**: YuNet (detection, `yunet-2023mar`) and an ArcFace-style recogniser (`FACE_MODEL`;
+  `sface-2021dec` is the development placeholder, not approved for production). The registry in
+  `@shotx/shared` (`FACE_DETECTOR_MODELS`, `FACE_RECOGNITION_MODELS`) pins every file by SHA-256.
+  `pnpm face-models` (this package's `models:download`) fetches them into `FACE_MODEL_DIR`
+  (default `<repo>/.models/face`, git-ignored); `readModelFile` checks the hash again on load.
+- **Engine** (`OnnxFaceEngine`, ONNX Runtime CPU, `ORT_DISABLE_TELEMETRY=1`): the image is
+  decoded once, scaled to `FACE_DETECTOR_LONG_EDGE` and scanned in YuNet's fixed 640 px windows
+  plus one whole-image pass, merged by NMS; each face is aligned on its five landmarks to the
+  112 × 112 ArcFace template and embedded (unit length). Faces under `FACE_MIN_FACE_PX` come back
+  unindexed with `SMALL_BOUNDING_BOX`, faces beyond `maxFaces` with `EXCEEDS_MAX_FACES`, as with
+  Rekognition, so `signal` tiling works unchanged. `InferenceSlots` bounds concurrent inference
+  (`FACE_INFERENCE_CONCURRENCY`, `FACE_INFERENCE_MAX_WAIT_MS` → `RateLimitedError`).
+- **Store** (`PgFaceVectorStore`): `face_vectors` (packages/db migration 0010, pgvector) with one
+  partial HNSW index per model; searches use iterative scans (`FACE_HNSW_*`). Model id and
+  dimension are SQL literals from the registry, never request data. `InMemoryFaceVectorStore` is
+  exact search for tests and face-eval.
+- **Semantics** (`SelfHostedFaceProvider`): the README rules below hold unchanged. `indexFaces`
+  adds fresh UUIDs every call and turns a failed insert into `IndexFacesOutcomeUnknownError`;
+  `listFaces` lists every model's vectors of a collection, so reconciliation still finds orphans.
+  Similarity is 100 × cosine; thresholds default per model (ADR 0009 section 3).
+- The Rekognition limits, rate limiters and worst-case maths below apply to
+  `FACE_PROVIDER=rekognition` only.
+
+`createFaceProvider(config, { profile, pool, redis, rekognitionClient })` builds whichever
+`FACE_PROVIDER` selects; call `warmUp()` at start-up when face search is enabled.
+
+## Building the Rekognition provider
 
 ```ts
 const face = loadFaceConfig(process.env);

@@ -25,12 +25,14 @@
     "drizzle-orm": "^0.45.4",
     "exif-reader": "^2.0.3",
     "ioredis": "^6.0.0",
+    "onnxruntime-node": "1.30.0",
     "pg": "^8.23.1",
     "sharp": "^0.35.5",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.10",
+    "@electric-sql/pglite-pgvector": "0.0.11",
     "@types/archiver": "^8.0.0",
     "@types/pg": "^8.23.1",
     "@types/yauzl": "^3.4.0",

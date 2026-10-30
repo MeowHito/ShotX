@@ -9,6 +9,13 @@ import type { FaceMatch, ImageInput, IndexFacesResult, ListedFace, QualityFilter
 export const REKOGNITION_INLINE_MAX_BYTES: number = REKOGNITION_INLINE_IMAGE_MAX_BYTES;
 export const REKOGNITION_MAX_SEARCH_FACES = 4096;
 export const REKOGNITION_DELETE_FACES_BATCH = 4096;
+
+/**
+ * Rekognition's UnindexedFaces reasons for faces skipped as too small or beyond MaxFaces. The
+ * self-hosted provider reports the same names, so `signal` tiling reads both alike.
+ */
+export const SMALL_BOUNDING_BOX = 'SMALL_BOUNDING_BOX';
+export const EXCEEDS_MAX_FACES = 'EXCEEDS_MAX_FACES';
 export const REKOGNITION_LIST_FACES_MAX_RESULTS = 4096;
 
 export interface IndexFacesRequest {
@@ -54,8 +61,8 @@ export interface ListFacesPage {
 }
 
 /**
- * Face recognition backend. Production uses Rekognition; tests use the fake in `./testing`.
- * Another backend needs a commercially licensed model approved by ADR.
+ * Face recognition backend: SelfHostedFaceProvider (ADR 0009) or RekognitionFaceProvider; tests
+ * use the fake in `./testing`. A production model needs a commercial licence approved by ADR.
  */
 export interface FaceProvider {
   /** Creates the collection if it doesn't exist. */

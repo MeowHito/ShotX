@@ -350,7 +350,7 @@ describe('off AWS: no AWS_ENDPOINT_URL, no default credential chain (ADR 0008 §
   it('keeps the AWS stacks as they are (task role, S3, SQS)', () => {
     const aws = testConfig();
     expect(aws.offAws).toBe(false);
-    expect(aws.rekognitionClient.credentials).toBeNull();
+    expect(aws.rekognitionClient?.credentials).toBeNull();
     expect(() => assertExplicitStorage(aws)).not.toThrow();
     expect(mediaSignerSummary(aws)).toBe('media URLs: cloudfront');
   });

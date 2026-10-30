@@ -1,4 +1,4 @@
-# Local development services: PostgreSQL (with ltree), Redis, and LocalStack (S3 + SQS).
+# Local development services: PostgreSQL (with ltree and pgvector), Redis, and LocalStack (S3 + SQS).
 #
 #   cp .env.example .env        # then set LOCALSTACK_AUTH_TOKEN
 #   docker compose up -d --wait
@@ -9,7 +9,11 @@ name: shotx
 
 services:
   postgres:
-    image: postgres:18-alpine
+    # postgres:18-alpine plus pgvector (face embeddings, ADR 0009). Same Alpine base, so existing
+    # volumes stay valid; `docker compose up` builds it the first time.
+    image: shotx/postgres:dev
+    build:
+      context: ./deploy/postgres-image
     environment:
       POSTGRES_USER: shotx
       POSTGRES_PASSWORD: shotx

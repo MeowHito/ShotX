@@ -1,5 +1,5 @@
 import { activityEvents, consents, faceDeletions, faceFeedback, faces, folders } from '@shotx/db';
-import { faceCollectionId } from '@shotx/face';
+import { faceCollectionId, RateLimitedError, UnreadableImageError } from '@shotx/face';
 import { FakeFaceProvider } from '@shotx/face/testing';
 import {
   apiPath,
@@ -13,7 +13,7 @@ import {
   shareMetaResponseSchema,
 } from '@shotx/shared';
 import { and, eq, isNotNull } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openPglite, type TestDatabase } from '../testing/database';
 import { emptyPhoto, eventPhoto, indexPhoto, selfie, testWorld } from '../testing/faces';
 import { type Browser, TestApi } from '../testing/harness';
@@ -349,6 +349,28 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
       form: form({ bytes: await emptyPhoto(world) }, { bytes: await selfie(world, 'alice') }),
     });
     expect(partial.body).toMatchObject({ selfies: 2, selfiesWithoutFace: 1 });
+  });
+
+  it('answers RATE_LIMITED when inference is busy and VALIDATION_FAILED for an unreadable selfie', async () => {
+    const { share } = await event();
+    const b = await consented(share.token);
+    const busy = vi
+      .spyOn(provider, 'searchFacesByImage')
+      .mockRejectedValueOnce(new RateLimitedError('face-inference', 5000));
+    const res = await b.request('POST', search(share.token), {
+      form: form({ bytes: await selfie(world, 'alice') }),
+    });
+    expect(res).toMatchObject({
+      status: 429,
+      body: { code: 'RATE_LIMITED', details: { retryAfterSeconds: 5, captcha: null } },
+    });
+    expect(res.headers.get('retry-after')).toBe('5');
+    busy.mockRejectedValueOnce(new UnreadableImageError(new Error('too many pixels')));
+    const unreadable = await b.request('POST', search(share.token), {
+      form: form({ bytes: await selfie(world, 'alice') }),
+    });
+    expect(unreadable).toMatchObject({ status: 400, body: { code: 'VALIDATION_FAILED' } });
+    busy.mockRestore();
   });
 
   it('is FACE_SEARCH_UNAVAILABLE on file shares and shares without an active index', async () => {

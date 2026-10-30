@@ -4,6 +4,7 @@ import { DEFAULT_AWS_REGION } from './aws';
 import { type Env, parseEnv } from './env';
 import { awsRegion, httpUrl } from './fields';
 import { EMAIL_PROVIDERS } from './billing';
+import { FACE_PROVIDERS } from './face-provider';
 import { LOCAL_DEV_APP_STAGE } from './stage-gate';
 
 // Explicit settings for the AWS clients that stay on AWS after ADR 0008: Rekognition (face) and
@@ -239,6 +240,19 @@ export function loadAwsClientConfig(
  */
 export function loadRekognitionClientConfig(env: Env): AwsClientConfig {
   return loadAwsClientConfig(env, AWS_CLIENT_ENV.rekognition, 'Rekognition client');
+}
+
+/**
+ * The Rekognition client for the face provider: loadRekognitionClientConfig with
+ * FACE_PROVIDER=rekognition, else null (the REKOGNITION_* values are still validated but no key
+ * is required; ADR 0009 section 1).
+ */
+export function loadFaceRekognitionClientConfig(env: Env): AwsClientConfig | null {
+  const schema = z.object({ FACE_PROVIDER: z.enum(FACE_PROVIDERS).default('self-hosted') });
+  const { FACE_PROVIDER } = parseEnv(schema, env, 'face provider');
+  if (FACE_PROVIDER === 'rekognition') return loadRekognitionClientConfig(env);
+  loadAwsClientConfig(env, AWS_CLIENT_ENV.rekognition, 'Rekognition client', { required: false });
+  return null;
 }
 
 /**

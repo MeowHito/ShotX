@@ -269,7 +269,12 @@ services:
     logging: *logging
 
   postgres:
-    image: postgres:${POSTGRES_VERSION:-18-alpine}
+    # postgres:18-alpine plus pgvector for face embeddings (ADR 0009); same base as before.
+    image: ${SHOTX_IMAGE_PREFIX:-shotx}/postgres:${SHOTX_IMAGE_TAG:-latest}
+    build:
+      context: ./postgres-image
+      args:
+        POSTGRES_IMAGE: postgres:${POSTGRES_VERSION:-18-alpine}
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

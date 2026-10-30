@@ -12,6 +12,8 @@ allowBuilds:
   '@swc/core': false
   # bullmq (worker) pulls this in through msgpackr; prebuilt binaries ship as optional packages.
   msgpackr-extract: false
+  # @shotx/face (ADR 0009): the CPU binaries ship in the package; its install script only fetches CUDA.
+  onnxruntime-node: false
 
 # Supply-chain hygiene: don't install versions published less than 7 days ago.
 minimumReleaseAge: 10080

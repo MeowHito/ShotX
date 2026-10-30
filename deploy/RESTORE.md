@@ -53,7 +53,8 @@ age -d -i key.txt "$(basename $K)" | ssh vps 'cat > ~/restore/db.dump && chmod 6
 
 On the VPS. Keep the damaged database under another name until the restore is verified. The
 superuser is `POSTGRES_USER` from `env/postgres.env`. The extension entries are left out of the
-restore list: ltree is created by the superuser, and the `shotx` role can't restore its comment.
+restore list: ltree, pg_trgm and vector are created by the superuser (`shotx` may not create
+pgvector, and can't restore the extensions' comments).
 
 ```sh
 PG="$C exec -T postgres"
@@ -63,7 +64,8 @@ $PG psql -U shotx_admin -d postgres -v ON_ERROR_STOP=1 \
   -c 'CREATE DATABASE shotx OWNER shotx' \
   -c 'REVOKE ALL ON DATABASE shotx FROM PUBLIC' \
   -c 'GRANT CONNECT ON DATABASE shotx TO shotx, shotx_monitor'
-$PG psql -U shotx_admin -d shotx -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION ltree'
+$PG psql -U shotx_admin -d shotx -v ON_ERROR_STOP=1 \
+  -c 'CREATE EXTENSION ltree' -c 'CREATE EXTENSION pg_trgm' -c 'CREATE EXTENSION vector'
 $PG sh -c 'cat > /tmp/db.dump' < ~/restore/db.dump
 $PG sh -c "pg_restore --list /tmp/db.dump | grep -vE ' EXTENSION - | COMMENT - EXTENSION ' > /tmp/toc.list"
 $PG pg_restore -U shotx --exit-on-error --single-transaction --no-owner --role=shotx \
@@ -116,15 +118,42 @@ $C --profile tools run --rm run-job faces.reconcile.daily
 - **Faces:** `faces.reconcile.daily` deletes collection faces that have no row (photos indexed in
   the window), once `FACE_ORPHAN_GRACE_MS` has passed. `faces.sweep` re-sends restored face
   deletions that are not complete.
+- **Face vectors (FACE_PROVIDER=self-hosted):** backups hold no `face_vectors` data (ADR 0009
+  section 6), so restored `faces` rows point at nothing and search finds no restored photo. Before
+  the `faces.sweep` above, forget them so the sweep indexes every covered photo again. **First
+  withhold again every photo a "ขอลบใบหน้าของฉัน" deletion touched in the lost window**: the
+  restored database lost those `faces_withheld_at` marks, and re-indexing would bring the deleted
+  faces back. The worker logs each completed deletion as `face deletion done` with
+  `withheldFileIds` (comma-separated file ids, no biometrics). Collect them from the worker logs
+  after D (`docker logs` on the VPS if it survived, or your log store), then, in `psql` as
+  `shotx`, until a re-index tool exists:
+
+  ```sql
+  BEGIN;
+  -- 1. The lost window's deletions: the file ids from the log lines, one list for all of them.
+  UPDATE files SET faces_withheld_at = now()
+    WHERE id = ANY('{<id>,<id>,...}'::uuid[]) AND faces_withheld_at IS NULL;
+  -- 2. Forget the vector-less faces (pending deletions keep their rows) and re-index the rest.
+  DELETE FROM faces WHERE deletion_id IS NULL;
+  UPDATE files SET face_count = NULL, faces_queued_at = NULL
+    WHERE face_count IS NOT NULL AND faces_withheld_at IS NULL
+      AND id NOT IN (SELECT file_id FROM faces);
+  COMMIT;
+  ```
+
+  If the worker logs for the window are lost too (likely on one VPS, with the api's), nothing
+  names the deletions that were lost: **don't run step 2 at all** until the DPO has decided.
+  Search then finds no restored photo, which is the safe side; photos uploaded after the restore
+  are indexed as usual.
+
 - **PDPA, lost face deletions and consent withdrawals:** a "ขอลบใบหน้าของฉัน" request or a consent
-  withdrawal made in the window is gone from the database. Faces deleted from Rekognition before T
-  stay deleted (search can't match them), but a request still pending at T was lost. Get the
-  `face_deletion` lines from the api logs for the window
-  (`docker logs` on the VPS, if it survived, or your log store), and tell the DPO. The people
-  concerned must be asked to send their request again; the selfie is never stored, so it can't be
+  withdrawal made in the window is gone from the database. With Rekognition, faces deleted before
+  T stay deleted (the collection is outside the database). With the self-hosted provider the
+  vectors are gone with the backup anyway, and the withholding step above keeps the deleted faces
+  from being indexed again. Either way a request still pending at T was lost. Count the worker's
+  `face deletion done` lines after D (if the logs survived) and tell the DPO. The people concerned
+  must be asked to send their request again; the selfie is never stored, so it can't be
   replayed.
-- **Accounts and shares** created in the window are gone. Photographers sign in again with LINE or
-  Google; a new `users` row is created, so files from the window are not attached to it.
 
 ## 7. Open, verify, clean up
 

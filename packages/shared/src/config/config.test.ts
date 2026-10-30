@@ -5,7 +5,8 @@ import { loadFaceConfig, loadFaceSearchUploadConfig, TILING_MODES, type TilingMo
 
 describe('loadFaceConfig', () => {
   it('uses the spec defaults', () => {
-    const config = loadFaceConfig({});
+    const config = loadFaceConfig({ FACE_PROVIDER: 'rekognition' });
+    expect(config.provider).toBe('rekognition');
     expect(config.thresholds).toEqual({ strong: 95, maybe: 85 });
     expect(config.search).toMatchObject({ maxSelfies: 3, expansionSeeds: 2 });
     expect(config.index).toMatchObject({ longEdge: 3500, jpegQuality: 90, maxFaces: 100 });
@@ -18,9 +19,52 @@ describe('loadFaceConfig', () => {
     });
   });
 
+  it("defaults to the self-hosted provider with the selected model's starting thresholds", () => {
+    const config = loadFaceConfig({});
+    expect(config.provider).toBe('self-hosted');
+    expect(config.thresholds).toEqual({ strong: 50, maybe: 36 });
+    expect(config.deletion.threshold).toBe(50);
+    expect(config.selfHosted).toEqual({
+      detectorModel: 'yunet-2023mar',
+      model: 'sface-2021dec',
+      modelDir: null,
+      detector: { minScore: 0.8, nmsIou: 0.3, longEdge: 1920, windowOverlap: 0.2 },
+      minFacePx: 32,
+      onnxThreads: 2,
+      inference: { concurrency: 2, maxWaitMs: 5000 },
+      hnsw: { efSearch: 100, maxScanTuples: 20_000 },
+      decodeMaxPixels: 40_000_000,
+    });
+  });
+
+  it('reads the self-hosted settings and checks thresholds after the defaults apply', () => {
+    const config = loadFaceConfig({
+      FACE_MODEL_DIR: '/models',
+      FACE_DETECTOR_LONG_EDGE: '1280',
+      FACE_INFERENCE_CONCURRENCY: '4',
+      FACE_HNSW_EF_SEARCH: '200',
+      FACE_STRONG: '60',
+    });
+    expect(config.selfHosted.modelDir).toBe('/models');
+    expect(config.selfHosted.detector.longEdge).toBe(1280);
+    expect(config.selfHosted.inference.concurrency).toBe(4);
+    expect(config.selfHosted.hnsw.efSearch).toBe(200);
+    expect(config.thresholds).toEqual({ strong: 60, maybe: 36 });
+    // The deletion threshold follows FACE_STRONG unless it is set.
+    expect(loadFaceConfig({ FACE_STRONG: '97', FACE_MAYBE: '80' }).deletion.threshold).toBe(97);
+    expect(() => loadFaceConfig({ FACE_MAYBE: '55' })).toThrow(
+      /FACE_STRONG must be greater than or equal to FACE_MAYBE/,
+    );
+    expect(() => loadFaceConfig({ FACE_MODEL: 'buffalo_l' })).toThrow(/Invalid face configuration/);
+    expect(() => loadFaceConfig({ FACE_PROVIDER: 'aws' })).toThrow(/Invalid face configuration/);
+  });
+
   it('reads the deletion threshold and keeps it at or above FACE_MAYBE', () => {
-    expect(loadFaceConfig({ FACE_DELETION_THRESHOLD: '90' }).deletion.threshold).toBe(90);
-    expect(() => loadFaceConfig({ FACE_DELETION_THRESHOLD: '80' })).toThrow(
+    const rekognition = { FACE_PROVIDER: 'rekognition' };
+    expect(
+      loadFaceConfig({ ...rekognition, FACE_DELETION_THRESHOLD: '90' }).deletion.threshold,
+    ).toBe(90);
+    expect(() => loadFaceConfig({ ...rekognition, FACE_DELETION_THRESHOLD: '80' })).toThrow(
       /FACE_DELETION_THRESHOLD must be greater than or equal to FACE_MAYBE/,
     );
   });
@@ -196,10 +240,22 @@ describe('loadFaceConfig', () => {
   });
 
   it('treats empty variables as unset', () => {
-    expect(loadFaceConfig({ FACE_STRONG: '' }).thresholds.strong).toBe(95);
+    expect(
+      loadFaceConfig({ FACE_PROVIDER: 'rekognition', FACE_STRONG: '' }).thresholds.strong,
+    ).toBe(95);
+    expect(loadFaceConfig({ FACE_STRONG: '', FACE_MODEL_DIR: '' }).selfHosted.modelDir).toBeNull();
     expect(
       loadFaceConfig({ FACE_REKOGNITION_RATE_LIMIT_PREFIX: '' }).rekognition.rateLimit,
     ).toMatchObject({ keyPrefix: 'shotx:rekognition' });
+  });
+
+  it('keeps the decode pixel limit above the index image size', () => {
+    expect(() => loadFaceConfig({ FACE_DECODE_MAX_PIXELS: '10000000' })).toThrow(
+      /FACE_DECODE_MAX_PIXELS must be at least FACE_INDEX_LONG_EDGE²/,
+    );
+    expect(() =>
+      loadFaceConfig({ FACE_INDEX_LONG_EDGE: '8192', FACE_DECODE_MAX_PIXELS: '67108864' }),
+    ).not.toThrow();
   });
 
   it('rejects a strong threshold below the maybe threshold', () => {

@@ -2,8 +2,8 @@
 
 Measures face search accuracy before anyone builds UI on it (build order phase 0). It indexes an
 event's photos, scans every volunteer with their selfies the way the share page does, and reports
-precision and recall for every FACE_STRONG / FACE_MAYBE pair and pipeline option, plus the Amazon
-Rekognition calls and cost per 1,000 photos.
+precision and recall for every FACE_STRONG / FACE_MAYBE pair and pipeline option, per face model
+(ADR 0009: the self-hosted provider; Amazon Rekognition stays available for comparison).
 
 It runs the production code from `@shotx/face` (`indexPhoto`, `selectSeeds`, `combineMatches`,
 `bucketByFile`). A test checks that its offline threshold sweep returns exactly what
@@ -17,7 +17,9 @@ It runs the production code from `@shotx/face` (`indexPhoto`, `selectSeeds`, `co
 - Selfies and photos are read only from the dataset folder, kept in memory, and never copied,
   written to storage or logged. Rekognition gets them as bytes (ADR 0008 section 5). Logs and reports contain counts, never image data, names or file contents.
 - Committed reports (`reports/`) hold aggregate numbers only.
-- Never use InsightFace pretrained models. Recognition goes through `FaceProvider`.
+- Never use InsightFace pretrained models. Recognition goes through `FaceProvider`; a model is
+  evaluated only once it is in the registry (`packages/shared/src/config/face-models.ts`).
+- `--provider self-hosted` runs our ONNX models on this machine: nothing is sent anywhere.
 - Rekognition runs only with `--provider rekognition --i-understand-this-calls-aws`, on an approved
   AWS account.
 
@@ -61,10 +63,12 @@ synthetic data says nothing about what 5 MiB does to real photos.
 Before collecting anything, get explicit written consent from every volunteer. The DPO or legal
 team approves the text. It must cover:
 
-- the purpose (testing face search accuracy) and that face data is biometric, sensitive data;
-- processing by Amazon Rekognition in AWS `ap-southeast-1` (Singapore), which is a transfer
-  outside Thailand;
-- the retention period, and deletion of the dataset, run output and Rekognition collections
+- the purpose (testing face search accuracy, including comparing face models) and that face data
+  is biometric, sensitive data;
+- where it is processed: on the company's own machines with `--provider self-hosted` (ADR 0009);
+  if Rekognition is also compared, by Amazon Rekognition in AWS `ap-southeast-1` (Singapore),
+  which is a transfer outside Thailand;
+- the retention period, and deletion of the dataset, run output and any Rekognition collections
   afterwards;
 - withdrawal: a volunteer who withdraws is removed from `labels.json` and `selfies/`, and any run
   that used their data is deleted.
@@ -147,7 +151,33 @@ full-image size distribution without a limit. Keep the JSON under `runs/` (git-i
   recall barely moves between 2.5 and 5 MiB, the step from 5 to 15 MiB would not have mattered
   either. If it drops, tiling (`FACE_INDEX_TILING=always`) is the first lever (ADR 0008).
 
-## Run the real evaluation (later, with approval)
+## Compare self-hosted models (no network)
+
+The Phase 0 decision for ADR 0009: run every candidate model on the same real dataset with the
+production pipeline (YuNet detection, alignment, embedding, expansion, bucketing). Vectors stay in
+memory with exact cosine search, so the numbers are the model's, not the HNSW index's.
+
+```sh
+pnpm face-models --all          # every registry model into .models/face, checked by SHA-256
+pnpm face-eval run \
+  --dataset tools/face-eval/data/<event> \
+  --provider self-hosted --models sface-2021dec[,<candidate>] \
+  --report tools/face-eval/reports/<event>.md
+```
+
+- Each model gets its own run folder and report (`<event>-<model>.md`), plus
+  `runs/<timestamp>-compare.md` with every model at its own recommended operating point.
+  Similarity is 100 × cosine and **not comparable across models**: compare precision, recall and
+  go/no-go, and adopt the winning model's `FACE_STRONG` / `FACE_MAYBE`.
+- The threshold sweeps default to 20–80 (strong) and 15–70 (maybe), the cosine range that matters;
+  `--quality-filters` is a Rekognition setting and is ignored (the self-hosted gates are
+  `FACE_DETECTOR_MIN_SCORE` and `FACE_MIN_FACE_PX`, set them in the environment to compare).
+- SFace is the development placeholder and is not approved for production (training-data terms);
+  a candidate must have a commercial licence before it goes into the registry.
+- Costs in the report count no per-call fees; the real cost is VPS CPU time, measured with the
+  load test (deploy/LOADTEST.md).
+
+## Run the real evaluation with Rekognition (later, with approval)
 
 This calls Amazon Rekognition: it is billed and sends the photos and selfies to AWS
 `ap-southeast-1`. Photos (full image and tiles) and selfies are sent as bytes of at most 5 MiB and

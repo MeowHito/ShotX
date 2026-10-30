@@ -3,6 +3,7 @@ import { loadApiLimitsConfig } from './api';
 import {
   CONSENT_POLICY_VERSIONS,
   LATEST_CONSENT_POLICY_VERSION,
+  CONSENT_POLICY_FACE_PROVIDER,
   loadConsentConfig,
 } from './consent';
 import { loadFeatureFlags } from './features';
@@ -177,6 +178,17 @@ describe('loadConsentConfig', () => {
       ipHashSecret: secret,
     });
     expect(() => loadConsentConfig({})).toThrow(/at IP_HASH_SECRET\b/);
+  });
+
+  it('picks the newest version naming FACE_PROVIDER and refuses one naming another processor', () => {
+    expect(CONSENT_POLICY_FACE_PROVIDER['2026-10-29']).toBe('self-hosted');
+    expect(loadConsentConfig({ IP_HASH_SECRET: secret }).policyVersion).toBe('2026-10-29');
+    expect(
+      loadConsentConfig({ IP_HASH_SECRET: secret, FACE_PROVIDER: 'rekognition' }).policyVersion,
+    ).toBe('2026-10-25');
+    expect(() =>
+      loadConsentConfig({ IP_HASH_SECRET: secret, CONSENT_POLICY_VERSION: '2026-10-25' }),
+    ).toThrow(/names the rekognition face processor, but FACE_PROVIDER is self-hosted/);
   });
 
   it('accepts only versions that have a text, and never prints the secret', () => {

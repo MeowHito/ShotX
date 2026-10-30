@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { ltree } from '@electric-sql/pglite/contrib/ltree';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { vector } from '@electric-sql/pglite-pgvector';
 import {
   files,
   folderPath,
@@ -13,6 +14,7 @@ import {
   users,
 } from '@shotx/db';
 import * as schema from '@shotx/db';
+import type { PgPoolLike } from '@shotx/face';
 import { originalKey } from '@shotx/shared';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -21,15 +23,30 @@ import type { Db } from '../db';
 
 export interface TestDatabase {
   db: Db;
+  /** The same database as node-postgres-like queries (the self-hosted face vector store). */
+  pool: PgPoolLike;
   close(): Promise<void>;
 }
 
-/** PostgreSQL 18 (WASM, in process) with ltree, pg_trgm (migration 0008) and every migration applied. */
+/**
+ * PostgreSQL 18 (WASM, in process) with ltree, pg_trgm (migration 0008), pgvector (migration 0010)
+ * and every migration applied.
+ */
 export async function openTestDatabase(): Promise<TestDatabase> {
-  const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
+  const client = await PGlite.create({ extensions: { ltree, pg_trgm, vector } });
   const db = drizzle({ client, schema });
   await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return { db: db as unknown as Db, close: () => client.close() };
+  const queryable = {
+    query: async (text: string, values?: unknown[]) => ({
+      rows: (await client.query(text, values)).rows,
+    }),
+  };
+  // PGlite has one connection: `connect` hands out the same one (queries run in order).
+  const pool: PgPoolLike = {
+    ...queryable,
+    connect: () => Promise.resolve({ ...queryable, release: () => undefined }),
+  };
+  return { db: db as unknown as Db, pool, close: () => client.close() };
 }
 
 export async function createPhotographer(

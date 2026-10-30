@@ -60,23 +60,31 @@ dist/cli/admin.js create --email ... --name ...` (password on stdin), then enrol
   and the restore test in [RESTORE.md](RESTORE.md) before launch.
 
 Postgres's init script (`postgres/01-init.sh`) only runs on an empty volume. It creates the
-`shotx` role, which owns the database and is not a superuser, and the `shotx_monitor` role. With
-an existing volume, create both by hand with the same SQL.
+extensions (ltree, pg_trgm, vector), the `shotx` role, which owns the database and is not a
+superuser, and the `shotx_monitor` role. With an existing volume, create them by hand with the
+same SQL. In particular, a volume created before migration 0010 (ADR 0009) needs pgvector
+created by the superuser **before** `migrate` runs, because `shotx` may not create it:
+
+```sh
+docker compose --env-file .env.production up -d postgres   # the pgvector image (postgres-image/)
+docker compose --env-file .env.production exec -T postgres \
+  psql -U shotx_admin -d shotx -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS vector'
+```
 
 ## Services
 
-| service  | image                 | networks                      | notes                                                              |
-| -------- | --------------------- | ----------------------------- | ------------------------------------------------------------------ |
-| proxy    | caddy                 | edge (fixed `SHOTX_PROXY_IP`) | the only published ports (80, 443 TCP/UDP); automatic TLS          |
-| web      | apps/web              | edge                          | reads the client address from the proxy's X-Forwarded-For          |
-| api      | apps/api              | edge, data                    | `TRUSTED_PROXY_ADDRESSES` = the proxy address                      |
-| worker   | apps/worker           | data, egress                  | concurrency in `env/worker.env`; `stop_grace_period` ≥ grace + 5 s |
-| migrate  | ops                   | data                          | one-off before api/worker: migrations, plan seed, monitor grants   |
-| postgres | postgres 18           | data                          | ltree; `shotx` owns the database                                   |
-| redis    | redis 7.2             | data                          | `noeviction`, `maxmemory`, AOF `everysec`, `users.acl`             |
-| backup   | ops                   | data, egress                  | daily at `BACKUP_TIME_UTC`                                         |
-| monitor  | ops                   | data, egress                  | checks every minute, alerts to the webhook                         |
-| run-job  | ops (profile `tools`) | data                          | `--profile tools run --rm run-job <type>`                          |
+| service  | image                  | networks                      | notes                                                              |
+| -------- | ---------------------- | ----------------------------- | ------------------------------------------------------------------ |
+| proxy    | caddy                  | edge (fixed `SHOTX_PROXY_IP`) | the only published ports (80, 443 TCP/UDP); automatic TLS          |
+| web      | apps/web               | edge                          | reads the client address from the proxy's X-Forwarded-For          |
+| api      | apps/api               | edge, data                    | `TRUSTED_PROXY_ADDRESSES` = the proxy address                      |
+| worker   | apps/worker            | data, egress                  | concurrency in `env/worker.env`; `stop_grace_period` ≥ grace + 5 s |
+| migrate  | ops                    | data                          | one-off before api/worker: migrations, plan seed, monitor grants   |
+| postgres | postgres 18 + pgvector | data                          | ltree, pg_trgm, vector (ADR 0009); `shotx` owns the database       |
+| redis    | redis 7.2              | data                          | `noeviction`, `maxmemory`, AOF `everysec`, `users.acl`             |
+| backup   | ops                    | data, egress                  | daily at `BACKUP_TIME_UTC`                                         |
+| monitor  | ops                    | data, egress                  | checks every minute, alerts to the webhook                         |
+| run-job  | ops (profile `tools`)  | data                          | `--profile tools run --rm run-job <type>`                          |
 
 `data` is an internal network: Postgres and Redis can't reach the internet, and nothing outside
 can reach them. Every service has CPU and memory limits, a restart policy, rotated logs (Docker's

@@ -4,6 +4,7 @@ import {
   awsClientOptions,
   configuredEndpointVariables,
   isAwsEndpointHost,
+  loadFaceRekognitionClientConfig,
   loadRekognitionClientConfig,
   loadSesClientConfig,
   runsOffAws,
@@ -45,6 +46,21 @@ describe('loadRekognitionClientConfig', () => {
       loadFaceConfig({ AWS_REGION: 'us-east-1', REKOGNITION_REGION: 'ap-southeast-1' }).rekognition
         .region,
     ).toBe('ap-southeast-1');
+  });
+
+  it('is null for the self-hosted provider (no keys needed), and required for Rekognition', () => {
+    expect(loadFaceRekognitionClientConfig(vps)).toBeNull();
+    expect(() => loadFaceRekognitionClientConfig({ ...vps, FACE_PROVIDER: 'rekognition' })).toThrow(
+      /required off AWS/,
+    );
+    expect(
+      loadFaceRekognitionClientConfig({ ...vps, ...keys, FACE_PROVIDER: 'rekognition' })
+        ?.credentials,
+    ).not.toBeNull();
+    // The values are still validated with the self-hosted provider.
+    expect(() =>
+      loadFaceRekognitionClientConfig({ ...vps, REKOGNITION_ENDPOINT_URL: 'not a url' }),
+    ).toThrow();
   });
 
   it('off AWS: requires explicit keys and uses them', () => {

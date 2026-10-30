@@ -2,11 +2,14 @@ import { Inject, Injectable, type LoggerService } from '@nestjs/common';
 import {
   type FaceProvider,
   faceCollectionId,
+  ImageTooLargeError,
   NoFaceDetectedError,
+  RateLimitedError,
   type SelfieSearchResult,
   bucketByFile,
   searchBySelfies,
   selfieSearchOptions,
+  UnreadableImageError,
 } from '@shotx/face';
 import { faceDeletions, faceFeedback, faces, files, searchableFaceSql } from '@shotx/db';
 import {
@@ -22,6 +25,7 @@ import {
   type FaceDeletionResponse,
   type FaceSearchResponse,
   faceScanResultKey,
+  SELFIE_FIELD_NAME,
   mergeFaceScanResult,
   viewerKey,
 } from '@shotx/shared';
@@ -216,6 +220,22 @@ export class FaceService {
         });
       }
       if (isMissingCollection(error)) return { matches: [], selfiesWithoutFace: 0, seeds: 0 };
+      // Self-hosted inference is busy (InferenceSlots, ADR 0009 section 5): ask to retry later.
+      if (error instanceof RateLimitedError) {
+        const retryAfterSeconds = Math.max(1, Math.ceil(error.waitMs / 1000));
+        throw new ApiError(
+          'RATE_LIMITED',
+          'Face search is busy; try again shortly',
+          { retryAfterSeconds, captcha: null },
+          { 'Retry-After': String(retryAfterSeconds) },
+        );
+      }
+      // A selfie that passed the magic-byte check but can't be decoded within the limits.
+      if (error instanceof UnreadableImageError || error instanceof ImageTooLargeError) {
+        throw new ApiError('VALIDATION_FAILED', 'Request validation failed', {
+          issues: [{ path: ['body', SELFIE_FIELD_NAME], message: 'selfie could not be read' }],
+        });
+      }
       throw error;
     } finally {
       for (const selfie of selfies) selfie.fill(0);

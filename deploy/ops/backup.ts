@@ -92,8 +92,17 @@ export function ageArgs(recipients: readonly string[]): string[] {
   return recipients.flatMap((r) => ['-r', r]);
 }
 
-/** Custom format (compressed, pg_restore can pick objects), connection from the PG* variables. */
-export const PG_DUMP_ARGS = ['--format=custom', '--compress=6', '--no-password'];
+/**
+ * Custom format (compressed, pg_restore can pick objects), connection from the PG* variables.
+ * Face embeddings stay out (ADR 0009 section 6): biometric templates never leave the VPS in a
+ * dump, and a deleted face doesn't live on in old backups. The table itself is dumped (empty).
+ */
+export const PG_DUMP_ARGS = [
+  '--format=custom',
+  '--compress=6',
+  '--no-password',
+  '--exclude-table-data=public.face_vectors',
+];
 
 /** Only PATH, the locale and libpq's PG* variables reach pg_dump; no bucket token. */
 export function pgDumpEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

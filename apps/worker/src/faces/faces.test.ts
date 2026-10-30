@@ -601,12 +601,17 @@ describe('faces consumer', () => {
         .returning();
       const [first] = await faceRows(file.id);
       await db.update(faces).set({ deletionId: deletion!.id }).where(eq(faces.id, first!.id));
+      const deletionLog = memoryLogger();
       await createFacesHandler(deps())(
         serializeQueueMessage('faces', { type: 'delete.faces', deletionId: deletion!.id }),
-        context(),
+        context(deletionLog),
       );
       expect((await fileById(db, file.id))?.facesWithheldAt).toBeInstanceOf(Date);
       expect((await fileById(db, other.id))?.facesWithheldAt).toBeNull();
+      // The log names the withheld files (ids only), so a restore can withhold them again.
+      expect(
+        deletionLog.entries.find((e) => e.msg === 'face deletion done')?.fields,
+      ).toMatchObject({ withheldFileIds: file.id });
 
       // The index expires: the rest of its faces go and face_count is null again.
       await db

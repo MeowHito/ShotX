@@ -1,4 +1,4 @@
-import { PUBLIC_SHARE_ROUTES } from '@shotx/shared';
+import { PUBLIC_SHARE_ROUTES, LATEST_CONSENT_POLICY_VERSION } from '@shotx/shared';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
@@ -22,8 +22,8 @@ beforeAll(() => {
   Object.defineProperty(HTMLVideoElement.prototype, 'videoHeight', { get: () => 960 });
 });
 
-const searchPolicy = th.consent.policies.face_search['2026-10-25'];
-const deletionPolicy = th.consent.policies.face_deletion['2026-10-25'];
+const searchPolicy = th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION];
+const deletionPolicy = th.consent.policies.face_deletion[LATEST_CONSENT_POLICY_VERSION];
 
 function scanShare(fake: FakeApi, extra: Partial<PublicShareFixture> = {}) {
   const share = fake.addPublicShare({ faceSearchAvailable: true, itemCount: 5, ...extra });
@@ -107,7 +107,11 @@ describe('ขอลบใบหน้าของฉัน', () => {
     await userEvent.click(screen.getByRole('button', { name: th.consent.acceptDeletion }));
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)[0]).toMatchObject({
       prefix: '/api',
-      body: { purpose: 'face_deletion', policyVersion: '2026-10-25', accepted: true },
+      body: {
+        purpose: 'face_deletion',
+        policyVersion: LATEST_CONSENT_POLICY_VERSION,
+        accepted: true,
+      },
     });
 
     expect(await screen.findByText(th.faceDeletion.intro)).toBeInTheDocument();
@@ -179,7 +183,7 @@ describe('CONSENT_VERSION_MISMATCH', () => {
     expect(posts).toHaveLength(2);
     expect(posts[1]?.body).toEqual({
       purpose: 'face_search',
-      policyVersion: '2026-10-25',
+      policyVersion: LATEST_CONSENT_POLICY_VERSION,
       accepted: true,
     });
     expect(share.consented).toBe(true);

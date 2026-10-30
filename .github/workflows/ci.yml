@@ -33,9 +33,11 @@ jobs:
           --health-retries 20
       # packages/db integration tests (skipped without TEST_DATABASE_URL). Same major as RDS
       # (infra/cdk.json database.engineVersion). ltree ships in the image's contrib modules; the
-      # migrations run CREATE EXTENSION themselves, as they do on RDS.
+      # migrations run CREATE EXTENSION themselves, as they do on RDS. Service containers can't
+      # build deploy/postgres-image, so CI uses pgvector's own image of the same major and pgvector
+      # release (Debian-based: collation doesn't matter for a fresh test database).
       postgres:
-        image: postgres:18-alpine
+        image: pgvector/pgvector:0.8.7-pg18
         env:
           POSTGRES_USER: shotx
           POSTGRES_PASSWORD: shotx

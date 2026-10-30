@@ -19,3 +19,5 @@ runs
 deploy/
 **/.env
 **/.env.*
+# Local face model files: the build fetches and checks its own (ADR 0009).
+.models

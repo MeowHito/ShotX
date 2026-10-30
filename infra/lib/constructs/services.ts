@@ -261,7 +261,11 @@ export class Services extends Construct {
     }
 
     // Typed context values; services.env can't set these (config validation).
-    const features = { FACE_SEARCH_ENABLED: String(config.features.faceSearchEnabled) };
+    // The AWS stacks keep Amazon Rekognition (ADR 0009: the self-hosted provider is the VPS's).
+    const features = {
+      FACE_SEARCH_ENABLED: String(config.features.faceSearchEnabled),
+      FACE_PROVIDER: 'rekognition',
+    };
     const consent = { CONSENT_POLICY_VERSION: config.consent.policyVersion };
     const extra = svc.env;
 

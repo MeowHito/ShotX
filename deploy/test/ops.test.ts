@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
 import { parseQueueMessage } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
-import { ageArgs, backupKey, nextDailyRun, pgDumpEnv, selectExpired } from '../ops/backup';
+import {
+  ageArgs,
+  backupKey,
+  nextDailyRun,
+  PG_DUMP_ARGS,
+  pgDumpEnv,
+  selectExpired,
+} from '../ops/backup';
 import { loadBackupConfig, loadMonitorConfig } from '../ops/config';
 import { MONITOR_GRANTS, monitorGrantStatements } from '../ops/migrate';
 import { buildUsersAcl, MONITOR_COMMANDS } from '../ops/redis-acl';
@@ -118,6 +125,10 @@ describe('backup', () => {
       BACKUP_AGE_RECIPIENTS: AGE_KEY,
     });
     expect(Object.keys(env).sort()).toEqual(['PATH', 'PGHOST', 'PGPASSWORD']);
+  });
+
+  it('leaves face embeddings out of every dump (ADR 0009)', () => {
+    expect(PG_DUMP_ARGS).toContain('--exclude-table-data=public.face_vectors');
   });
 
   it('encrypts to every recipient', () => {

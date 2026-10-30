@@ -39,7 +39,7 @@ import {
   loadPaymentGatewayConfig,
   loadQueueBackendConfig,
   loadRedisConfig,
-  loadRekognitionClientConfig,
+  loadFaceRekognitionClientConfig,
   loadSesClientConfig,
   loadRetentionConfig,
   loadSentryConfig,
@@ -143,8 +143,11 @@ export interface ApiConfig {
    * AWS_ENDPOINT_URL or the default credential chain (wiring refuses SQS and AWS S3 there).
    */
   offAws: boolean;
-  /** Rekognition (face search and deletion): REKOGNITION_* (explicit keys off AWS). Secret. */
-  rekognitionClient: AwsClientConfig;
+  /**
+   * Rekognition (face search and deletion) with FACE_PROVIDER=rekognition: REKOGNITION_* (explicit
+   * keys off AWS), else null (ADR 0009). Secret.
+   */
+  rekognitionClient: AwsClientConfig | null;
   /**
    * SES with EMAIL_PROVIDER=ses (SES_*), else null. Validated here; the api builds no SES client
    * yet (SesEmailProvider is wired without one). Secret.
@@ -200,7 +203,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     bff: loadBffAuthConfig(env),
     trustedProxies: loadTrustedProxyConfig(env),
     offAws: runsOffAws(env),
-    rekognitionClient: loadRekognitionClientConfig(env),
+    rekognitionClient: loadFaceRekognitionClientConfig(env),
     sesClient: loadSesClientConfig(env),
     captcha: loadCaptchaConfig(env),
     zipJobActiveMs: loadWorkerSettings(env).maxProcessingMs.zip,

@@ -1,4 +1,8 @@
-import { IDEMPOTENCY_KEY_HEADER, PUBLIC_SHARE_ROUTES } from '@shotx/shared';
+import {
+  IDEMPOTENCY_KEY_HEADER,
+  PUBLIC_SHARE_ROUTES,
+  LATEST_CONSENT_POLICY_VERSION,
+} from '@shotx/shared';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -47,7 +51,9 @@ function scanShare(fake: FakeApi, extra: Partial<PublicShareFixture> = {}) {
 async function acceptConsent() {
   await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
   await userEvent.click(
-    screen.getByRole('checkbox', { name: th.consent.policies.face_search['2026-10-25'].checkbox }),
+    screen.getByRole('checkbox', {
+      name: th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION].checkbox,
+    }),
   );
   await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
 }
@@ -63,10 +69,10 @@ describe('consent', () => {
     const share = scanShare(fake);
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    const policy = th.consent.policies.face_search['2026-10-25'];
+    const policy = th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION];
     expect(screen.getByRole('heading', { name: policy.title })).toBeInTheDocument();
     expect(screen.getByText(policy.points.noStorage)).toBeInTheDocument();
-    expect(screen.getByText('ฉบับวันที่ 2026-10-25')).toBeInTheDocument();
+    expect(screen.getByText(`ฉบับวันที่ ${LATEST_CONSENT_POLICY_VERSION}`)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
     expect(screen.getByText(th.consent.mustCheck)).toBeInTheDocument();
@@ -78,7 +84,7 @@ describe('consent', () => {
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)[0]).toMatchObject({
       prefix: '/api',
       credentials: 'include',
-      body: { policyVersion: '2026-10-25', accepted: true },
+      body: { policyVersion: LATEST_CONSENT_POLICY_VERSION, accepted: true },
     });
   });
 
@@ -100,7 +106,7 @@ describe('consent', () => {
     await userEvent.click(screen.getByRole('button', { name: th.share.scan }));
     expect(
       await screen.findByRole('checkbox', {
-        name: th.consent.policies.face_search['2026-10-25'].checkbox,
+        name: th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION].checkbox,
       }),
     ).toBeInTheDocument();
   });

@@ -8,8 +8,10 @@
 #   as shotx. Not a superuser, so a SQL injection can't read files or run programs.
 # - shotx_monitor: logs in with no privileges of its own; `ops migrate` grants it SELECT on
 #   exactly the columns it reads (deploy/ops/migrate.ts MONITOR_GRANTS).
-# ltree and pg_trgm (drive search) are created here by the superuser; the migrations' CREATE EXTENSION IF NOT EXISTS is then a
-# no-op.
+# ltree, pg_trgm (drive search) and vector (face embeddings, ADR 0009; pgvector isn't a trusted
+# extension, so `shotx` can't create it) are created here by the superuser; the migrations'
+# CREATE EXTENSION IF NOT EXISTS is then a no-op. The image is deploy/postgres-image.
+
 set -eu
 
 : "${APP_DB_PASSWORD:?set APP_DB_PASSWORD in env/postgres.env}"
@@ -19,6 +21,7 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   -v app_password="$APP_DB_PASSWORD" -v monitor_password="$MONITOR_DB_PASSWORD" <<'SQL'
 CREATE EXTENSION IF NOT EXISTS ltree;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS vector;
 CREATE ROLE shotx LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'app_password';
 ALTER DATABASE :"DBNAME" OWNER TO shotx;
 CREATE ROLE shotx_monitor LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT

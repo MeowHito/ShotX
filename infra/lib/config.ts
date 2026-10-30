@@ -1,6 +1,7 @@
 import {
   apiPath,
   BILLING_ROUTES,
+  CONSENT_POLICY_FACE_PROVIDER,
   CONSENT_POLICY_VERSIONS,
   CONTENT_DISPOSITION_QUERY_PARAM,
   EMAIL_PROVIDERS,
@@ -548,8 +549,15 @@ export const configSchema = z
     }),
 
     consent: z.object({
-      /** CONSENT_POLICY_VERSION (api): one of CONSENT_POLICY_VERSIONS in packages/shared. */
-      policyVersion: z.enum(CONSENT_POLICY_VERSIONS),
+      /**
+       * CONSENT_POLICY_VERSION (api): one of CONSENT_POLICY_VERSIONS in packages/shared whose texts
+       * name Rekognition, the face processor of the AWS stacks (ADR 0009).
+       */
+      policyVersion: z
+        .enum(CONSENT_POLICY_VERSIONS)
+        .refine((v) => CONSENT_POLICY_FACE_PROVIDER[v] === 'rekognition', {
+          error: 'must be a policy version that names Rekognition (FACE_PROVIDER=rekognition)',
+        }),
     }),
 
     /** Payments (api: checkout and webhooks; worker: auto-renew charges). */

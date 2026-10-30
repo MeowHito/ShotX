@@ -2,7 +2,7 @@ import {
   CAPTCHA_TOKEN_HEADER,
   type CaptchaAction,
   type CaptchaRejectReason,
-  CONSENT_POLICY_VERSIONS,
+  LATEST_CONSENT_POLICY_VERSION,
   type CreateShareBody,
   DRIVE_ROUTES,
   generateShareToken,
@@ -121,7 +121,7 @@ export function createPublicShare(
     unlocked: false,
     consented: false,
     deletionConsented: false,
-    serverPolicyVersion: CONSENT_POLICY_VERSIONS[CONSENT_POLICY_VERSIONS.length - 1] as string,
+    serverPolicyVersion: LATEST_CONSENT_POLICY_VERSION,
     consentMismatchOnce: false,
     searchConsentStale: false,
     faceMatches: { strong: [], maybe: [] },
@@ -194,7 +194,7 @@ function visibleItems(share: PublicShareFixture) {
 function faceGate(share: PublicShareFixture) {
   if (!share.faceSearchAvailable) throw new Fail('FEATURE_DISABLED', { feature: 'face_search' });
   if (!share.consented) {
-    throw new Fail('CONSENT_REQUIRED', { policyVersion: CONSENT_POLICY_VERSIONS[0] });
+    throw new Fail('CONSENT_REQUIRED', { policyVersion: LATEST_CONSENT_POLICY_VERSION });
   }
 }
 
@@ -406,7 +406,7 @@ export function handlePhase3(
               },
         faceSearch: {
           available: share.faceSearchAvailable,
-          policyVersion: share.faceSearchAvailable ? CONSENT_POLICY_VERSIONS[0] : null,
+          policyVersion: share.faceSearchAvailable ? LATEST_CONSENT_POLICY_VERSION : null,
           consented: share.consented,
           maxSelfies: api.options.maxSelfies,
           selfieLongEdge: api.options.selfieLongEdge,
@@ -420,7 +420,7 @@ export function handlePhase3(
       // Token lookup only: expired, revoked, locked shares and the flag off all answer.
       const share = publicShareOrFail(api, params.token);
       return {
-        policyVersion: CONSENT_POLICY_VERSIONS[0],
+        policyVersion: LATEST_CONSENT_POLICY_VERSION,
         consented: share.deletionConsented,
         maxSelfies: api.options.maxSelfies,
         selfieLongEdge: api.options.selfieLongEdge,

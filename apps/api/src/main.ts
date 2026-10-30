@@ -8,7 +8,7 @@ import { createS3Client, S3ObjectStorage } from './infra/s3-storage';
 import { systemClock } from './tokens';
 import {
   assertExplicitStorage,
-  interactiveFaceProvider,
+  apiFaceProvider,
   mediaSignerSummary,
   mediaUrlSigner,
   queueSender,
@@ -28,8 +28,12 @@ async function main(): Promise<void> {
   const queue = queueSender(config);
   // BullMQ: Redis must be reachable before the API takes requests (bounded wait, then exit).
   await queue.start();
-  // Face search is the only synchronous Rekognition use: the interactive profile fails fast.
-  const faceProvider = interactiveFaceProvider(config, redis);
+  // Face search is the only synchronous face call: the interactive profile fails fast (ADR 0009).
+  const face = apiFaceProvider(config, redis, pool);
+  logger.log(face.summary);
+  // A missing or altered model file stops start-up instead of the first scan.
+  if (config.features.faceSearch) await face.warmUp();
+  const faceProvider = face.provider;
 
   const app = await createApiApp(
     {

@@ -4,7 +4,9 @@ import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { TILING_MODES, type TilingMode } from '@shotx/face';
 import {
+  FACE_RECOGNITION_MODEL_IDS,
   type FaceConfig,
+  type FaceRecognitionModelId,
   faceEncodeFloorBytes,
   loadCostConfig,
   loadFaceConfig,
@@ -55,19 +57,23 @@ encode:
   --concurrency <n>             default 2
 
 run:
-  --provider fake|rekognition   default fake (synthetic datasets only)
+  --provider fake|self-hosted|rekognition   default fake (synthetic datasets only)
+                                self-hosted: our ONNX models on this machine (ADR 0009), no network;
+                                model files from FACE_MODEL_DIR or .models/face (pnpm face-models --all)
+  --models <list>               self-hosted only: evaluate each FACE_MODEL (default FACE_MODEL) and
+                                write a comparison (${FACE_RECOGNITION_MODEL_IDS.join(', ')})
   --${AWS_ACKNOWLEDGEMENT}   required with --provider rekognition (billed AWS calls)
                                 Rekognition client: REKOGNITION_REGION and the evaluation account's
                                 REKOGNITION_ACCESS_KEY_ID / REKOGNITION_SECRET_ACCESS_KEY;
                                 REKOGNITION_ENDPOINT_URL unset or an AWS host (the client
                                 always gets an explicit AWS endpoint)
   --long-edges <list>           default 1600,2400,FACE_INDEX_LONG_EDGE
-  --quality-filters <list>      default LOW,MEDIUM
+  --quality-filters <list>      default LOW,MEDIUM (self-hosted ignores it: AUTO)
   --tiling <list>               default never,signal,always
   --expansion-seeds <list>      default 0,FACE_EXPANSION_SEEDS
   --selfies <list>              default 1,FACE_MAX_SELFIES
-  --strong <from:to:step|list>  FACE_STRONG sweep, default 80:99:1
-  --maybe <from:to:step|list>   FACE_MAYBE sweep, default 70:95:1
+  --strong <from:to:step|list>  FACE_STRONG sweep, default 80:99:1 (self-hosted: 20:80:1)
+  --maybe <from:to:step|list>   FACE_MAYBE sweep, default 70:95:1 (self-hosted: 15:70:1)
   --strong-precision <0-1>      default 0.98
   --overall-precision <0-1>     default 0.90
   --min-recall <0-1>            default 0.80 (go criterion)
@@ -277,13 +283,14 @@ async function encodeCommand(args: string[]): Promise<void> {
   );
 }
 
-async function runCommand(args: string[]): Promise<void> {
-  const { values } = parseArgs({
+function parseRunArgs(args: string[]) {
+  return parseArgs({
     args,
     strict: true,
     options: {
       dataset: { type: 'string' },
       provider: { type: 'string', default: 'fake' },
+      models: { type: 'string' },
       [AWS_ACKNOWLEDGEMENT]: { type: 'boolean', default: false },
       'index-max-bytes': { type: 'string' },
       'long-edges': { type: 'string' },
@@ -306,11 +313,88 @@ async function runCommand(args: string[]): Promise<void> {
       'keep-collections': { type: 'boolean', default: false },
     },
   });
+}
+
+type RunValues = ReturnType<typeof parseRunArgs>['values'];
+
+/** One model's outcome, for the comparison of `--models`. */
+interface ModelRun {
+  model: string;
+  key: string;
+  strong: number;
+  maybe: number;
+  go: boolean;
+  /** Null when no photo came back (precision) or nobody was in a photo (recall, zero-result). */
+  precision: number | null;
+  recall: number | null;
+  zeroResult: number | null;
+  runDir: string;
+}
+
+async function runCommand(args: string[]): Promise<void> {
+  const { values } = parseRunArgs(args);
   // Checked before anything else, so a missing flag never gets as far as building an AWS client.
   assertProviderAllowed(values.provider, values[AWS_ACKNOWLEDGEMENT] === true);
+  if (values.models !== undefined && values.provider !== 'self-hosted') {
+    throw new Error('--models compares self-hosted models: use it with --provider self-hosted');
+  }
+  const models: (FaceRecognitionModelId | undefined)[] =
+    values.models === undefined
+      ? [undefined]
+      : list<FaceRecognitionModelId>(values.models, [], FACE_RECOGNITION_MODEL_IDS, 'models', (v) =>
+          v.toLowerCase(),
+        );
+  const started = new Date();
+  const stamp = started.toISOString().replace(/[-:]/g, '').replace(/\..*/, '').toLowerCase();
+  const runs: ModelRun[] = [];
+  for (const model of models) {
+    runs.push(await runEvaluation(values, model, models.length > 1, started, stamp));
+  }
+  if (runs.length > 1) {
+    const pct = (v: number | null) => (v === null ? '–' : `${(v * 100).toFixed(1)}%`);
+    const table = [
+      `# Model comparison (${started.toISOString()})`,
+      '',
+      'Same dataset, same pipeline options; each model at its own recommended operating point.',
+      'Scores of different models are not comparable: compare precision, recall and go/no-go.',
+      '',
+      '| Model | Recommended option | FACE_STRONG | FACE_MAYBE | Precision (strong+maybe) | Recall (strong+maybe) | Zero-result | Go |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- |',
+      ...runs.map(
+        (r) =>
+          `| ${r.model} | ${r.key} | ${r.strong} | ${r.maybe} | ${pct(r.precision)} | ${pct(r.recall)} | ${pct(r.zeroResult)} | ${r.go ? 'GO' : 'NO-GO'} |`,
+      ),
+      '',
+    ].join('\n');
+    const runsDir = resolve(values['runs-dir'] ?? RUNS_DIR);
+    const file = join(runsDir, `${stamp}-compare.md`);
+    await writeMarkdown(file, table);
+    if (values.report) await writeMarkdown(withSuffix(resolve(values.report), 'compare'), table);
+    log(`Comparison: ${file}`);
+  }
+}
 
-  const config = loadFaceConfig(process.env);
-  const cost = loadCostConfig(process.env);
+/** `report.md` → `report-<suffix>.md`. */
+function withSuffix(path: string, suffix: string): string {
+  return path.replace(/(\.md)?$/, `-${suffix}.md`);
+}
+
+async function runEvaluation(
+  values: RunValues,
+  model: FaceRecognitionModelId | undefined,
+  several: boolean,
+  started: Date,
+  stamp: string,
+): Promise<ModelRun> {
+  const selfHosted = values.provider === 'self-hosted';
+  // FACE_MODEL also picks the model's starting thresholds (ADR 0009 section 3).
+  const config = loadFaceConfig(
+    model === undefined ? process.env : { ...process.env, FACE_MODEL: model },
+  );
+  if (model !== undefined) log(`\n=== ${model} ===`);
+  const baseCost = loadCostConfig(process.env);
+  // No per-call or per-face fees on our own VPS.
+  const cost = selfHosted ? { ...baseCost, rekognitionCall: 0, rekognitionFaceMonth: 0 } : baseCost;
   const datasetDir = resolve(values.dataset ?? DEFAULT_SYNTHETIC_DIR);
   assertNotCommittable(datasetDir, 'Dataset');
   const runsDir = resolve(values['runs-dir'] ?? RUNS_DIR);
@@ -337,7 +421,7 @@ async function runCommand(args: string[]): Promise<void> {
   );
   const filters = list<QualityFilter>(
     values['quality-filters'],
-    ['LOW', 'MEDIUM'],
+    selfHosted ? ['AUTO'] : ['LOW', 'MEDIUM'],
     QUALITY_FILTERS,
     'quality-filters',
     (v) => v.toUpperCase(),
@@ -353,10 +437,16 @@ async function runCommand(args: string[]): Promise<void> {
   );
   const selfies = integers(values.selfies, [1, config.search.maxSelfies], 'selfies', 1);
   const strongGrid = [
-    ...new Set([...parseGrid(values.strong ?? '80:99:1'), config.thresholds.strong]),
+    ...new Set([
+      ...parseGrid(values.strong ?? (selfHosted ? '20:80:1' : '80:99:1')),
+      config.thresholds.strong,
+    ]),
   ].sort((a, b) => a - b);
   const maybeGrid = [
-    ...new Set([...parseGrid(values.maybe ?? '70:95:1'), config.thresholds.maybe]),
+    ...new Set([
+      ...parseGrid(values.maybe ?? (selfHosted ? '15:70:1' : '70:95:1')),
+      config.thresholds.maybe,
+    ]),
   ].sort((a, b) => a - b);
   const indexOptions: IndexOption[] = longEdges.flatMap((longEdge) =>
     maxBytesGrid.flatMap((maxBytes) =>
@@ -398,8 +488,6 @@ async function runCommand(args: string[]): Promise<void> {
       `at most ~${upperBound.toLocaleString('en-US')} provider calls.`,
   );
 
-  const started = new Date();
-  const stamp = started.toISOString().replace(/[-:]/g, '').replace(/\..*/, '').toLowerCase();
   const result = await evaluate({
     dataset,
     providerFor: setup.providerFor,
@@ -413,7 +501,10 @@ async function runCommand(args: string[]): Promise<void> {
     minStrong: strongGrid[0]!,
     // The fake derives face ids, and so its similarity jitter, from the collection id: keep it stable
     // so synthetic runs are reproducible. Real runs get unique collections.
-    collectionTag: setup.name === 'fake' ? 'eval-synthetic' : `eval-${stamp}`,
+    collectionTag:
+      setup.name === 'fake'
+        ? 'eval-synthetic'
+        : `eval-${stamp}${model === undefined ? '' : `-${model}`}`,
     concurrency: number(values.concurrency, 4, 'concurrency', 1),
     keepCollections: values['keep-collections'],
     log,
@@ -445,7 +536,10 @@ async function runCommand(args: string[]): Promise<void> {
     harnessCalls: result.harnessCalls,
   });
 
-  const runDir = join(runsDir, `${stamp}-${summary.synthetic ? 'synthetic' : 'real'}`);
+  const runDir = join(
+    runsDir,
+    `${stamp}-${summary.synthetic ? 'synthetic' : 'real'}${several && model !== undefined ? `-${model}` : ''}`,
+  );
   await mkdir(runDir, { recursive: true });
   const recommended = analysis.recommended;
   const perPerson = scoreScans(recommended.result.scans, positivesOf, analysis.thresholds);
@@ -487,12 +581,30 @@ async function runCommand(args: string[]): Promise<void> {
   );
   await writeFile(join(runDir, 'scans.json'), `${JSON.stringify(result.combos)}\n`);
   await writeMarkdown(join(runDir, 'report.md'), markdown);
-  if (values.report) await writeMarkdown(resolve(values.report), markdown);
-  log(`Run output: ${runDir}${values.report ? `\nReport: ${resolve(values.report)}` : ''}`);
+  const reportPath =
+    values.report === undefined
+      ? undefined
+      : several && model !== undefined
+        ? withSuffix(resolve(values.report), model)
+        : resolve(values.report);
+  if (reportPath) await writeMarkdown(reportPath, markdown);
+  log(`Run output: ${runDir}${reportPath ? `\nReport: ${reportPath}` : ''}`);
   log(
     `Recommended ${recommended.key} at FACE_STRONG=${analysis.thresholds.strong} FACE_MAYBE=${analysis.thresholds.maybe}; ` +
       `${analysis.go.every((g) => g.pass) && analysis.feasible ? 'GO' : 'NO-GO'} on this dataset.`,
   );
+  const overall = recommended.at(analysis.thresholds).overallSummary;
+  return {
+    model: model ?? config.selfHosted.model,
+    key: recommended.key,
+    strong: analysis.thresholds.strong,
+    maybe: analysis.thresholds.maybe,
+    go: analysis.go.every((g) => g.pass) && analysis.feasible,
+    precision: overall.micro.precision,
+    recall: overall.micro.recall,
+    zeroResult: overall.zeroResult.rate,
+    runDir,
+  };
 }
 
 async function main(argv: string[]): Promise<void> {

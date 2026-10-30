@@ -186,7 +186,11 @@ describe('searchBySelfies', () => {
 
 describe('selfieSearchOptions', () => {
   it('takes thresholds and search settings from FaceConfig', () => {
-    const config = loadFaceConfig({ FACE_STRONG: '96', FACE_EXPANSION_SEEDS: '0' });
+    const config = loadFaceConfig({
+      FACE_PROVIDER: 'rekognition',
+      FACE_STRONG: '96',
+      FACE_EXPANSION_SEEDS: '0',
+    });
     expect(selfieSearchOptions(config, 'pg-7')).toEqual({
       collectionId: 'pg-7',
       thresholds: { strong: 96, maybe: 85 },

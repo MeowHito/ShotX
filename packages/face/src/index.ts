@@ -12,3 +12,5 @@ export * from './index-photo';
 export * from './reconcile';
 export * from './worst-case';
 export * from './search';
+export * from './self-hosted/index';
+export * from './create-provider';

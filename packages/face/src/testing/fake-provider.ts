@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { EncodedImage } from '../image';
 import type { SmallFaceDetector } from '../index-photo';
 import {
+  EXCEEDS_MAX_FACES,
   type FaceProvider,
   ImageTooLargeError,
   type IndexFacesRequest,
@@ -12,6 +13,7 @@ import {
   REKOGNITION_LIST_FACES_MAX_RESULTS,
   type SearchByFaceRequest,
   type SearchByImageRequest,
+  SMALL_BOUNDING_BOX,
 } from '../provider';
 import { compareMatches } from '../search';
 import type {
@@ -236,11 +238,10 @@ export class FakeFaceProvider implements FaceProvider {
     for (const face of largestFirst) {
       const bbox = toRatios(face.box, size);
       const reasons: string[] = [];
-      if (rule && face.box.width < minWidth * rule.minSizeFactor)
-        reasons.push('SMALL_BOUNDING_BOX');
+      if (rule && face.box.width < minWidth * rule.minSizeFactor) reasons.push(SMALL_BOUNDING_BOX);
       if (rule && faceQuality(face.box.width) < rule.minQuality) reasons.push('LOW_FACE_QUALITY');
       if (reasons.length === 0 && result.faces.length >= request.maxFaces) {
-        reasons.push('EXCEEDS_MAX_FACES');
+        reasons.push(EXCEEDS_MAX_FACES);
       }
       if (reasons.length > 0) {
         result.unindexed.push({ bbox, reasons });

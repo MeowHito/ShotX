@@ -103,11 +103,15 @@ export async function deleteRequestedFaces(
     return removed.length;
   });
   if (deleted === null) return 'already-done';
+  const withheldFileIds = [...new Set(marked.map((f) => f.fileId))].sort();
   log.info('face deletion done', {
     deletionId,
     photographerId: deletion.photographerId,
     facesDeleted: deleted,
-    files: new Set(marked.map((f) => f.fileId)).size,
+    files: withheldFileIds.length,
+    // File ids only (no biometrics), comma-separated: after a database restore these photos must
+    // be withheld again before re-indexing (deploy/RESTORE.md; ADR 0009 section 6).
+    withheldFileIds: withheldFileIds.join(','),
   });
   return 'done';
 }

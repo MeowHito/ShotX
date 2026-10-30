@@ -61,6 +61,9 @@ export function testEnv(overrides: Env = {}): Env {
     DRIVE_PAGE_SIZE: '3',
     DRIVE_MAX_FOLDER_DEPTH: '4',
     IP_HASH_SECRET: 'test-ip-hash-secret-0123456789abcdef',
+    // The AWS-stack fixture: FakeFaceProvider's similarities are on Rekognition's scale (95 / 85
+    // thresholds). Self-hosted wiring has its own tests (wiring.test.ts).
+    FACE_PROVIDER: 'rekognition',
     FACE_SEARCH_MAX_SELFIE_BYTES: String(1024 * 1024),
     FACE_SEARCH_MAX_BODY_BYTES: String(3 * 1024 * 1024 + 64 * 1024),
     FACES_QUEUE_URL: 'https://sqs.ap-southeast-1.amazonaws.com/000000000000/shotx-test-faces',

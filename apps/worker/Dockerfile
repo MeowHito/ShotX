@@ -36,9 +36,22 @@ COPY packages/shared packages/shared
 COPY packages/db packages/db
 COPY packages/face packages/face
 COPY apps/worker apps/worker
+# Face models (ADR 0009): fetched for FACE_DETECTOR_MODEL / FACE_MODEL (build args, registry
+# defaults when empty) and checked against the registry's SHA-256; the provider checks again.
+ARG FACE_DETECTOR_MODEL=
+ARG FACE_MODEL=
+# Models before `deploy --prod`, which prunes the dev tools (tsx) from the workspace; afterwards
+# ONNX Runtime keeps only the binary for this image's platform (it ships every OS, ~250 MB).
 RUN pnpm --filter @shotx/worker run build \
+ && FACE_DETECTOR_MODEL="$FACE_DETECTOR_MODEL" FACE_MODEL="$FACE_MODEL" \
+    pnpm --filter @shotx/worker exec tsx ../../packages/face/src/cli/download-models.ts --dir /models \
  && pnpm --filter @shotx/worker deploy --legacy --prod /out \
- && cp -r apps/worker/dist /out/dist
+ && cp -r apps/worker/dist /out/dist \
+ && mv /models /out/models \
+ && ORT=/out/node_modules/onnxruntime-node/bin/napi-v6 \
+ && ARCH=$(case "$(uname -m)" in aarch64) echo arm64;; *) echo x64;; esac) \
+ && find "$ORT" -mindepth 2 -maxdepth 2 -type d ! -path "$ORT/linux/$ARCH" -exec rm -rf {} + \
+ && test -d "$ORT/linux/$ARCH"
 
 # --- Runtime ---------------------------------------------------------------------------------
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
@@ -56,11 +69,14 @@ RUN apt-get update \
 
 ENV NODE_ENV=production \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
-    WORKER_TMP_DIR=/tmp/worker
+    WORKER_TMP_DIR=/tmp/worker \
+    FACE_MODEL_DIR=/app/models \
+    ORT_DISABLE_TELEMETRY=1
 WORKDIR /app
 COPY --from=build --chown=node:node /out/node_modules ./node_modules
 COPY --from=build --chown=node:node /out/package.json ./package.json
 COPY --from=build --chown=node:node /out/dist ./dist
+COPY --from=build --chown=node:node /out/models ./models
 RUN mkdir -p /tmp/worker && chown node:node /tmp/worker
 
 USER node

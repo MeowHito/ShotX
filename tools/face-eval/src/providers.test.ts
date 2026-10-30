@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
-import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { REKOGNITION_INLINE_MAX_BYTES } from '@shotx/face';
-import { type Env, loadFaceConfig } from '@shotx/shared';
+import { type Env, FACE_RECOGNITION_MODELS, loadFaceConfig } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
 import type { Dataset } from './dataset';
 import { LEGACY_S3_MAX_BYTES } from './encoding';
@@ -10,6 +11,7 @@ import {
   assertProviderAllowed,
   AWS_ACKNOWLEDGEMENT,
   createProvider,
+  DEFAULT_MODEL_DIR,
   evaluationClientConfig,
   rekognitionRegionalEndpoint,
 } from './providers';
@@ -126,6 +128,27 @@ describe('createProvider', () => {
     expect(() =>
       createProvider({ ...base, name: 'fake', acknowledged: false, dataset: realDataset }),
     ).toThrow(/synthetic datasets/);
+  });
+
+  it('runs the self-hosted pipeline on real datasets without any flag, if the models are there', () => {
+    expect(() =>
+      createProvider({
+        ...base,
+        config: loadFaceConfig({ FACE_MODEL_DIR: '/nonexistent/models' }),
+        name: 'self-hosted',
+        acknowledged: false,
+        dataset: realDataset,
+      }),
+    ).toThrow(/pnpm face-models --all/);
+    if (!existsSync(join(DEFAULT_MODEL_DIR, FACE_RECOGNITION_MODELS['sface-2021dec'].file))) return;
+    const setup = createProvider({
+      ...base,
+      name: 'self-hosted',
+      acknowledged: false,
+      dataset: realDataset,
+    });
+    expect(setup.name).toBe('self-hosted');
+    expect(setup.description).toMatch(/sface-2021dec.*not approved for production.*no network/);
   });
 
   it('refuses byte limits above 5 MiB for Rekognition: the S3 path is gone', () => {

@@ -2,7 +2,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { SESv2Client } from '@aws-sdk/client-sesv2';
 import { SQSClient, type SQSClientConfig } from '@aws-sdk/client-sqs';
 import { createDb, createPool } from '@shotx/db';
-import { createRedisRekognitionLimiters, RekognitionFaceProvider } from '@shotx/face';
+import { createFaceProvider } from '@shotx/face';
 import { awsClientOptions, QUEUE_NAMES, type QueueName } from '@shotx/shared';
 import { Redis } from 'ioredis';
 import { S3ObjectStore } from './aws/object-store';
@@ -149,17 +149,20 @@ async function main(): Promise<void> {
   });
   redis.on('error', (error) => log.warn('redis error', errorFields(error)));
 
-  // Rekognition behind FaceProvider (ADR 0001): background profile, rate limits shared through
-  // Redis with every api and worker task.
-  const limiters = createRedisRekognitionLimiters(redis, config.face.rekognition, 'background');
-  // Explicit region, endpoint and keys (loadRekognitionClientConfig), never AWS_ENDPOINT_URL or
-  // the default chain off AWS (ADR 0008 section 1).
-  const provider = RekognitionFaceProvider.create(
-    config.face.rekognition,
-    'background',
-    limiters,
-    config.rekognitionClient,
-  );
+  // FACE_PROVIDER behind FaceProvider (ADR 0001, ADR 0009): self-hosted runs the ONNX models in
+  // this process and keeps vectors in `face_vectors` on the primary; rekognition uses the
+  // background profile, rate limits shared through Redis, and explicit REKOGNITION_* keys (never
+  // AWS_ENDPOINT_URL or the default chain off AWS, ADR 0008 section 1).
+  const face = createFaceProvider(config.face, {
+    profile: 'background',
+    pool,
+    redis,
+    rekognitionClient: config.rekognitionClient,
+  });
+  log.info(face.summary);
+  // Deletions never need the models, so only indexing makes a missing model file fatal.
+  if (config.features.faceSearch) await face.warmUp();
+  const provider = face.provider;
 
   const budget = checkFacesBudget(config.face, worker.maxProcessingMs.faces, runtime.facesHold);
   for (const problem of budget.problems) log.error(`faces time budget: ${problem}`);

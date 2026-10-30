@@ -4,6 +4,7 @@ import {
   BILLING_MODES,
   BILLING_NOTICE_CODES,
   CHECKOUT_CHANGE_TYPES,
+  CONSENT_POLICY_FACE_PROVIDER,
   CONSENT_POLICY_VERSIONS,
   CONSENT_PURPOSES,
   DOWNLOAD_SIZES,
@@ -116,6 +117,18 @@ describe('Thai messages', () => {
         const policy = th.consent.policies[purpose][version];
         expect(policy.intro).toContain('มาตรา 26');
         expect(policy.points.noStorage).toContain('ไม่มีการบันทึกภาพเซลฟี');
+      }
+    }
+    // Each version names the processor CONSENT_POLICY_FACE_PROVIDER says it does (ADR 0009).
+    for (const purpose of CONSENT_PURPOSES) {
+      for (const version of CONSENT_POLICY_VERSIONS) {
+        const { processor } = th.consent.policies[purpose][version].points;
+        if (CONSENT_POLICY_FACE_PROVIDER[version] === 'rekognition') {
+          expect(processor).toContain('Amazon Web Services');
+        } else {
+          expect(processor).not.toContain('Amazon');
+          expect(processor).toContain('เซิร์ฟเวอร์ของเราเอง');
+        }
       }
     }
     // The face-search text states the API's result TTL instead of a literal.

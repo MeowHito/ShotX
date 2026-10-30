@@ -45,7 +45,7 @@ Enforce ownership server-side in one place (NestJS guard plus service-level `own
 | Background jobs | SQS (each queue with a DLQ) → worker service (sharp, ffmpeg, archiver); EventBridge Scheduler for cron |
 | Database | PostgreSQL on RDS Multi-AZ with `ltree`; Redis (ElastiCache) for cache, rate limits, short-lived grants |
 | Media | S3 (private) + CloudFront flat-rate Business plan, OAC, signed URLs |
-| Face AI | Amazon Rekognition behind a `FaceProvider` interface |
+| Face AI | Self-hosted behind a `FaceProvider` interface (ADR 0009): ONNX models (YuNet detection + a recogniser; SFace is the dev placeholder) in api/worker, embeddings in Postgres pgvector (HNSW). Amazon Rekognition stays selectable (`FACE_PROVIDER=rekognition`) until Phase 0 is done |
 | Auth | Amazon Cognito; Google and LINE Login as OIDC providers; MFA for admins |
 | Payments | Thai gateway with PromptPay QR, cards and signed webhooks (e.g. Omise/Opn, 2C2P, Stripe) |
 | Infra / ops | ECS Fargate, AWS CDK (TypeScript), GitHub Actions, CloudWatch, Sentry |
@@ -75,10 +75,10 @@ docs/adr/    architecture decision records
 - **Never hand out S3 URLs.** Buckets are private (Block Public Access on) and reachable only through CloudFront OAC. S3→CloudFront transfer is free and CloudFront transfer is covered by the flat-rate plan, while direct S3 egress is billed per GB.
 - **Heavy work is async.** Image/video processing, face indexing and zipping run in the worker via SQS. Face *search* is the only synchronous AI call, and it is bounded and rate-limited.
 - **Selfies are never persisted** — not in S3, the DB, logs or Sentry. Process in memory and discard. Exclude face-search request bodies from all logging and error reporting.
-- **No scan without consent.** A `consents` row for the current policy version must exist for the viewer or session before any call to Rekognition.
+- **No scan without consent.** A `consents` row for the current policy version must exist for the viewer or session before any call to the face provider. The policy version's texts must name `FACE_PROVIDER`'s processor (`CONSENT_POLICY_FACE_PROVIDER`).
 - **Tenant isolation.** Every drive query filters by `owner_id`; share access is checked with `ltree` path containment, never by trusting paths from the client.
 - **Money and quota change inside DB transactions.** Payment webhooks are verified and idempotent. Money is stored as integer satang.
-- **No InsightFace pretrained models** (buffalo_l, antelopev2, …). Their license is non-commercial research only. Face recognition goes through `FaceProvider` → Rekognition unless a commercially licensed model is approved by ADR.
+- **No InsightFace pretrained models** (buffalo_l, antelopev2, …). Their license is non-commercial research only. Face recognition goes through `FaceProvider`; a production model must have a commercial licence and be added to the model registry by ADR (ADR 0009). Face embeddings are biometric data: backups exclude `face_vectors`.
 
 ## Data model (PostgreSQL)
 
@@ -139,6 +139,8 @@ tmp/index/{fileId}.jpg    tmp/zips/{jobId}.zip                                  
 
 ## Face indexing (worker)
 
+> ADR 0009: with the self-hosted provider a "collection" is the `collection_id` of `face_vectors` rows, IndexFaces is detection + embedding + insert, and Rekognition's TPS limits, `QualityFilter` and costs don't apply (the gates are `FACE_DETECTOR_MIN_SCORE` and `FACE_MIN_FACE_PX`). The rules below otherwise hold for both providers.
+
 - One Rekognition collection per photographer (`pg-{photographerId}`) with `ExternalImageId = fileId`, so moving or renaming never requires re-indexing.
 - Index from a temporary JPEG (long edge ~3,500 px, quality 90, under 15 MB) written to `tmp/index/` and passed as an S3 object.
 - Call `IndexFaces` with `MaxFaces = 100` and `QualityFilter` from config (start with `LOW`: event photos are often slightly blurred; tune in the PoC). Store every returned face in `faces`.
@@ -147,6 +149,8 @@ tmp/index/{fileId}.jpg    tmp/zips/{jobId}.zip                                  
 - Purging files calls `DeleteFaces` in batches. A scheduled job deletes faces for folders past `face_index_expires_at` (default: last upload + 90 days, extendable by the photographer).
 
 ## Face search (share page)
+
+> ADR 0009: similarity is 100 × cosine for the self-hosted provider, and thresholds are per model (SFace starts at 50 / 36); the selfie is embedded in the api process and never stored.
 
 1. Consent screen (Thai, versioned) → `POST /s/:token/consent`.
 2. Capture with `getUserMedia`, falling back to `<input type="file" accept="image/*" capture="user">` because LINE and Facebook in-app browsers often block the camera API. "Choose from gallery" is allowed only in `gallery` mode.

@@ -9,10 +9,12 @@ import {
   orientedSize,
 } from './image';
 import {
+  EXCEEDS_MAX_FACES,
   type FaceProvider,
   ImageTooLargeError,
   IndexFacesOutcomeUnknownError,
   REKOGNITION_INLINE_MAX_BYTES,
+  SMALL_BOUNDING_BOX,
 } from './provider';
 import type { IndexedFace, IndexFacesResult, QualityFilter } from './types';
 
@@ -20,7 +22,7 @@ import type { IndexedFace, IndexFacesResult, QualityFilter } from './types';
 export { TILING_MODES, type TilingMode } from '@shotx/shared';
 
 /** Rekognition reasons meaning faces were skipped for being small or too many. */
-const TILE_REASONS = new Set(['SMALL_BOUNDING_BOX', 'EXCEEDS_MAX_FACES']);
+const TILE_REASONS = new Set([SMALL_BOUNDING_BOX, EXCEEDS_MAX_FACES]);
 
 /** Cheap local face detector (e.g. OpenCV YuNet) that decides whether small faces need tiles. */
 export interface SmallFaceDetector {

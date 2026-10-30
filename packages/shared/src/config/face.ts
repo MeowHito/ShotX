@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { AWS_CLIENT_ENV, loadAwsClientConfig } from './aws-clients';
 import { type Env, parseEnv } from './env';
+import { FACE_PROVIDERS, type FaceProviderName } from './face-provider';
+import {
+  FACE_DETECTOR_MODEL_IDS,
+  FACE_RECOGNITION_MODEL_IDS,
+  FACE_RECOGNITION_MODELS,
+  type FaceDetectorModelId,
+  type FaceRecognitionModelId,
+} from './face-models';
 import {
   int,
   MiB,
@@ -10,6 +18,11 @@ import {
   SECONDS_PER_DAY,
   SECONDS_PER_MINUTE,
 } from './fields';
+
+export { FACE_PROVIDERS, type FaceProviderName } from './face-provider';
+
+/** FACE_STRONG and FACE_MAYBE defaults with FACE_PROVIDER=rekognition (the platform spec). */
+export const REKOGNITION_DEFAULT_THRESHOLDS = { strong: 95, maybe: 85 } as const;
 
 export const QUALITY_FILTERS = ['NONE', 'AUTO', 'LOW', 'MEDIUM', 'HIGH'] as const;
 export type QualityFilter = (typeof QUALITY_FILTERS)[number];
@@ -56,16 +69,23 @@ const windowSeconds = int(1, SECONDS_PER_DAY);
 // Defaults are the starting values from the platform spec. The face PoC decides the real ones.
 const faceEnvSchema = z
   .object({
-    FACE_STRONG: percent.default(95),
-    FACE_MAYBE: percent.default(85),
+    FACE_PROVIDER: z.enum(FACE_PROVIDERS).default('self-hosted'),
+    /**
+     * Similarity thresholds (0–100). Unset, they default per backend: Rekognition's spec values
+     * (REKOGNITION_DEFAULT_THRESHOLDS) or the selected FACE_MODEL's starting values (ADR 0009
+     * section 3; scores of different models are not comparable). FACE_DELETION_THRESHOLD
+     * defaults to the resulting FACE_STRONG.
+     */
+    FACE_STRONG: percent.optional(),
+    FACE_MAYBE: percent.optional(),
     FACE_MAX_SELFIES: int(1, 5).default(3),
     FACE_EXPANSION_SEEDS: int(0, 10).default(2),
     /**
      * "ขอลบใบหน้าของฉัน": faces matching a selfie at or above this similarity are deleted from the
      * photographer's collection (direct matches only, no expansion). At least FACE_MAYBE.
-     * Assumption: the FACE_STRONG default, so a deletion rarely removes someone else's face.
+     * Assumption: FACE_STRONG (the default), so a deletion rarely removes someone else's face.
      */
-    FACE_DELETION_THRESHOLD: percent.default(95),
+    FACE_DELETION_THRESHOLD: percent.optional(),
     /**
      * Alert (ADR 0007) when one share gets at least this many face deletions within
      * FACE_DELETION_ALERT_WINDOW_SECONDS. Assumption: 20 per day; tune after launch.
@@ -130,12 +150,35 @@ const faceEnvSchema = z
     FACE_SEARCH_RATE_PER_SHARE_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
     FACE_SEARCH_RATE_PER_VIEWER: requests.default(10),
     FACE_SEARCH_RATE_PER_VIEWER_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
+    // Self-hosted provider (ADR 0009). Assumptions until Phase 0 and the load test measure them.
+    FACE_DETECTOR_MODEL: z.enum(FACE_DETECTOR_MODEL_IDS).default('yunet-2023mar'),
+    FACE_MODEL: z.enum(FACE_RECOGNITION_MODEL_IDS).default('sface-2021dec'),
+    /** Directory holding the model files (`pnpm --filter @shotx/face models:download`). */
+    FACE_MODEL_DIR: z
+      .string()
+      .max(1024)
+      .regex(/^[^\s\0][^\0]*$/, { error: 'must be a directory path' })
+      .optional(),
+    FACE_DETECTOR_MIN_SCORE: ratio.default(0.8),
+    FACE_DETECTOR_NMS_IOU: ratio.default(0.3),
+    FACE_DETECTOR_LONG_EDGE: int(320, 8192).default(1920),
+    FACE_DETECTOR_WINDOW_OVERLAP: z.coerce.number().min(0).max(0.5).default(0.2),
+    FACE_MIN_FACE_PX: int(8, 1024).default(32),
+    FACE_ONNX_THREADS: int(1, 64).default(2),
+    FACE_INFERENCE_CONCURRENCY: int(1, 64).default(2),
+    FACE_INFERENCE_MAX_WAIT_MS: int(0, 120_000).default(5000),
+    FACE_HNSW_EF_SEARCH: int(10, 1000).default(100),
+    FACE_HNSW_MAX_SCAN_TUPLES: int(1000, 10_000_000).default(20_000),
+    /**
+     * Largest image (width × height, read from the header before decoding) the self-hosted
+     * provider decodes. Anything bigger is refused as unreadable, so one crafted selfie can't
+     * exhaust the api's memory. Index images are at most FACE_INDEX_LONG_EDGE² (12.25 MP).
+     */
+    FACE_DECODE_MAX_PIXELS: int(1_000_000, 268_402_689).default(40_000_000),
   })
-  .refine((env) => env.FACE_STRONG >= env.FACE_MAYBE, {
-    error: 'FACE_STRONG must be greater than or equal to FACE_MAYBE',
-  })
-  .refine((env) => env.FACE_DELETION_THRESHOLD >= env.FACE_MAYBE, {
-    error: 'FACE_DELETION_THRESHOLD must be greater than or equal to FACE_MAYBE',
+  .refine((env) => env.FACE_DECODE_MAX_PIXELS >= env.FACE_INDEX_LONG_EDGE ** 2, {
+    error:
+      'FACE_DECODE_MAX_PIXELS must be at least FACE_INDEX_LONG_EDGE²: index images are decoded at full size',
   })
   .refine((env) => env.FACE_ENCODE_MIN_LONG_EDGE <= env.FACE_SELFIE_LONG_EDGE, {
     error: 'FACE_ENCODE_MIN_LONG_EDGE must be less than or equal to FACE_SELFIE_LONG_EDGE',
@@ -177,7 +220,39 @@ export interface RateLimitRule {
   windowSeconds: number;
 }
 
+/** The self-hosted provider's settings (ADR 0009). */
+export interface SelfHostedFaceConfig {
+  detectorModel: FaceDetectorModelId;
+  model: FaceRecognitionModelId;
+  /** FACE_MODEL_DIR; null when unset (models load only when first needed, and then fail). */
+  modelDir: string | null;
+  detector: {
+    /** Detections below this score (0–1) are not faces. */
+    minScore: number;
+    /** Overlapping detections above this IoU are merged (non-maximum suppression). */
+    nmsIou: number;
+    /** Images are detected at this long edge (never upscaled), in 640 px windows. */
+    longEdge: number;
+    /** Overlap of neighbouring detection windows, as a fraction of the window. */
+    windowOverlap: number;
+  };
+  /**
+   * Faces narrower than this in the image passed to the provider are not embedded; they come
+   * back as unindexed with SMALL_BOUNDING_BOX, which triggers `signal` tiling.
+   */
+  minFacePx: number;
+  /** Intra-op threads of each ONNX Runtime session. */
+  onnxThreads: number;
+  /** Per process: inferences run at once, and the longest wait for a slot (then RateLimitedError). */
+  inference: { concurrency: number; maxWaitMs: number };
+  /** pgvector search settings (hnsw.ef_search, hnsw.max_scan_tuples with iterative scans). */
+  hnsw: { efSearch: number; maxScanTuples: number };
+  /** FACE_DECODE_MAX_PIXELS: images above this many pixels are refused before decoding. */
+  decodeMaxPixels: number;
+}
+
 export interface FaceConfig {
+  provider: FaceProviderName;
   thresholds: FaceThresholds;
   search: {
     maxSelfies: number;
@@ -238,6 +313,7 @@ export interface FaceConfig {
      */
     orphanGraceMs: number;
   };
+  selfHosted: SelfHostedFaceConfig;
   /** Re-encoding of index images and selfies that are over their byte limit. */
   encode: {
     /** JPEG quality is lowered by this much per attempt. */
@@ -308,12 +384,33 @@ export interface FaceConfig {
  */
 export function loadFaceConfig(env: Env): FaceConfig {
   const e = parseEnv(faceEnvSchema, env, 'face');
+  const defaults =
+    e.FACE_PROVIDER === 'rekognition'
+      ? REKOGNITION_DEFAULT_THRESHOLDS
+      : FACE_RECOGNITION_MODELS[e.FACE_MODEL].thresholds;
+  const strong = e.FACE_STRONG ?? defaults.strong;
+  const maybe = e.FACE_MAYBE ?? defaults.maybe;
+  const deletion = e.FACE_DELETION_THRESHOLD ?? strong;
+  const problems = [
+    ...(strong >= maybe ? [] : ['FACE_STRONG must be greater than or equal to FACE_MAYBE']),
+    ...(deletion >= maybe
+      ? []
+      : ['FACE_DELETION_THRESHOLD must be greater than or equal to FACE_MAYBE']),
+  ];
+  if (problems.length > 0) {
+    throw new Error(
+      `Invalid face configuration (FACE_PROVIDER=${e.FACE_PROVIDER}, FACE_MODEL=${e.FACE_MODEL}):\n${problems
+        .map((p) => `✖ ${p}`)
+        .join('\n')}`,
+    );
+  }
   // Validates every REKOGNITION_* value; the keys are enforced by loadRekognitionClientConfig.
   const { region } = loadAwsClientConfig(env, AWS_CLIENT_ENV.rekognition, 'face', {
     required: false,
   });
   return {
-    thresholds: { strong: e.FACE_STRONG, maybe: e.FACE_MAYBE },
+    provider: e.FACE_PROVIDER,
+    thresholds: { strong, maybe },
     search: {
       maxSelfies: e.FACE_MAX_SELFIES,
       expansionSeeds: e.FACE_EXPANSION_SEEDS,
@@ -321,7 +418,7 @@ export function loadFaceConfig(env: Env): FaceConfig {
       qualityFilter: e.FACE_SEARCH_QUALITY_FILTER,
     },
     deletion: {
-      threshold: e.FACE_DELETION_THRESHOLD,
+      threshold: deletion,
       alert: {
         perShare: e.FACE_DELETION_ALERT_PER_SHARE,
         windowSeconds: e.FACE_DELETION_ALERT_WINDOW_SECONDS,
@@ -355,6 +452,25 @@ export function loadFaceConfig(env: Env): FaceConfig {
       smallFaceRatio: e.FACE_SMALL_FACE_RATIO,
       dedupeIou: e.FACE_DEDUPE_IOU,
       orphanGraceMs: e.FACE_ORPHAN_GRACE_MS,
+    },
+    selfHosted: {
+      detectorModel: e.FACE_DETECTOR_MODEL,
+      model: e.FACE_MODEL,
+      modelDir: e.FACE_MODEL_DIR ?? null,
+      detector: {
+        minScore: e.FACE_DETECTOR_MIN_SCORE,
+        nmsIou: e.FACE_DETECTOR_NMS_IOU,
+        longEdge: e.FACE_DETECTOR_LONG_EDGE,
+        windowOverlap: e.FACE_DETECTOR_WINDOW_OVERLAP,
+      },
+      minFacePx: e.FACE_MIN_FACE_PX,
+      onnxThreads: e.FACE_ONNX_THREADS,
+      inference: {
+        concurrency: e.FACE_INFERENCE_CONCURRENCY,
+        maxWaitMs: e.FACE_INFERENCE_MAX_WAIT_MS,
+      },
+      hnsw: { efSearch: e.FACE_HNSW_EF_SEARCH, maxScanTuples: e.FACE_HNSW_MAX_SCAN_TUPLES },
+      decodeMaxPixels: e.FACE_DECODE_MAX_PIXELS,
     },
     encode: {
       qualityStep: e.FACE_ENCODE_QUALITY_STEP,

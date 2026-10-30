@@ -13,6 +13,8 @@ import { createJsonLogger, errorFields } from './logger';
 const env = {
   NODE_ENV: 'production',
   APP_STAGE: 'staging',
+  // The AWS stack with Rekognition; the self-hosted default has its own test below.
+  FACE_PROVIDER: 'rekognition',
   PUBLIC_BASE_URL: 'https://shotx.example',
   ADMIN_BASE_URL: 'https://admin.shotx.example',
   AWS_REGION: 'ap-southeast-1',
@@ -201,6 +203,27 @@ describe('worker config with R2 storage', () => {
     AWS_IGNORE_CONFIGURED_ENDPOINT_URLS: 'true',
   };
 
+  it('runs the self-hosted face provider (the default) without any Rekognition key (ADR 0009)', () => {
+    const selfHosted = {
+      ...r2,
+      FACE_PROVIDER: '',
+      REKOGNITION_ACCESS_KEY_ID: '',
+      REKOGNITION_SECRET_ACCESS_KEY: '',
+      FACE_MODEL_DIR: '/app/models',
+    };
+    const config = loadWorkerConfig(selfHosted);
+    expect(config.face.provider).toBe('self-hosted');
+    expect(config.rekognitionClient).toBeNull();
+    expect(config.face.selfHosted).toMatchObject({
+      model: 'sface-2021dec',
+      modelDir: '/app/models',
+    });
+    // Rekognition, once selected, still needs its keys off AWS.
+    expect(() => loadWorkerConfig({ ...selfHosted, FACE_PROVIDER: 'rekognition' })).toThrow(
+      /REKOGNITION_ACCESS_KEY_ID/,
+    );
+  });
+
   it('reads an explicit storage endpoint and keys, separate from AWS_ENDPOINT_URL', () => {
     const config = loadWorkerConfig(r2);
     const options = storageS3ClientOptions(config.storage);
@@ -214,7 +237,7 @@ describe('worker config with R2 storage', () => {
       region: 'ap-southeast-1',
     });
     expect(storageS3ClientOptions(loadWorkerConfig(env).storage)).not.toHaveProperty('credentials');
-    expect(awsClientOptions(config.rekognitionClient)).toEqual({
+    expect(awsClientOptions(config.rekognitionClient!)).toEqual({
       region: 'ap-southeast-1',
       credentials: {
         accessKeyId: 'AKIAREKOGNITIONWORKER',
@@ -223,7 +246,7 @@ describe('worker config with R2 storage', () => {
     });
     expect(config.sesClient?.credentials?.accessKeyId).toBe('AKIASESWORKERKEY0001');
     // On AWS (no STORAGE_ENDPOINT_URL, Cognito) the task role still works.
-    expect(loadWorkerConfig(env).rekognitionClient.credentials).toBeNull();
+    expect(loadWorkerConfig(env).rekognitionClient?.credentials).toBeNull();
     expect(config.worker.sweeps.media.maxRequeues).toBe(3);
     expect(config.retention.authSessionRetentionDays).toBe(7);
   });

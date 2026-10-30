@@ -16,7 +16,8 @@
     "dev:services:down": "docker compose down",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "face-eval": "tsx tools/face-eval/src/cli.ts"
+    "face-eval": "tsx tools/face-eval/src/cli.ts",
+    "face-models": "pnpm --filter @shotx/face models:download"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

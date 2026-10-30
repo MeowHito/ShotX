@@ -1,5 +1,8 @@
 import {
+  type ConfiguredFaceProvider,
+  createFaceProvider,
   createRedisRekognitionLimiters,
+  type PgPoolLike,
   type RekognitionLimiters,
   RekognitionFaceProvider,
 } from '@shotx/face';
@@ -129,6 +132,24 @@ export function mediaSignerSummary(config: Pick<ApiConfig, 'mediaUrls'>): string
 }
 
 /**
+ * The api's FaceProvider as FACE_PROVIDER selects (ADR 0009): self-hosted runs the selfie through
+ * the ONNX models in this process (bounded by FACE_INFERENCE_CONCURRENCY) and searches
+ * `face_vectors` on `pool`; rekognition is interactiveFaceProvider below.
+ */
+export function apiFaceProvider(
+  config: Pick<ApiConfig, 'face' | 'rekognitionClient'>,
+  redis: Parameters<typeof createRedisRekognitionLimiters>[0],
+  pool: PgPoolLike,
+): ConfiguredFaceProvider {
+  return createFaceProvider(config.face, {
+    profile: 'interactive',
+    pool,
+    redis,
+    rekognitionClient: config.rekognitionClient,
+  });
+}
+
+/**
  * The api's Rekognition provider: face search (the only synchronous Rekognition use) and face
  * deletion, on the `interactive` profile (fails fast). The client gets REKOGNITION_* region and
  * keys explicitly (config.rekognitionClient; ADR 0008 §1), never AWS_ENDPOINT_URL or, off AWS,
@@ -143,6 +164,9 @@ export function interactiveFaceProvider(
     'interactive',
   ),
 ): RekognitionFaceProvider {
+  if (config.rekognitionClient === null) {
+    throw new Error('FACE_PROVIDER=rekognition needs the REKOGNITION_* client settings');
+  }
   return RekognitionFaceProvider.create(
     config.face.rekognition,
     'interactive',

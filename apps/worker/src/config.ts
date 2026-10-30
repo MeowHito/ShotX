@@ -21,7 +21,7 @@ import {
   loadQueueBackendConfig,
   loadQueueVisibilityTimeouts,
   loadRedisConfig,
-  loadRekognitionClientConfig,
+  loadFaceRekognitionClientConfig,
   loadRetentionConfig,
   loadScheduledJobsConfig,
   loadSesClientConfig,
@@ -73,10 +73,11 @@ export interface WorkerConfig {
   /** AWS_REGION and AWS_ENDPOINT_URL (LocalStack): the SQS client on the AWS stacks only. */
   aws: AwsConfig;
   /**
-   * Rekognition's region, endpoint and keys (ADR 0008 section 1): explicit, never
-   * AWS_ENDPOINT_URL or the default chain off AWS. Secret: never log it.
+   * Rekognition's region, endpoint and keys (ADR 0008 section 1) with FACE_PROVIDER=rekognition:
+   * explicit, never AWS_ENDPOINT_URL or the default chain off AWS; else null (ADR 0009). Secret:
+   * never log it.
    */
-  rekognitionClient: AwsClientConfig;
+  rekognitionClient: AwsClientConfig | null;
   /** The SES client with EMAIL_PROVIDER=ses, else null. Secret: never log it. */
   sesClient: AwsClientConfig | null;
   /**
@@ -112,7 +113,7 @@ export function loadWorkerConfig(env: Env): WorkerConfig {
   return {
     app: loadAppConfig(env),
     aws: loadAwsConfig(env),
-    rekognitionClient: loadRekognitionClientConfig(env),
+    rekognitionClient: loadFaceRekognitionClientConfig(env),
     sesClient: loadSesClientConfig(env),
     offAws: runsOffAws(env),
     storage: loadMediaStorageConfig(env),

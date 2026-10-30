@@ -67,6 +67,7 @@ describe('schema', () => {
         'subscription_events',
         'auth_sessions',
         'admin_credentials',
+        'face_vectors',
       ].sort(),
     );
   });
@@ -226,6 +227,14 @@ describe('schema', () => {
         'expires_at',
       ],
       zip_job_entries: ['job_id', 'photographer_id', 'position', 'file_id', 'name'],
+      face_vectors: [
+        'face_id',
+        'collection_id',
+        'external_image_id',
+        'model',
+        'embedding',
+        'created_at',
+      ],
     };
     for (const [table, columns] of Object.entries(expected)) {
       const actual = config(table).columns.map((c) => c.name);

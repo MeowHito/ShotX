@@ -71,6 +71,13 @@
       "when": 1793269448107,
       "tag": "0009_faces_withheld",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793273359634,
+      "tag": "0010_face_vectors",
+      "breakpoints": true
     }
   ]
 }

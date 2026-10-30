@@ -40,6 +40,7 @@ export * from './api/auth';
 export * from './api/routes';
 export * from './config/env';
 export * from './config/face';
+export * from './config/face-models';
 export * from './config/cost';
 export * from './config/upload';
 export * from './config/drive';

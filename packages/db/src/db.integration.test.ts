@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { ltree } from '@electric-sql/pglite/contrib/ltree';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { vector } from '@electric-sql/pglite-pgvector';
 import { and, eq, type SQL, sql } from 'drizzle-orm';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
@@ -50,7 +51,7 @@ interface Backend {
 }
 
 async function openPglite(): Promise<Backend> {
-  const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
+  const client = await PGlite.create({ extensions: { ltree, pg_trgm, vector } });
   const db = drizzlePglite({ client, schema });
   const run = () => migratePglite(db, { migrationsFolder: MIGRATIONS_FOLDER });
   await run();
@@ -1756,7 +1757,7 @@ describe('migration 0001 on a database with 0000 and existing shares (PGlite)', 
   }
 
   async function at0000() {
-    const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
+    const client = await PGlite.create({ extensions: { ltree, pg_trgm, vector } });
     const db = drizzlePglite({ client, schema });
     const folder = migrationsUpTo(1);
     await migratePglite(db, { migrationsFolder: folder });
@@ -1855,7 +1856,7 @@ describe('migration 0003 on a database with 0002 and existing rows (PGlite)', ()
   }
 
   it('backfills part sizes, turns off unconfirmed face indexes and dedupes consents', async () => {
-    const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
+    const client = await PGlite.create({ extensions: { ltree, pg_trgm, vector } });
     try {
       const db = drizzlePglite({ client, schema });
       const folder = migrationsUpTo(3);
@@ -1937,7 +1938,7 @@ describe('migration 0003 on a database with 0002 and existing rows (PGlite)', ()
 
 describe('migration 0004 on a database with 0003 and existing rows (PGlite)', () => {
   it('backfills payment owners, period starts, legacy auto-renew and consent purposes', async () => {
-    const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
+    const client = await PGlite.create({ extensions: { ltree, pg_trgm, vector } });
     try {
       const db = drizzlePglite({ client, schema });
       const dir = mkdtempSync(join(tmpdir(), 'shotx-migrations-'));
@@ -2219,7 +2220,7 @@ describe('auth sessions and admin credentials (migration 0005, PGlite)', () => {
 
 describe('migration 0005 on a database with 0004 and existing users (PGlite)', () => {
   it('renames the identity columns and constraints and keeps the admin CHECK', async () => {
-    const client = await PGlite.create({ extensions: { ltree, pg_trgm } });
+    const client = await PGlite.create({ extensions: { ltree, pg_trgm, vector } });
     try {
       const db = drizzlePglite({ client, schema });
       const dir = mkdtempSync(join(tmpdir(), 'shotx-migrations-'));

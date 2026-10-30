@@ -10,14 +10,20 @@
   "scripts": {
     "lint": "eslint .",
     "typecheck": "tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "models:download": "tsx src/cli/download-models.ts"
   },
   "dependencies": {
     "@aws-sdk/client-rekognition": "^3.1152.0",
     "@shotx/shared": "workspace:*",
+    "onnxruntime-node": "1.30.0",
     "sharp": "^0.35.5"
   },
   "devDependencies": {
-    "ioredis": "^6.0.0"
+    "@electric-sql/pglite": "0.5.10",
+    "@electric-sql/pglite-pgvector": "0.0.11",
+    "@shotx/db": "workspace:*",
+    "ioredis": "^6.0.0",
+    "tsx": "^4.23.15"
   }
 }
