@@ -1,6 +1,11 @@
 import {
   AUTH_ROUTES,
   type AuthPool,
+  normalizeAccountEmail,
+  PASSWORD_CHANGE_CLAIM,
+  PHOTOGRAPHER_ACCOUNT_ROUTES,
+  passwordAccountSubject,
+  passwordPolicyViolation,
   type AuthTokenResponse,
   BFF_CLIENT_IP_HEADER,
   BFF_KEY_HEADER,
@@ -21,7 +26,12 @@ import { matchRoute } from '@/lib/bff/handler';
  *
  * Behaviour modelled: `bff` routes need the BFF key (else UNAUTHENTICATED); OIDC state is
  * one-time; refresh tokens rotate, the family's expiry never extends, and re-use of a rotated
- * token revokes the family (REFRESH_TOKEN_REUSED).
+ * token revokes the family (REFRESH_TOKEN_REUSED). Photographer email + password (ADR 0010):
+ * one INVALID_CREDENTIALS for every wrong pair, a lockout after `lockoutThreshold` failures
+ * (RATE_LIMITED), ACCOUNT_DISABLED only after the right password, a temporary password answers
+ * `change_password` with a restricted, short-lived session (PASSWORD_CHANGE_CLAIM), and the
+ * password change (the photographer's bearer token) checks the current password and the policy,
+ * revokes every session of the account and answers a new one.
  */
 
 export const BFF_KEY = 'test-bff-key-0123456789abcdef0123456789';
@@ -41,6 +51,19 @@ interface Family {
   /** Epoch ms: fixed at sign-in, never extended by rotation. */
   expiresAt: number;
   revoked: boolean;
+  /** A temporary password's session: only the password change works. */
+  restricted?: boolean;
+}
+
+/** A photographer account an admin created (users pool, `password:` subject). */
+export interface PasswordAccount {
+  subject: string;
+  email: string;
+  name: string;
+  password: string;
+  mustChange: boolean;
+  disabled: boolean;
+  failures: number;
 }
 
 class Fail extends Error {
@@ -63,27 +86,91 @@ export class FakeAuthApi {
   now = 1_700_000_000_000;
   /** Answer every call with this status (e.g. 503) instead. */
   outage: number | null = null;
+  /** PHOTOGRAPHER_PASSWORD_MIN_LENGTH. */
+  passwordMinLength = 10;
+  /** PHOTOGRAPHER_PASSWORD_CHANGE_SESSION_TTL_SECONDS. */
+  restrictedTtlSeconds = 30 * 60;
+  /** PHOTOGRAPHER_LOGIN_LOCKOUT_THRESHOLD; the lock lasts PHOTOGRAPHER_LOGIN_LOCKOUT_SECONDS. */
+  lockoutThreshold = 5;
+  lockoutSeconds = 15 * 60;
+  /** Photographer accounts by normalized email. */
+  readonly accounts = new Map<string, PasswordAccount>();
+  /** Every family issued, for revocation and bearer checks. */
+  private readonly families: Family[] = [];
+  private readonly accessTokens = new Map<string, Family>();
 
   private readonly states = new Map<string, { provider: OidcProvider; redirectUri: string }>();
   private readonly refreshTokens = new Map<string, { family: Family; used: boolean }>();
 
   /** The tokens of a fresh sign-in (also usable to seed a session in tests). */
-  signIn(subject: string, user: AuthTokenResponse['user'], pool: AuthPool = 'users') {
+  signIn(
+    subject: string,
+    user: AuthTokenResponse['user'],
+    pool: AuthPool = 'users',
+    restricted = false,
+  ) {
     const family: Family = {
       subject,
       user,
       pool,
-      expiresAt: this.now + this.refreshTtlSeconds * 1000,
+      expiresAt:
+        this.now + (restricted ? this.restrictedTtlSeconds : this.refreshTtlSeconds) * 1000,
       revoked: false,
+      restricted,
     };
+    this.families.push(family);
     return this.issue(family);
+  }
+
+  /** Seeds a photographer account an admin created (temporary password by default). */
+  addPhotographer(account: {
+    email: string;
+    password: string;
+    name?: string;
+    mustChange?: boolean;
+    disabled?: boolean;
+  }): PasswordAccount {
+    const created: PasswordAccount = {
+      subject: passwordAccountSubject(crypto.randomUUID()),
+      email: account.email,
+      name: account.name ?? 'ช่างภาพ',
+      password: account.password,
+      mustChange: account.mustChange ?? true,
+      disabled: account.disabled ?? false,
+      failures: 0,
+    };
+    this.accounts.set(normalizeAccountEmail(account.email), created);
+    return created;
+  }
+
+  /** True while the refresh token can still be used (not revoked, rotated or expired). */
+  refreshTokenWorks(refreshToken: string): boolean {
+    const entry = this.refreshTokens.get(refreshToken);
+    return (
+      entry !== undefined &&
+      !entry.used &&
+      !entry.family.revoked &&
+      entry.family.expiresAt > this.now
+    );
+  }
+
+  /** The family an access token belongs to (tests). */
+  familyOf(accessToken: string): Family | undefined {
+    return this.accessTokens.get(accessToken);
   }
 
   private issue(family: Family): AuthTokenResponse {
     const refreshToken = randomToken(32);
     this.refreshTokens.set(refreshToken, { family, used: false });
+    const accessToken = `h.${encodeJsonCookie({
+      sub: family.subject,
+      iat: this.now,
+      jti: randomToken(8),
+      ...(family.restricted === true ? { [PASSWORD_CHANGE_CLAIM]: true } : {}),
+    })}.s`;
+    this.accessTokens.set(accessToken, family);
     return {
-      accessToken: `h.${encodeJsonCookie({ sub: family.subject, iat: this.now })}.s`,
+      accessToken,
       refreshToken,
       expiresIn: ACCESS_TOKEN_SECONDS,
       refreshExpiresIn: Math.ceil((family.expiresAt - this.now) / 1000),
@@ -100,14 +187,20 @@ export class FakeAuthApi {
     const path = url.pathname.replace(/^\/api/, '');
     const route = matchRoute(method, path);
     const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
-    if (route === null || route.auth !== 'bff') {
+    const changePassword = route === PHOTOGRAPHER_ACCOUNT_ROUTES.changePassword;
+    if (route === null || (route.auth !== 'bff' && !changePassword)) {
       return Response.json({ code: ErrorCode.NOT_FOUND, message: 'no' }, { status: 404 });
     }
     this.calls.push({ route, path, headers, body });
     if (this.outage !== null) return new Response('upstream down', { status: this.outage });
     try {
-      if (headers[BFF_KEY_HEADER] !== BFF_KEY) throw new Fail(ErrorCode.UNAUTHENTICATED);
-      const result = this.handle(route, path, body);
+      // `bff` routes need web's key; the password change needs the photographer's own token.
+      if (!changePassword && headers[BFF_KEY_HEADER] !== BFF_KEY) {
+        throw new Fail(ErrorCode.UNAUTHENTICATED);
+      }
+      const result = changePassword
+        ? this.changePassword(headers.authorization, body)
+        : this.handle(route, path, body);
       if (route.status === 204) return new Response(null, { status: 204 });
       const checked = route.response?.parse(result);
       return Response.json(checked, { status: route.status });
@@ -188,8 +281,68 @@ export class FakeAuthApi {
         if (entry !== undefined) entry.family.revoked = true;
         return undefined;
       }
+      case AUTH_ROUTES.photographerSignIn: {
+        const account = this.accounts.get(normalizeAccountEmail(body?.email ?? ''));
+        if (account !== undefined && account.failures >= this.lockoutThreshold) {
+          throw new Fail(ErrorCode.RATE_LIMITED, {
+            retryAfterSeconds: this.lockoutSeconds,
+            captcha: null,
+          });
+        }
+        if (account === undefined || account.password !== body?.password) {
+          if (account !== undefined) account.failures++;
+          throw new Fail(ErrorCode.INVALID_CREDENTIALS);
+        }
+        if (account.disabled) throw new Fail(ErrorCode.ACCOUNT_DISABLED);
+        account.failures = 0;
+        const tokens = this.signIn(
+          account.subject,
+          { email: account.email, name: account.name },
+          'users',
+          account.mustChange,
+        );
+        return { step: account.mustChange ? 'change_password' : 'signed_in', ...tokens };
+      }
       default:
         throw new Fail(ErrorCode.NOT_FOUND);
     }
+  }
+
+  /** POST /auth/photographer/password with `Authorization: Bearer <access token>`. */
+  private changePassword(authorization: string | undefined, rawBody: unknown): AuthTokenResponse {
+    const family = this.accessTokens.get(authorization?.replace(/^Bearer /, '') ?? '');
+    if (family === undefined || family.revoked || family.expiresAt <= this.now) {
+      throw new Fail(ErrorCode.UNAUTHENTICATED);
+    }
+    const account = [...this.accounts.values()].find((a) => a.subject === family.subject);
+    if (account === undefined) throw new Fail(ErrorCode.FORBIDDEN);
+    if (account.disabled) throw new Fail(ErrorCode.ACCOUNT_DISABLED);
+    const parsed = PHOTOGRAPHER_ACCOUNT_ROUTES.changePassword.body.safeParse(rawBody);
+    if (!parsed.success) throw new Fail(ErrorCode.VALIDATION_FAILED);
+    const { currentPassword, newPassword } = parsed.data;
+    if (account.failures >= this.lockoutThreshold) {
+      throw new Fail(ErrorCode.RATE_LIMITED, {
+        retryAfterSeconds: this.lockoutSeconds,
+        captcha: null,
+      });
+    }
+    if (currentPassword !== account.password) {
+      account.failures++;
+      throw new Fail(ErrorCode.PASSWORD_INCORRECT);
+    }
+    const reason =
+      passwordPolicyViolation(newPassword, {
+        minLength: this.passwordMinLength,
+        email: account.email,
+      }) ?? (newPassword === currentPassword ? 'same_as_current' : null);
+    if (reason !== null) {
+      throw new Fail(ErrorCode.PASSWORD_TOO_WEAK, { reason, minLength: this.passwordMinLength });
+    }
+    account.password = newPassword;
+    account.mustChange = false;
+    account.failures = 0;
+    // Every session of the account ends, this one too.
+    for (const f of this.families) if (f.subject === account.subject) f.revoked = true;
+    return this.signIn(account.subject, { email: account.email, name: account.name });
   }
 }

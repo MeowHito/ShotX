@@ -59,7 +59,7 @@ import {
   RATE_LIMITER,
   type RateLimiter,
 } from '../tokens';
-import { currentSubscription, reserveQuotaBytes, storageCounters } from './account';
+import { currentSubscription, reserveQuotaBytes, storageCounters, uploadGate } from './account';
 import { listingOrder } from './drive.service';
 import { ancestorsOf, liveFolder, newId, pathFolderIds } from './folders';
 import { DriveFileMapper, toDriveFolder } from './media-urls';
@@ -187,15 +187,23 @@ export class StudioService {
         );
       }
 
-      // The upload gate and the reservation, as for an upload init.
-      const subscription = await currentSubscription(tx, ownerId, { lock: 'share' });
-      if (!subscriptionAllowsUploads(subscription?.status ?? null)) {
-        throw new ApiError('SUBSCRIPTION_INACTIVE', 'Copies need an active subscription', {
-          status: subscription?.status ?? null,
-        });
+      // The upload gate and the reservation, as for an upload init (ADR 0010: subscription only
+      // with BILLING_MODE=gateway, quota only with STORAGE_QUOTA_ENFORCED).
+      const gate = uploadGate(this.config);
+      let quotaBytes: number | null = null;
+      if (gate.subscription || gate.quota) {
+        const subscription = await currentSubscription(tx, ownerId, { lock: 'share' });
+        if (gate.subscription && !subscriptionAllowsUploads(subscription?.status ?? null)) {
+          throw new ApiError('SUBSCRIPTION_INACTIVE', 'Copies need an active subscription', {
+            status: subscription?.status ?? null,
+          });
+        }
+        if (gate.quota) quotaBytes = subscription?.quotaBytes ?? 0;
       }
-      const quotaBytes = subscription?.quotaBytes ?? 0;
-      if (!(await reserveQuotaBytes(tx, ownerId, source.sizeBytes, quotaBytes))) {
+      if (
+        !(await reserveQuotaBytes(tx, ownerId, source.sizeBytes, quotaBytes)) &&
+        quotaBytes !== null
+      ) {
         const check = reserveQuota(
           { ...(await storageCounters(tx, ownerId)), quotaBytes },
           source.sizeBytes,

@@ -24,3 +24,6 @@ Paste one wave at a time into the main `claude` session. Wait for each wave's re
 - If agents step on each other, tell the main session: "run each subagent in its own git worktree" (or open separate terminals with `git worktree add`), then merge after review.
 - Commit after every wave so you can roll back one wave cleanly.
 - Run `/agents` once to confirm all 8 agents are detected.
+
+## Wave 9 — Accounts without online payment (ADR 0010)
+> Read docs/adr/0010-admin-provisioned-accounts-offline-payment.md. First **contracts** (account status, photographer credentials, admin users schemas, error codes, BILLING_MODE=offline, STORAGE_QUOTA_ENFORCED=false, optional cash_payments). Then in parallel: **api** (admin users endpoints, photographer email/password sign-in with forced first change, disable revokes sessions, billing and quota off), **admin** (create apps/admin: sign-in with TOTP + Users page), **web** (studio sign-in/change password, hide plans/checkout), **worker** (stop subscription transitions while offline). Then **reviewer**. Afterwards the owner creates the bootstrap admin `action.in.th@gmail.com` with `pnpm --filter @shotx/api admin create` (password on stdin, never in files).

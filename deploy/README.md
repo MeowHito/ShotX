@@ -10,6 +10,12 @@ operator runs every step.
 
 - **Domain:** DNS `A`/`AAAA` records for `SHOTX_DOMAIN` pointing at the VPS. Ports 80 and 443 must be
   reachable for the certificate (Let's Encrypt HTTP-01/TLS-ALPN).
+- **Admin subdomain (ADR 0010):** the name for the admin app (`SHOTX_ADMIN_DOMAIN` in
+  `.env.production`, e.g. `admin.photos.example.com`; `ADMIN_BASE_URL` in `env/common.env` is
+  `https://` plus that name), with its own `A`/`AAAA` records to the same VPS before the first
+  start. Caddy gets a separate certificate for it.
+- **Bootstrap admin:** the person who runs the one-time `create` command below for
+  `action.in.th@gmail.com`, types its password and enrols TOTP on their own device.
 - **VPS:** size (open question 2; the defaults fit 4 vCPU / 8 GB), with an encrypted volume.
 - **Cloudflare R2:** the media bucket and a separate backup bucket with a bucket lock, both with
   location hint `apac`. Tokens: api (Object Read & Write, media bucket), worker (same), an
@@ -24,8 +30,12 @@ operator runs every step.
   both.
 - **Alerts:** a webhook URL (`ALERT_WEBHOOK_URL`) and an external uptime check (below). Optionally a
   heartbeat URL (`MONITOR_HEARTBEAT_URL`).
-- **Sign-in, mail, payments:** the LINE Login channel, the Google OAuth client, the Cloudflare
-  Turnstile keys, SES sending, and the Omise keys.
+- **Sign-in and mail:** the LINE Login channel, the Google OAuth client, the Cloudflare Turnstile
+  keys and SES sending.
+- **Payments:** none for now. `BILLING_MODE=offline` (ADR 0010): photographers pay the owner in
+  cash and an admin creates their account. The Omise keys are needed only when the gateway is
+  switched on (`BILLING_MODE=gateway`, a later ADR): then uncomment `PAYMENT_GATEWAY` in
+  `env/common.env` and the `PAYMENT_OMISE_*` lines in `env/api.env` and `env/worker.env`.
 
 ## First deploy
 
@@ -54,8 +64,24 @@ docker compose --env-file .env.production ps
 Then:
 
 - Apply the R2 bucket settings: `r2/setup-bucket.ts` (below), with the admin token.
-- Create the first admin: `docker compose --env-file .env.production exec api node
-dist/cli/admin.js create --email ... --name ...` (password on stdin), then enrol TOTP.
+- Create the bootstrap admin (once; ADR 0010). Run it in the api container, interactively, so
+  the password is typed on stdin:
+
+  ```sh
+  docker compose --env-file .env.production exec api \
+    node dist/cli/admin.js create --email action.in.th@gmail.com --name "<display name>"
+  ```
+
+  Never pass the password as an argument or an environment variable, and never write it in any
+  file (env files, `.env.production`, shell history, notes in the repository) or a log. The
+  password must meet `ADMIN_PASSWORD_MIN_LENGTH` (default 14). The CLI then prints the TOTP
+  enrolment once (an `otpauth://` URI and the manual secret): add it to the admin's
+  authenticator app right away. Then sign in at `https://<SHOTX_ADMIN_DOMAIN>` with the email,
+  the password you typed and a code from the app; the first valid code confirms the enrolment.
+  A CLI-created admin is not asked to change the password (it was typed by its owner). If the
+  enrolment output is lost, run `node dist/cli/admin.js reset-totp --email ...`. Every other
+  account, admin or photographer, is created in the admin app.
+
 - Run one backup now (`docker compose --env-file .env.production run --rm backup backup --once`)
   and the restore test in [RESTORE.md](RESTORE.md) before launch.
 
@@ -77,6 +103,7 @@ docker compose --env-file .env.production exec -T postgres \
 | -------- | ---------------------- | ----------------------------- | ------------------------------------------------------------------ |
 | proxy    | caddy                  | edge (fixed `SHOTX_PROXY_IP`) | the only published ports (80, 443 TCP/UDP); automatic TLS          |
 | web      | apps/web               | edge                          | reads the client address from the proxy's X-Forwarded-For          |
+| admin    | apps/admin             | edge                          | `SHOTX_ADMIN_DOMAIN`; calls the api at `http://api:4000` directly  |
 | api      | apps/api               | edge, data                    | `TRUSTED_PROXY_ADDRESSES` = the proxy address                      |
 | worker   | apps/worker            | data, egress                  | concurrency in `env/worker.env`; `stop_grace_period` ≥ grace + 5 s |
 | migrate  | ops                    | data                          | one-off before api/worker: migrations, plan seed, monitor grants   |
@@ -90,10 +117,24 @@ docker compose --env-file .env.production exec -T postgres \
 can reach them. Every service has CPU and memory limits, a restart policy, rotated logs (Docker's
 `local` driver) and `no-new-privileges`. The app containers also drop all capabilities.
 
-**Client IP (ADR 0008 section 1).** Caddy strips any client-sent `X-Forwarded-For`,
+**Client IP (ADR 0008 section 1).** On both sites Caddy strips any client-sent `X-Forwarded-For`,
 `x-shotx-bff-key`, `x-shotx-client-ip`, `CF-Connecting-IP` and the CloudFront headers. It then sets
 `X-Forwarded-For` to the TCP peer. The api trusts that header only from `SHOTX_PROXY_IP`, and trusts
-web's `x-shotx-client-ip` only with the BFF key. If Cloudflare's proxied DNS is turned on later
+the `x-shotx-client-ip` of web and admin only with a valid BFF key. There are two keys, generated
+separately with `openssl rand -base64 48` (different values; the api refuses equal ones):
+
+- `AUTH_BFF_KEY`, web's: in `env/web.env` and `env/api.env`;
+- `AUTH_ADMIN_BFF_KEY`, the admin app's: in `env/admin.env` and `env/api.env`.
+
+web never holds the admin key and admin never holds web's, so a leak from one app can't call the
+other's routes. The trust is by key, not by address, so the admin container needs no entry in
+`TRUSTED_PROXY_ADDRESSES`, which must stay the proxy alone.
+
+**Admin app (ADR 0010).** `SHOTX_ADMIN_DOMAIN` goes to `admin:3001` only. On the main domain Caddy
+answers 404 for `/api/admin/*` and `/api/auth/admin/*` (any case, merged slashes, dot segments and
+percent-encoding included). The admin app reaches those routes over the edge network through
+`API_INTERNAL_URL=http://api:4000`, never through the proxy. The proxy doesn't wait for the admin
+app, so a broken admin deploy can't take the main site down: only the admin site answers 502. If Cloudflare's proxied DNS is turned on later
 (open question 6), `CF-Connecting-IP` handling and a firewall that admits Cloudflare's ranges
 only must come first. Until then, leave it off.
 
@@ -132,6 +173,7 @@ on another machine) to:
 
 - GET `https://<SHOTX_DOMAIN>/api/health` every minute and expect 200 (the api through the proxy);
 - GET `https://<SHOTX_DOMAIN>/healthz` and expect 200 (web);
+- GET `https://<SHOTX_ADMIN_DOMAIN>/healthz` and expect 200 (admin);
 - alert on a TLS certificate expiring in less than 14 days;
 - optionally, expect the monitor's heartbeat (`MONITOR_HEARTBEAT_URL`) at least every 5 minutes.
 
@@ -172,9 +214,11 @@ pnpm --filter @shotx/deploy lint typecheck test
 
 `test/compose.test.ts` runs `docker compose config` on the example files when Docker is installed.
 It checks that only the proxy publishes ports, the trusted proxy address, the api and worker
-settings, the Redis flags, the limits and the logging. It also runs every shared loader of web,
-api, worker, migrate, monitor and backup on the example env, with the `REPLACE_ME` secrets filled
-in, and checks that the api refuses to start while they are left.
+settings, the admin service (edge network, read-only, API-issued sign-in, internal api URL), the
+offline billing settings (no `PAYMENT_*` anywhere), the Redis flags, the limits and the logging.
+It also runs every shared loader of web, admin, api, worker, migrate, monitor and backup on the
+example env, with the `REPLACE_ME` secrets filled in, and checks that api and admin refuse to
+start while they are left. The Caddyfile checks cover the admin site and the `/api/admin/*` 404.
 
 ## `r2/setup-bucket.ts`: CORS and lifecycle on the R2 media bucket
 

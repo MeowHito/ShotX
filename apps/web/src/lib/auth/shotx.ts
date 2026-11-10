@@ -6,6 +6,7 @@ import {
   type AuthTokenResponse,
   ErrorCode,
   opaqueTokenSchema,
+  PHOTOGRAPHER_ACCOUNT_ROUTES,
 } from '@shotx/shared';
 import { createApiClient } from '../api/client';
 import { ApiError, ContractError } from '../api/errors';
@@ -121,11 +122,14 @@ export interface ShotxAuthOptions {
   fetch?: typeof fetch;
 }
 
-function authApi(options: ShotxAuthOptions) {
+function authApi(options: ShotxAuthOptions, accessToken?: string) {
   const api = createApiClient({
     baseUrl: `${options.apiInternalUrl.replace(/\/+$/, '')}/api`,
     fetch: options.fetch,
-    headers: serverCallHeaders(options.context),
+    headers: {
+      ...serverCallHeaders(options.context),
+      ...(accessToken !== undefined ? { authorization: `Bearer ${accessToken}` } : {}),
+    },
   });
   return { api, timeoutMs: options.client.callTimeoutMs };
 }
@@ -142,7 +146,12 @@ async function guarded<T>(
     return await call(AbortSignal.timeout(timeoutMs));
   } catch (error) {
     if (error instanceof ApiError) {
-      throw new AuthProviderError(`API answered ${error.code}`, error.status, error.code);
+      throw new AuthProviderError(
+        `API answered ${error.code}`,
+        error.status,
+        error.code,
+        error.details,
+      );
     }
     if (error instanceof ContractError) {
       throw new AuthProviderError('Unexpected API response', error.status);
@@ -237,6 +246,26 @@ export function createShotxAuthProvider(
 
     // The API keeps no browser session at LINE or Google to end.
     logoutUrl: (returnTo) => returnTo,
+
+    async passwordSignIn({ email, password }) {
+      const response = await guarded(timeoutMs, (signal) =>
+        api.call(AUTH_ROUTES.photographerSignIn, { body: { email, password }, signal }),
+      );
+      return { step: response.step, tokens: toTokens(response) };
+    },
+
+    async changePassword({ accessToken, currentPassword, newPassword }) {
+      // Not a `bff` route: it needs the photographer's own token (serverOnly: never via /bff).
+      const own = authApi(options, accessToken).api;
+      return toTokens(
+        await guarded(timeoutMs, (signal) =>
+          own.call(PHOTOGRAPHER_ACCOUNT_ROUTES.changePassword, {
+            body: { currentPassword, newPassword },
+            signal,
+          }),
+        ),
+      );
+    },
   };
 
   if (options.devLogin) {

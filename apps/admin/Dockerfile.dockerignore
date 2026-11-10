@@ -1,0 +1,16 @@
+# BuildKit reads this file for apps/admin/Dockerfile (the build context is the repository root).
+**/node_modules
+**/.next
+**/.turbo
+**/dist
+**/cdk.out
+**/coverage
+.git
+.env
+.env.*
+data
+runs
+# Production secrets, the Redis ACL and load-test selfies (biometric) never enter a build.
+deploy/
+**/.env
+**/.env.*

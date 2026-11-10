@@ -224,10 +224,13 @@ export const driveUsageResponseSchema = z.object({
   usedBytes: byteCountSchema,
   /** Uploads in progress (reserved at init, not yet verified by the worker). */
   reservedBytes: byteCountSchema,
-  /** The live subscription's plan quota; 0 without a live subscription. */
-  quotaBytes: byteCountSchema,
-  /** max(0, quota - used - reserved). */
-  availableBytes: byteCountSchema,
+  /**
+   * The live subscription's plan quota; 0 without a live subscription. Null while
+   * STORAGE_QUOTA_ENFORCED is false (ADR 0010: no storage limit; show the used bytes only).
+   */
+  quotaBytes: byteCountSchema.nullable(),
+  /** max(0, quota - used - reserved); null when quotaBytes is null. */
+  availableBytes: byteCountSchema.nullable(),
   /** Part of usedBytes + reservedBytes that is in the trash. */
   trashBytes: byteCountSchema,
   subscription: z
@@ -237,7 +240,10 @@ export const driveUsageResponseSchema = z.object({
       periodEnd: isoDateTimeSchema,
     })
     .nullable(),
-  /** Why uploads are blocked right now (uploadsBlockedBy), or null. */
+  /**
+   * Why uploads are blocked right now (uploadsBlockedBy), or null. Always null while
+   * BILLING_MODE=offline and STORAGE_QUOTA_ENFORCED=false (ADR 0010).
+   */
   uploadsBlockedBy: z.enum(['SUBSCRIPTION_INACTIVE', 'QUOTA_EXCEEDED']).nullable(),
 });
 export type DriveUsageResponse = z.output<typeof driveUsageResponseSchema>;

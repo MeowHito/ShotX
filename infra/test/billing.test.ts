@@ -44,22 +44,92 @@ const secrets = (synth: Synthesized, service: string) =>
     ]),
   );
 
-/** A non-production stage that relies on the defaults (no billing or email selection). */
+/** cdk.json with BILLING_MODE=gateway, as when the bank's details arrive (ADR 0010). */
+const gatewayEdit = (c: Json) => {
+  at(c, 'billing').mode = 'gateway';
+};
+const withGateway = (edit: (c: Json) => void): Json =>
+  withEdit((c) => {
+    gatewayEdit(c);
+    edit(c);
+  });
+const gw = synthPlatform(gatewayEdit);
+const gwApp = gw.template(gw.platform.app);
+
+/** A non-production gateway stage that relies on the defaults (no gateway or email selection). */
 const devSynth = synthPlatform((c) => {
+  gatewayEdit(c);
   c.stage = 'dev';
   delete (c.billing as Json).paymentGateway;
   delete (c.email as Json).provider;
 });
 
-describe('payment gateway and email selection', () => {
+describe('billing mode (ADR 0010)', () => {
+  it('is offline on the prod stage (cdk.json), and must be stated', () => {
+    expect(s.config.billing.mode).toBe('offline');
+    const unset = withEdit((x) => {
+      delete at(x, 'billing').mode;
+    });
+    expect(() => parseConfig(unset)).toThrow(/billing\.mode/);
+    const invalid = withEdit((x) => {
+      at(x, 'billing').mode = 'online';
+    });
+    expect(() => parseConfig(invalid)).toThrow(/billing\.mode/);
+  });
+
+  it('sets BILLING_MODE on web, api and worker, never on admin', () => {
+    for (const service of ['web', 'api', 'worker']) {
+      expect(env(s, service).BILLING_MODE, service).toBe('offline');
+      expect(env(gw, service).BILLING_MODE, service).toBe('gateway');
+    }
+    expect(env(s, 'admin')).not.toHaveProperty('BILLING_MODE');
+  });
+
+  it('refuses BILLING_MODE in services.env (one source: billing.mode)', () => {
+    const c = withEdit((x) => {
+      at(x, 'services', 'env', 'common').BILLING_MODE = 'gateway';
+    });
+    expect(() => parseConfig(c)).toThrow(/common: BILLING_MODE is set by infra/);
+  });
+
+  it('offline: no PAYMENT_* variable or secret, no gateway secret and no secret ARN output', () => {
+    for (const service of ['web', 'admin', 'api', 'worker']) {
+      const keys = [...Object.keys(env(s, service)), ...Object.keys(secrets(s, service))];
+      expect(
+        keys.filter((k) => k.startsWith('PAYMENT_')),
+        service,
+      ).toEqual([]);
+    }
+    expect(JSON.stringify(app.toJSON())).not.toContain(s.config.billing.gatewaySecretName);
+    expect(
+      Object.keys(
+        app.findResources('AWS::SecretsManager::Secret', {
+          Properties: { Name: Match.stringLikeRegexp('payment-gateway') },
+        }),
+      ),
+    ).toEqual([]);
+    expect(Object.keys(app.findOutputs('PaymentGatewaySecretArn'))).toHaveLength(0);
+    // Nothing gateway-related is checked either: offline, a fake or unnamed gateway is fine.
+    const fake = withEdit((x) => {
+      at(x, 'billing').paymentGateway = 'fake';
+      at(x, 'billing').gatewaySecretName = '';
+    });
+    expect(() => parseConfig(fake)).not.toThrow();
+    expect(
+      Annotations.fromStack(s.platform.app).findWarning('*', Match.stringLikeRegexp('is fake')),
+    ).toHaveLength(0);
+  });
+});
+
+describe('payment gateway and email selection (BILLING_MODE=gateway)', () => {
   it('uses a real gateway and SES on the prod stage (cdk.json)', () => {
-    expect(s.config.stage).toBe('prod');
-    expect(s.config.billing.paymentGateway).toBe('omise');
+    expect(gw.config.stage).toBe('prod');
+    expect(gw.config.billing.paymentGateway).toBe('omise');
     expect(s.config.email.provider).toBe('ses');
   });
 
   it('refuses fake on the prod stage', () => {
-    const gateway = withEdit((x) => {
+    const gateway = withGateway((x) => {
       at(x, 'billing').paymentGateway = 'fake';
     });
     expect(() => parseConfig(gateway)).toThrow(
@@ -72,7 +142,7 @@ describe('payment gateway and email selection', () => {
       /must not be fake on the prod stage[\s\S]*at email\.provider/,
     );
     // An unset value falls back to fake, which prod refuses too.
-    const unset = withEdit((x) => {
+    const unset = withGateway((x) => {
       delete at(x, 'billing').paymentGateway;
       delete at(x, 'email').provider;
     });
@@ -89,12 +159,12 @@ describe('payment gateway and email selection', () => {
     );
     expect(warnings).toHaveLength(2);
     expect(
-      Annotations.fromStack(s.platform.app).findWarning('*', Match.stringLikeRegexp('is fake')),
+      Annotations.fromStack(gw.platform.app).findWarning('*', Match.stringLikeRegexp('is fake')),
     ).toHaveLength(0);
   });
 
   it('needs the operator’s secret name for a real gateway', () => {
-    const c = withEdit((x) => {
+    const c = withGateway((x) => {
       at(x, 'billing').gatewaySecretName = '';
     });
     expect(() => parseConfig(c)).toThrow(
@@ -117,6 +187,7 @@ describe('payment gateway and email selection', () => {
 
   it('refuses billing, email and gateway secret keys in services.env', () => {
     for (const key of [
+      'BILLING_MODE',
       'PAYMENT_GATEWAY',
       'EMAIL_PROVIDER',
       'EMAIL_FROM_ADDRESS',
@@ -131,45 +202,50 @@ describe('payment gateway and email selection', () => {
   });
 });
 
-describe('gateway secrets (Secrets Manager -> ECS secrets)', () => {
+describe('gateway secrets (BILLING_MODE=gateway: Secrets Manager -> ECS secrets)', () => {
   const omise = PAYMENT_GATEWAY_SECRET_ENV.omise;
 
   for (const service of ['api', 'worker']) {
     it(`gives ${service} every secret of the selected gateway from the operator’s secret`, () => {
-      const got = secrets(s, service);
+      const got = secrets(gw, service);
       for (const name of omise) {
-        expect(got[name], name).toContain(`secret:${s.config.billing.gatewaySecretName}:${name}::`);
+        expect(got[name], name).toContain(
+          `secret:${gw.config.billing.gatewaySecretName}:${name}::`,
+        );
       }
       // Never another gateway's secrets.
       for (const name of PAYMENT_GATEWAY_SECRET_NAMES.filter((n) => !omise.includes(n as never))) {
         expect(got, name).not.toHaveProperty(name);
       }
-      expect(env(s, service)).toMatchObject({
+      expect(env(gw, service)).toMatchObject({
+        BILLING_MODE: 'gateway',
         PAYMENT_GATEWAY: 'omise',
         EMAIL_PROVIDER: 'ses',
-        EMAIL_FROM_ADDRESS: s.config.email.fromAddress,
-        EMAIL_FROM_NAME: s.config.email.fromName,
+        EMAIL_FROM_ADDRESS: gw.config.email.fromAddress,
+        EMAIL_FROM_NAME: gw.config.email.fromName,
       });
       // Never as plain environment variables.
       for (const name of PAYMENT_GATEWAY_SECRET_NAMES)
-        expect(env(s, service), name).not.toHaveProperty(name);
+        expect(env(gw, service), name).not.toHaveProperty(name);
     });
   }
 
-  it('keeps payments and email out of web and admin', () => {
-    for (const service of ['web', 'admin']) {
-      const keys = [...Object.keys(env(s, service)), ...Object.keys(secrets(s, service))];
-      expect(
-        keys.filter((k) => /^(PAYMENT_|EMAIL_)/.test(k)),
-        service,
-      ).toEqual([]);
+  it('keeps payments out of web and admin, and email out of them on every mode', () => {
+    for (const synth of [s, gw]) {
+      for (const service of ['web', 'admin']) {
+        const keys = [...Object.keys(env(synth, service)), ...Object.keys(secrets(synth, service))];
+        expect(
+          keys.filter((k) => /^(PAYMENT_|EMAIL_)/.test(k)),
+          service,
+        ).toEqual([]);
+      }
     }
   });
 
   it('lets only the api and worker execution roles read the gateway secret', () => {
-    const readers = Object.entries(app.findResources('AWS::IAM::Policy'))
+    const readers = Object.entries(gwApp.findResources('AWS::IAM::Policy'))
       .filter(([, p]) =>
-        JSON.stringify(p).includes(`secret:${s.config.billing.gatewaySecretName}-??????`),
+        JSON.stringify(p).includes(`secret:${gw.config.billing.gatewaySecretName}-??????`),
       )
       .map(([id]) => id)
       .sort();
@@ -205,7 +281,7 @@ describe('gateway secrets (Secrets Manager -> ECS secrets)', () => {
   });
 
   it('outputs the secret ARN, never its value', () => {
-    const outputs = app.findOutputs('PaymentGatewaySecretArn');
+    const outputs = gwApp.findOutputs('PaymentGatewaySecretArn');
     expect(Object.keys(outputs)).toHaveLength(1);
   });
 });

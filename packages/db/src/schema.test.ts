@@ -1,4 +1,5 @@
 import {
+  ACCOUNT_STATUSES,
   ACTIVITY_TYPES,
   AUTH_POOLS,
   BILLING_ACTORS,
@@ -68,13 +69,27 @@ describe('schema', () => {
         'auth_sessions',
         'admin_credentials',
         'face_vectors',
+        'user_password_credentials',
+        'cash_payments',
       ].sort(),
     );
   });
 
   it('has the data-model columns of every table', () => {
     const expected: Record<string, string[]> = {
-      users: ['id', 'email', 'name', 'role', 'auth_pool', 'auth_subject', 'created_at'],
+      users: [
+        'id',
+        'email',
+        'name',
+        'role',
+        'auth_pool',
+        'auth_subject',
+        'created_at',
+        'status',
+        'disabled_at',
+        'created_by_id',
+        'last_sign_in_at',
+      ],
       plans: [
         'id',
         'code',
@@ -206,6 +221,27 @@ describe('schema', () => {
         'locked_until',
         'created_at',
         'updated_at',
+        'must_change_password',
+      ],
+      user_password_credentials: [
+        'user_id',
+        'auth_pool',
+        'password_hash',
+        'must_change_password',
+        'failed_attempts',
+        'locked_until',
+        'password_changed_at',
+        'created_at',
+        'updated_at',
+      ],
+      cash_payments: [
+        'id',
+        'photographer_id',
+        'amount_satang',
+        'paid_at',
+        'note',
+        'recorded_by_id',
+        'created_at',
       ],
       zip_jobs: [
         'id',
@@ -263,6 +299,72 @@ describe('schema', () => {
     expect(schema.subscriptionEventType.enumValues).toEqual([...SUBSCRIPTION_EVENT_TYPES]);
     expect(schema.subscriptionNoticeKind.enumValues).toEqual([...SUBSCRIPTION_NOTICE_KINDS]);
     expect(schema.billingActor.enumValues).toEqual([...BILLING_ACTORS]);
+    expect(schema.accountStatus.enumValues).toEqual([...ACCOUNT_STATUSES]);
+  });
+
+  it('has the account columns, keys and checks of migration 0011 (ADR 0010)', () => {
+    expect(column('users', 'status').notNull).toBe(true);
+    expect(column('users', 'status').default).toBe('active');
+    expect(column('users', 'disabled_at').notNull).toBe(false);
+    expect(column('admin_credentials', 'must_change_password').default).toBe(false);
+    expect(column('admin_credentials', 'totp_secret_encrypted').notNull).toBe(false);
+    expect(column('admin_credentials', 'totp_secret_nonce').notNull).toBe(false);
+    expect(column('user_password_credentials', 'must_change_password').default).toBe(true);
+    expect(column('cash_payments', 'amount_satang').getSQLType()).toBe('integer');
+    const checks = (table: string) => config(table).checks.map((c) => c.name);
+    expect(checks('users')).toEqual(
+      expect.arrayContaining([
+        'users_disabled_at_iff_disabled',
+        'users_password_subject_photographer',
+        'users_admin_subject_admins_pool',
+        'users_password_account_has_email',
+      ]),
+    );
+    expect(checks('admin_credentials')).toEqual(
+      expect.arrayContaining([
+        'admin_credentials_totp_secret_complete',
+        'admin_credentials_totp_state_needs_secret',
+      ]),
+    );
+    expect(checks('user_password_credentials')).toEqual(
+      expect.arrayContaining([
+        'user_password_credentials_users_pool',
+        'user_password_credentials_password_argon2id',
+      ]),
+    );
+    expect(checks('cash_payments')).toEqual(
+      expect.arrayContaining(['cash_payments_amount_positive', 'cash_payments_note_length']),
+    );
+    const usersIndex = (name: string) =>
+      config('users').indexes.find((i) => i.config.name === name);
+    expect(usersIndex('users_password_account_email_unique')?.config.unique).toBe(true);
+    expect(usersIndex('users_admin_email_unique')?.config.unique).toBe(true);
+    const fk = (table: string, name: string) => {
+      const found = config(table).foreignKeys.find((f) => f.getName() === name);
+      if (found === undefined) throw new Error(`no fk ${name}`);
+      const ref = found.reference();
+      return {
+        columns: ref.columns.map((c) => c.name),
+        foreignColumns: ref.foreignColumns.map((c) => c.name),
+        onDelete: found.onDelete,
+      };
+    };
+    expect(fk('user_password_credentials', 'user_password_credentials_user_fk')).toEqual({
+      columns: ['user_id', 'auth_pool'],
+      foreignColumns: ['id', 'auth_pool'],
+      onDelete: 'cascade',
+    });
+    expect(fk('cash_payments', 'cash_payments_recorded_by_admin_fk').columns).toEqual([
+      'recorded_by_id',
+      'recorded_by_pool',
+    ]);
+    expect(fk('users', 'users_created_by_id_users_id_fk').onDelete).toBe('set null');
+    expect(
+      config('cash_payments').uniqueConstraints.map((u) => [u.name, u.columns.map((c) => c.name)]),
+    ).toContainEqual(['cash_payments_idempotency_unique', ['recorded_by_id', 'idempotency_key']]);
+    expect(config('cash_payments').indexes.map((i) => i.config.name)).toEqual(
+      expect.arrayContaining(['cash_payments_photographer_paid_idx', 'cash_payments_paid_idx']),
+    );
   });
 
   it('has the billing columns, checks and unique keys of migration 0004', () => {

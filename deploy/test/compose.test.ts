@@ -9,12 +9,17 @@ import {
   BFF_CLIENT_IP_HEADER,
   BFF_KEY_HEADER,
   type Env,
+  loadAdminConsoleConfig,
+  loadAdminPasswordUiConfig,
   loadApiLimitsConfig,
   loadAppConfig,
   loadAuthClientConfig,
   loadAuthProviderConfig,
+  loadAdminBffAuthConfig,
   loadBffAuthConfig,
+  loadBffKeysConfig,
   loadBillingConfig,
+  loadBillingModeConfig,
   loadCaptchaClientConfig,
   loadCaptchaConfig,
   loadConsentConfig,
@@ -28,6 +33,7 @@ import {
   loadMediaStorageConfig,
   loadMediaUrlSignerConfig,
   loadPaymentGatewayConfig,
+  loadPhotographerPasswordPolicy,
   loadQueueBackendConfig,
   loadRedisConfig,
   loadFaceRekognitionClientConfig,
@@ -38,6 +44,7 @@ import {
   loadShareConfig,
   loadSharePasswordHashConfig,
   loadShotxAuthConfig,
+  loadStorageQuotaConfig,
   loadTrustedProxyConfig,
   loadUploadConfig,
   loadWorkerSettings,
@@ -101,6 +108,43 @@ describe('Caddyfile', () => {
     expect(caddy).toMatch(/handle \/api\/\* \{[\s\S]*reverse_proxy api:4000/);
     expect(caddy).toMatch(/handle \{[\s\S]*reverse_proxy web:3000/);
   });
+
+  /** The body of the site block that starts with `address {` (top level, tab-indented). */
+  const site = (address: string): string => {
+    const start = caddy.indexOf(`\n${address} {\n`);
+    expect(start, address).toBeGreaterThanOrEqual(0);
+    const end = caddy.indexOf('\n}\n', start);
+    return caddy.slice(start, end);
+  };
+  const main = site('{$SHOTX_DOMAIN}');
+  const admin = site('{$SHOTX_ADMIN_DOMAIN}');
+
+  it('answers 404 for the api admin routes on the main domain, before any proxying', () => {
+    const matcher = /@adminApi path ([^\n]+)/.exec(main)?.[1]?.split(' ');
+    expect(matcher).toEqual(['/api/admin', '/api/admin/*', '/api/auth/admin', '/api/auth/admin/*']);
+    const block = main.indexOf('handle @adminApi {\n\t\t\trespond 404\n\t\t}');
+    expect(block).toBeGreaterThan(main.indexOf('route {'));
+    expect(block).toBeLessThan(main.indexOf('reverse_proxy'));
+  });
+
+  it('sends the whole admin subdomain to admin:3001 and nothing to api or web', () => {
+    expect(admin).toMatch(/reverse_proxy admin:3001/);
+    expect(admin).not.toMatch(/api:4000|web:3000/);
+    expect(admin).toMatch(/max_size \{\$PROXY_ADMIN_MAX_BODY\}/);
+  });
+
+  it('gives both sites the same header stripping, security headers and access log', () => {
+    const snippet = /\n\(edge_common\) \{\n([\s\S]*?)\n\}\n/.exec(caddy)?.[1] ?? '';
+    for (const h of [BFF_KEY_HEADER, BFF_CLIENT_IP_HEADER, 'x-forwarded-for', 'forwarded']) {
+      expect(snippet.toLowerCase(), h).toContain(`request_header -${h}\n`);
+    }
+    expect(snippet).toMatch(/Strict-Transport-Security "max-age=\d+; includeSubDomains"/);
+    expect(snippet).toMatch(/-Server/);
+    expect(snippet).toMatch(/request>headers delete/);
+    for (const block of [main, admin]) expect(block).toMatch(/^\timport edge_common$/m);
+    // The header strips live only in the snippet, so neither site can drift.
+    expect(caddy.match(/request_header -X-Forwarded-For/g)).toHaveLength(1);
+  });
 });
 
 // --- docker compose config --------------------------------------------------------------------
@@ -147,6 +191,7 @@ function secretSamples(): Record<string, string> {
   const random = () => randomBytes(36).toString('base64url');
   return {
     AUTH_BFF_KEY: random(),
+    AUTH_ADMIN_BFF_KEY: random(),
     AUTH_USERS_SIGNING_KEY: ed25519(),
     AUTH_ADMINS_SIGNING_KEY: ed25519(),
     ADMIN_TOTP_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
@@ -185,6 +230,17 @@ const LOADERS: Record<string, Loader[]> = {
     loadUploadConfig,
     loadMediaBrowserOrigins,
     loadCaptchaClientConfig,
+    loadBillingModeConfig,
+    loadPhotographerPasswordPolicy,
+  ],
+  admin: [
+    loadAppConfig,
+    (e) => loadServerConfig(e, 3001),
+    loadInternalApiConfig,
+    loadAuthProviderConfig,
+    loadAdminBffAuthConfig,
+    loadAuthClientConfig,
+    loadAdminPasswordUiConfig,
   ],
   api: [
     loadAppConfig,
@@ -196,7 +252,7 @@ const LOADERS: Record<string, Loader[]> = {
     (e) => loadQueueBackendConfig(e, ['media', 'faces', 'zip']),
     loadAuthProviderConfig,
     loadShotxAuthConfig,
-    loadBffAuthConfig,
+    loadBffKeysConfig,
     loadTrustedProxyConfig,
     loadFaceConfig,
     loadFaceSearchUploadConfig,
@@ -211,7 +267,10 @@ const LOADERS: Record<string, Loader[]> = {
     loadSharePasswordHashConfig,
     loadRetentionConfig,
     loadBillingConfig,
+    loadBillingModeConfig,
     loadPaymentGatewayConfig,
+    loadStorageQuotaConfig,
+    loadAdminConsoleConfig,
     loadEmailConfig,
     loadCaptchaConfig,
   ],
@@ -230,6 +289,7 @@ const LOADERS: Record<string, Loader[]> = {
     loadShareConfig,
     loadRetentionConfig,
     loadBillingConfig,
+    loadBillingModeConfig,
     loadPaymentGatewayConfig,
     loadEmailConfig,
   ],
@@ -298,6 +358,90 @@ describe.skipIf(!hasCompose)('docker compose config', () => {
     }
   });
 
+  it('runs the admin app on the edge network behind the proxy, reaching the api directly', () => {
+    const admin = services.admin as Json;
+    expect((admin.build as Json).dockerfile).toBe('apps/admin/Dockerfile');
+    expect(Object.keys(admin.networks as Json)).toEqual(['edge']);
+    expect(admin.ports ?? []).toEqual([]);
+    expect(admin.read_only).toBe(true);
+    expect(admin.cap_drop).toEqual(['ALL']);
+    expect(admin.security_opt).toContain('no-new-privileges:true');
+    expect(env('admin')).toMatchObject({
+      NODE_ENV: 'production',
+      PORT: '3001',
+      AUTH_PROVIDER: 'shotx',
+      API_INTERNAL_URL: 'http://api:4000',
+    });
+    expect(String(env('admin').ADMIN_BASE_URL)).toMatch(/^https:\/\//);
+    expect(String(env('admin').PUBLIC_BASE_URL)).toMatch(/^https:\/\//);
+    expect((admin.depends_on as Json).api).toMatchObject({ condition: 'service_healthy' });
+    expect(JSON.stringify((admin.healthcheck as Json).test)).toContain(
+      'http://127.0.0.1:3001/healthz',
+    );
+    // The main site never waits for the admin app.
+    expect(services.proxy?.depends_on as Json).not.toHaveProperty('admin');
+    // Only the api's own secrets and keys stay out of the admin app.
+    for (const k of [
+      'PGPASSWORD',
+      'REDIS_PASSWORD',
+      'STORAGE_SECRET_ACCESS_KEY',
+      'IP_HASH_SECRET',
+    ]) {
+      expect(env('admin'), k).not.toHaveProperty(k);
+    }
+  });
+
+  it('gives the proxy the admin domain, matching ADMIN_BASE_URL', () => {
+    const proxy = env('proxy');
+    expect(proxy.SHOTX_ADMIN_DOMAIN).toBe(production.SHOTX_ADMIN_DOMAIN);
+    expect(env('admin').ADMIN_BASE_URL).toBe(`https://${proxy.SHOTX_ADMIN_DOMAIN}`);
+    expect(env('web').PUBLIC_BASE_URL).toBe(`https://${proxy.SHOTX_DOMAIN}`);
+    expect(proxy.PROXY_ADMIN_MAX_BODY).toBeDefined();
+  });
+
+  it('shares the password and refresh settings across api, web and admin', () => {
+    for (const k of [
+      'ADMIN_PASSWORD_MIN_LENGTH',
+      'PHOTOGRAPHER_PASSWORD_MIN_LENGTH',
+      'AUTH_REFRESH_REUSE_GRACE_SECONDS',
+    ]) {
+      expect(env('admin')[k], k).toBeDefined();
+      expect(env('web')[k], k).toBe(env('admin')[k]);
+      expect(env('api')[k], k).toBe(env('admin')[k]);
+    }
+  });
+
+  it('gives web and admin each their own BFF key, and the api both', () => {
+    const has = (s: string, k: string) => Object.hasOwn(env(s), k);
+    expect(['web', 'api'].map((s) => has(s, 'AUTH_BFF_KEY'))).toEqual([true, true]);
+    expect(['admin', 'api'].map((s) => has(s, 'AUTH_ADMIN_BFF_KEY'))).toEqual([true, true]);
+    expect(has('web', 'AUTH_ADMIN_BFF_KEY')).toBe(false);
+    expect(has('admin', 'AUTH_BFF_KEY')).toBe(false);
+    for (const [name] of Object.entries(services).filter(
+      ([n]) => !['web', 'admin', 'api'].includes(n),
+    )) {
+      expect(has(name, 'AUTH_BFF_KEY') || has(name, 'AUTH_ADMIN_BFF_KEY'), name).toBe(false);
+    }
+    // The api refuses equal keys.
+    const api = withSamples(env('api'));
+    expect(() => loadBffKeysConfig(api)).not.toThrow();
+    expect(() => loadBffKeysConfig({ ...api, AUTH_ADMIN_BFF_KEY: api.AUTH_BFF_KEY ?? '' })).toThrow(
+      /AUTH_ADMIN_BFF_KEY/,
+    );
+  });
+
+  it('runs billing offline: no gateway setting or secret anywhere (ADR 0010)', () => {
+    for (const s of ['web', 'api', 'worker']) expect(env(s).BILLING_MODE, s).toBe('offline');
+    for (const [name] of Object.entries(services)) {
+      expect(
+        Object.keys(env(name)).filter((k) => k.startsWith('PAYMENT_')),
+        name,
+      ).toEqual([]);
+    }
+    expect(loadPaymentGatewayConfig(withSamples(env('api')))).toBeNull();
+    expect(loadStorageQuotaConfig(env('api')).enforced).toBe(false);
+  });
+
   it('starts api and worker only after a successful migrate', () => {
     for (const s of ['api', 'worker']) {
       expect((services[s]?.depends_on as Json).migrate, s).toMatchObject({
@@ -321,16 +465,18 @@ describe.skipIf(!hasCompose)('docker compose config', () => {
     });
   }
 
-  it('refuses to start api while a secret is still REPLACE_ME', () => {
-    const raw = env('api');
-    const failures = LOADERS.api?.filter((load) => {
-      try {
-        load(raw);
-        return false;
-      } catch {
-        return true;
-      }
+  for (const service of ['api', 'admin']) {
+    it(`refuses to start ${service} while a secret is still REPLACE_ME`, () => {
+      const raw = env(service);
+      const failures = LOADERS[service]?.filter((load) => {
+        try {
+          load(raw);
+          return false;
+        } catch {
+          return true;
+        }
+      });
+      expect(failures?.length).toBeGreaterThan(0);
     });
-    expect(failures?.length).toBeGreaterThan(0);
-  });
+  }
 });

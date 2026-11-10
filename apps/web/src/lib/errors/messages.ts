@@ -8,6 +8,8 @@ import {
   folderDepthExceededDetailsSchema,
   nameTakenDetailsSchema,
   noFaceDetectedDetailsSchema,
+  type PasswordPolicyReason,
+  passwordTooWeakDetailsSchema,
   quotaExceededDetailsSchema,
   rateLimitedDetailsSchema,
   shareExpiredDetailsSchema,
@@ -35,6 +37,7 @@ export type ErrorMessageKey =
   | `hints.${keyof Errors['hints']}`
   | `details.${keyof Errors['details']}`
   | `planChange.${keyof Errors['planChange']}`
+  | `passwordPolicy.${keyof Errors['passwordPolicy']}`
   | `notices.${keyof Errors['notices']}`
   | `client.${keyof Errors['client']}`;
 
@@ -53,6 +56,17 @@ export class ClientError extends Error {
   ) {
     super(key);
   }
+}
+
+/**
+ * Why a new password is refused, from PASSWORD_TOO_WEAK details or the form's own check
+ * (passwordPolicyViolation) before sending; `minLength` is the photographer minimum.
+ */
+export function messageForPasswordPolicy(
+  reason: PasswordPolicyReason,
+  minLength: number,
+): ErrorMessage {
+  return { key: `passwordPolicy.${reason}`, values: { minLength } };
 }
 
 /** The message for an error code and its (untrusted) details. */
@@ -185,6 +199,11 @@ export function messageForCode(
           },
         };
       }
+      break;
+    }
+    case ErrorCode.PASSWORD_TOO_WEAK: {
+      const d = passwordTooWeakDetailsSchema.safeParse(details);
+      if (d.success) return messageForPasswordPolicy(d.data.reason, d.data.minLength);
       break;
     }
     case ErrorCode.RATE_LIMITED: {

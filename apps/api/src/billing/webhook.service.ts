@@ -67,11 +67,17 @@ export class WebhookService {
     @Inject(DATABASE) private readonly db: Db,
     @Inject(API_CONFIG) private readonly config: ApiConfig,
     @Inject(CLOCK) private readonly clock: Clock,
-    @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayAdapter,
+    @Inject(PAYMENT_GATEWAY) private readonly paymentGateway: PaymentGatewayAdapter | null,
     @Inject(EMAIL_PROVIDER) private readonly email: EmailProvider,
     @Inject(API_LOGGER) private readonly logger: LoggerService,
     @Inject(EVENT_LOG) private readonly events: EventLog,
   ) {}
+
+  /** The gateway; NOT_FOUND with BILLING_MODE=offline (none is built). */
+  private get gateway(): PaymentGatewayAdapter {
+    if (this.paymentGateway === null) throw notFound('Route');
+    return this.paymentGateway;
+  }
 
   private alert(errorCode: string, fields: Record<string, string | null>): void {
     this.events.warn(BILLING_WEBHOOK_ALERT_EVENT, { ...fields, errorCode });

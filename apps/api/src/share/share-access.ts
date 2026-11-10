@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { files, folders, shares, users } from '@shotx/db';
 import {
+  type AccountStatus,
   faceScanResultKey,
   isOpaqueCookieToken,
   isShareToken,
@@ -13,11 +14,19 @@ import {
 } from '@shotx/shared';
 import { and, eq, type SQL, sql } from 'drizzle-orm';
 import type { PublicContext } from '../auth/public.guard';
+import { type ApiConfig, billingOnline } from '../config';
 import type { Db, Queryable } from '../db/db';
 import { currentSubscription } from '../drive/account';
 import { ApiError, notFound } from '../http/api-error';
 import { sha256Hex } from '../http/client';
-import { CLOCK, type Clock, DATABASE, KEY_VALUE_STORE, type KeyValueStore } from '../tokens';
+import {
+  API_CONFIG,
+  CLOCK,
+  type Clock,
+  DATABASE,
+  KEY_VALUE_STORE,
+  type KeyValueStore,
+} from '../tokens';
 
 type ShareRow = typeof shares.$inferSelect;
 
@@ -31,8 +40,13 @@ export interface LoadedShare extends ShareRow {
   targetLive: boolean;
   /** The owner's display name. */
   ownerName: string | null;
-  /** The owner's latest subscription status (live first), null when none. */
+  /**
+   * The owner's latest subscription status (live first), null when none. Not read (null) with
+   * BILLING_MODE=offline, where subscriptions decide nothing.
+   */
   subscriptionStatus: SubscriptionStatus | null;
+  /** The owner's account status (ADR 0010): a disabled photographer's shares don't serve. */
+  ownerStatus: AccountStatus;
 }
 
 /** First 16 hex characters of SHA-256 of the password hash: what an unlock proof stores. */
@@ -40,8 +54,15 @@ export function passwordFingerprint(passwordHash: string): string {
   return sha256Hex(passwordHash).slice(0, 16);
 }
 
-/** One share with its target's name, path and liveness, its owner's name and subscription. */
-async function loadShare(q: Queryable, where: SQL): Promise<LoadedShare | null> {
+/**
+ * One share with its target's name, path and liveness, its owner's name, account status and
+ * (when `withSubscription`) subscription.
+ */
+async function loadShare(
+  q: Queryable,
+  where: SQL,
+  withSubscription: boolean,
+): Promise<LoadedShare | null> {
   const [row] = await q
     .select({
       share: shares,
@@ -51,6 +72,7 @@ async function loadShare(q: Queryable, where: SQL): Promise<LoadedShare | null> 
       folderPath: folders.path,
       folderLive: sql<boolean>`(${folders.id} IS NOT NULL AND ${folders.deletedAt} IS NULL AND ${folders.purgeRequestedAt} IS NULL)`,
       ownerName: users.name,
+      ownerStatus: users.status,
     })
     .from(shares)
     .innerJoin(users, eq(users.id, shares.ownerId))
@@ -62,7 +84,7 @@ async function loadShare(q: Queryable, where: SQL): Promise<LoadedShare | null> 
     .where(where)
     .limit(1);
   if (row === undefined) return null;
-  const subscription = await currentSubscription(q, row.share.ownerId);
+  const subscription = withSubscription ? await currentSubscription(q, row.share.ownerId) : null;
   const isFile = row.share.targetType === 'file';
   return {
     ...row.share,
@@ -71,6 +93,7 @@ async function loadShare(q: Queryable, where: SQL): Promise<LoadedShare | null> 
     targetLive: isFile ? row.fileLive : row.folderLive,
     ownerName: row.ownerName,
     subscriptionStatus: subscription?.status ?? null,
+    ownerStatus: row.ownerStatus,
   };
 }
 
@@ -86,27 +109,34 @@ export class ShareAccess {
     @Inject(DATABASE) private readonly db: Db,
     @Inject(KEY_VALUE_STORE) private readonly store: KeyValueStore,
     @Inject(CLOCK) private readonly clock: Clock,
+    @Inject(API_CONFIG) private readonly config: ApiConfig,
   ) {}
 
   /** The share of a token; unknown or malformed tokens are NOT_FOUND (never VALIDATION_FAILED). */
   async byToken(token: string): Promise<LoadedShare> {
     if (!isShareToken(token)) throw notFound('Share');
-    const share = await loadShare(this.db, eq(shares.token, token));
+    const share = await loadShare(this.db, eq(shares.token, token), billingOnline(this.config));
     if (share === null) throw notFound('Share');
     return share;
   }
 
   async byId(id: string): Promise<LoadedShare | null> {
-    return loadShare(this.db, eq(shares.id, id));
+    return loadShare(this.db, eq(shares.id, id), billingOnline(this.config));
   }
 
-  /** SHARE_EXPIRED unless the share serves (revoked, expired, then unavailable). */
+  /**
+   * SHARE_EXPIRED unless the share serves (revoked, expired, then unavailable). ADR 0010: a
+   * disabled owner makes it `unavailable`, and the subscription gates only with
+   * BILLING_MODE=gateway.
+   */
   assertAvailable(share: LoadedShare): void {
     const availability = shareAvailability(
       {
         isActive: share.isActive,
         expiresAt: share.expiresAt,
         targetLive: share.targetLive,
+        ownerStatus: share.ownerStatus,
+        subscriptionGates: billingOnline(this.config),
         subscriptionStatus: share.subscriptionStatus,
       },
       this.clock.now(),

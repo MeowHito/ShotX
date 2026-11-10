@@ -5,11 +5,19 @@ import {
   Inject,
   Injectable,
 } from '@nestjs/common';
+import { allowedDuringPasswordChange } from '@shotx/shared';
 import type { Request } from 'express';
 import type { Db } from '../db/db';
 import { ApiError } from '../http/api-error';
-import { DATABASE, TOKEN_VERIFIER, type TokenVerifier } from '../tokens';
-import { type AppUser, bearerToken, provisionUser } from './users';
+import { matchedRoute } from '../http/route-contract';
+import { CLOCK, type Clock, DATABASE, TOKEN_VERIFIER, type TokenVerifier } from '../tokens';
+import {
+  type AppUser,
+  assertAccountActive,
+  assertUserSessionLive,
+  bearerToken,
+  provisionUser,
+} from './users';
 
 export { bearerToken } from './users';
 
@@ -20,17 +28,29 @@ export interface Photographer {
 
 const PRINCIPAL = Symbol('principal');
 
-type AuthedRequest = Request & { [PRINCIPAL]?: AppUser };
+/** The guard's user plus whether the session is restricted (PASSWORD_CHANGE_CLAIM). */
+export interface UserPrincipal extends AppUser {
+  passwordChangeRequired: boolean;
+}
+
+type AuthedRequest = Request & { [PRINCIPAL]?: UserPrincipal };
 
 /**
  * Verifies a users-pool token and provisions its `users` row (ADR 0002). An admins-pool token is
- * UNAUTHENTICATED here: admins never act as photographers or viewers outside `/admin/*`.
+ * UNAUTHENTICATED here: admins never act as photographers or viewers outside `/admin/*`. Then,
+ * in this one place for every `user` and `photographer` route (ADR 0010):
+ * - a ShotX-issued token's session must be live (assertUserSessionLive), else UNAUTHENTICATED;
+ * - a disabled account is ACCOUNT_DISABLED (its sessions were revoked when it was disabled, but
+ *   an access token lives until it expires);
+ * - a restricted session (PASSWORD_CHANGE_CLAIM) is PASSWORD_CHANGE_REQUIRED on every route but
+ *   PASSWORD_CHANGE_ALLOWED_ROUTES.
  */
 async function authenticateUser(
   req: AuthedRequest,
   verifier: TokenVerifier,
   db: Db,
-): Promise<AppUser> {
+  clock: Clock,
+): Promise<UserPrincipal> {
   const token = bearerToken(req.headers.authorization);
   if (token === null) throw new ApiError('UNAUTHENTICATED', 'Authentication required');
   const identity = await verifier.verify(token);
@@ -38,8 +58,18 @@ async function authenticateUser(
     throw new ApiError('UNAUTHENTICATED', 'This route needs a users-pool token');
   }
   const user = await provisionUser(db, identity);
-  req[PRINCIPAL] = user;
-  return user;
+  assertAccountActive(user);
+  await assertUserSessionLive(db, identity, user.id, clock.now());
+  const passwordChangeRequired = identity.passwordChange === true;
+  if (passwordChangeRequired) {
+    const route = matchedRoute(req);
+    if (route === null || !allowedDuringPasswordChange(route)) {
+      throw new ApiError('PASSWORD_CHANGE_REQUIRED', 'Change your temporary password first');
+    }
+  }
+  const principal = { ...user, passwordChangeRequired };
+  req[PRINCIPAL] = principal;
+  return principal;
 }
 
 /**
@@ -51,17 +81,19 @@ export class UserGuard implements CanActivate {
   constructor(
     @Inject(TOKEN_VERIFIER) private readonly verifier: TokenVerifier,
     @Inject(DATABASE) private readonly db: Db,
+    @Inject(CLOCK) private readonly clock: Clock,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    await authenticateUser(context.switchToHttp().getRequest(), this.verifier, this.db);
+    await authenticateUser(context.switchToHttp().getRequest(), this.verifier, this.db, this.clock);
     return true;
   }
 }
 
 /**
  * The one guard of every `photographer` route. Like UserGuard (so a first request provisions the
- * user), then requires role `photographer` (else FORBIDDEN: POST /me/photographer first).
+ * user), then requires role `photographer` (else FORBIDDEN: only an admin creates photographers,
+ * ADR 0010).
  * Services filter every query by this id; ids from the client are never trusted for ownership.
  */
 @Injectable()
@@ -69,6 +101,7 @@ export class PhotographerGuard implements CanActivate {
   constructor(
     @Inject(TOKEN_VERIFIER) private readonly verifier: TokenVerifier,
     @Inject(DATABASE) private readonly db: Db,
+    @Inject(CLOCK) private readonly clock: Clock,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -76,6 +109,7 @@ export class PhotographerGuard implements CanActivate {
       context.switchToHttp().getRequest(),
       this.verifier,
       this.db,
+      this.clock,
     );
     if (user.role !== 'photographer') {
       throw new ApiError('FORBIDDEN', 'Only photographers may use this route');
@@ -84,7 +118,7 @@ export class PhotographerGuard implements CanActivate {
   }
 }
 
-function principal(context: ExecutionContext): AppUser {
+function principal(context: ExecutionContext): UserPrincipal {
   const user = context.switchToHttp().getRequest<AuthedRequest>()[PRINCIPAL];
   if (user === undefined) throw new Error('UserGuard or PhotographerGuard did not run');
   return user;
@@ -97,5 +131,5 @@ export const CurrentPhotographer = createParamDecorator(
 
 /** The user the guard resolved. Use only on routes behind UserGuard or PhotographerGuard. */
 export const CurrentUser = createParamDecorator(
-  (_data: unknown, context: ExecutionContext): AppUser => principal(context),
+  (_data: unknown, context: ExecutionContext): UserPrincipal => principal(context),
 );

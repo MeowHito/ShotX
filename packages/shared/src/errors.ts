@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PASSWORD_POLICY_REASONS } from './account/password-accounts';
 import {
   CAPTCHA_ACTIONS,
   CAPTCHA_REJECT_REASONS,
@@ -84,7 +85,10 @@ export const ErrorCode = {
   LOGIN_REQUIRED: 'LOGIN_REQUIRED',
   /** The share has a password and this browser hasn't unlocked it (POST /s/:token/unlock). */
   PASSWORD_REQUIRED: 'PASSWORD_REQUIRED',
-  /** POST /s/:token/unlock with the wrong password. */
+  /**
+   * POST /s/:token/unlock with the wrong password; also POST /auth/photographer/password with the
+   * wrong `currentPassword` (ADR 0010; counts as a failed attempt towards the lockout).
+   */
   PASSWORD_INCORRECT: 'PASSWORD_INCORRECT',
   /**
    * The consent was given for another policy version than the current one (the page showed an
@@ -138,7 +142,8 @@ export const ErrorCode = {
   AUTH_PROVIDER_UNAVAILABLE: 'AUTH_PROVIDER_UNAVAILABLE',
   /**
    * The login state is unknown, expired or already used: the OIDC `state` of a callback, or the
-   * `challengeId` of an admin MFA step. Start the sign-in again.
+   * `challengeId` of an admin sign-in step (password change, MFA or TOTP enrolment), or a
+   * challenge used for another step than the one it was issued for. Start the sign-in again.
    */
   LOGIN_STATE_INVALID: 'LOGIN_STATE_INVALID',
   /**
@@ -147,11 +152,15 @@ export const ErrorCode = {
    */
   IDENTITY_PROVIDER_ERROR: 'IDENTITY_PROVIDER_ERROR',
   /**
-   * Admin sign-in: wrong email or password, no such admin, or no password credentials. One code
-   * for all of them, so the response never reveals whether an account exists.
+   * Admin or photographer sign-in: wrong email or password, no such account, or no password
+   * credentials. One code for all of them, so the response never reveals whether an account
+   * exists. A locked account (too many failures) is RATE_LIMITED, with `Retry-After`.
    */
   INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
-  /** Admin MFA step: the TOTP code is wrong, outside the window, or was already used. */
+  /**
+   * Admin MFA step: the TOTP code is wrong, outside the window, or was already used; also the
+   * code that should confirm a new TOTP enrolment.
+   */
   MFA_INVALID: 'MFA_INVALID',
   /**
    * An admins-pool token without `otp` in its `amr` claim (see ADMIN_REQUIRED_AMR). Every admin
@@ -165,6 +174,40 @@ export const ErrorCode = {
    * is revoked. Sign in again.
    */
   REFRESH_TOKEN_REUSED: 'REFRESH_TOKEN_REUSED',
+
+  // Admin-provisioned accounts (ADR 0010).
+  /**
+   * The signed-in photographer's password is temporary (set by an admin at create or reset): the
+   * session carries PASSWORD_CHANGE_CLAIM and may only call PASSWORD_CHANGE_ALLOWED_ROUTES until
+   * POST /auth/photographer/password succeeds. The web app shows the change-password form.
+   */
+  PASSWORD_CHANGE_REQUIRED: 'PASSWORD_CHANGE_REQUIRED',
+  /**
+   * The account is disabled (`users.status`). Password sign-ins answer it only after the password
+   * was verified (so it reveals nothing to someone without the password); LINE/Google sign-in
+   * (OIDC callback) and the dev login answer it for a disabled account once the identity is
+   * verified; routes answer it for a token issued before the account was disabled (disabling
+   * also revokes every session).
+   */
+  ACCOUNT_DISABLED: 'ACCOUNT_DISABLED',
+  /**
+   * Another email + password account (admin or photographer, either pool) already has this email,
+   * ignoring ASCII case (`users_password_account_email_unique`, normalizeAccountEmail).
+   */
+  EMAIL_TAKEN: 'EMAIL_TAKEN',
+  /**
+   * The change would leave no active admin: disabling another admin who is the last other active
+   * admin. Self-disable is CANNOT_MODIFY_SELF (checked first), so in practice this is a race (two
+   * admins disabling each other at once); the api counts inside the transaction.
+   */
+  LAST_ADMIN: 'LAST_ADMIN',
+  /**
+   * An admin may not disable or reset the password of their own account in the admin users
+   * routes (renaming themself is allowed). Checked before LAST_ADMIN.
+   */
+  CANNOT_MODIFY_SELF: 'CANNOT_MODIFY_SELF',
+  /** A new password breaks the policy. Details: PasswordTooWeakDetails. */
+  PASSWORD_TOO_WEAK: 'PASSWORD_TOO_WEAK',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -219,6 +262,12 @@ export const ERROR_HTTP_STATUS = {
   MFA_REQUIRED: 401,
   REFRESH_TOKEN_INVALID: 401,
   REFRESH_TOKEN_REUSED: 401,
+  PASSWORD_CHANGE_REQUIRED: 403,
+  ACCOUNT_DISABLED: 403,
+  EMAIL_TAKEN: 409,
+  LAST_ADMIN: 409,
+  CANNOT_MODIFY_SELF: 403,
+  PASSWORD_TOO_WEAK: 422,
 } as const satisfies Record<ErrorCode, number>;
 
 /** Body of every API error response. */
@@ -396,6 +445,16 @@ export const identityProviderErrorDetailsSchema = z.object({
 export type IdentityProviderErrorDetails = z.output<typeof identityProviderErrorDetailsSchema>;
 
 /**
+ * PASSWORD_TOO_WEAK: the first rule the password breaks (PASSWORD_POLICY_REASONS) and the pool's
+ * minimum length, so the form can say "อย่างน้อย N ตัวอักษร".
+ */
+export const passwordTooWeakDetailsSchema = z.object({
+  reason: z.enum(PASSWORD_POLICY_REASONS),
+  minLength: z.number().int().positive(),
+});
+export type PasswordTooWeakDetails = z.output<typeof passwordTooWeakDetailsSchema>;
+
+/**
  * Informational codes in successful billing responses (`notices`), never sent as errors. The web
  * app maps them to Thai text like error codes.
  * - `DOWNGRADE_EXCEEDS_QUOTA`: the smaller plan is below what is stored; uploads will be blocked
@@ -437,6 +496,7 @@ export const ERROR_DETAILS_SCHEMAS = {
   CHECKOUT_PENDING: checkoutPendingDetailsSchema,
   AUTH_PROVIDER_UNAVAILABLE: authProviderUnavailableDetailsSchema,
   IDENTITY_PROVIDER_ERROR: identityProviderErrorDetailsSchema,
+  PASSWORD_TOO_WEAK: passwordTooWeakDetailsSchema,
 } as const satisfies Partial<Record<ErrorCode, z.ZodType>>;
 
 /**

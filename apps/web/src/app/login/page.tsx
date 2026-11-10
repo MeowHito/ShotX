@@ -41,7 +41,9 @@ export default async function LoginPage({
         <div className="space-y-1.5">
           <p className="eyebrow">{t('eyebrow')}</p>
           <h1 className="text-2xl">{t('title')}</h1>
-          <p className="text-sm text-muted-foreground">{t('subtitle')}</p>
+          <p className="text-sm text-muted-foreground">
+            {options?.password === true ? t('passwordSubtitle') : t('subtitle')}
+          </p>
         </div>
         {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
         {options === null ? (

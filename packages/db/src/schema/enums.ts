@@ -1,4 +1,5 @@
 import {
+  ACCOUNT_STATUSES,
   ACTIVITY_SOURCES,
   ACTIVITY_TYPES,
   AUTH_POOLS,
@@ -47,3 +48,5 @@ export const paymentEventType = pgEnum('payment_event_type', PAYMENT_EVENT_TYPES
 export const subscriptionEventType = pgEnum('subscription_event_type', SUBSCRIPTION_EVENT_TYPES);
 export const subscriptionNoticeKind = pgEnum('subscription_notice_kind', SUBSCRIPTION_NOTICE_KINDS);
 export const billingActor = pgEnum('billing_actor', BILLING_ACTORS);
+// Migration 0011 (ADR 0010).
+export const accountStatus = pgEnum('account_status', ACCOUNT_STATUSES);

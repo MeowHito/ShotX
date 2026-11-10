@@ -1,13 +1,18 @@
 import { createHmac } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { adminCredentials, users } from '@shotx/db';
-import type {
-  AdminLoginResponse,
-  AdminSignInConfig,
-  AuthAuditAction,
-  AuthTokenResponse,
+import {
+  ADMIN_SIGN_IN_STEPS,
+  type AccountStatus,
+  type AdminChangePasswordResponse,
+  type AdminLoginResponse,
+  type AdminSignInConfig,
+  type AdminSignInStep,
+  type AuthAuditAction,
+  type AuthTokenResponse,
+  normalizeAccountEmail,
 } from '@shotx/shared';
-import { and, eq, gte, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, eq, gte, isNull, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ApiConfig } from '../config';
 import type { Db, Queryable } from '../db/db';
@@ -24,19 +29,28 @@ import {
   type RateLimiter,
   type RateLimitResult,
 } from '../tokens';
-import { parseJson, sessionUser, tokenResponse } from './auth.service';
+import { markSignedIn, parseJson, sessionUser, tokenResponse } from './auth.service';
 import { hashPassword, verifyPassword } from './password';
+import { assertPasswordPolicy } from './password-policy';
 import { newOpaqueToken, startSession, writeAuthAudit } from './sessions';
 import { SHOTX_AUTH, type ShotxAuth } from './shotx-auth';
-import { decryptTotpSecret, matchTotp } from './totp';
+import {
+  adminTotpIssuer,
+  decryptTotpSecret,
+  encryptTotpSecret,
+  generateTotpSecret,
+  matchTotp,
+  otpauthUri,
+} from './totp';
 
-// Admin sign-in (ADR 0008 section 4): email + password (argon2id), then a one-time challenge in
-// Redis, then TOTP. Admins-pool tokens are issued only by verifyMfa, with amr pwd + otp + mfa.
+// Admin sign-in (ADR 0008 section 4, ADR 0010): email + password (argon2id), then one-time
+// challenges in Redis for the steps (ADMIN_SIGN_IN_STEPS: change a temporary password, enrol
+// TOTP, enter the code). Admins-pool tokens are issued only by verifyMfa, with amr pwd + otp +
+// mfa, and only verifyMfa writes what the earlier steps changed (new password hash, new TOTP
+// secret), in one transaction.
 
 /** Admin email as accounts are keyed: trimmed, ASCII-lowercased (users_admin_email_unique). */
-export function normalizeAdminEmail(email: string): string {
-  return email.trim().replace(/[A-Z]/g, (c) => c.toLowerCase());
-}
+export const normalizeAdminEmail = normalizeAccountEmail;
 
 /**
  * The account key of rate limits and of audit rows without a known account (`admin_login`
@@ -54,15 +68,38 @@ export function adminAccountKey(secret: string, email: string): string {
 export const adminChallengeKey = (challengeId: string) =>
   `auth:admin-mfa:${sha256Hex(challengeId)}`;
 
-const challengeSchema = z.object({ userId: z.uuid(), account: z.string().min(1) });
+/**
+ * A pending sign-in step in Redis. `pwdFp`: SHA-256 of the password hash the sign-in verified, so
+ * a password reset (or change) in between ends the sign-in. `newPasswordHash`: the argon2id hash
+ * of the password chosen at the `change_password` step; `enrolment`: the TOTP secret generated
+ * for the `enrol_totp` step, AES-256-GCM under ADMIN_TOTP_ENCRYPTION_KEY with the user id as AAD
+ * (like admin_credentials). Both are stored only by a successful verifyMfa.
+ */
+const challengeSchema = z.object({
+  userId: z.uuid(),
+  account: z.string().min(1),
+  step: z.enum(ADMIN_SIGN_IN_STEPS),
+  pwdFp: z.string().regex(/^[0-9a-f]{64}$/),
+  newPasswordHash: z.string().startsWith('$argon2id$').optional(),
+  enrolment: z.object({ ciphertext: z.base64url(), nonce: z.base64url() }).optional(),
+});
+type Challenge = z.output<typeof challengeSchema>;
+
+const loginStateInvalid = () => new ApiError('LOGIN_STATE_INVALID', 'Sign-in expired; start again');
+const accountDisabled = () => new ApiError('ACCOUNT_DISABLED', 'This account is disabled');
 
 interface AdminRow {
   id: string;
   authSubject: string;
+  email: string | null;
+  status: AccountStatus;
   passwordHash: string;
-  totpSecretEncrypted: Buffer;
-  totpSecretNonce: Buffer;
+  /** Null for an admin created in the admin app until a sign-in enrols TOTP (ADR 0010). */
+  totpSecretEncrypted: Buffer | null;
+  totpSecretNonce: Buffer | null;
   totpConfirmedAt: Date | null;
+  /** The password is temporary (admin-app creation or reset): the first step changes it. */
+  mustChangePassword: boolean;
   totpLastUsedStep: number | null;
   lockedUntil: Date | null;
   /**
@@ -75,10 +112,13 @@ interface AdminRow {
 const adminColumns = {
   id: users.id,
   authSubject: users.authSubject,
+  email: users.email,
+  status: users.status,
   passwordHash: adminCredentials.passwordHash,
   totpSecretEncrypted: adminCredentials.totpSecretEncrypted,
   totpSecretNonce: adminCredentials.totpSecretNonce,
   totpConfirmedAt: adminCredentials.totpConfirmedAt,
+  mustChangePassword: adminCredentials.mustChangePassword,
   totpLastUsedStep: adminCredentials.totpLastUsedStep,
   lockedUntil: adminCredentials.lockedUntil,
   credentialsCreatedAt: adminCredentials.createdAt,
@@ -100,7 +140,7 @@ export async function findAdminByEmail(q: Queryable, email: string): Promise<Adm
   return row ?? null;
 }
 
-async function findAdminById(q: Queryable, id: string): Promise<AdminRow | null> {
+export async function findAdminById(q: Queryable, id: string): Promise<AdminRow | null> {
   const [row] = await q
     .select(adminColumns)
     .from(users)
@@ -134,7 +174,10 @@ const unknownLockKey = (account: string) => `auth-admin:locked:${account}`;
 
 const invalidCredentials = () => new ApiError('INVALID_CREDENTIALS', 'Wrong email or password');
 
-/** Admin sign-in: POST /auth/admin/login and POST /auth/admin/mfa. */
+/** The fingerprint of a password hash a challenge is bound to. */
+const passwordFingerprint = (hash: string) => sha256Hex(hash);
+
+/** Admin sign-in: POST /auth/admin/login, POST /auth/admin/password and POST /auth/admin/mfa. */
 @Injectable()
 export class AdminSignIn {
   /** A real argon2id hash of a random password, verified for unknown emails (same timing). */
@@ -383,32 +426,143 @@ export class AdminSignIn {
         updatedAt: this.clock.now(),
       })
       .where(eq(adminCredentials.userId, row.id));
-    const challengeId = newOpaqueToken();
-    await this.store.setWithTtl(
-      adminChallengeKey(challengeId),
-      JSON.stringify({ userId: row.id, account }),
-      settings.challengeTtlSeconds,
-    );
-    return { challengeId, expiresIn: settings.challengeTtlSeconds };
+    // Only after the password was verified, so it reveals nothing to someone without it.
+    if (row.status !== 'active') {
+      await this.audit('auth.admin.sign_in_failed', row, account, {
+        reason: 'account_disabled',
+        ipHash,
+      });
+      throw accountDisabled();
+    }
+    const base = { userId: row.id, account, pwdFp: passwordFingerprint(row.passwordHash) };
+    if (row.mustChangePassword) {
+      return this.issueChallenge(settings, { ...base, step: 'change_password' });
+    }
+    return this.nextCodeStep(settings, base, row, ipHash);
   }
 
   /**
-   * Step 2. Like step 1, the attempt is counted in the code windows and reserved against the
-   * lockout before the code is checked, so parallel guesses can't exceed the limits. The
-   * challenge stays usable after a wrong code until it expires, the account window is used up
-   * or the account locks (then it is deleted). A code is accepted once: totp_last_used_step is
-   * advanced with a conditional UPDATE, so a replay (or a concurrent second use) is MFA_INVALID.
-   * The first valid code of an unconfirmed enrolment confirms it, unless the enrolment is older
-   * than ADMIN_TOTP_ENROLMENT_TTL_SECONDS (MFA_INVALID, audited `enrolment_expired`, until the
-   * operator runs reset-totp). Success clears the failure
-   * count and the account's windows.
+   * The step after the password (and after a password change): `enrol_totp` with a new secret
+   * for an account without one (UI-created admins), else `totp`.
+   */
+  private async nextCodeStep(
+    settings: AdminSignInConfig,
+    base: Pick<Challenge, 'userId' | 'account' | 'pwdFp' | 'newPasswordHash'>,
+    row: AdminRow,
+    ipHash: string,
+  ): Promise<Extract<AdminLoginResponse, { step: 'enrol_totp' | 'totp' }>> {
+    if (row.totpSecretEncrypted !== null) {
+      return this.issueChallenge(settings, { ...base, step: 'totp' });
+    }
+    const secret = generateTotpSecret();
+    const encrypted = encryptTotpSecret(settings.totp.encryptionKey, row.id, secret);
+    const uri = otpauthUri({
+      issuer: adminTotpIssuer(this.config.app.stage),
+      account: row.email ?? row.id,
+      secret,
+      digits: settings.totp.digits,
+      periodSeconds: settings.totp.periodSeconds,
+    });
+    secret.fill(0);
+    const response = await this.issueChallenge(settings, {
+      ...base,
+      step: 'enrol_totp',
+      enrolment: {
+        ciphertext: encrypted.ciphertext.toString('base64url'),
+        nonce: encrypted.nonce.toString('base64url'),
+      },
+    });
+    await this.audit('auth.admin.totp_enrolment_started', row, base.account, { ipHash });
+    return { ...response, step: 'enrol_totp', otpauthUri: uri };
+  }
+
+  /** Stores a fresh one-time challenge for `challenge.step` and answers it. */
+  private async issueChallenge<S extends AdminSignInStep>(
+    settings: AdminSignInConfig,
+    challenge: Challenge & { step: S },
+  ): Promise<{ step: S; challengeId: string; expiresIn: number }> {
+    const challengeId = newOpaqueToken();
+    await this.store.setWithTtl(
+      adminChallengeKey(challengeId),
+      JSON.stringify(challenge),
+      settings.challengeTtlSeconds,
+    );
+    return { step: challenge.step, challengeId, expiresIn: settings.challengeTtlSeconds };
+  }
+
+  /** The challenge of `challengeId` if it is for one of `steps`, else LOGIN_STATE_INVALID. */
+  private async readChallenge(
+    challengeId: string,
+    steps: readonly AdminSignInStep[],
+  ): Promise<{ key: string; challenge: Challenge }> {
+    const key = adminChallengeKey(challengeId);
+    const parsed = challengeSchema.safeParse(parseJson(await this.store.get(key)));
+    if (!parsed.success || !steps.includes(parsed.data.step)) throw loginStateInvalid();
+    return { key, challenge: parsed.data };
+  }
+
+  /**
+   * The `change_password` step (ADR 0010): the new password must pass the policy
+   * (ADMIN_PASSWORD_MIN_LENGTH, passwordPolicyViolation, the common list, not the current
+   * password); a refused one keeps the challenge usable. Success uses the challenge up and answers
+   * the next step with a fresh one carrying the new hash; nothing is written to admin_credentials
+   * until verifyMfa succeeds. The account must still be active with the password the sign-in
+   * verified.
+   */
+  async changePassword(
+    challengeId: string,
+    newPassword: string,
+    ipHash: string,
+  ): Promise<AdminChangePasswordResponse> {
+    const { settings } = this.admin();
+    const { key, challenge } = await this.readChallenge(challengeId, ['change_password']);
+    const row = await findAdminById(this.db, challenge.userId);
+    if (row === null || passwordFingerprint(row.passwordHash) !== challenge.pwdFp) {
+      await this.store.del(key);
+      throw loginStateInvalid();
+    }
+    if (row.status !== 'active') {
+      await this.store.del(key);
+      throw accountDisabled();
+    }
+    await assertPasswordPolicy(newPassword, {
+      minLength: settings.passwordMinLength,
+      email: row.email,
+      currentHash: row.passwordHash,
+    });
+    if ((await this.store.take(key)) === null) throw loginStateInvalid();
+    const newPasswordHash = await hashPassword(newPassword, this.config.password.argon2id);
+    return this.nextCodeStep(
+      settings,
+      {
+        userId: row.id,
+        account: challenge.account,
+        pwdFp: challenge.pwdFp,
+        newPasswordHash,
+      },
+      row,
+      ipHash,
+    );
+  }
+
+  /**
+   * The final step, for a `totp` or an `enrol_totp` challenge. Like step 1, the attempt is counted
+   * in the code windows and reserved against the lockout before the code is checked, so parallel
+   * guesses can't exceed the limits. The challenge stays usable after a wrong code until it
+   * expires, the account window is used up or the account locks (then it is deleted). A code is
+   * accepted once: the credentials row is locked FOR UPDATE and totp_last_used_step must be below
+   * the code's step, so a replay (or a concurrent second use) is MFA_INVALID. The first valid code
+   * of an unconfirmed enrolment confirms it: a CLI enrolment unless it is older than
+   * ADMIN_TOTP_ENROLMENT_TTL_SECONDS (MFA_INVALID, audited `enrolment_expired`, until reset-totp),
+   * or the secret of this sign-in's `enrol_totp` step. In the same transaction as the session:
+   * the new password hash and TOTP secret of earlier steps, `must_change_password = false`, the
+   * replay step, the cleared failure count, `last_sign_in_at` and the audit rows (ADR 0010).
+   * Success also clears the account's windows.
    */
   async verifyMfa(challengeId: string, code: string, ipHash: string): Promise<AuthTokenResponse> {
     const { auth, settings } = this.admin();
-    const key = adminChallengeKey(challengeId);
-    const parsed = challengeSchema.safeParse(parseJson(await this.store.get(key)));
-    if (!parsed.success) throw new ApiError('LOGIN_STATE_INVALID', 'Sign-in expired; start again');
-    const { userId, account } = parsed.data;
+    const { key, challenge } = await this.readChallenge(challengeId, ['totp', 'enrol_totp']);
+    const { userId, account } = challenge;
 
     const limits = await this.reserveWindows(settings, 'otp', ipHash, account);
     const row = await findAdminById(this.db, userId);
@@ -417,9 +571,13 @@ export class AdminSignIn {
       await this.audit('auth.admin.mfa_failed', row, account, { reason: 'rate_limited', ipHash });
       throw rateLimited(limits.retryAfterSeconds);
     }
-    if (row === null) {
+    if (row === null || !this.challengeMatches(challenge, row)) {
       await this.store.del(key);
-      throw new ApiError('LOGIN_STATE_INVALID', 'Sign-in expired; start again');
+      throw loginStateInvalid();
+    }
+    if (row.status !== 'active') {
+      await this.store.del(key);
+      throw accountDisabled();
     }
     const lockout = await this.reserveLockout(settings, row, account);
     if (lockout.kind === 'locked') {
@@ -432,19 +590,32 @@ export class AdminSignIn {
     }
 
     const now = this.clock.now();
+    const enrolling = challenge.enrolment !== undefined;
+    const stored = enrolling
+      ? {
+          ciphertext: Buffer.from(challenge.enrolment?.ciphertext ?? '', 'base64url'),
+          nonce: Buffer.from(challenge.enrolment?.nonce ?? '', 'base64url'),
+        }
+      : // challengeMatches: a `totp` challenge's account has a secret.
+        { ciphertext: row.totpSecretEncrypted as Buffer, nonce: row.totpSecretNonce as Buffer };
     const enrolmentExpired =
+      !enrolling &&
       row.totpConfirmedAt === null &&
       now.getTime() - row.credentialsCreatedAt.getTime() > settings.totpEnrolmentTtlSeconds * 1000;
-    const secret = decryptTotpSecret(settings.totp.encryptionKey, row.id, {
-      ciphertext: row.totpSecretEncrypted,
-      nonce: row.totpSecretNonce,
-    });
+    let secret: Buffer;
+    try {
+      secret = decryptTotpSecret(settings.totp.encryptionKey, row.id, stored);
+    } catch {
+      // A challenge written under another key (rotated ADMIN_TOTP_ENCRYPTION_KEY): start again.
+      await this.store.del(key);
+      throw loginStateInvalid();
+    }
     const check = {
       nowMs: now.getTime(),
       periodSeconds: settings.totp.periodSeconds,
       digits: settings.totp.digits,
       window: settings.totp.window,
-      lastUsedStep: row.totpLastUsedStep,
+      lastUsedStep: enrolling ? null : row.totpLastUsedStep,
     };
     const step = matchTotp(secret, code, check);
     // For the audit row only: a code that is valid but for an already used step is a replay.
@@ -469,51 +640,110 @@ export class AdminSignIn {
     if (enrolmentExpired) return fail('enrolment_expired');
     if (step === null) return fail(replayed ? 'replayed' : 'invalid_code');
 
-    const [accepted] = await this.db
-      .update(adminCredentials)
-      .set({
-        totpLastUsedStep: step,
-        totpConfirmedAt: sql`coalesce(${adminCredentials.totpConfirmedAt}, ${now.toISOString()}::timestamptz)`,
-        failedAttempts: 0,
-        lockedUntil: null,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(adminCredentials.userId, row.id),
-          or(
-            isNull(adminCredentials.totpLastUsedStep),
-            lt(adminCredentials.totpLastUsedStep, step),
-          ),
-        ),
-      )
-      .returning({ userId: adminCredentials.userId });
-    if (accepted === undefined) return fail('replayed');
-    // One sign-in per challenge.
-    if ((await this.store.take(key)) === null) {
-      throw new ApiError('LOGIN_STATE_INVALID', 'Sign-in expired; start again');
+    const outcome = await this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({
+          status: users.status,
+          passwordHash: adminCredentials.passwordHash,
+          totpSecretEncrypted: adminCredentials.totpSecretEncrypted,
+          totpConfirmedAt: adminCredentials.totpConfirmedAt,
+          totpLastUsedStep: adminCredentials.totpLastUsedStep,
+        })
+        .from(adminCredentials)
+        .innerJoin(users, eq(users.id, adminCredentials.userId))
+        .where(eq(adminCredentials.userId, row.id))
+        .for('update', { of: adminCredentials })
+        .limit(1);
+      if (current === undefined) return { kind: 'gone' } as const;
+      if (current.status !== 'active') return { kind: 'disabled' } as const;
+      // The password, or the secret, changed since this sign-in started (reset, reset-totp, a
+      // concurrent enrolment): start again.
+      const sameSecret = enrolling
+        ? current.totpSecretEncrypted === null
+        : current.totpSecretEncrypted !== null &&
+          Buffer.from(current.totpSecretEncrypted).equals(stored.ciphertext);
+      if (passwordFingerprint(current.passwordHash) !== challenge.pwdFp || !sameSecret) {
+        return { kind: 'gone' } as const;
+      }
+      if (!enrolling && current.totpLastUsedStep !== null && current.totpLastUsedStep >= step) {
+        return { kind: 'replayed' } as const;
+      }
+      // One sign-in per challenge (taken inside the transaction: a concurrent use waits on the
+      // row lock and then finds it gone).
+      if ((await this.store.take(key)) === null) return { kind: 'gone' } as const;
+      await tx
+        .update(adminCredentials)
+        .set({
+          totpLastUsedStep: step,
+          totpConfirmedAt: enrolling
+            ? now
+            : sql`coalesce(${adminCredentials.totpConfirmedAt}, ${now.toISOString()}::timestamptz)`,
+          failedAttempts: 0,
+          lockedUntil: null,
+          updatedAt: now,
+          ...(enrolling
+            ? { totpSecretEncrypted: stored.ciphertext, totpSecretNonce: stored.nonce }
+            : {}),
+          ...(challenge.newPasswordHash === undefined
+            ? {}
+            : { passwordHash: challenge.newPasswordHash, mustChangePassword: false }),
+        })
+        .where(eq(adminCredentials.userId, row.id));
+      await markSignedIn(tx, row.id, now);
+      const audit = (action: AuthAuditAction, meta: Record<string, unknown>) =>
+        writeAuthAudit(tx, {
+          actorId: row.id,
+          action,
+          targetType: 'user',
+          targetId: row.id,
+          meta,
+          now,
+        });
+      if (challenge.newPasswordHash !== undefined) {
+        await audit('auth.admin.password_changed', { ipHash });
+      }
+      if (current.totpConfirmedAt === null) {
+        await audit('auth.admin.totp_confirmed', { ipHash, enrolledAtSignIn: enrolling });
+      }
+      await audit('auth.admin.sign_in', { ipHash, amr: ['pwd', 'otp', 'mfa'] });
+      const session = await startSession(tx, {
+        userId: row.id,
+        pool: 'admins',
+        now,
+        ttlSeconds: auth.config.pools.admins?.refreshTokenTtlSeconds ?? 0,
+      });
+      return { kind: 'signed_in', session, user: await sessionUser(tx, row.id) } as const;
+    });
+    if (outcome.kind === 'replayed') return fail('replayed');
+    if (outcome.kind === 'disabled') {
+      await this.store.del(key);
+      throw accountDisabled();
+    }
+    if (outcome.kind === 'gone') {
+      await this.store.del(key);
+      throw loginStateInvalid();
     }
     await Promise.all(
       (['pwd', 'otp'] as const).map((s) => this.limiter.reset(this.windowKey(s, 'acct', account))),
     );
+    return tokenResponse(auth, 'admins', outcome.user, outcome.session, ['pwd', 'otp', 'mfa'], now);
+  }
 
-    if (row.totpConfirmedAt === null) {
-      await this.audit('auth.admin.totp_confirmed', row, account, { ipHash });
+  /**
+   * The challenge still describes the account: the password the sign-in verified, a temporary
+   * password only together with its replacement, and a code step that fits the TOTP state (a
+   * `totp` challenge needs a secret; an `enrol_totp` one an account without).
+   */
+  private challengeMatches(challenge: Challenge, row: AdminRow): boolean {
+    if (passwordFingerprint(row.passwordHash) !== challenge.pwdFp) return false;
+    if (row.mustChangePassword && challenge.newPasswordHash === undefined) return false;
+    if (challenge.step === 'enrol_totp') {
+      return challenge.enrolment !== undefined && row.totpSecretEncrypted === null;
     }
-    await this.audit('auth.admin.sign_in', row, account, { ipHash, amr: ['pwd', 'otp', 'mfa'] });
-    const session = await startSession(this.db, {
-      userId: row.id,
-      pool: 'admins',
-      now,
-      ttlSeconds: auth.config.pools.admins?.refreshTokenTtlSeconds ?? 0,
-    });
-    return tokenResponse(
-      auth,
-      'admins',
-      await sessionUser(this.db, row.id),
-      session,
-      ['pwd', 'otp', 'mfa'],
-      now,
+    return (
+      challenge.enrolment === undefined &&
+      row.totpSecretEncrypted !== null &&
+      row.totpSecretNonce !== null
     );
   }
 }

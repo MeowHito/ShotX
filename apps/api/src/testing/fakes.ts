@@ -68,6 +68,11 @@ export function testEnv(overrides: Env = {}): Env {
     FACE_SEARCH_MAX_BODY_BYTES: String(3 * 1024 * 1024 + 64 * 1024),
     FACES_QUEUE_URL: 'https://sqs.ap-southeast-1.amazonaws.com/000000000000/shotx-test-faces',
     ZIP_QUEUE_URL: 'https://sqs.ap-southeast-1.amazonaws.com/000000000000/shotx-test-zip',
+    // The Phase 4 suites run with online billing and an enforced quota (the code stays for when
+    // the gateway returns). ADR 0010's defaults (offline, no quota) are tested with
+    // OFFLINE_ACCOUNTS_ENV.
+    BILLING_MODE: 'gateway',
+    STORAGE_QUOTA_ENFORCED: 'true',
     PAYMENT_GATEWAY: 'fake',
     PAYMENT_FAKE_WEBHOOK_SECRET: TEST_FAKE_WEBHOOK_SECRET,
     EMAIL_PROVIDER: 'fake',
@@ -75,6 +80,12 @@ export function testEnv(overrides: Env = {}): Env {
     ...overrides,
   };
 }
+
+/** ADR 0010's production defaults: no payment gateway, no storage limit. */
+export const OFFLINE_ACCOUNTS_ENV: Env = {
+  BILLING_MODE: 'offline',
+  STORAGE_QUOTA_ENFORCED: 'false',
+};
 
 export function testConfig(overrides: Env = {}, limits: Partial<ApiLimits> = {}): ApiConfig {
   const config = loadApiConfig(testEnv(overrides));

@@ -1,5 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import {
+  type AuthPool,
   BFF_CLIENT_IP_HEADER,
   BFF_KEY_HEADER,
   bffClientIpSchema,
@@ -37,16 +38,23 @@ export function cameThroughCloudFront(req: Request): boolean {
   );
 }
 
-/** Which callers may tell the API the client address (ApiConfig `bff` and `trustedProxies`). */
+/** Which callers may tell the API the client address (ApiConfig `bffKeys` and `trustedProxies`). */
 export interface ClientIpTrust {
-  /** AUTH_BFF_KEY; null when unset (then BFF_CLIENT_IP_HEADER is never trusted). */
-  bffKey: string | null;
+  /**
+   * The BFF keys by the pool whose app holds each: `users` AUTH_BFF_KEY (web), `admins`
+   * AUTH_ADMIN_BFF_KEY (admin app). Null when unset; with neither, BFF_CLIENT_IP_HEADER is never
+   * trusted.
+   */
+  bffKeys: { users: string | null; admins: string | null };
   /** TRUSTED_PROXY_ADDRESSES: socket peers whose X-Forwarded-For is trusted. */
   proxies: TrustedProxyConfig;
 }
 
 /** Trust nobody: CloudFront markers and the socket peer only. */
-export const NO_CLIENT_IP_TRUST: ClientIpTrust = { bffKey: null, proxies: { addresses: [] } };
+export const NO_CLIENT_IP_TRUST: ClientIpTrust = {
+  bffKeys: { users: null, admins: null },
+  proxies: { addresses: [] },
+};
 
 /**
  * Constant-time comparison of a presented secret with the expected one. Both sides are hashed
@@ -69,14 +77,20 @@ export function cameThroughPublicProxy(req: Request, proxies: TrustedProxyConfig
 }
 
 /**
- * True when the request carries the valid BFF key (web and admin server-side calls). BFF headers
- * on a request that came through the public proxy are ignored: web and admin call the API
- * directly on the private network, so such a request is internet traffic (and a leaked key can't
- * be used from outside).
+ * The pool of the BFF key the request carries: `users` for web's key, `admins` for the admin
+ * app's, null for none or a wrong one. Both keys are always compared, each in constant time, so
+ * timing tells nothing about which (if any) matched. BFF headers on a request that came through
+ * the public proxy are ignored: web and admin call the API directly on the private network, so
+ * such a request is internet traffic (and a leaked key can't be used from outside).
  */
-export function hasValidBffKey(req: Request, trust: ClientIpTrust): boolean {
-  if (cameThroughPublicProxy(req, trust.proxies)) return false;
-  return secretMatches(headerValue(req, BFF_KEY_HEADER), trust.bffKey);
+export function hasValidBffKey(req: Request, trust: ClientIpTrust): AuthPool | null {
+  if (cameThroughPublicProxy(req, trust.proxies)) return null;
+  const presented = headerValue(req, BFF_KEY_HEADER);
+  const users = secretMatches(presented, trust.bffKeys.users);
+  const admins = secretMatches(presented, trust.bffKeys.admins);
+  if (users) return 'users';
+  if (admins) return 'admins';
+  return null;
 }
 
 /** `::ffff:1.2.3.4` as `1.2.3.4`, brackets and zone ids removed; other values unchanged. */
@@ -107,7 +121,7 @@ function normalizeIp(value: string): string {
  */
 export function clientIp(req: Request, trust: ClientIpTrust = NO_CLIENT_IP_TRUST): string {
   const forwarded = headerValue(req, BFF_CLIENT_IP_HEADER);
-  if (forwarded !== undefined && hasValidBffKey(req, trust)) {
+  if (forwarded !== undefined && hasValidBffKey(req, trust) !== null) {
     const parsed = bffClientIpSchema.safeParse(normalizeIp(forwarded));
     if (parsed.success) return parsed.data;
   }

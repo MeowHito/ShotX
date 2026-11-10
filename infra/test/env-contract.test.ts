@@ -2,12 +2,17 @@ import { readFileSync } from 'node:fs';
 import {
   type Env,
   loadApiLimitsConfig,
+  loadAdminBffAuthConfig,
+  loadAdminConsoleConfig,
+  loadAdminPasswordUiConfig,
   loadAppConfig,
   loadAuthClientConfig,
   loadAuthProviderConfig,
   loadAwsConfig,
   loadBffAuthConfig,
+  loadBffKeysConfig,
   loadBillingConfig,
+  loadBillingModeConfig,
   loadCaptchaClientConfig,
   loadCaptchaConfig,
   loadCloudFrontSigningConfig,
@@ -38,6 +43,7 @@ import {
   loadSharePasswordHashConfig,
   loadShotxAuthConfig,
   loadStorageLifecycleConfig,
+  loadStorageQuotaConfig,
   loadTrustedProxyConfig,
   loadUploadConfig,
   loadWafCaptchaConfig,
@@ -140,6 +146,8 @@ const SERVICE_LOADERS: Record<ServiceName, Loader[]> = {
     loadMediaStorageConfig,
     // The share page's captcha (the default `waf` on AWS).
     loadCaptchaClientConfig,
+    // ADR 0010: hides plans and checkout while offline.
+    loadBillingModeConfig,
   ],
   admin: [
     loadAppConfig,
@@ -167,7 +175,10 @@ const SERVICE_LOADERS: Record<ServiceName, Loader[]> = {
     loadSharePasswordHashConfig,
     loadRetentionConfig,
     loadBillingConfig,
+    loadBillingModeConfig,
     loadPaymentGatewayConfig,
+    loadStorageQuotaConfig,
+    loadAdminConsoleConfig,
     loadEmailConfig,
     loadCaptchaConfig,
   ],
@@ -185,6 +196,7 @@ const SERVICE_LOADERS: Record<ServiceName, Loader[]> = {
     // subscriptions.transition.daily: lifecycle, purge, reminders and auto-renew charges.
     loadRetentionConfig,
     loadBillingConfig,
+    loadBillingModeConfig,
     loadPaymentGatewayConfig,
     loadEmailConfig,
   ],
@@ -208,12 +220,24 @@ const ALL_LOADERS: Loader[] = [
   loadConsentConfig,
   loadSharePasswordHashConfig,
   loadEmailConfig,
-  loadPaymentGatewayConfig,
-  // Each gateway's secrets, whichever gateway the env selects.
+  // ADR 0010: billing mode, storage quota, the admin console and the admin app's password UI.
+  loadBillingModeConfig,
+  loadStorageQuotaConfig,
+  loadAdminConsoleConfig,
+  loadAdminPasswordUiConfig,
+  // With BILLING_MODE=offline (the default) loadPaymentGatewayConfig reads nothing else, so the
+  // gateway settings and each gateway's secrets are read as with BILLING_MODE=gateway, whichever
+  // gateway the env selects.
+  (e) => loadPaymentGatewayConfig({ ...e, BILLING_MODE: 'gateway' }),
   ...PAYMENT_GATEWAYS.map(
     (gateway): Loader =>
       (e) =>
-        loadPaymentGatewayConfig({ ...e, NODE_ENV: 'development', PAYMENT_GATEWAY: gateway }),
+        loadPaymentGatewayConfig({
+          ...e,
+          BILLING_MODE: 'gateway',
+          NODE_ENV: 'development',
+          PAYMENT_GATEWAY: gateway,
+        }),
   ),
   // The local stand-ins (.env.example selects them) are read only on APP_STAGE=local.
   (e) => loadAuthProviderConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
@@ -225,6 +249,9 @@ const ALL_LOADERS: Loader[] = [
   loadScheduledJobsConfig,
   (e) => loadShotxAuthConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
   (e) => loadBffAuthConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
+  // The admin app's own key, and the api reading both (they must differ).
+  (e) => loadAdminBffAuthConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
+  (e) => loadBffKeysConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
   loadAuthClientConfig,
   loadTrustedProxyConfig,
   // ADR 0008 sections 1 and 5: Rekognition and SES clients off AWS, and the R2 bucket lifecycle

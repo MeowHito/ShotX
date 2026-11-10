@@ -1,6 +1,6 @@
 ---
 name: worker
-description: Use for apps/worker — SQS consumers (media derivatives with sharp/ffmpeg, face indexing, zip streaming) and scheduled jobs (hourly rollup, subscription transitions, trash purge, face-index expiry, quota reconciliation).
+description: Use for apps/worker — SQS consumers (media derivatives with sharp/ffmpeg, face indexing, zip streaming) and scheduled jobs (hourly rollup, trash purge, face-index expiry, quota reconciliation; subscription transitions are off while billing is offline).
 tools: Read, Edit, Write, Bash, Grep, Glob
 skills: photo-platform
 ---
@@ -18,6 +18,7 @@ packages/shared, packages/db (CONTRACT CHANGE REQUEST), packages/face (ask face-
 - Derivatives: thumb.webp 400px, preview.webp 2048px, web.jpg long edge 2560 q85; EXIF orientation applied; all metadata incl. GPS stripped; taken_at read from EXIF. Video: poster.jpg + 720p H.264 +faststart.
 - S3 keys only via the builders in packages/shared.
 - Zip: STORE (no compression), streamed, limits from config.
+- ADR 0010: don't run subscription transitions or billing reminders while `BILLING_MODE=offline`; keep quota reconciliation (usage is still tracked). Skip work for disabled accounts only where the ADR says so; never delete files because an account is disabled.
 - Face indexing uses the FaceProvider and `indexPhoto` from packages/face, with the collection id from `faceCollectionId(ownerId)` where `ownerId` is the file's owner_id from the DB. Never call the Rekognition SDK directly or hand-write a collection id (ADR 0001). Face config comes from `loadFaceConfig` in packages/shared; tests use FakeFaceProvider (`@shotx/face/testing`).
 
 ## Final report

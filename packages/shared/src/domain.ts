@@ -5,6 +5,23 @@ export const USER_ROLES = ['photographer', 'admin', 'user'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 /**
+ * Roles of accounts an admin creates in the admin app (ADR 0010): `admin` (admins pool, password +
+ * TOTP) or `photographer` (users pool, email + password). Viewers (`user`) are never created by an
+ * admin. An existing account never changes between the two (different pools): create a new one.
+ */
+export const ACCOUNT_ROLES = ['admin', 'photographer'] as const;
+export type AccountRole = (typeof ACCOUNT_ROLES)[number];
+
+/**
+ * `users.status` (migration 0011, ADR 0010). `disabled` blocks sign-in (ACCOUNT_DISABLED), revokes
+ * every session of the account, and makes a photographer's shares answer SHARE_EXPIRED (reason
+ * `unavailable`). Files are never deleted by disabling. `users.disabled_at` is set exactly when
+ * the status is `disabled` (users_disabled_at_iff_disabled).
+ */
+export const ACCOUNT_STATUSES = ['active', 'disabled'] as const;
+export type AccountStatus = (typeof ACCOUNT_STATUSES)[number];
+
+/**
  * The pool an identity comes from (`users.auth_pool`): a Cognito user pool (ADR 0002) or the
  * matching pool of ShotX-issued tokens (ADR 0008). `users` holds photographers and viewers,
  * `admins` holds admins only (MFA required). A subject is unique only within its pool.
@@ -76,8 +93,9 @@ export type ActivitySource = (typeof ACTIVITY_SOURCES)[number];
  * Why a share link no longer serves anything (SHARE_EXPIRED details):
  * - `revoked`: the owner revoked it (`is_active = false`), or an admin took it down;
  * - `expired`: `expires_at` has passed;
- * - `unavailable`: the target was trashed or purged, or the owner's subscription is `expired` or
- *   `purged` (the spec's "ลิงก์นี้หมดอายุ").
+ * - `unavailable`: the target was trashed or purged, the owner's account is `disabled` (ADR 0010),
+ *   or the owner's subscription is `expired` or `purged` (the spec's "ลิงก์นี้หมดอายุ"; only while
+ *   BILLING_MODE=gateway).
  */
 export const SHARE_UNAVAILABLE_REASONS = ['revoked', 'expired', 'unavailable'] as const;
 export type ShareUnavailableReason = (typeof SHARE_UNAVAILABLE_REASONS)[number];
@@ -251,8 +269,52 @@ export const AUTH_AUDIT_ACTIONS = [
   'auth.admin.password_reset',
   'auth.admin.unlocked',
   'auth.refresh_reused',
+  // ADR 0010 (migration 0011). Actor: the signed-in account itself (null for an unknown email).
+  /** A UI-created admin set their own password in the sign-in step (POST /auth/admin/password). */
+  'auth.admin.password_changed',
+  /** A sign-in generated a TOTP secret and showed it to the admin (UI-created admins). */
+  'auth.admin.totp_enrolment_started',
+  /** Photographer email + password sign-in (POST /auth/photographer/sign-in). */
+  'auth.photographer.sign_in',
+  /** Wrong password or unknown email; `target_type` `photographer_login` with the email HMAC. */
+  'auth.photographer.sign_in_failed',
+  'auth.photographer.locked',
+  /** Correct password on a disabled account (ACCOUNT_DISABLED). */
+  'auth.photographer.sign_in_disabled',
+  /** POST /auth/photographer/password (forced first change or a voluntary one). */
+  'auth.photographer.password_changed',
 ] as const;
 export type AuthAuditAction = (typeof AUTH_AUDIT_ACTIONS)[number];
+
+/**
+ * `audit_log.action` of admin user management (ADR 0010), written in the same transaction as the
+ * change, always with the acting admin as `actor_id`. Named like AUTH_AUDIT_ACTIONS
+ * (`<area>.<object>.<past tense>`). `target_type` is ADMIN_AUDIT_TARGET_TYPES' value, `target_id`
+ * the row id. `meta` never holds a password, a hash or a TOTP secret. Shapes (zod:
+ * ADMIN_AUDIT_META_SCHEMAS in api/admin):
+ * - `admin.user.created`: `{ role, email }`;
+ * - `admin.user.updated`: `{ changed: ['name'], oldName, newName }` (a status change writes
+ *   `admin.user.disabled` / `admin.user.enabled` instead; `changed` may list `status` too when one
+ *   PATCH did both, and the names are present whenever `name` is in `changed`);
+ * - `admin.user.disabled`: `{ revokedSessions }` (families revoked); `admin.user.enabled`: `{}`;
+ * - `admin.user.password_reset`: `{}` (the account must change it at next sign-in);
+ * - `admin.cash_payment.created`: `{ photographerId, amountSatang, paidAt }` (paidAt ISO).
+ */
+export const ADMIN_AUDIT_ACTIONS = [
+  'admin.user.created',
+  'admin.user.updated',
+  'admin.user.disabled',
+  'admin.user.enabled',
+  'admin.user.password_reset',
+  'admin.cash_payment.created',
+] as const;
+export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];
+
+/** `audit_log.target_type` of ADMIN_AUDIT_ACTIONS. */
+export const ADMIN_AUDIT_TARGET_TYPES = {
+  user: 'user',
+  cashPayment: 'cash_payment',
+} as const;
 
 /** `audit_log.action` prefix that may go without an actor. */
 export const AUTH_AUDIT_ACTION_PREFIX = 'auth.';

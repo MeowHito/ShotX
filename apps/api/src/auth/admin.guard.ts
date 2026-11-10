@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { adminCredentials, authSessions, users } from '@shotx/db';
 import { hasRequiredAmr } from '@shotx/shared';
-import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 import type { Request } from 'express';
 import type { Db } from '../db/db';
 import { ApiError } from '../http/api-error';
@@ -19,20 +19,20 @@ import {
   type TokenVerifier,
   type VerifiedIdentity,
 } from '../tokens';
-import { type AppUser, bearerToken, provisionUser } from './users';
+import { type AppUser, assertAccountActive, bearerToken, provisionUser } from './users';
 
 const ADMIN = Symbol('admin');
 type AdminRequest = Request & { [ADMIN]?: AppUser };
 
 /**
  * The admin user of a verified admins-pool identity. ShotX admins (`admin:` subjects) are created
- * by the operator CLI only, so their row must exist; Cognito admins are provisioned on first use
- * (ADR 0002).
+ * by the operator CLI or another admin (ADR 0010), so their row must exist; Cognito admins are
+ * provisioned on first use (ADR 0002).
  */
 async function adminUser(db: Db, identity: VerifiedIdentity): Promise<AppUser | null> {
   if (identity.issuer !== 'shotx') return provisionUser(db, identity);
   const [row] = await db
-    .select({ id: users.id, role: users.role })
+    .select({ id: users.id, role: users.role, status: users.status })
     .from(users)
     .where(and(eq(users.authPool, 'admins'), eq(users.authSubject, identity.sub)))
     .limit(1);
@@ -40,9 +40,11 @@ async function adminUser(db: Db, identity: VerifiedIdentity): Promise<AppUser | 
 }
 
 /**
- * True while a ShotX admin's session family is live (not revoked, not expired) and the account
- * is not locked: logout, reuse revocation, an operator reset (which revokes sessions) and a
- * lockout end admin access at once, not when the access token expires.
+ * True while a ShotX admin's session family is live (not revoked, not expired): logout, reuse
+ * revocation, a reset (operator or admin), a disable and a password change end admin access at
+ * once, not when the access token expires. A lockout does NOT end live sessions (ADR 0010 round
+ * 2): it only blocks new sign-ins, so someone who knows an admin's email can't sign them out by
+ * guessing passwords.
  */
 async function adminSessionLive(
   db: Db,
@@ -61,7 +63,6 @@ async function adminSessionLive(
         eq(authSessions.userId, userId),
         isNull(authSessions.revokedAt),
         gt(authSessions.expiresAt, now),
-        sql`(${adminCredentials.lockedUntil} IS NULL OR ${adminCredentials.lockedUntil} <= ${now.toISOString()}::timestamptz)`,
       ),
     )
     .limit(1);
@@ -72,7 +73,8 @@ async function adminSessionLive(
  * The guard of every `/admin/*` route (Phase 5): an admins-pool token only (a users-pool token is
  * UNAUTHENTICATED: it can never become an admin, ADR 0002). ShotX-issued admins tokens must carry
  * ADMIN_REQUIRED_AMR (`pwd` and `otp`), else MFA_REQUIRED, and a live session (adminSessionLive)
- * else UNAUTHENTICATED; Cognito enforces MFA in the admins pool itself.
+ * else UNAUTHENTICATED; Cognito enforces MFA in the admins pool itself. A disabled admin is
+ * ACCOUNT_DISABLED (checked before the session, which disabling revoked).
  */
 @Injectable()
 export class AdminGuard implements CanActivate {
@@ -95,6 +97,7 @@ export class AdminGuard implements CanActivate {
     }
     const user = await adminUser(this.db, identity);
     if (user?.role !== 'admin') throw new ApiError('UNAUTHENTICATED', 'Unknown admin');
+    assertAccountActive(user);
     if (
       identity.issuer === 'shotx' &&
       !(await adminSessionLive(this.db, user.id, identity.sessionId, this.clock.now()))

@@ -20,6 +20,7 @@ import {
 } from '../auth/photographer.guard';
 import { rawBodyOf } from '../http/json-body';
 import { parseRequestPart, respond, ZodPipe } from '../http/zod';
+import { BillingEnabledGuard } from './billing-enabled.guard';
 import { BillingService } from './billing.service';
 import { WebhookService } from './webhook.service';
 
@@ -35,8 +36,13 @@ function lowercaseHeaders(req: Request): Record<string, string | undefined> {
   return out;
 }
 
-/** BILLING_ROUTES. `GET /plans` is public; the webhook has its own auth (the signature). */
+/**
+ * BILLING_ROUTES. `GET /plans` is public; the webhook has its own auth (the signature). With
+ * BILLING_MODE=offline every route is NOT_FOUND (BillingEnabledGuard runs before the route's own
+ * guards: class guards come first).
+ */
 @Controller()
+@UseGuards(BillingEnabledGuard)
 export class BillingController {
   constructor(
     @Inject(BillingService) private readonly billing: BillingService,

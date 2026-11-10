@@ -1,4 +1,5 @@
 import type {
+  AccountStatus,
   FileStatus,
   ShareMode,
   ShareStatus,
@@ -108,6 +109,16 @@ export interface ShareAvailabilityInput {
   expiresAt: Date | null;
   /** The target file or folder exists, is not in the trash and is not being purged. */
   targetLive: boolean;
+  /**
+   * The owner's account status (`users.status`, ADR 0010). `disabled` makes the share
+   * `unavailable` (nothing is deleted; enabling the account brings it back).
+   */
+  ownerStatus: AccountStatus;
+  /**
+   * Whether the owner's subscription decides anything: true only with BILLING_MODE=gateway.
+   * False with BILLING_MODE=offline (ADR 0010): `subscriptionStatus` is ignored.
+   */
+  subscriptionGates: boolean;
   /** The owner's latest subscription status, null when there is none. */
   subscriptionStatus: SubscriptionStatus | null;
 }
@@ -117,14 +128,19 @@ export type ShareAvailability =
 
 /**
  * Whether a share serves anything at `now`, checked first by every public route after the token
- * lookup (unknown token: NOT_FOUND). Order: revoked, expired, then unavailable.
+ * lookup (unknown token: NOT_FOUND). Order: revoked, expired, then unavailable (target not live,
+ * owner disabled, or, only when `subscriptionGates`, a subscription that doesn't serve shares).
  */
 export function shareAvailability(share: ShareAvailabilityInput, now: Date): ShareAvailability {
   if (!share.isActive) return { ok: false, code: 'SHARE_EXPIRED', reason: 'revoked' };
   if (share.expiresAt !== null && share.expiresAt.getTime() <= now.getTime()) {
     return { ok: false, code: 'SHARE_EXPIRED', reason: 'expired' };
   }
-  if (!share.targetLive || !subscriptionServesShares(share.subscriptionStatus)) {
+  if (
+    !share.targetLive ||
+    share.ownerStatus !== 'active' ||
+    (share.subscriptionGates && !subscriptionServesShares(share.subscriptionStatus))
+  ) {
     return { ok: false, code: 'SHARE_EXPIRED', reason: 'unavailable' };
   }
   return { ok: true };

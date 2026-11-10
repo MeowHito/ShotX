@@ -20,7 +20,10 @@ import { BFF_PREFIX } from './constants';
  * Public routes (`auth: 'public'`, the share page's) are not forwarded either: the browser calls
  * them at `/api/...` directly so the API sees the viewer's address and its cookies reach it.
  * Nor are `webhook` (payment gateways) and `bff` routes (sign-in: web calls those itself with the
- * BFF key, see src/lib/auth/shotx; forwarding them would hand the key's power to any browser).
+ * BFF key, see src/lib/auth/shotx; forwarding them would hand the key's power to any browser),
+ * `admin` routes (the admin app's, with admins-pool tokens; never from this site), and
+ * `serverOnly` routes, whose responses carry a refresh token that must go into the httpOnly
+ * session cookie, never to browser JS (the password change: src/lib/auth/password).
  * Every forwarded call carries the BFF key and the end user's address (serverCallHeaders), built
  * from config and the proxy's header, never copied from the browser's request.
  */
@@ -72,6 +75,16 @@ export function unsafePathReason(path: string): string | null {
 function rawPathname(requestUrl: string): string {
   const match = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*([^?#]*)/i.exec(requestUrl);
   return match?.[1] || new URL(requestUrl).pathname;
+}
+
+/**
+ * True for a route the browser may reach through `/bff/*`: signed-in photographer and viewer
+ * routes (`photographer`, `user`) that don't hand out tokens. Everything else is answered 404
+ * without calling the API: `public` (the browser calls /api directly), `webhook`, `bff` (sign-in,
+ * with web's key), `admin` (admin app only) and `serverOnly` (the response holds a refresh token).
+ */
+export function isBrowserForwardable(route: RouteContract): boolean {
+  return (route.auth === 'photographer' || route.auth === 'user') && route.serverOnly !== true;
 }
 
 /** The contract route for a method and API path (relative to /api), or null. */
@@ -143,14 +156,9 @@ export async function handleBffRequest(request: Request, deps: BffDeps): Promise
   }
   const path = url.pathname.slice(BFF_PREFIX.length);
   const route = matchRoute(request.method, path);
-  // Public routes go to /api directly; gateway webhooks and the sign-in (`bff`) routes are
-  // server-to-server, never via a browser.
-  if (
-    route === null ||
-    route.auth === 'public' ||
-    route.auth === 'webhook' ||
-    route.auth === 'bff'
-  ) {
+  // Public routes go to /api directly; gateway webhooks, the sign-in (`bff`) routes, admin routes
+  // and token-carrying (`serverOnly`) routes are never forwarded for a browser.
+  if (route === null || !isBrowserForwardable(route)) {
     return errorResponse(404, ErrorCode.NOT_FOUND, 'Unknown route');
   }
 

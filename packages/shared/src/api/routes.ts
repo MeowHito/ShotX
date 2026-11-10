@@ -2,6 +2,21 @@ import type { z } from 'zod';
 import type { ActivityType } from '../domain';
 import { ErrorCode } from '../errors';
 import {
+  adminUserSchema,
+  cashPaymentSchema,
+  createAdminUserBodySchema,
+  createCashPaymentBodySchema,
+  createCashPaymentHeadersSchema,
+  listAdminUsersQuerySchema,
+  listAdminUsersResponseSchema,
+  listCashPaymentsQuerySchema,
+  listCashPaymentsResponseSchema,
+  resetAdminUserPasswordBodySchema,
+  updateAdminUserBodySchema,
+} from './admin';
+import {
+  adminChangePasswordBodySchema,
+  adminChangePasswordResponseSchema,
   adminLoginBodySchema,
   adminLoginResponseSchema,
   adminMfaBodySchema,
@@ -13,6 +28,10 @@ import {
   oidcProviderParamsSchema,
   oidcStartBodySchema,
   oidcStartResponseSchema,
+  photographerChangePasswordBodySchema,
+  photographerChangePasswordResponseSchema,
+  photographerSignInBodySchema,
+  photographerSignInResponseSchema,
   refreshBodySchema,
 } from './auth';
 import {
@@ -46,7 +65,7 @@ import {
   updateFileBodySchema,
   updateFolderBodySchema,
 } from './drive';
-import { becomePhotographerBodySchema, meResponseSchema } from './me';
+import { meResponseSchema } from './me';
 import {
   copyFileBodySchema,
   copyFileResponseSchema,
@@ -115,15 +134,40 @@ export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
  *   check, not behind the WAF's share rules; the body is read raw and the gateway adapter verifies
  *   its signature before anything is parsed (WEBHOOK_SIGNATURE_INVALID).
  * - `bff`: sign-in routes (AUTH_ROUTES, AUTH_PROVIDER=shotx or local). No user token: called
- *   server-side by the web and admin BFFs only, with the shared key in BFF_KEY_HEADER required
- *   (missing or wrong: UNAUTHENTICATED). Never proxied from the browser (the web's generic `/bff`
+ *   server-side by the web and admin BFFs only, with the key in BFF_KEY_HEADER that the route's
+ *   `bffKey` accepts (missing, wrong or the other app's key: UNAUTHENTICATED). Never proxied from the browser (the web's generic `/bff`
  *   proxy must refuse them like `public` and `webhook`), no cookies, no Origin check.
  * Every server-side call from web or admin (any RouteAuth) sends BFF_KEY_HEADER and the end
  * user's IP in BFF_CLIENT_IP_HEADER; the API trusts that IP only with a valid key.
+ * - `admin` (ADR 0010): an admins-pool token (role `admin`) with `pwd` and `otp` in `amr`, sent by
+ *   the admin app's BFF with AUTH_ADMIN_BFF_KEY (`bffKey: 'admins'`; any other key or none:
+ *   UNAUTHENTICATED). Without the methods: MFA_REQUIRED. Every `/admin/*` route.
  * Admins (admins-pool tokens) use only `/admin/*` routes; anywhere else they are UNAUTHENTICATED.
  * Admins-pool tokens without `otp` in `amr` are MFA_REQUIRED on admin routes (ADMIN_REQUIRED_AMR).
+ * Every `photographer`, `user` and `admin` route answers ACCOUNT_DISABLED for a disabled account,
+ * and every `photographer` and `user` route except PASSWORD_CHANGE_ALLOWED_ROUTES answers
+ * PASSWORD_CHANGE_REQUIRED for a restricted session (PASSWORD_CHANGE_CLAIM).
  */
-export type RouteAuth = 'photographer' | 'user' | 'public' | 'webhook' | 'bff';
+export type RouteAuth = 'photographer' | 'user' | 'public' | 'webhook' | 'bff' | 'admin';
+
+/**
+ * Which BFF key (BFF_KEY_HEADER) a route accepts (ADR 0010 round 2). web holds AUTH_BFF_KEY (the
+ * users pool's key), the admin app AUTH_ADMIN_BFF_KEY (the admins pool's); the API knows the
+ * calling app by the key. A missing key, an unknown one or the other app's key is
+ * UNAUTHENTICATED, so a compromised web server can't use a stolen admin token or drive admin
+ * sign-in.
+ * - `users`: web's key only (LINE/Google, dev login, photographer sign-in);
+ * - `admins`: the admin app's key only (every `admin` route; admin login, password and MFA steps);
+ * - `request`: the key of the pool the request concerns: POST /auth/refresh, the body's `pool`
+ *   (a mismatch is UNAUTHENTICATED); POST /auth/logout, the pool of the token's session (a token of
+ *   the other pool is treated like an unknown one: 204, nothing revoked, so the answer reveals
+ *   nothing);
+ * - `either`: either key (GET /auth/providers: nothing secret).
+ * Routes without `bffKey` need no key; there either valid key only lets the API trust
+ * BFF_CLIENT_IP_HEADER.
+ */
+export const BFF_KEY_SCOPES = ['users', 'admins', 'request', 'either'] as const;
+export type BffKeyScope = (typeof BFF_KEY_SCOPES)[number];
 
 /** A multipart/form-data request body of file parts only. */
 export interface MultipartSpec {
@@ -162,6 +206,17 @@ export interface RouteContract {
   rawBody?: true;
   /** Absent for 204. */
   response?: z.ZodType;
+  /**
+   * Which BFF key the route accepts (BffKeyScope). Set on every `bff` and `admin` route; absent
+   * elsewhere (no key needed).
+   */
+  bffKey?: BffKeyScope;
+  /**
+   * The response carries tokens (a refresh token), so web and admin call the route from server
+   * code only and store the tokens in their session cookie; the generic browser proxy (`/bff/*`)
+   * must refuse it like `bff` routes.
+   */
+  serverOnly?: true;
   /** Every error code the route can return. */
   errors: readonly ErrorCode[];
 }
@@ -180,6 +235,24 @@ const errors = (...specific: ErrorCode[]): readonly ErrorCode[] => [
   ...specific,
 ];
 
+/**
+ * Errors of every `photographer` and `user` route (ADR 0010): a disabled account, and a session
+ * that must change its temporary password first.
+ */
+export const SIGNED_IN_ROUTE_ERRORS = [
+  ErrorCode.ACCOUNT_DISABLED,
+  ErrorCode.PASSWORD_CHANGE_REQUIRED,
+] as const;
+
+const signedIn = (...specific: ErrorCode[]): readonly ErrorCode[] =>
+  errors(...SIGNED_IN_ROUTE_ERRORS, ...specific);
+
+/** Errors of every `admin` route. */
+export const ADMIN_ROUTE_ERRORS = [ErrorCode.MFA_REQUIRED, ErrorCode.ACCOUNT_DISABLED] as const;
+
+const adminErrors = (...specific: ErrorCode[]): readonly ErrorCode[] =>
+  errors(...ADMIN_ROUTE_ERRORS, ...specific);
+
 /** Drive routes (Phase 2). Items of other owners are NOT_FOUND. */
 export const DRIVE_ROUTES = {
   /** One page of a folder's live children, folders first. `:id` is a folder id or `root`. */
@@ -191,7 +264,7 @@ export const DRIVE_ROUTES = {
     params: listChildrenParamsSchema,
     query: listChildrenQuerySchema,
     response: listChildrenResponseSchema,
-    errors: errors(ErrorCode.NOT_FOUND),
+    errors: signedIn(ErrorCode.NOT_FOUND),
   },
   createFolder: {
     method: 'POST',
@@ -200,7 +273,7 @@ export const DRIVE_ROUTES = {
     auth: 'photographer',
     body: createFolderBodySchema,
     response: driveFolderSchema,
-    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.NAME_TAKEN, ErrorCode.FOLDER_DEPTH_EXCEEDED),
+    errors: signedIn(ErrorCode.NOT_FOUND, ErrorCode.NAME_TAKEN, ErrorCode.FOLDER_DEPTH_EXCEEDED),
   },
   /** Rename and/or move a folder (with its subtree). */
   updateFolder: {
@@ -211,7 +284,7 @@ export const DRIVE_ROUTES = {
     params: idParamsSchema,
     body: updateFolderBodySchema,
     response: driveFolderSchema,
-    errors: errors(
+    errors: signedIn(
       ErrorCode.NOT_FOUND,
       ErrorCode.NAME_TAKEN,
       ErrorCode.INVALID_MOVE,
@@ -227,7 +300,7 @@ export const DRIVE_ROUTES = {
     params: idParamsSchema,
     body: updateFileBodySchema,
     response: driveFileSchema,
-    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.NAME_TAKEN, ErrorCode.UNSUPPORTED_FILE_TYPE),
+    errors: signedIn(ErrorCode.NOT_FOUND, ErrorCode.NAME_TAKEN, ErrorCode.UNSUPPORTED_FILE_TYPE),
   },
   trashItems: {
     method: 'POST',
@@ -236,7 +309,7 @@ export const DRIVE_ROUTES = {
     auth: 'photographer',
     body: driveItemsBodySchema,
     response: trashItemsResponseSchema,
-    errors: errors(ErrorCode.NOT_FOUND),
+    errors: signedIn(ErrorCode.NOT_FOUND),
   },
   restoreItems: {
     method: 'POST',
@@ -245,7 +318,7 @@ export const DRIVE_ROUTES = {
     auth: 'photographer',
     body: driveItemsBodySchema,
     response: restoreItemsResponseSchema,
-    errors: errors(ErrorCode.NOT_FOUND),
+    errors: signedIn(ErrorCode.NOT_FOUND),
   },
   /** Added (not in the spec's route list): the trash view needs a listing. */
   listTrash: {
@@ -255,7 +328,7 @@ export const DRIVE_ROUTES = {
     auth: 'photographer',
     query: listTrashQuerySchema,
     response: listTrashResponseSchema,
-    errors: errors(),
+    errors: signedIn(),
   },
   emptyTrash: {
     method: 'DELETE',
@@ -263,7 +336,7 @@ export const DRIVE_ROUTES = {
     status: 202,
     auth: 'photographer',
     response: emptyTrashResponseSchema,
-    errors: errors(),
+    errors: signedIn(),
   },
   /**
    * Added (Phase 3): turn face indexing of a folder subtree on (PDPA confirmation required),
@@ -277,7 +350,7 @@ export const DRIVE_ROUTES = {
     params: idParamsSchema,
     body: updateFaceIndexBodySchema,
     response: driveFolderSchema,
-    errors: errors(
+    errors: signedIn(
       ErrorCode.NOT_FOUND,
       ErrorCode.FEATURE_DISABLED,
       ErrorCode.SUBSCRIPTION_INACTIVE,
@@ -292,7 +365,7 @@ export const DRIVE_ROUTES = {
     params: idParamsSchema,
     query: ownerDownloadQuerySchema,
     response: signedDownloadSchema,
-    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.CONFLICT),
+    errors: signedIn(ErrorCode.NOT_FOUND, ErrorCode.CONFLICT),
   },
   /**
    * Added (not in the spec's route list): the studio's storage meter ("ใช้ไป X จาก Y": used +
@@ -304,7 +377,7 @@ export const DRIVE_ROUTES = {
     status: 200,
     auth: 'photographer',
     response: driveUsageResponseSchema,
-    errors: errors(),
+    errors: signedIn(),
   },
 
   // Wave 7: Drive-style studio (api/studio for the rules).
@@ -317,7 +390,7 @@ export const DRIVE_ROUTES = {
     params: idParamsSchema,
     body: copyFileBodySchema,
     response: copyFileResponseSchema,
-    errors: errors(
+    errors: signedIn(
       ErrorCode.NOT_FOUND,
       ErrorCode.CONFLICT,
       ErrorCode.NAME_TAKEN,
@@ -337,7 +410,7 @@ export const DRIVE_ROUTES = {
     headers: downloadsHeadersSchema,
     body: downloadFolderBodySchema,
     response: downloadFolderResponseSchema,
-    errors: errors(
+    errors: signedIn(
       ErrorCode.NOT_FOUND,
       ErrorCode.CONFLICT,
       ErrorCode.ZIP_TOO_LARGE,
@@ -351,7 +424,7 @@ export const DRIVE_ROUTES = {
     auth: 'photographer',
     params: idParamsSchema,
     response: ownerZipJobResponseSchema,
-    errors: errors(ErrorCode.NOT_FOUND),
+    errors: signedIn(ErrorCode.NOT_FOUND),
   },
   /** "ล่าสุด". */
   recent: {
@@ -361,7 +434,7 @@ export const DRIVE_ROUTES = {
     auth: 'photographer',
     query: listRecentQuerySchema,
     response: listRecentResponseSchema,
-    errors: errors(),
+    errors: signedIn(),
   },
   search: {
     method: 'GET',
@@ -370,7 +443,7 @@ export const DRIVE_ROUTES = {
     auth: 'photographer',
     query: searchDriveQuerySchema,
     response: searchDriveResponseSchema,
-    errors: errors(ErrorCode.NOT_FOUND),
+    errors: signedIn(ErrorCode.NOT_FOUND),
   },
   /** "ข้อมูลไฟล์" of a file. */
   getFile: {
@@ -380,7 +453,7 @@ export const DRIVE_ROUTES = {
     auth: 'photographer',
     params: idParamsSchema,
     response: getFileResponseSchema,
-    errors: errors(ErrorCode.NOT_FOUND),
+    errors: signedIn(ErrorCode.NOT_FOUND),
   },
   /** "ข้อมูลไฟล์" of a folder. */
   folderSummary: {
@@ -390,7 +463,7 @@ export const DRIVE_ROUTES = {
     auth: 'photographer',
     params: idParamsSchema,
     response: folderSummaryResponseSchema,
-    errors: errors(ErrorCode.NOT_FOUND),
+    errors: signedIn(ErrorCode.NOT_FOUND),
   },
 } as const satisfies Record<string, RouteContract>;
 
@@ -403,7 +476,7 @@ export const UPLOAD_ROUTES = {
     auth: 'photographer',
     body: uploadInitBodySchema,
     response: uploadInitResponseSchema,
-    errors: errors(
+    errors: signedIn(
       ErrorCode.SUBSCRIPTION_INACTIVE,
       ErrorCode.UNSUPPORTED_FILE_TYPE,
       ErrorCode.FILE_TOO_LARGE,
@@ -424,7 +497,7 @@ export const UPLOAD_ROUTES = {
     params: idParamsSchema,
     body: signPartsBodySchema,
     response: signPartsResponseSchema,
-    errors: errors(ErrorCode.UPLOAD_NOT_FOUND, ErrorCode.UPLOAD_EXPIRED, ErrorCode.CONFLICT),
+    errors: signedIn(ErrorCode.UPLOAD_NOT_FOUND, ErrorCode.UPLOAD_EXPIRED, ErrorCode.CONFLICT),
   },
   /** Added: parts already uploaded, for resuming (Uppy `listParts`). */
   listParts: {
@@ -434,7 +507,7 @@ export const UPLOAD_ROUTES = {
     auth: 'photographer',
     params: idParamsSchema,
     response: listPartsResponseSchema,
-    errors: errors(ErrorCode.UPLOAD_NOT_FOUND, ErrorCode.UPLOAD_EXPIRED, ErrorCode.CONFLICT),
+    errors: signedIn(ErrorCode.UPLOAD_NOT_FOUND, ErrorCode.UPLOAD_EXPIRED, ErrorCode.CONFLICT),
   },
   complete: {
     method: 'POST',
@@ -444,7 +517,7 @@ export const UPLOAD_ROUTES = {
     params: idParamsSchema,
     body: completeUploadBodySchema,
     response: completeUploadResponseSchema,
-    errors: errors(
+    errors: signedIn(
       ErrorCode.UPLOAD_NOT_FOUND,
       ErrorCode.UPLOAD_EXPIRED,
       ErrorCode.UPLOAD_PARTS_INVALID,
@@ -457,30 +530,35 @@ export const UPLOAD_ROUTES = {
     status: 204,
     auth: 'photographer',
     params: idParamsSchema,
-    errors: errors(ErrorCode.UPLOAD_NOT_FOUND, ErrorCode.CONFLICT),
+    errors: signedIn(ErrorCode.UPLOAD_NOT_FOUND, ErrorCode.CONFLICT),
   },
 } as const satisfies Record<string, RouteContract>;
 
 /** The signed-in user (Phase 3). */
 export const ME_ROUTES = {
-  /** Provisions the `users` row on first use. */
+  /**
+   * Provisions the `users` row on first use (LINE/Google viewers only; password accounts exist
+   * already). Allowed for a restricted session (`passwordChangeRequired`).
+   */
   get: {
     method: 'GET',
     path: '/me',
     status: 200,
     auth: 'user',
     response: meResponseSchema,
-    errors: errors(),
+    errors: errors(ErrorCode.ACCOUNT_DISABLED),
   },
-  /** Photographer onboarding: role + 14-day trial, idempotent. */
+  /**
+   * @deprecated ADR 0010: always FORBIDDEN (accounts come from admins only, POST /admin/users).
+   * It never succeeds, so it advertises no body and no response (the 204 is nominal). Kept only
+   * until the api controller and the api/web tests that still reference it drop it; then removed.
+   */
   becomePhotographer: {
     method: 'POST',
     path: '/me/photographer',
-    status: 200,
+    status: 204,
     auth: 'user',
-    body: becomePhotographerBodySchema,
-    response: meResponseSchema,
-    errors: errors(),
+    errors: signedIn(),
   },
   /**
    * Called by the web BFF for a signed-in user before the share page uses the public routes:
@@ -492,7 +570,7 @@ export const ME_ROUTES = {
     path: '/me/viewer-session',
     status: 204,
     auth: 'user',
-    errors: errors(),
+    errors: signedIn(),
   },
   /** Ends the viewer session of the cookie it carries (sign-out) and clears the cookie. */
   deleteViewerSession: {
@@ -513,7 +591,7 @@ export const SHARE_ROUTES = {
     auth: 'photographer',
     body: createShareBodySchema,
     response: ownerShareSchema,
-    errors: errors(
+    errors: signedIn(
       ErrorCode.NOT_FOUND,
       ErrorCode.SUBSCRIPTION_INACTIVE,
       ErrorCode.FEATURE_DISABLED,
@@ -527,7 +605,7 @@ export const SHARE_ROUTES = {
     auth: 'photographer',
     query: listSharesQuerySchema,
     response: listSharesResponseSchema,
-    errors: errors(),
+    errors: signedIn(),
   },
   /** Added: one share, for its settings page. */
   get: {
@@ -537,7 +615,7 @@ export const SHARE_ROUTES = {
     auth: 'photographer',
     params: idParamsSchema,
     response: ownerShareSchema,
-    errors: errors(ErrorCode.NOT_FOUND),
+    errors: signedIn(ErrorCode.NOT_FOUND),
   },
   /** Change settings; a revoked share is CONFLICT. */
   update: {
@@ -548,7 +626,7 @@ export const SHARE_ROUTES = {
     params: idParamsSchema,
     body: updateShareBodySchema,
     response: ownerShareSchema,
-    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.CONFLICT, ErrorCode.FEATURE_DISABLED),
+    errors: signedIn(ErrorCode.NOT_FOUND, ErrorCode.CONFLICT, ErrorCode.FEATURE_DISABLED),
   },
   /** Added: revoke (is_active = false), final and idempotent. */
   revoke: {
@@ -557,7 +635,7 @@ export const SHARE_ROUTES = {
     status: 204,
     auth: 'photographer',
     params: idParamsSchema,
-    errors: errors(ErrorCode.NOT_FOUND),
+    errors: signedIn(ErrorCode.NOT_FOUND),
   },
   stats: {
     method: 'GET',
@@ -567,7 +645,7 @@ export const SHARE_ROUTES = {
     params: idParamsSchema,
     query: shareStatsQuerySchema,
     response: shareStatsResponseSchema,
-    errors: errors(ErrorCode.NOT_FOUND),
+    errors: signedIn(ErrorCode.NOT_FOUND),
   },
 } as const satisfies Record<string, RouteContract>;
 
@@ -777,7 +855,10 @@ export function publicShareRouteWritesActivity(
   return (PUBLIC_SHARE_ROUTE_ACTIVITY[route] as readonly ActivityType[]).includes(type);
 }
 
-/** Billing routes (Phase 4); see api/billing and billing/subscription for the rules. */
+/**
+ * Billing routes (Phase 4); see api/billing and billing/subscription for the rules. With
+ * BILLING_MODE=offline (ADR 0010, the default) every one of them answers NOT_FOUND.
+ */
 export const BILLING_ROUTES = {
   /** Public price list: active plans except the trial. */
   plans: {
@@ -786,7 +867,7 @@ export const BILLING_ROUTES = {
     status: 200,
     auth: 'public',
     response: plansResponseSchema,
-    errors: errors(),
+    errors: errors(ErrorCode.NOT_FOUND),
   },
   /** Start a purchase (Idempotency-Key required). */
   checkout: {
@@ -797,7 +878,8 @@ export const BILLING_ROUTES = {
     headers: checkoutHeadersSchema,
     body: createCheckoutBodySchema,
     response: checkoutResponseSchema,
-    errors: errors(
+    errors: signedIn(
+      ErrorCode.NOT_FOUND,
       ErrorCode.PLAN_NOT_FOUND,
       ErrorCode.PLAN_CHANGE_INVALID,
       ErrorCode.CHECKOUT_PENDING,
@@ -814,7 +896,7 @@ export const BILLING_ROUTES = {
     auth: 'photographer',
     params: idParamsSchema,
     response: paymentViewSchema,
-    errors: errors(ErrorCode.NOT_FOUND),
+    errors: signedIn(ErrorCode.NOT_FOUND),
   },
   subscription: {
     method: 'GET',
@@ -822,7 +904,7 @@ export const BILLING_ROUTES = {
     status: 200,
     auth: 'photographer',
     response: subscriptionResponseSchema,
-    errors: errors(),
+    errors: signedIn(ErrorCode.NOT_FOUND),
   },
   /** Auto-renew off at period end (idempotent; a prepaid subscription is returned unchanged). */
   cancelSubscription: {
@@ -831,7 +913,7 @@ export const BILLING_ROUTES = {
     status: 200,
     auth: 'photographer',
     response: subscriptionResponseSchema,
-    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.PAYMENT_GATEWAY_ERROR),
+    errors: signedIn(ErrorCode.NOT_FOUND, ErrorCode.PAYMENT_GATEWAY_ERROR),
   },
   /** Gateway webhooks: verify, store, apply in one transaction, answer 2xx. */
   webhook: {
@@ -853,9 +935,10 @@ export const BILLING_ROUTES = {
 } as const satisfies Record<string, RouteContract>;
 
 /**
- * Sign-in routes of the API's own issuer (ADR 0008 section 4); see api/auth. All `bff`. With
- * AUTH_PROVIDER=cognito they answer NOT_FOUND. Every sign-in writes nothing to activity_events;
- * admin sign-ins (successful and failed) are written to audit_log (AUTH_AUDIT_ACTIONS).
+ * Sign-in routes of the API's own issuer (ADR 0008 section 4, ADR 0010); see api/auth. All `bff`.
+ * With AUTH_PROVIDER=cognito they answer NOT_FOUND. Every sign-in writes nothing to
+ * activity_events; admin and photographer sign-ins (successful and failed) are written to
+ * audit_log (AUTH_AUDIT_ACTIONS).
  */
 export const AUTH_ROUTES = {
   /** What the sign-in pages may offer. */
@@ -864,6 +947,7 @@ export const AUTH_ROUTES = {
     path: '/auth/providers',
     status: 200,
     auth: 'bff',
+    bffKey: 'either',
     response: authProvidersResponseSchema,
     errors: errors(ErrorCode.NOT_FOUND),
   },
@@ -872,6 +956,7 @@ export const AUTH_ROUTES = {
     path: '/auth/oidc/:provider/start',
     status: 200,
     auth: 'bff',
+    bffKey: 'users',
     params: oidcProviderParamsSchema,
     body: oidcStartBodySchema,
     response: oidcStartResponseSchema,
@@ -882,12 +967,14 @@ export const AUTH_ROUTES = {
     path: '/auth/oidc/callback',
     status: 200,
     auth: 'bff',
+    bffKey: 'users',
     body: oidcCallbackBodySchema,
     response: authTokenResponseSchema,
     errors: errors(
       ErrorCode.NOT_FOUND,
       ErrorCode.LOGIN_STATE_INVALID,
       ErrorCode.IDENTITY_PROVIDER_ERROR,
+      ErrorCode.ACCOUNT_DISABLED,
     ),
   },
   /** AUTH_PROVIDER=local only (NOT_FOUND otherwise); users pool only. */
@@ -896,15 +983,17 @@ export const AUTH_ROUTES = {
     path: '/auth/dev/login',
     status: 200,
     auth: 'bff',
+    bffKey: 'users',
     body: devLoginBodySchema,
     response: authTokenResponseSchema,
-    errors: errors(ErrorCode.NOT_FOUND),
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.ACCOUNT_DISABLED),
   },
   refresh: {
     method: 'POST',
     path: '/auth/refresh',
     status: 200,
     auth: 'bff',
+    bffKey: 'request',
     body: refreshBodySchema,
     response: authTokenResponseSchema,
     errors: errors(
@@ -918,29 +1007,201 @@ export const AUTH_ROUTES = {
     path: '/auth/logout',
     status: 204,
     auth: 'bff',
+    bffKey: 'request',
     body: logoutBodySchema,
     errors: errors(ErrorCode.NOT_FOUND),
   },
+  /** Answers the first step (ADMIN_SIGN_IN_STEPS); tokens come only from adminMfa. */
   adminLogin: {
     method: 'POST',
     path: '/auth/admin/login',
     status: 200,
     auth: 'bff',
+    bffKey: 'admins',
     body: adminLoginBodySchema,
     response: adminLoginResponseSchema,
-    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.INVALID_CREDENTIALS),
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.INVALID_CREDENTIALS, ErrorCode.ACCOUNT_DISABLED),
   },
-  /** Answers admins-pool tokens with `amr` ["pwd", "otp", "mfa"]. */
+  /** Added (ADR 0010): the `change_password` step of a temporary admin password. */
+  adminChangePassword: {
+    method: 'POST',
+    path: '/auth/admin/password',
+    status: 200,
+    auth: 'bff',
+    bffKey: 'admins',
+    body: adminChangePasswordBodySchema,
+    response: adminChangePasswordResponseSchema,
+    errors: errors(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.LOGIN_STATE_INVALID,
+      ErrorCode.PASSWORD_TOO_WEAK,
+      ErrorCode.ACCOUNT_DISABLED,
+    ),
+  },
+  /**
+   * The `totp` or `enrol_totp` step. Answers admins-pool tokens with `amr` ["pwd", "otp", "mfa"],
+   * after storing what earlier steps changed (ADMIN_SIGN_IN_STEPS).
+   */
   adminMfa: {
     method: 'POST',
     path: '/auth/admin/mfa',
     status: 200,
     auth: 'bff',
+    bffKey: 'admins',
     body: adminMfaBodySchema,
     response: authTokenResponseSchema,
-    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.LOGIN_STATE_INVALID, ErrorCode.MFA_INVALID),
+    errors: errors(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.LOGIN_STATE_INVALID,
+      ErrorCode.MFA_INVALID,
+      ErrorCode.ACCOUNT_DISABLED,
+    ),
+  },
+  /**
+   * Added (ADR 0010): photographer email + password. A normal or a restricted session
+   * (photographerSignInResponseSchema); writes AUTH_AUDIT_ACTIONS `auth.photographer.*`.
+   */
+  photographerSignIn: {
+    method: 'POST',
+    path: '/auth/photographer/sign-in',
+    status: 200,
+    auth: 'bff',
+    bffKey: 'users',
+    body: photographerSignInBodySchema,
+    response: photographerSignInResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.INVALID_CREDENTIALS, ErrorCode.ACCOUNT_DISABLED),
   },
 } as const satisfies Record<string, RouteContract>;
+
+/**
+ * The signed-in photographer's own account (ADR 0010). Not `bff`: it needs the photographer's
+ * token. `serverOnly`: the web BFF calls it from its own route handler and swaps its session
+ * cookie for the new tokens; the browser proxy refuses it.
+ */
+export const PHOTOGRAPHER_ACCOUNT_ROUTES = {
+  /** Forced first change (restricted session) and any later change; answers a new session. */
+  changePassword: {
+    method: 'POST',
+    path: '/auth/photographer/password',
+    status: 200,
+    auth: 'photographer',
+    body: photographerChangePasswordBodySchema,
+    response: photographerChangePasswordResponseSchema,
+    serverOnly: true,
+    errors: errors(
+      ErrorCode.ACCOUNT_DISABLED,
+      ErrorCode.PASSWORD_INCORRECT,
+      ErrorCode.PASSWORD_TOO_WEAK,
+    ),
+  },
+} as const satisfies Record<string, RouteContract>;
+
+/**
+ * Admin app routes (ADR 0010; api/admin for the rules). All RouteAuth `admin`; every mutation
+ * writes audit_log (ADMIN_AUDIT_ACTIONS) in its transaction.
+ */
+export const ADMIN_ROUTES = {
+  listUsers: {
+    method: 'GET',
+    path: '/admin/users',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    query: listAdminUsersQuerySchema,
+    response: listAdminUsersResponseSchema,
+    errors: adminErrors(),
+  },
+  createUser: {
+    method: 'POST',
+    path: '/admin/users',
+    status: 201,
+    auth: 'admin',
+    bffKey: 'admins',
+    body: createAdminUserBodySchema,
+    response: adminUserSchema,
+    errors: adminErrors(ErrorCode.EMAIL_TAKEN, ErrorCode.PASSWORD_TOO_WEAK),
+  },
+  /** Added: one account, for its detail page and after a mutation. */
+  getUser: {
+    method: 'GET',
+    path: '/admin/users/:id',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    params: idParamsSchema,
+    response: adminUserSchema,
+    errors: adminErrors(ErrorCode.NOT_FOUND),
+  },
+  /** Rename, disable or enable. */
+  updateUser: {
+    method: 'PATCH',
+    path: '/admin/users/:id',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    params: idParamsSchema,
+    body: updateAdminUserBodySchema,
+    response: adminUserSchema,
+    errors: adminErrors(ErrorCode.NOT_FOUND, ErrorCode.CANNOT_MODIFY_SELF, ErrorCode.LAST_ADMIN),
+  },
+  resetPassword: {
+    method: 'POST',
+    path: '/admin/users/:id/reset-password',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    params: idParamsSchema,
+    body: resetAdminUserPasswordBodySchema,
+    response: adminUserSchema,
+    errors: adminErrors(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.CANNOT_MODIFY_SELF,
+      ErrorCode.CONFLICT,
+      ErrorCode.PASSWORD_TOO_WEAK,
+    ),
+  },
+  listCashPayments: {
+    method: 'GET',
+    path: '/admin/cash-payments',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    query: listCashPaymentsQuerySchema,
+    response: listCashPaymentsResponseSchema,
+    errors: adminErrors(),
+  },
+  /** Idempotency-Key required. */
+  createCashPayment: {
+    method: 'POST',
+    path: '/admin/cash-payments',
+    status: 201,
+    auth: 'admin',
+    bffKey: 'admins',
+    headers: createCashPaymentHeadersSchema,
+    body: createCashPaymentBodySchema,
+    response: cashPaymentSchema,
+    errors: adminErrors(ErrorCode.NOT_FOUND, ErrorCode.IDEMPOTENCY_KEY_REUSED),
+  },
+} as const satisfies Record<string, RouteContract>;
+
+/**
+ * What a restricted session (PASSWORD_CHANGE_CLAIM) may call; every other `photographer` or
+ * `user` route answers PASSWORD_CHANGE_REQUIRED. The `bff` routes (refresh, logout) need no
+ * user token and always work.
+ */
+export const PASSWORD_CHANGE_ALLOWED_ROUTES: readonly RouteContract[] = [
+  ME_ROUTES.get,
+  PHOTOGRAPHER_ACCOUNT_ROUTES.changePassword,
+];
+
+/** True when a restricted session may call `route`. */
+export function allowedDuringPasswordChange(
+  route: Pick<RouteContract, 'method' | 'path'>,
+): boolean {
+  return PASSWORD_CHANGE_ALLOWED_ROUTES.some(
+    (r) => r.method === route.method && r.path === route.path,
+  );
+}
 
 /** Every route with a contract, by module. */
 export const API_ROUTES = {
@@ -951,6 +1212,8 @@ export const API_ROUTES = {
   publicShare: PUBLIC_SHARE_ROUTES,
   billing: BILLING_ROUTES,
   auth: AUTH_ROUTES,
+  photographerAccount: PHOTOGRAPHER_ACCOUNT_ROUTES,
+  admin: ADMIN_ROUTES,
 } as const;
 
 /** Every route as a flat list, e.g. for OpenAPI generation. */

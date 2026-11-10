@@ -11,8 +11,14 @@ import { z } from 'zod';
 import { findAdminByEmail, normalizeAdminEmail } from '../auth/admin-sign-in';
 import { hashPassword } from '../auth/password';
 import { revokeUserSessions } from '../auth/sessions';
-import { base32Encode, encryptTotpSecret, generateTotpSecret, otpauthUri } from '../auth/totp';
-import type { Db, Queryable } from '../db/db';
+import {
+  adminTotpIssuer,
+  base32Encode,
+  encryptTotpSecret,
+  generateTotpSecret,
+  otpauthUri,
+} from '../auth/totp';
+import { type Db, isUniqueViolation, type Queryable } from '../db/db';
 import { newId } from '../drive/folders';
 
 // Operator actions on ShotX admin accounts (ADR 0008 section 4), used by cli/admin.ts. Admins
@@ -88,7 +94,7 @@ function enrolment(
     userId,
     subject: authSubject('admin', userId),
     otpauthUri: otpauthUri({
-      issuer: ctx.stage === 'prod' ? 'ShotX Admin' : `ShotX Admin (${ctx.stage})`,
+      issuer: adminTotpIssuer(ctx.stage),
       account: email,
       secret,
       digits: ctx.admin.totp.digits,
@@ -107,7 +113,9 @@ async function requireAdmin(ctx: AdminOpsContext, email: string) {
 /**
  * Creates an admin: a `users` row in the admins pool (role admin, subject `admin:<users.id>`) and
  * its credentials, in one transaction. TOTP stays unconfirmed (`totp_confirmed_at` null) until
- * the first valid code at sign-in.
+ * the first valid code at sign-in. The operator typed the password, so it is not temporary
+ * (`must_change_password = false`, ADR 0010). The email must not belong to any password account
+ * (admin or photographer, users_password_account_email_unique).
  */
 export async function createAdmin(
   ctx: AdminOpsContext,
@@ -124,6 +132,27 @@ export async function createAdmin(
   const passwordHash = await hashPassword(input.password, ctx.argon2id);
   const secret = generateTotpSecret();
   const now = ctx.now();
+  try {
+    return await insertAdmin(ctx, {
+      email: email.data,
+      name: name.data,
+      passwordHash,
+      secret,
+      now,
+    });
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new AdminOpsError('An account with this email already exists');
+    }
+    throw error;
+  }
+}
+
+function insertAdmin(
+  ctx: AdminOpsContext,
+  input: { email: string; name: string; passwordHash: string; secret: Buffer; now: Date },
+): Promise<TotpEnrolment> {
+  const { email, name, passwordHash, secret, now } = input;
   return ctx.db.transaction(async (tx) => {
     const id = await newId(tx);
     const subject = authSubject('admin', id);
@@ -133,8 +162,8 @@ export async function createAdmin(
       authPool: 'admins',
       authSubject: subject,
       role: 'admin',
-      email: email.data,
-      name: name.data,
+      email,
+      name,
       createdAt: now,
     });
     const encrypted = encryptTotpSecret(ctx.admin.totp.encryptionKey, id, secret);
@@ -143,11 +172,12 @@ export async function createAdmin(
       passwordHash,
       totpSecretEncrypted: encrypted.ciphertext,
       totpSecretNonce: encrypted.nonce,
+      mustChangePassword: false,
       createdAt: now,
       updatedAt: now,
     });
     await audit(tx, ctx, 'auth.admin.created', id);
-    return enrolment(ctx, id, email.data, secret);
+    return enrolment(ctx, id, email, secret);
   });
 }
 
@@ -167,11 +197,16 @@ export async function resetAdminTotp(ctx: AdminOpsContext, email: string): Promi
     const [old] = await tx
       .delete(adminCredentials)
       .where(eq(adminCredentials.userId, row.id))
-      .returning({ passwordHash: adminCredentials.passwordHash });
+      .returning({
+        passwordHash: adminCredentials.passwordHash,
+        mustChangePassword: adminCredentials.mustChangePassword,
+      });
     if (old === undefined) throw new AdminOpsError('No ShotX admin with this email');
     await tx.insert(adminCredentials).values({
       userId: row.id,
       passwordHash: old.passwordHash,
+      // A temporary password set by an admin stays temporary.
+      mustChangePassword: old.mustChangePassword,
       totpSecretEncrypted: encrypted.ciphertext,
       totpSecretNonce: encrypted.nonce,
       createdAt: now,

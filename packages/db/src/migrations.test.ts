@@ -187,6 +187,28 @@ describe('migrations', () => {
     );
   });
 
+  it('0011 is admin_accounts: additive, the enum before its column, keys before their users', () => {
+    expect(journal.entries[11]?.tag).toBe('0011_admin_accounts');
+    const list = statements(sqlOf('0011_admin_accounts'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    // Nothing is dropped or renamed; only the TOTP columns are relaxed.
+    expect(list.filter((s) => /\bDROP\b/.test(s))).toEqual([
+      'ALTER TABLE "admin_credentials" ALTER COLUMN "totp_secret_encrypted" DROP NOT NULL;',
+      'ALTER TABLE "admin_credentials" ALTER COLUMN "totp_secret_nonce" DROP NOT NULL;',
+    ]);
+    expect(list.some((s) => /RENAME/.test(s))).toBe(false);
+    expect(at('CREATE TYPE "public"."account_status"')).toBeLessThan(at('ADD COLUMN "status"'));
+    expect(list[at('ADD COLUMN "status"')]).toContain(`DEFAULT 'active' NOT NULL`);
+    expect(list[at('ADD COLUMN "must_change_password"')]).toContain('DEFAULT false NOT NULL');
+    for (const column of ['disabled_at', 'created_by_id', 'last_sign_in_at']) {
+      expect(list[at(`ADD COLUMN "${column}"`)], column).not.toContain('NOT NULL');
+    }
+    expect(at('ADD COLUMN "disabled_at"')).toBeLessThan(at('"users_disabled_at_iff_disabled"'));
+    expect(list[at('"users_password_account_email_unique"')]).toMatch(
+      /lower\("email" COLLATE "C"\)\) WHERE .*'admin:%'.*'password:%'/,
+    );
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

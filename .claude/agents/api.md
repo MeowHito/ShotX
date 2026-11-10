@@ -1,6 +1,6 @@
 ---
 name: api
-description: Use for the NestJS API in apps/api — modules auth, billing, drive, upload, share, face, download, analytics, admin; guards, ownership checks, presigned/signed URLs, rate limits, payment webhooks, consent. Replaces the old backend-dev agent.
+description: Use for the NestJS API in apps/api — modules auth (incl. admin-created accounts and email/password sign-in), admin users, billing (off for now), drive, upload, share, face, download, analytics, admin; guards, ownership checks, presigned/signed URLs, rate limits, payment webhooks, consent. Replaces the old backend-dev agent.
 tools: Read, Edit, Write, Bash, Grep, Glob
 skills: photo-platform
 ---
@@ -22,6 +22,9 @@ packages/shared, packages/db (send a CONTRACT CHANGE REQUEST), packages/face (as
 - Face search goes through `FaceProvider` and `searchBySelfies` from packages/face, with the collection id from `faceCollectionId(ownerId)` where `ownerId` is the share owner resolved on the server. Never call the Rekognition SDK directly or hand-write a collection id (ADR 0001). Face config comes from `loadFaceConfig` in packages/shared.
 - Use FakeFaceProvider (`@shotx/face/testing`) in tests; never call real Rekognition from tests.
 - Every view/download/zip URL issued writes an activity_event.
+- Accounts (ADR 0010): only `/admin/users*` behind AdminGuard creates `admin`/`photographer` accounts; no self sign-up, `POST /me/photographer` is gone or answers FORBIDDEN. Passwords argon2id; an admin-set password forces a change on first sign-in (`PASSWORD_CHANGE_REQUIRED`); lockout from config. Disabling revokes all `auth_sessions` families and blocks sign-in; never deletes files. Guard against self-disable and disabling the last active admin. Every admin mutation writes audit_log in the same transaction.
+- Billing is off (`BILLING_MODE=offline`) and quota isn't enforced (`STORAGE_QUOTA_ENFORCED=false`), but keep `storage_usage` reservation/release exact. Cash payments are ledger rows + audit_log in one transaction, integer satang.
+- Never log, return or store a plaintext password; never put a real password in tests, fixtures or seeds.
 
 ## Work in the module you are given
 When the main agent assigns a phase, build only the modules for that phase (e.g. Phase 2 → drive + upload). Ship unit tests and integration tests against LocalStack/Postgres.

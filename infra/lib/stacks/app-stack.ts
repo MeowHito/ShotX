@@ -184,8 +184,11 @@ export class AppStack extends Stack {
     out('ALARM_TOPIC_ARN', alarmTopic.topicArn);
     // ARN only: the api gets the value as the ECS secret IP_HASH_SECRET.
     out('IP_HASH_SECRET_ARN', services.ipHashSecret.secretArn);
-    // ARN only: api and worker get its keys as ECS secrets (PAYMENT_GATEWAY_SECRET_ENV).
-    out('PAYMENT_GATEWAY_SECRET_ARN', services.paymentGatewaySecret.secretArn);
+    // ARN only: api and worker get its keys as ECS secrets (PAYMENT_GATEWAY_SECRET_ENV). None
+    // with billing.mode `offline` (ADR 0010), where no gateway secret exists.
+    if (services.paymentGatewaySecret !== undefined) {
+      out('PAYMENT_GATEWAY_SECRET_ARN', services.paymentGatewaySecret.secretArn);
+    }
     out('SES_IDENTITY_ARN', email.identityArn);
     out('SES_CONFIGURATION_SET', email.configurationSet.configurationSetName);
   }

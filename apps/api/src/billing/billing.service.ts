@@ -87,9 +87,15 @@ export class BillingService {
     @Inject(DATABASE) private readonly db: Db,
     @Inject(API_CONFIG) private readonly config: ApiConfig,
     @Inject(CLOCK) private readonly clock: Clock,
-    @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGatewayAdapter,
+    @Inject(PAYMENT_GATEWAY) private readonly paymentGateway: PaymentGatewayAdapter | null,
     @Inject(API_LOGGER) private readonly logger: LoggerService,
   ) {}
+
+  /** The gateway; NOT_FOUND with BILLING_MODE=offline (none is built). */
+  private get gateway(): PaymentGatewayAdapter {
+    if (this.paymentGateway === null) throw notFound('Route');
+    return this.paymentGateway;
+  }
 
   private split(totalSatang: number, vatSatang?: number) {
     const rate = this.config.billing.vatRateBasisPoints;

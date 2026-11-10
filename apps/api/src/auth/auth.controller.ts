@@ -1,10 +1,12 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, UseGuards } from '@nestjs/common';
-import { AUTH_ROUTES } from '@shotx/shared';
+import { AUTH_ROUTES, type AuthPool } from '@shotx/shared';
 import type { z } from 'zod';
 import { respond, ZodPipe } from '../http/zod';
 import { AdminSignIn } from './admin-sign-in';
 import { AuthService } from './auth.service';
-import { BffGuard, BffIpHash } from './bff.guard';
+import { ApiError } from '../http/api-error';
+import { BffGuard, BffIpHash, BffKeyPool } from './bff.guard';
+import { PhotographerSignIn } from './photographer-sign-in';
 
 const R = AUTH_ROUTES;
 type Out<T extends z.ZodType> = z.output<T>;
@@ -19,6 +21,7 @@ export class AuthController {
   constructor(
     @Inject(AuthService) private readonly auth: AuthService,
     @Inject(AdminSignIn) private readonly admin: AdminSignIn,
+    @Inject(PhotographerSignIn) private readonly photographer: PhotographerSignIn,
   ) {}
 
   @Get(R.providers.path)
@@ -63,14 +66,23 @@ export class AuthController {
 
   @Post(R.refresh.path)
   @HttpCode(R.refresh.status)
-  async refresh(@Body(new ZodPipe(R.refresh.body, 'body')) body: Out<typeof R.refresh.body>) {
+  async refresh(
+    @Body(new ZodPipe(R.refresh.body, 'body')) body: Out<typeof R.refresh.body>,
+    @BffKeyPool() keyPool: AuthPool,
+  ) {
+    // `bffKey: 'request'`: only the app of the body's pool may refresh its tokens.
+    if (body.pool !== keyPool) throw new ApiError('UNAUTHENTICATED', 'Server-side callers only');
     return respond(R.refresh.response, await this.auth.refresh(body.refreshToken, body.pool));
   }
 
   @Post(R.logout.path)
   @HttpCode(R.logout.status)
-  async logout(@Body(new ZodPipe(R.logout.body, 'body')) body: Out<typeof R.logout.body>) {
-    await this.auth.logout(body.refreshToken);
+  async logout(
+    @Body(new ZodPipe(R.logout.body, 'body')) body: Out<typeof R.logout.body>,
+    @BffKeyPool() keyPool: AuthPool,
+  ) {
+    // `bffKey: 'request'`: a token of the other app's pool is treated as unknown (204).
+    await this.auth.logout(body.refreshToken, keyPool);
   }
 
   @Post(R.adminLogin.path)
@@ -82,6 +94,32 @@ export class AuthController {
     return respond(
       R.adminLogin.response,
       await this.admin.login(body.email, body.password, ipHash),
+    );
+  }
+
+  @Post(R.adminChangePassword.path)
+  @HttpCode(R.adminChangePassword.status)
+  async adminChangePassword(
+    @Body(new ZodPipe(R.adminChangePassword.body, 'body'))
+    body: Out<typeof R.adminChangePassword.body>,
+    @BffIpHash() ipHash: string,
+  ) {
+    return respond(
+      R.adminChangePassword.response,
+      await this.admin.changePassword(body.challengeId, body.newPassword, ipHash),
+    );
+  }
+
+  @Post(R.photographerSignIn.path)
+  @HttpCode(R.photographerSignIn.status)
+  async photographerSignIn(
+    @Body(new ZodPipe(R.photographerSignIn.body, 'body'))
+    body: Out<typeof R.photographerSignIn.body>,
+    @BffIpHash() ipHash: string,
+  ) {
+    return respond(
+      R.photographerSignIn.response,
+      await this.photographer.signIn(body.email, body.password, ipHash),
     );
   }
 

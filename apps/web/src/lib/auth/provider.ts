@@ -1,4 +1,4 @@
-import type { ErrorCode, OidcProvider } from '@shotx/shared';
+import type { ErrorCode, OidcProvider, PhotographerSignInResponse } from '@shotx/shared';
 
 /**
  * The identity provider behind login, chosen by AUTH_PROVIDER (src/lib/server/auth):
@@ -50,7 +50,27 @@ export interface AuthProvider {
   logoutUrl: (returnTo: string) => string;
   /** The development sign-in (AUTH_PROVIDER=local only); absent everywhere else. */
   devLogin?: (identity: { email: string; name: string }) => Promise<AuthTokens>;
+  /**
+   * Photographer email + password (ADR 0010; API-issued tokens only, absent with Cognito).
+   * `change_password`: the tokens are a restricted session that may only change the password.
+   */
+  passwordSignIn?: (credentials: { email: string; password: string }) => Promise<{
+    step: PhotographerSignInStep;
+    tokens: AuthTokens;
+  }>;
+  /**
+   * The signed-in photographer changes their own password with their access token (the forced
+   * first change and any later one). The API revokes every session of the account and answers
+   * with a new one, which replaces the session cookies.
+   */
+  changePassword?: (input: {
+    accessToken: string;
+    currentPassword: string;
+    newPassword: string;
+  }) => Promise<AuthTokens>;
 }
+
+export type PhotographerSignInStep = PhotographerSignInResponse['step'];
 
 export class AuthProviderError extends Error {
   override readonly name = 'AuthProviderError';
@@ -61,6 +81,8 @@ export class AuthProviderError extends Error {
     readonly status?: number,
     /** The API's error code (API-issued tokens). */
     readonly code?: ErrorCode,
+    /** The API's error details (e.g. PASSWORD_TOO_WEAK's reason and minimum length). */
+    readonly details?: unknown,
   ) {
     super(message);
   }

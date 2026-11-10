@@ -114,6 +114,7 @@ export const INFRA_OWNED_ENV = [
   'CONSENT_POLICY_VERSION',
   'IP_HASH_SECRET',
   'MEDIA_BUCKET',
+  'BILLING_MODE',
   'PAYMENT_GATEWAY',
   ...PAYMENT_GATEWAY_SECRET_NAMES,
   'EMAIL_PROVIDER',
@@ -142,6 +143,7 @@ export const INFRA_OWNED_ENV = [
   // definition. Google and LINE client ids come from cdk.json `auth` (the Cognito identity
   // providers) and are refused with their secrets so each has one source.
   'AUTH_BFF_KEY',
+  'AUTH_ADMIN_BFF_KEY',
   ...Object.values(AUTH_SIGNING_KEY_ENV).flatMap((names) => Object.values(names)),
   'ADMIN_TOTP_ENCRYPTION_KEY',
   'LINE_LOGIN_CHANNEL_ID',

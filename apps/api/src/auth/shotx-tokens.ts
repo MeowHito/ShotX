@@ -7,6 +7,7 @@ import {
   type AuthMethod,
   type AuthPool,
   hasRequiredAmr,
+  PASSWORD_CHANGE_CLAIM,
   isAuthSubjectInPool,
   parseAuthSubject,
   type PoolTokenConfig,
@@ -33,8 +34,9 @@ function poolEntries(config: ShotxAuthConfig): [AuthPool, PoolTokenConfig][] {
 
 /**
  * The `amr` of tokens for a subject: `fed` for LINE and Google, `dev` for the development login,
- * `pwd` + `otp` + `mfa` for ShotX admins (whose sessions start only after TOTP). Refreshes
- * re-issue the same methods: a session's way of signing in never changes.
+ * `pwd` for photographer email + password accounts (ADR 0010), `pwd` + `otp` + `mfa` for ShotX
+ * admins (whose sessions start only after TOTP). Refreshes re-issue the same methods: a session's
+ * way of signing in never changes.
  */
 export function amrForSubject(subject: string): AuthMethod[] {
   const parsed = parseAuthSubject(subject);
@@ -44,6 +46,8 @@ export function amrForSubject(subject: string): AuthMethod[] {
       return ['fed'];
     case 'local':
       return ['dev'];
+    case 'password':
+      return ['pwd'];
     case 'admin':
       return ['pwd', 'otp', 'mfa'];
     default:
@@ -135,6 +139,7 @@ export class ShotxTokenVerifier implements TokenVerifier {
       issuer: 'shotx',
       amr: claims.amr,
       sessionId: claims.sid,
+      ...(claims[PASSWORD_CHANGE_CLAIM] === true ? { passwordChange: true } : {}),
     };
   }
 }
@@ -170,9 +175,18 @@ export class ShotxTokenIssuer {
     return this.signingKeys.has(pool);
   }
 
+  /**
+   * `passwordChange`: add PASSWORD_CHANGE_CLAIM (a restricted session of a photographer whose
+   * password is temporary; users pool, `password:` subjects only, else a thrown bug).
+   */
   async accessToken(
     pool: AuthPool,
-    input: { subject: string; sessionId: string; amr: readonly AuthMethod[] },
+    input: {
+      subject: string;
+      sessionId: string;
+      amr: readonly AuthMethod[];
+      passwordChange?: boolean;
+    },
   ): Promise<IssuedAccessToken> {
     const signing = this.signingKeys.get(pool);
     const poolConfig = pool === 'users' ? this.config.pools.users : this.config.pools.admins;
@@ -194,11 +208,15 @@ export class ShotxTokenIssuer {
     }
     const now = Math.floor(this.clock.now().getTime() / 1000);
     const ttl = this.config.accessTokenTtlSeconds;
+    if (input.passwordChange === true && (pool !== 'users' || parsed.provider !== 'password')) {
+      throw new Error('Only photographer password sessions can require a password change');
+    }
     const claims = {
       sid: input.sessionId,
       idp: parsed.provider,
       amr: [...input.amr],
       token_use: ACCESS_TOKEN_USE,
+      ...(input.passwordChange === true ? { [PASSWORD_CHANGE_CLAIM]: true as const } : {}),
     };
     const token = await new SignJWT(claims)
       .setProtectedHeader({ alg: AUTH_TOKEN_ALGORITHM, kid: signing.kid, typ: ACCESS_TOKEN_TYPE })

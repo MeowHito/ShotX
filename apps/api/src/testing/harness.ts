@@ -135,7 +135,7 @@ export class TestApi {
     const logger = new CapturingLogger();
     const gateway = new FakePaymentGateway(
       TEST_FAKE_WEBHOOK_SECRET,
-      config.paymentGateway.webhookToleranceSeconds,
+      config.paymentGateway?.webhookToleranceSeconds ?? 300,
       clock,
     );
     const email = new FakeEmailProvider();

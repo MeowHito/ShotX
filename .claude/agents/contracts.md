@@ -23,7 +23,8 @@ Anything in apps/**, infra/**, tools/**, packages/face/** (owned by face-poc, se
    - S3 key builders (originals/, derived/, tmp/) so nobody hand-writes keys
 
 Not yours (ADR 0001): the `FaceProvider` interface and its types, `NoFaceDetectedError`, and the collection-name builder `faceCollectionId` live in packages/face. Never define face provider types in packages/shared.
-3. Unit tests for the schemas and key builders.
+3. ADR 0010 contracts: account `status` (active|disabled) and `created_by` on users; a users-pool photographer credentials table (argon2id, must_change_password, lockout counters); optional `cash_payments` ledger (satang); zod schemas for `/admin/users*`, `/admin/cash-payments`, photographer sign-in and change-password; error codes (`PASSWORD_CHANGE_REQUIRED`, `ACCOUNT_DISABLED`, `EMAIL_TAKEN`, `LAST_ADMIN`, …); config keys `BILLING_MODE` (offline|gateway, default offline), `STORAGE_QUOTA_ENFORCED` (default false), photographer password min length and lockout. Never seed a real account or password.
+4. Unit tests for the schemas and key builders.
 
 ## Rules
 - Contracts are versioned by intent: never rename or remove an exported name without listing every consumer in your report.

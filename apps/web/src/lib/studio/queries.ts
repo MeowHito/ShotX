@@ -23,24 +23,16 @@ export const studioKeys = {
   stats: (id: string, range: ShareStatsQuery) => ['shares', 'stats', id, range] as const,
 };
 
-/** GET /me through the BFF (provisions the user on first use). */
+/**
+ * GET /me through the BFF (provisions a LINE/Google user on first use). Also answers for a
+ * restricted session, whose `passwordChangeRequired` sends the studio to the password change.
+ */
 export function useMe() {
   const api = useApiClient();
   return useQuery({
     queryKey: studioKeys.me,
     queryFn: ({ signal }) => api.call(ME_ROUTES.get, { signal }),
     staleTime: 5 * 60_000,
-  });
-}
-
-/** POST /me/photographer: role photographer plus the trial (idempotent). */
-export function useBecomePhotographer() {
-  const api = useApiClient();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (name: string | undefined) =>
-      api.call(ME_ROUTES.becomePhotographer, { body: name ? { name } : {} }),
-    onSuccess: (me) => queryClient.setQueryData(studioKeys.me, me),
   });
 }
 

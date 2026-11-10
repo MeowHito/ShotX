@@ -3,17 +3,21 @@ import {
   type CaptchaCspSources,
   captchaCspSources,
   type AuthProviderName,
+  type BillingOperatingMode,
   type CognitoPoolConfig,
   type Env,
   type MediaBrowserOrigins,
+  type PasswordLengthPolicy,
   loadAppConfig,
   loadAuthClientConfig,
   loadCaptchaClientConfig,
   loadAuthProviderConfig,
   loadBffAuthConfig,
+  loadBillingModeConfig,
   loadCognitoConfig,
   loadInternalApiConfig,
   loadMediaBrowserOrigins,
+  loadPhotographerPasswordPolicy,
   loadUploadConfig,
   parseEnv,
   planCodeSchema,
@@ -221,11 +225,19 @@ export function clientShareConfig(env: Env = process.env): ClientShareConfig {
   };
 }
 
-/** Studio drive tunables: the processing refresh, and the owner ZIP polling (as on share pages). */
+/**
+ * Studio drive tunables (the processing refresh, and the owner ZIP polling as on share pages) and
+ * how photographers pay.
+ */
 export interface ClientStudioConfig {
   processingPollMs: number;
   zipPollIntervalMs: number;
   zipPollTimeoutMs: number;
+  /**
+   * BILLING_MODE (ADR 0010). `offline`: no plans, checkout, subscription banner or "add storage"
+   * prompts anywhere in the studio (the billing routes answer NOT_FOUND).
+   */
+  billingMode: BillingOperatingMode;
 }
 
 export function clientStudioConfig(env: Env = process.env): ClientStudioConfig {
@@ -234,7 +246,32 @@ export function clientStudioConfig(env: Env = process.env): ClientStudioConfig {
     processingPollMs: e.WEB_DRIVE_PROCESSING_POLL_MS,
     zipPollIntervalMs: e.WEB_ZIP_POLL_INTERVAL_MS,
     zipPollTimeoutMs: e.WEB_ZIP_POLL_TIMEOUT_MS,
+    billingMode: billingMode(env),
   };
+}
+
+/**
+ * BILLING_MODE as the API reads it (loadBillingModeConfig, default `offline`). Read on the server
+ * per request, never baked into the client bundle.
+ */
+export function billingMode(env: Env = process.env): BillingOperatingMode {
+  return loadBillingModeConfig(env).mode;
+}
+
+/** True while photographers can't pay online (BILLING_MODE=offline, ADR 0010). */
+export function billingOffline(env: Env = process.env): boolean {
+  return billingMode(env) === 'offline';
+}
+
+/**
+ * What the change-password form checks before calling the API (ADR 0010): the photographer
+ * minimum from loadPhotographerPasswordPolicy, the same secret-free reader the API uses, so key,
+ * bounds and default can't drift. The API's PASSWORD_TOO_WEAK stays the authority.
+ */
+export type ClientPasswordPolicy = PasswordLengthPolicy;
+
+export function clientPasswordPolicy(env: Env = process.env): ClientPasswordPolicy {
+  return loadPhotographerPasswordPolicy(env);
 }
 
 /** The pricing page's recommended plan code, or null for none. */

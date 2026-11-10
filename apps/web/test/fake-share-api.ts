@@ -21,7 +21,7 @@ import {
   type ZipJobView,
 } from '@shotx/shared';
 // Circular at module level only; every use is inside a function that runs after both load.
-import { type FakeApi, Fail, MEDIA, NOW, trialSubscription } from './fake-api';
+import { type FakeApi, Fail, MEDIA, NOW } from './fake-api';
 
 /**
  * Phase 3 routes of the fake API: me, owner shares, face index, owner download and the public
@@ -271,18 +271,9 @@ export function handlePhase3(
     // --- me ---------------------------------------------------------------------------------
     case ME_ROUTES.get:
       return api.me;
-    case ME_ROUTES.becomePhotographer: {
-      const b = body as { name?: string };
-      if (api.me.role !== 'photographer') {
-        api.me = {
-          ...api.me,
-          role: 'photographer',
-          name: b.name ?? api.me.name,
-          subscription: trialSubscription(),
-        };
-      }
-      return api.me;
-    }
+    case ME_ROUTES.becomePhotographer:
+      // ADR 0010: accounts come from admins only.
+      throw new Fail('FORBIDDEN');
     case ME_ROUTES.createViewerSession:
       api.viewerSession = true;
       return undefined;

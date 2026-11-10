@@ -10,9 +10,10 @@ import {
   unique,
   uniqueIndex,
   uuid,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { createdAt, id, timestamptz } from './columns';
-import { authPool, billingMode, subscriptionStatus, userRole } from './enums';
+import { accountStatus, authPool, billingMode, subscriptionStatus, userRole } from './enums';
 
 /**
  * Everyone who signs in: photographers, viewers (role `user`) and admins.
@@ -29,6 +30,21 @@ import { authPool, billingMode, subscriptionStatus, userRole } from './enums';
  * so a session's pool is always its user's and only admins-pool users get admin credentials.
  * Password sign-in finds admins by email: `users_admin_email_unique` keeps it unique (ignoring
  * ASCII case) among ShotX admins (`admin:` subjects).
+ *
+ * Migration 0011 (ADR 0010, admin-provisioned accounts):
+ * - `status` (active|disabled) with `disabled_at` set exactly when disabled
+ *   (`users_disabled_at_iff_disabled`). Disabling revokes the account's auth_sessions and blocks
+ *   sign-in; files are kept.
+ * - `created_by_id`: the admin who created the account in the admin app (null: operator CLI,
+ *   self-provisioned viewers, or older rows). ON DELETE SET NULL.
+ * - `last_sign_in_at`: set by every successful sign-in (any pool; the admin users list).
+ * - Email + password accounts are `admin:` subjects in the admins pool and `password:` subjects
+ *   (photographers, users pool; `users_password_subject_photographer`,
+ *   `users_admin_subject_admins_pool`). A photographer's email is required
+ *   (`users_password_account_has_email`) and unique ignoring ASCII case across both pools
+ *   (`users_password_account_email_unique`, the key normalizeAccountEmail in @shotx/shared builds),
+ *   so one email never names two password accounts. LINE/Google/Cognito rows are not constrained.
+ *   EMAIL_TAKEN maps a violation of either email index.
  */
 export const users = pgTable(
   'users',
@@ -41,6 +57,12 @@ export const users = pgTable(
     authPool: authPool('auth_pool').notNull(),
     authSubject: text('auth_subject').notNull(),
     createdAt: createdAt(),
+    status: accountStatus('status').notNull().default('active'),
+    disabledAt: timestamptz('disabled_at'),
+    createdById: uuid('created_by_id').references((): AnyPgColumn => users.id, {
+      onDelete: 'set null',
+    }),
+    lastSignInAt: timestamptz('last_sign_in_at'),
   },
   (t) => [
     unique('users_auth_identity_unique').on(t.authPool, t.authSubject),
@@ -50,6 +72,36 @@ export const users = pgTable(
       .where(sql`${t.authPool} = 'admins' AND ${t.authSubject} LIKE 'admin:%'`),
     check('users_admin_iff_admins_pool', sql`(${t.role} = 'admin') = (${t.authPool} = 'admins')`),
     check('users_auth_subject_not_empty', sql`length(${t.authSubject}) > 0`),
+    // Migration 0011.
+    uniqueIndex('users_password_account_email_unique')
+      .on(sql`lower(${t.email} COLLATE "C")`)
+      .where(
+        sql`(${t.authPool} = 'admins' AND ${t.authSubject} LIKE 'admin:%') OR (${t.authPool} = 'users' AND ${t.authSubject} LIKE 'password:%')`,
+      ),
+    // The admin users list: accounts newest first (ListAdminUsers keyset).
+    index('users_accounts_created_idx')
+      .on(t.createdAt.desc(), t.id.desc())
+      .where(sql`${t.role} IN ('admin', 'photographer')`),
+    check(
+      'users_disabled_at_iff_disabled',
+      sql`(${t.status} = 'disabled') = (${t.disabledAt} IS NOT NULL)`,
+    ),
+    check(
+      'users_password_subject_photographer',
+      sql`${t.authSubject} NOT LIKE 'password:%' OR (${t.authPool} = 'users' AND ${t.role} = 'photographer')`,
+    ),
+    check(
+      'users_admin_subject_admins_pool',
+      sql`${t.authSubject} NOT LIKE 'admin:%' OR ${t.authPool} = 'admins'`,
+    ),
+    check(
+      'users_password_account_has_email',
+      sql`${t.authSubject} NOT LIKE 'password:%' OR ${t.email} IS NOT NULL`,
+    ),
+    check(
+      'users_not_created_by_self',
+      sql`${t.createdById} IS NULL OR ${t.createdById} <> ${t.id}`,
+    ),
   ],
 );
 

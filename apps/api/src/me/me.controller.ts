@@ -1,5 +1,4 @@
 import {
-  Body,
   Controller,
   Delete,
   Get,
@@ -17,18 +16,16 @@ import {
   viewerSessionCookie,
 } from '@shotx/shared';
 import type { Request, Response } from 'express';
-import type { z } from 'zod';
-import { CurrentUser, UserGuard } from '../auth/photographer.guard';
+import { CurrentUser, UserGuard, type UserPrincipal } from '../auth/photographer.guard';
 import { OriginGuard } from '../auth/public.guard';
-import type { AppUser } from '../auth/users';
 import { type ApiConfig, secureCookies } from '../config';
+import { ApiError } from '../http/api-error';
 import { clearCookie, readCookies, setCookie } from '../http/cookies';
-import { respond, ZodPipe } from '../http/zod';
+import { respond } from '../http/zod';
 import { API_CONFIG } from '../tokens';
 import { MeService } from './me.service';
 
 const R = ME_ROUTES;
-type Out<T extends z.ZodType> = z.output<T>;
 
 /** ME_ROUTES. */
 @Controller()
@@ -48,19 +45,19 @@ export class MeController {
   @Get(R.get.path)
   @HttpCode(R.get.status)
   @UseGuards(UserGuard)
-  async get(@CurrentUser() user: AppUser) {
-    return respond(R.get.response, await this.me.me(user.id));
+  async get(@CurrentUser() user: UserPrincipal) {
+    return respond(R.get.response, await this.me.me(user.id, user.passwordChangeRequired));
   }
 
+  /**
+   * Deprecated (ADR 0010): self-serve onboarding is gone; only an admin creates photographer
+   * accounts (POST /admin/users). FORBIDDEN for everyone, whatever the body.
+   */
   @Post(R.becomePhotographer.path)
   @HttpCode(R.becomePhotographer.status)
   @UseGuards(UserGuard)
-  async becomePhotographer(
-    @CurrentUser() user: AppUser,
-    @Body(new ZodPipe(R.becomePhotographer.body, 'body'))
-    body: Out<typeof R.becomePhotographer.body>,
-  ) {
-    return respond(R.becomePhotographer.response, await this.me.becomePhotographer(user.id, body));
+  becomePhotographer(): never {
+    throw new ApiError('FORBIDDEN', 'Accounts are created by an admin');
   }
 
   /** Sets the viewer-session cookie; the web BFF passes its Set-Cookie on to the browser. */
@@ -68,7 +65,7 @@ export class MeController {
   @HttpCode(R.createViewerSession.status)
   @UseGuards(UserGuard)
   async createViewerSession(
-    @CurrentUser() user: AppUser,
+    @CurrentUser() user: UserPrincipal,
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
     setCookie(res, this.cookie(), await this.me.createViewerSession(user.id));

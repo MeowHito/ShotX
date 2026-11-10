@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { users } from '@shotx/db';
+import { userPasswordCredentials, users } from '@shotx/db';
 import {
   type AuthPool,
   type AuthProvidersResponse,
@@ -14,7 +14,7 @@ import {
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ApiConfig } from '../config';
-import type { Db } from '../db/db';
+import type { Db, Queryable } from '../db/db';
 import { ApiError, notFound } from '../http/api-error';
 import { sha256Hex } from '../http/client';
 import { validationError } from '../http/zod';
@@ -32,6 +32,7 @@ import {
 import {
   type IssuedRefreshToken,
   newOpaqueToken,
+  revokeFamily,
   revokeSessionByToken,
   rotateSession,
   type SessionUser,
@@ -40,7 +41,7 @@ import {
 } from './sessions';
 import { SHOTX_AUTH, type ShotxAuth } from './shotx-auth';
 import { amrForSubject } from './shotx-tokens';
-import { provisionUser } from './users';
+import { assertAccountActive, provisionUser } from './users';
 
 /** Redis key of a pending OIDC sign-in (the state is stored hashed). */
 export const oidcStateKey = (state: string) => `auth:oidc:${sha256Hex(state)}`;
@@ -62,7 +63,10 @@ export function parseJson(raw: string | null): unknown {
   }
 }
 
-/** The token response of a sign-in or refresh (AuthTokenResponse). */
+/**
+ * The token response of a sign-in or refresh (AuthTokenResponse). `passwordChange`: a restricted
+ * photographer session (PASSWORD_CHANGE_CLAIM, ADR 0010).
+ */
 export async function tokenResponse(
   auth: ShotxAuth,
   pool: AuthPool,
@@ -70,11 +74,13 @@ export async function tokenResponse(
   session: IssuedRefreshToken,
   amr: readonly AuthMethod[],
   now: Date,
+  options: { passwordChange?: boolean } = {},
 ): Promise<AuthTokenResponse> {
   const access = await auth.issuer.accessToken(pool, {
     subject: user.authSubject,
     sessionId: session.familyId,
     amr,
+    ...(options.passwordChange === true ? { passwordChange: true } : {}),
   });
   return {
     accessToken: access.token,
@@ -85,8 +91,33 @@ export async function tokenResponse(
   };
 }
 
+/** `users.last_sign_in_at` = now: every successful sign-in, any pool (ADR 0010). */
+export async function markSignedIn(q: Queryable, userId: string, now: Date): Promise<void> {
+  await q.update(users).set({ lastSignInAt: now }).where(eq(users.id, userId));
+}
+
+/**
+ * What a refresh re-reads (ADR 0010): the account's status and, for photographer password
+ * accounts, whether the password is still temporary (null without password credentials).
+ */
+async function refreshState(
+  q: Queryable,
+  userId: string,
+): Promise<{ status: 'active' | 'disabled'; mustChangePassword: boolean | null } | null> {
+  const [row] = await q
+    .select({
+      status: users.status,
+      mustChangePassword: userPasswordCredentials.mustChangePassword,
+    })
+    .from(users)
+    .leftJoin(userPasswordCredentials, eq(userPasswordCredentials.userId, users.id))
+    .where(eq(users.id, userId))
+    .limit(1);
+  return row ?? null;
+}
+
 /** The token-response fields of a users row. */
-export async function sessionUser(db: Db, id: string): Promise<SessionUser> {
+export async function sessionUser(db: Queryable, id: string): Promise<SessionUser> {
   const [row] = await db
     .select({ id: users.id, authSubject: users.authSubject, email: users.email, name: users.name })
     .from(users)
@@ -194,7 +225,10 @@ export class AuthService {
     return this.signIn(auth, localDevSubject(email), email.trim(), name);
   }
 
-  /** Provisions the users-pool row (first sign-in only) and starts a session. */
+  /**
+   * Provisions the users-pool row (first sign-in only) and starts a session. A disabled account
+   * (ADR 0010) gets no session: ACCOUNT_DISABLED.
+   */
   private async signIn(
     auth: ShotxAuth,
     subject: string,
@@ -210,6 +244,8 @@ export class AuthService {
       name,
       issuer: 'shotx',
     });
+    assertAccountActive(user);
+    await markSignedIn(this.db, user.id, now);
     const session = await startSession(this.db, {
       userId: user.id,
       pool: 'users',
@@ -242,10 +278,20 @@ export class AuthService {
       throw new ApiError('REFRESH_TOKEN_REUSED', 'Sign in again');
     }
     if (result.kind === 'invalid') throw new ApiError('REFRESH_TOKEN_INVALID', 'Sign in again');
+    // ADR 0010: a disabled account's sessions were revoked when it was disabled; should one have
+    // been rotated in the same instant, end it now. A temporary password keeps the session
+    // restricted (PASSWORD_CHANGE_CLAIM) until it is changed.
+    const state = await refreshState(this.db, result.user.id);
+    if (state?.status !== 'active') {
+      await revokeFamily(this.db, result.issued.familyId, now);
+      throw new ApiError('REFRESH_TOKEN_INVALID', 'Sign in again');
+    }
     let amr: AuthMethod[];
     try {
       amr = amrForSubject(result.user.authSubject);
-      return await tokenResponse(auth, pool, result.user, result.issued, amr, now);
+      return await tokenResponse(auth, pool, result.user, result.issued, amr, now, {
+        passwordChange: pool === 'users' && state.mustChangePassword === true,
+      });
     } catch (error) {
       // A session the issuer may no longer serve (e.g. a dev-login session after leaving
       // AUTH_PROVIDER=local): the rotation stands, the caller signs in again.
@@ -254,8 +300,9 @@ export class AuthService {
     }
   }
 
-  async logout(refreshToken: string): Promise<void> {
+  /** Revokes the token's family if it belongs to `pool` (the caller's BFF key); else a no-op. */
+  async logout(refreshToken: string, pool: AuthPool): Promise<void> {
     this.shotx();
-    await revokeSessionByToken(this.db, refreshToken, this.clock.now());
+    await revokeSessionByToken(this.db, refreshToken, this.clock.now(), pool);
   }
 }

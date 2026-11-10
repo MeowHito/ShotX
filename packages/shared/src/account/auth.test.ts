@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { OIDC_PROVIDERS } from '../domain';
 import {
+  adminAccountSubject,
   AUTH_SUBJECT_PROVIDER_POOL,
   authSubject,
   isAuthSubjectInPool,
+  isPasswordAccountSubject,
   localDevSubject,
+  PASSWORD_ACCOUNT_PROVIDERS,
   parseAuthSubject,
+  passwordAccountSubject,
 } from './auth-subject';
 import { OIDC_PROVIDER_METADATA } from './oidc';
 import {
@@ -14,6 +19,7 @@ import {
   authTokenIssuer,
   hasRequiredAmr,
   opaqueTokenSchema,
+  PASSWORD_CHANGE_CLAIM,
   REFRESH_TOKEN_HASH_PATTERN,
 } from './tokens';
 
@@ -50,6 +56,7 @@ describe('auth subjects', () => {
       google: 'users',
       local: 'users',
       admin: 'admins',
+      password: 'users',
     });
     expect(isAuthSubjectInPool('line:U1', 'users')).toBe(true);
     expect(isAuthSubjectInPool('local:a@example.com', 'admins')).toBe(false);
@@ -58,6 +65,26 @@ describe('auth subjects', () => {
     expect(isAuthSubjectInPool(`admin:${uuid}`, 'admins')).toBe(true);
     expect(isAuthSubjectInPool(uuid, 'admins')).toBe(true);
     expect(isAuthSubjectInPool('okta:1', 'users')).toBe(false);
+    expect(isAuthSubjectInPool(`password:${uuid}`, 'users')).toBe(true);
+    expect(isAuthSubjectInPool(`password:${uuid}`, 'admins')).toBe(false);
+  });
+
+  it('builds password-account subjects from the users.id (ADR 0010)', () => {
+    const upper = uuid.toUpperCase();
+    expect(passwordAccountSubject(upper)).toBe(`password:${uuid.toLowerCase()}`);
+    expect(adminAccountSubject(uuid)).toBe(`admin:${uuid.toLowerCase()}`);
+    for (const bad of ['', 'not-a-uuid', `${uuid}x`, 'line:U1']) {
+      expect(() => passwordAccountSubject(bad), bad).toThrow(RangeError);
+      expect(() => adminAccountSubject(bad), bad).toThrow(RangeError);
+    }
+    expect(PASSWORD_ACCOUNT_PROVIDERS).toEqual(['admin', 'password']);
+    expect(isPasswordAccountSubject(`password:${uuid}`)).toBe(true);
+    expect(isPasswordAccountSubject(`admin:${uuid}`)).toBe(true);
+    for (const other of [`line:${uuid}`, `google:1`, `local:a@example.com`, uuid, '']) {
+      expect(isPasswordAccountSubject(other), other).toBe(false);
+    }
+    // Never collides with a federated subject: the prefix is not an OIDC provider.
+    expect(OIDC_PROVIDERS as readonly string[]).not.toContain('password');
   });
 });
 
@@ -102,6 +129,30 @@ describe('access token claims', () => {
     const schema = accessTokenClaimsSchemaFor('prod', 'admins');
     expect(schema.safeParse({ ...admins, amr: ['pwd'] }).success).toBe(false);
     expect(schema.safeParse({ ...admins, amr: ['pwd', 'mfa'] }).success).toBe(false);
+  });
+
+  it('carries pwd_change only on photographer password sessions (ADR 0010)', () => {
+    expect(PASSWORD_CHANGE_CLAIM).toBe('pwd_change');
+    const usersSchema = accessTokenClaimsSchemaFor('prod', 'users');
+    const photographer = { ...users, sub: `password:${uuid}`, idp: 'password', amr: ['pwd'] };
+    expect(usersSchema.parse(photographer)).toEqual(photographer);
+    const restricted = { ...photographer, pwd_change: true };
+    expect(usersSchema.parse(restricted)).toEqual(restricted);
+    expect(usersSchema.safeParse({ ...photographer, pwd_change: false }).success).toBe(false);
+    expect(usersSchema.safeParse({ ...users, pwd_change: true }).success).toBe(false);
+    expect(
+      accessTokenClaimsSchemaFor('prod', 'admins').safeParse({ ...admins, pwd_change: true })
+        .success,
+    ).toBe(false);
+    // A password subject never verifies as an admins token.
+    expect(
+      accessTokenClaimsSchemaFor('prod', 'admins').safeParse({
+        ...photographer,
+        ...admins,
+        sub: `password:${uuid}`,
+        idp: 'password',
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects tokens of another pool, stage, audience or provider', () => {

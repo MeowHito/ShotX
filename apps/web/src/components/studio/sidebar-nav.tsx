@@ -12,6 +12,7 @@ import {
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { BILLING_HREF, RECENT_HREF, SHARES_HREF, TRASH_HREF } from '@/components/drive/paths';
+import { useStudio } from './studio-context';
 
 export type StudioNavId = 'drive' | 'recent' | 'shares' | 'trash' | 'billing';
 
@@ -36,7 +37,8 @@ export function activeNav(pathname: string): StudioNavId | null {
 
 /**
  * The studio's main navigation. `rail` is the tablet rail (icons; labels for screen readers and
- * tooltips) up to `lg`, where the full aside always shows labels.
+ * tooltips) up to `lg`, where the full aside always shows labels. "Plans and payment" only while
+ * photographers can pay online (BILLING_MODE=gateway; ADR 0010).
  */
 export function SidebarNav({
   pathname,
@@ -48,11 +50,13 @@ export function SidebarNav({
   onNavigate?: () => void;
 }) {
   const t = useTranslations('studio');
+  const { config } = useStudio();
   const active = activeNav(pathname);
+  const items = NAV.filter(({ id }) => id !== 'billing' || config.billingMode === 'gateway');
   return (
     <nav aria-label={t('navLabel')}>
       <ul className="space-y-1">
-        {NAV.map(({ id, href, icon: Icon }) => {
+        {items.map(({ id, href, icon: Icon }) => {
           const current = id === active;
           return (
             <li key={id}>

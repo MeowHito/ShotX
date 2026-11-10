@@ -14,10 +14,11 @@ import { AUTH_SUBJECT_MAX_LENGTH, isAuthSubjectInPool } from './auth-subject';
  *   SELECT ... FROM users WHERE auth_pool = $pool AND auth_subject = $subject;
  *
  * with the values from {@link newUserForIdentity}. Later sign-ins never change the role, and
- * email and name are only filled on insert. A users-pool identity starts as `user` (viewer) and
- * becomes `photographer` only through `POST /me/photographer`; an admins-pool identity is always
- * `admin` (the `users_admin_iff_admins_pool` CHECK enforces both). Admins-pool rows of ShotX
- * tokens are created by the operator CLI, never by the guard.
+ * email and name are only filled on insert. A users-pool identity starts as `user` (viewer); an
+ * admins-pool identity is always `admin` (the `users_admin_iff_admins_pool` CHECK enforces both).
+ * Since ADR 0010 nobody becomes a photographer through provisioning or `POST /me/photographer`
+ * (deprecated, FORBIDDEN): `admin` and `photographer` accounts (`admin:` and `password:`
+ * subjects) are created by an admin (POST /admin/users) or the operator CLI, never by the guard.
  */
 export const authIdentitySchema = z
   .object({

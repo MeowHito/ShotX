@@ -24,8 +24,8 @@ async function choose(name: string, ...path: string[]) {
   }
 }
 
-describe('onboarding', () => {
-  it('asks GET /me and shows onboarding to a viewer, then the studio after POST /me/photographer', async () => {
+describe('studio gate (ADR 0010: accounts come from admins only)', () => {
+  it('tells a signed-in viewer account to ask the admin; no self-serve upgrade', async () => {
     const fake = new FakeApi({ role: 'user' });
     renderWithProviders(
       <StudioGate>
@@ -33,29 +33,42 @@ describe('onboarding', () => {
       </StudioGate>,
       { api: apiClientFor(fake.fetch) },
     );
-    expect(await screen.findByRole('heading', { name: th.onboarding.title })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: th.notPhotographer.title }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(th.notPhotographer.body)).toBeInTheDocument();
     expect(screen.queryByText('studio content')).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.getByRole('button', { name: th.studio.logout })).toBeInTheDocument();
     expect(fake.callsTo(ME_ROUTES.get)[0]?.prefix).toBe('/bff');
-
-    const name = screen.getByLabelText(th.onboarding.nameLabel);
-    await userEvent.clear(name);
-    await userEvent.type(name, 'สมชาย ถ่ายภาพ');
-    await userEvent.click(screen.getByRole('button', { name: th.onboarding.start }));
-    expect(await screen.findByText('studio content')).toBeInTheDocument();
-    expect(fake.callsTo(ME_ROUTES.becomePhotographer)[0]?.body).toEqual({ name: 'สมชาย ถ่ายภาพ' });
-    expect(fake.me).toMatchObject({ role: 'photographer', subscription: { status: 'trial' } });
+    expect(fake.callsTo(ME_ROUTES.becomePhotographer)).toHaveLength(0);
   });
 
   it('goes straight to the studio for photographers', async () => {
     const fake = new FakeApi();
+    const onPasswordChangeRequired = vi.fn();
     renderWithProviders(
-      <StudioGate>
+      <StudioGate onPasswordChangeRequired={onPasswordChangeRequired}>
         <p>studio content</p>
       </StudioGate>,
       { api: apiClientFor(fake.fetch) },
     );
     expect(await screen.findByText('studio content')).toBeInTheDocument();
-    expect(fake.callsTo(ME_ROUTES.becomePhotographer)).toHaveLength(0);
+    expect(onPasswordChangeRequired).not.toHaveBeenCalled();
+  });
+
+  it('sends a session with a temporary password to the change, before any drive call', async () => {
+    const fake = new FakeApi({ passwordChangeRequired: true });
+    const onPasswordChangeRequired = vi.fn();
+    renderWithProviders(
+      <StudioGate onPasswordChangeRequired={onPasswordChangeRequired}>
+        <p>studio content</p>
+      </StudioGate>,
+      { api: apiClientFor(fake.fetch) },
+    );
+    await waitFor(() => expect(onPasswordChangeRequired).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('studio content')).not.toBeInTheDocument();
+    expect(fake.calls.map((c) => c.path)).toEqual(['/me']);
   });
 });
 

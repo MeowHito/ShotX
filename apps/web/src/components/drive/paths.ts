@@ -11,6 +11,9 @@ export const RECENT_HREF = '/studio/recent';
 
 export const SHARES_HREF = '/studio/shares';
 
+/** Account settings: name, email and the password change (ADR 0010). */
+export const SETTINGS_HREF = '/studio/settings';
+
 /** The studio billing page (shared BILLING_PAGE_PATH; emails link to it too). */
 export const BILLING_HREF = BILLING_PAGE_PATH;
 

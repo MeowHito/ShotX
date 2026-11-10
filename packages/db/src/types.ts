@@ -3,6 +3,7 @@ import type {
   adminCredentials,
   authSessions,
   auditLog,
+  cashPayments,
   checkoutSessions,
   consents,
   dailyStats,
@@ -20,6 +21,7 @@ import type {
   subscriptionEvents,
   subscriptionNotices,
   subscriptions,
+  userPasswordCredentials,
   users,
   zipJobEntries,
   zipJobs,
@@ -74,3 +76,7 @@ export type AuthSession = typeof authSessions.$inferSelect;
 export type NewAuthSession = typeof authSessions.$inferInsert;
 export type AdminCredentials = typeof adminCredentials.$inferSelect;
 export type NewAdminCredentials = typeof adminCredentials.$inferInsert;
+export type UserPasswordCredentials = typeof userPasswordCredentials.$inferSelect;
+export type NewUserPasswordCredentials = typeof userPasswordCredentials.$inferInsert;
+export type CashPayment = typeof cashPayments.$inferSelect;
+export type NewCashPayment = typeof cashPayments.$inferInsert;

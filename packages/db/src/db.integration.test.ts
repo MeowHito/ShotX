@@ -17,6 +17,7 @@ import { loadDatabaseConfig, pgPoolConfig } from './config';
 import { folderPath, folderSubtreeMoveSql, planFolderMove } from './ltree';
 import { MIGRATIONS_FOLDER, migrateDatabase } from './migrate';
 import {
+  ADMIN_AUDIT_ACTIONS,
   AUTH_AUDIT_ACTIONS,
   driveNameKey,
   isCoveredByFaceIndex,
@@ -2279,6 +2280,334 @@ describe('migration 0005 on a database with 0004 and existing users (PGlite)', (
           ),
         ),
       ).toEqual({ code: CHECK, constraint: 'users_admin_iff_admins_pool' });
+    } finally {
+      await client.close();
+    }
+  }, 120_000);
+});
+
+describe('admin-provisioned accounts (migration 0011, PGlite)', () => {
+  let b: Backend;
+  const db = () => b.db;
+
+  beforeAll(async () => {
+    b = await openPglite();
+  }, 120_000);
+
+  afterAll(async () => {
+    await b?.close();
+  });
+
+  const fakeHash = '$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA';
+  const insertUser = (values: NewUser) => db().insert(schema.users).values(values).returning();
+  const newAdmin = async (values: Partial<NewUser> = {}) => {
+    const id = randomUUID();
+    return one(
+      await insertUser({
+        id,
+        authPool: 'admins',
+        authSubject: `admin:${id}`,
+        role: 'admin',
+        email: `admin-${id}@example.test`,
+        ...values,
+      }),
+    );
+  };
+  const newPhotographer = async (values: Partial<NewUser> = {}) => {
+    const id = randomUUID();
+    return one(
+      await insertUser({
+        id,
+        authPool: 'users',
+        authSubject: `password:${id}`,
+        role: 'photographer',
+        email: `photo-${id}@example.test`,
+        ...values,
+      }),
+    );
+  };
+  const sha = () => randomBytes(32).toString('hex');
+
+  it('defaults accounts to active, and ties disabled_at to the status', async () => {
+    const admin = await newAdmin();
+    expect(admin).toMatchObject({ status: 'active', disabledAt: null, lastSignInAt: null });
+    const p = await newPhotographer({ createdById: admin.id });
+    expect(p.createdById).toBe(admin.id);
+    const update = (set: Partial<NewUser>) =>
+      db().update(schema.users).set(set).where(eq(schema.users.id, p.id));
+    expect(await pgError(update({ status: 'disabled' }))).toEqual({
+      code: CHECK,
+      constraint: 'users_disabled_at_iff_disabled',
+    });
+    expect(await pgError(update({ disabledAt: new Date() }))).toEqual({
+      code: CHECK,
+      constraint: 'users_disabled_at_iff_disabled',
+    });
+    await update({ status: 'disabled', disabledAt: new Date() });
+    await update({ status: 'active', disabledAt: null });
+    expect(await pgError(update({ createdById: p.id }))).toEqual({
+      code: CHECK,
+      constraint: 'users_not_created_by_self',
+    });
+    // Deleting the creating admin keeps the account.
+    await db().delete(schema.users).where(eq(schema.users.id, admin.id));
+    const [left] = await db().select().from(schema.users).where(eq(schema.users.id, p.id));
+    expect(left?.createdById).toBeNull();
+  });
+
+  it('keeps password subjects photographers with an email, and admin subjects admins', async () => {
+    const id = randomUUID();
+    const base = { id, authSubject: `password:${id}`, email: `${id}@example.test` };
+    expect(await pgError(insertUser({ ...base, authPool: 'users', role: 'user' }))).toEqual({
+      code: CHECK,
+      constraint: 'users_password_subject_photographer',
+    });
+    expect(
+      await pgError(insertUser({ ...base, authPool: 'users', role: 'photographer', email: null })),
+    ).toEqual({ code: CHECK, constraint: 'users_password_account_has_email' });
+    expect(
+      await pgError(insertUser({ ...base, authSubject: `admin:${id}`, authPool: 'users' })),
+    ).toEqual({ code: CHECK, constraint: 'users_admin_subject_admins_pool' });
+  });
+
+  it('keeps one email per password account across both pools, ignoring ASCII case', async () => {
+    const email = `Somchai-${randomUUID()}@Example.test`;
+    await newPhotographer({ email });
+    expect(await pgError(newAdmin({ email: email.toLowerCase() }))).toEqual({
+      code: UNIQUE,
+      constraint: 'users_password_account_email_unique',
+    });
+    expect(await pgError(newPhotographer({ email: email.toUpperCase() }))).toEqual({
+      code: UNIQUE,
+      constraint: 'users_password_account_email_unique',
+    });
+    // LINE/Google viewers and photographers from before ADR 0010 may share it.
+    await insertUser({ authPool: 'users', authSubject: `line:${randomUUID()}`, email });
+    await insertUser({
+      authPool: 'users',
+      authSubject: `google:${randomUUID()}`,
+      role: 'photographer',
+      email,
+    });
+  });
+
+  it('gives password credentials to users-pool accounts only, temporary by default', async () => {
+    const p = await newPhotographer();
+    const credentials = (userId: string, values: Record<string, unknown> = {}) =>
+      db()
+        .insert(schema.userPasswordCredentials)
+        .values({ userId, passwordHash: fakeHash, ...values })
+        .returning();
+    const [row] = await credentials(p.id);
+    expect(row).toMatchObject({
+      authPool: 'users',
+      mustChangePassword: true,
+      failedAttempts: 0,
+      lockedUntil: null,
+      passwordChangedAt: null,
+    });
+    const admin = await newAdmin();
+    expect(await pgError(credentials(admin.id))).toEqual({
+      code: FOREIGN_KEY,
+      constraint: 'user_password_credentials_user_fk',
+    });
+    expect(await pgError(credentials(admin.id, { authPool: 'admins' }))).toEqual({
+      code: CHECK,
+      constraint: 'user_password_credentials_users_pool',
+    });
+    const other = await newPhotographer();
+    expect(await pgError(credentials(other.id, { passwordHash: '$2b$10$bcrypt' }))).toEqual({
+      code: CHECK,
+      constraint: 'user_password_credentials_password_argon2id',
+    });
+    expect(await pgError(credentials(other.id, { failedAttempts: -1 }))).toEqual({
+      code: CHECK,
+      constraint: 'user_password_credentials_failed_attempts_valid',
+    });
+    await db().delete(schema.users).where(eq(schema.users.id, p.id));
+    expect(
+      await db()
+        .select()
+        .from(schema.userPasswordCredentials)
+        .where(eq(schema.userPasswordCredentials.userId, p.id)),
+    ).toEqual([]);
+  });
+
+  it('lets admin-app admins start without a TOTP secret, but never half a secret', async () => {
+    const credentials = (userId: string, values: Record<string, unknown> = {}) =>
+      db()
+        .insert(schema.adminCredentials)
+        .values({ userId, passwordHash: fakeHash, ...values })
+        .returning();
+    const uiAdmin = await newAdmin();
+    const [row] = await credentials(uiAdmin.id, { mustChangePassword: true });
+    expect(row).toMatchObject({
+      mustChangePassword: true,
+      totpSecretEncrypted: null,
+      totpSecretNonce: null,
+      totpConfirmedAt: null,
+    });
+    // As the CLI writes them: secret set, not temporary.
+    const cliAdmin = await newAdmin();
+    const [cli] = await credentials(cliAdmin.id, {
+      totpSecretEncrypted: randomBytes(36),
+      totpSecretNonce: randomBytes(12),
+    });
+    expect(cli?.mustChangePassword).toBe(false);
+    for (const [values, constraint] of [
+      [{ totpSecretNonce: randomBytes(12) }, 'admin_credentials_totp_secret_complete'],
+      [{ totpSecretEncrypted: randomBytes(36) }, 'admin_credentials_totp_secret_complete'],
+      [{ totpConfirmedAt: new Date() }, 'admin_credentials_totp_state_needs_secret'],
+      [{ totpLastUsedStep: 1 }, 'admin_credentials_totp_state_needs_secret'],
+    ] as const) {
+      const other = await newAdmin();
+      expect(await pgError(credentials(other.id, values)), constraint).toEqual({
+        code: CHECK,
+        constraint,
+      });
+    }
+    // The final sign-in step stores the secret and the confirmation together.
+    await db()
+      .update(schema.adminCredentials)
+      .set({
+        totpSecretEncrypted: randomBytes(36),
+        totpSecretNonce: randomBytes(12),
+        totpConfirmedAt: new Date(),
+        mustChangePassword: false,
+      })
+      .where(eq(schema.adminCredentials.userId, uiAdmin.id));
+  });
+
+  it('records cash payments from an admin against a users-pool account, in satang', async () => {
+    const admin = await newAdmin();
+    const p = await newPhotographer();
+    const pay = (values: Record<string, unknown> = {}) =>
+      db()
+        .insert(schema.cashPayments)
+        .values({
+          photographerId: p.id,
+          amountSatang: 39_000,
+          paidAt: new Date(),
+          recordedById: admin.id,
+          idempotencyKey: randomUUID(),
+          requestSha256: sha(),
+          ...values,
+        })
+        .returning();
+    const [row] = await pay({ note: 'เงินสด' });
+    expect(row).toMatchObject({
+      photographerPool: 'users',
+      recordedByPool: 'admins',
+      amountSatang: 39_000,
+    });
+    expect(await pgError(pay({ photographerId: admin.id }))).toEqual({
+      code: FOREIGN_KEY,
+      constraint: 'cash_payments_photographer_fk',
+    });
+    expect(await pgError(pay({ recordedById: p.id }))).toEqual({
+      code: FOREIGN_KEY,
+      constraint: 'cash_payments_recorded_by_admin_fk',
+    });
+    for (const [values, constraint] of [
+      [{ amountSatang: 0 }, 'cash_payments_amount_positive'],
+      [{ note: '' }, 'cash_payments_note_length'],
+      [{ note: 'x'.repeat(501) }, 'cash_payments_note_length'],
+      [{ paidAt: new Date(Date.now() + 3 * 86_400_000) }, 'cash_payments_paid_at_not_future'],
+      [{ idempotencyKey: '' }, 'cash_payments_idempotency_key_format'],
+      [{ requestSha256: 'ABC' }, 'cash_payments_request_sha256_hex'],
+    ] as const) {
+      expect(await pgError(pay(values)), constraint).toEqual({ code: CHECK, constraint });
+    }
+    expect(await pgError(pay({ idempotencyKey: row?.idempotencyKey }))).toEqual({
+      code: UNIQUE,
+      constraint: 'cash_payments_idempotency_unique',
+    });
+    // A ledger row keeps its photographer: deleting them is refused.
+    expect(await pgError(db().delete(schema.users).where(eq(schema.users.id, p.id)))).toEqual({
+      code: FOREIGN_KEY,
+      constraint: 'cash_payments_photographer_fk',
+    });
+  });
+
+  it('allows admin user-management audit rows only with an actor', async () => {
+    const admin = await newAdmin();
+    for (const action of ADMIN_AUDIT_ACTIONS) {
+      await db()
+        .insert(schema.auditLog)
+        .values({ actorId: admin.id, action, targetType: 'user', targetId: admin.id });
+      expect(
+        await pgError(
+          db()
+            .insert(schema.auditLog)
+            .values({ actorId: null, action, targetType: 'user', targetId: admin.id }),
+        ),
+        action,
+      ).toEqual({ code: CHECK, constraint: 'audit_log_actor_unless_auth_event' });
+    }
+  });
+});
+
+describe('migration 0011 on a database with 0010 and existing accounts (PGlite)', () => {
+  it('keeps CLI admins (secret set, not temporary) and makes every account active', async () => {
+    const client = await PGlite.create({ extensions: { ltree, pg_trgm, vector } });
+    try {
+      const db = drizzlePglite({ client, schema });
+      const dir = mkdtempSync(join(tmpdir(), 'shotx-migrations-'));
+      mkdirSync(join(dir, 'meta'));
+      const journal = JSON.parse(
+        readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8'),
+      ) as { entries: { tag: string }[] };
+      const entries = journal.entries.slice(0, 11);
+      expect(entries.at(-1)?.tag).toBe('0010_face_vectors');
+      writeFileSync(join(dir, 'meta', '_journal.json'), JSON.stringify({ ...journal, entries }));
+      for (const { tag } of entries) {
+        copyFileSync(join(MIGRATIONS_FOLDER, `${tag}.sql`), join(dir, `${tag}.sql`));
+      }
+      await migratePglite(db, { migrationsFolder: dir });
+      rmSync(dir, { recursive: true });
+      const exec = (query: SQL) => db.execute(query);
+
+      const admin = randomUUID();
+      const viewer = randomUUID();
+      const photographer = randomUUID();
+      await exec(
+        sql`INSERT INTO users (id, auth_pool, auth_subject, role, email) VALUES
+            (${admin}, 'admins', ${`admin:${admin}`}, 'admin', 'Ops@Example.test'),
+            (${viewer}, 'users', ${`line:${viewer}`}, 'user', null),
+            (${photographer}, 'users', ${`google:${photographer}`}, 'photographer', 'ops@example.test')`,
+      );
+      await exec(
+        sql`INSERT INTO admin_credentials (user_id, password_hash, totp_secret_encrypted, totp_secret_nonce, totp_confirmed_at)
+            VALUES (${admin}, '$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA', ${randomBytes(36)}, ${randomBytes(12)}, now())`,
+      );
+
+      await migratePglite(db, { migrationsFolder: MIGRATIONS_FOLDER });
+
+      expect(
+        await rows(
+          db,
+          sql`SELECT status::text AS status, disabled_at, created_by_id FROM users ORDER BY id`,
+        ),
+      ).toEqual([
+        { status: 'active', disabled_at: null, created_by_id: null },
+        { status: 'active', disabled_at: null, created_by_id: null },
+        { status: 'active', disabled_at: null, created_by_id: null },
+      ]);
+      expect(
+        await rows(
+          db,
+          sql`SELECT must_change_password, totp_secret_encrypted IS NOT NULL AS has_secret FROM admin_credentials`,
+        ),
+      ).toEqual([{ must_change_password: false, has_secret: true }]);
+      // The existing admin's email now blocks a photographer password account with it.
+      const id = randomUUID();
+      expect(
+        await pgError(
+          exec(
+            sql`INSERT INTO users (id, auth_pool, auth_subject, role, email) VALUES (${id}, 'users', ${`password:${id}`}, 'photographer', 'OPS@example.test')`,
+          ),
+        ),
+      ).toEqual({ code: UNIQUE, constraint: 'users_password_account_email_unique' });
     } finally {
       await client.close();
     }

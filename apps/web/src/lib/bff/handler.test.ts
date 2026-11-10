@@ -1,9 +1,13 @@
 // @vitest-environment node
 import {
+  ADMIN_ROUTES,
+  ALL_ROUTES,
   AUTH_ROUTES,
   BILLING_ROUTES,
   DRIVE_ROUTES,
   ME_ROUTES,
+  PHOTOGRAPHER_ACCOUNT_ROUTES,
+  type RouteContract,
   UPLOAD_ROUTES,
 } from '@shotx/shared';
 import { describe, expect, it, vi } from 'vitest';
@@ -15,6 +19,7 @@ import {
   forwardableRequestHeaders,
   forwardableSetCookies,
   handleBffRequest,
+  isBrowserForwardable,
   matchRoute,
   unsafePathReason,
 } from './handler';
@@ -321,6 +326,72 @@ describe('BFF', () => {
       expect(response.status, route.path).toBe(404);
     }
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  /** Calls every route through the BFF as a signed-in, same-origin browser would. */
+  async function throughBff(routes: readonly RouteContract[], fetch: typeof globalThis.fetch) {
+    const statuses: number[] = [];
+    for (const route of routes) {
+      const path = route.path.replace(/:[A-Za-z]+/g, ID);
+      expect(matchRoute(route.method, path), route.path).toBe(route);
+      const response = await handleBffRequest(
+        new Request(`${BASE}/bff${path}`, {
+          method: route.method,
+          headers: {
+            origin: BASE,
+            cookie: `${names.session}=${session}`,
+            'content-type': 'application/json',
+          },
+          ...(route.method === 'GET' ? {} : { body: '{}' }),
+        }),
+        deps(fetch),
+      );
+      statuses.push(response.status);
+      if (response.status === 404) {
+        await expect(response.json()).resolves.toMatchObject({ code: 'NOT_FOUND' });
+      }
+    }
+    return statuses;
+  }
+
+  it('never forwards admin routes (RouteAuth admin): the admin app calls them with admin tokens', async () => {
+    const fetch = upstream();
+    const admin = ALL_ROUTES.filter((r) => r.auth === 'admin');
+    expect(admin.length).toBeGreaterThanOrEqual(Object.keys(ADMIN_ROUTES).length);
+    for (const route of admin) expect(isBrowserForwardable(route), route.path).toBe(false);
+    const statuses = await throughBff(admin, fetch);
+    expect(statuses).toEqual(admin.map(() => 404));
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('never forwards serverOnly routes: the password change answers with a refresh token', async () => {
+    const fetch = upstream();
+    const serverOnly = ALL_ROUTES.filter((r) => r.serverOnly === true);
+    expect(serverOnly).toContain(PHOTOGRAPHER_ACCOUNT_ROUTES.changePassword);
+    // A photographer route like any other, except for serverOnly.
+    expect(PHOTOGRAPHER_ACCOUNT_ROUTES.changePassword.auth).toBe('photographer');
+    for (const route of serverOnly) expect(isBrowserForwardable(route), route.path).toBe(false);
+    const statuses = await throughBff(serverOnly, fetch);
+    expect(statuses).toEqual(serverOnly.map(() => 404));
+    const direct = await handleBffRequest(
+      new Request(`${BASE}/bff/auth/photographer/password`, {
+        method: 'POST',
+        headers: { origin: BASE, cookie: `${names.session}=${session}` },
+        body: JSON.stringify({ currentPassword: 'old-password-1', newPassword: 'new-pass-word-2' }),
+      }),
+      deps(fetch),
+    );
+    expect(direct.status).toBe(404);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('forwards only photographer and user routes without serverOnly', () => {
+    const forwarded = ALL_ROUTES.filter(isBrowserForwardable);
+    expect(forwarded.length).toBeGreaterThan(20);
+    for (const route of forwarded) {
+      expect(['photographer', 'user'], route.path).toContain(route.auth);
+      expect(route.serverOnly, route.path).toBeUndefined();
+    }
   });
 
   it('answers 502 and keeps the cookies when the token refresh cannot reach the API', async () => {

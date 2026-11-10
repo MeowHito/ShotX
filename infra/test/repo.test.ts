@@ -48,9 +48,9 @@ describe('CI', () => {
     const images = job('images');
     const config = parseConfig(rawConfig());
 
-    it('lints and builds the api, worker and web Dockerfiles', () => {
-      expect(images).toMatch(/app: \[api, worker, web\]/);
-      for (const app of ['api', 'worker', 'web']) {
+    it('lints and builds the api, worker, web and admin Dockerfiles', () => {
+      expect(images).toMatch(/app: \[api, worker, web, admin\]/);
+      for (const app of ['api', 'worker', 'web', 'admin']) {
         expect(existsSync(new URL(`../../apps/${app}/Dockerfile`, import.meta.url)), app).toBe(
           true,
         );

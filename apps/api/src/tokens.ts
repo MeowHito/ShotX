@@ -115,6 +115,11 @@ export interface VerifiedIdentity {
   amr?: readonly AuthMethod[];
   /** `sid` of a ShotX-issued token (auth_sessions.family_id); absent for Cognito tokens. */
   sessionId?: string;
+  /**
+   * PASSWORD_CHANGE_CLAIM (ADR 0010): a restricted photographer session that must change its
+   * temporary password; only PASSWORD_CHANGE_ALLOWED_ROUTES work (the user guards enforce it).
+   */
+  passwordChange?: boolean;
 }
 
 export interface TokenVerifier {

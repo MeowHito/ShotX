@@ -234,11 +234,16 @@ describe('payment gateways', () => {
   });
 
   it('selects the configured gateway; production refuses the fake one', () => {
-    const fakeConfig = loadPaymentGatewayConfig({ PAYMENT_FAKE_WEBHOOK_SECRET: SECRET });
+    const gatewayConfig = (env: Record<string, string>) => {
+      const config = loadPaymentGatewayConfig({ BILLING_MODE: 'gateway', ...env });
+      if (config === null) throw new Error('BILLING_MODE=gateway must load a gateway');
+      return config;
+    };
+    const fakeConfig = gatewayConfig({ PAYMENT_FAKE_WEBHOOK_SECRET: SECRET });
     expect(createPaymentGateway(fakeConfig, clock)).toBeInstanceOf(FakePaymentGateway);
     expect(
       createPaymentGateway(
-        loadPaymentGatewayConfig({
+        gatewayConfig({
           PAYMENT_GATEWAY: 'omise',
           PAYMENT_OMISE_PUBLIC_KEY: 'pkey_test_0123456789abcdef',
           PAYMENT_OMISE_SECRET_KEY: 'skey_test_0123456789abcdef',
@@ -250,6 +255,28 @@ describe('payment gateways', () => {
     // The fake is refused only on the prod stage; NODE_ENV alone doesn't decide it.
     expect(() => loadApiConfig(testEnv({ APP_STAGE: 'prod' }))).toThrow(/PAYMENT_GATEWAY=fake/);
     expect(() => loadApiConfig(testEnv({ NODE_ENV: 'production' }))).not.toThrow();
+  });
+
+  it('BILLING_MODE=offline (ADR 0010) reads no gateway setting, even on prod', () => {
+    // No secret, the fake gateway on prod: nothing is read, nothing is refused.
+    expect(
+      loadPaymentGatewayConfig({
+        APP_STAGE: 'prod',
+        BILLING_MODE: 'offline',
+        PAYMENT_GATEWAY: 'fake',
+      }),
+    ).toBeNull();
+    expect(loadPaymentGatewayConfig({ APP_STAGE: 'prod' })).toBeNull();
+    const config = loadApiConfig(
+      testEnv({ BILLING_MODE: 'offline', PAYMENT_FAKE_WEBHOOK_SECRET: '' }),
+    );
+    expect(config.paymentGateway).toBeNull();
+    expect(config.billingMode.mode).toBe('offline');
+    // Without BILLING_MODE the default is offline.
+    const env = Object.fromEntries(
+      Object.entries(testEnv()).filter(([name]) => name !== 'BILLING_MODE'),
+    );
+    expect(loadApiConfig(env).paymentGateway).toBeNull();
   });
 });
 

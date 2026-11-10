@@ -21,6 +21,7 @@ import {
   ed25519PublicKeyBase64,
   localAuthEnv,
   shotxEnv,
+  TEST_ADMIN_BFF_KEY,
   TEST_BFF_KEY,
 } from '../testing/shotx-auth';
 import type { Db } from '../db/db';
@@ -333,7 +334,7 @@ describe('client address (ADR 0008 section 1)', () => {
   const req = (headers: Record<string, string>, remote = '172.18.0.5') =>
     ({ headers, socket: { remoteAddress: remote } }) as unknown as Request;
   const trust = clientIpTrust({
-    bff: { key: TEST_BFF_KEY },
+    bffKeys: { users: { key: TEST_BFF_KEY }, admins: { key: TEST_ADMIN_BFF_KEY } },
     trustedProxies: { addresses: ['172.18.0.0/16'] },
   });
   const noProxy = { ...trust, proxies: { addresses: [] } };
@@ -351,8 +352,13 @@ describe('client address (ADR 0008 section 1)', () => {
     expect(clientIp(req({ ...withKey, 'x-forwarded-for': '198.51.100.9' }), trust)).toBe(
       '198.51.100.9',
     );
-    expect(hasValidBffKey(req(withKey), trust)).toBe(false);
-    expect(hasValidBffKey(req(withKey, '10.9.0.3'), trust)).toBe(true);
+    expect(hasValidBffKey(req(withKey), trust)).toBeNull();
+    expect(hasValidBffKey(req(withKey, '10.9.0.3'), trust)).toBe('users');
+    // The admin app's key names the admins pool, and is trusted for the client IP as well.
+    const adminKey = { ...withKey, 'x-shotx-bff-key': TEST_ADMIN_BFF_KEY };
+    expect(hasValidBffKey(req(adminKey, '10.9.0.3'), trust)).toBe('admins');
+    expect(clientIp(req(adminKey, '10.9.0.3'), trust)).toBe('203.0.113.7');
+    expect(hasValidBffKey(req({}, '10.9.0.3'), trust)).toBeNull();
     // Spoofed without a key, or with a wrong key: ignored (socket peer, no XFF).
     expect(clientIp(req({ 'x-shotx-client-ip': '203.0.113.7' }, '10.9.0.3'), trust)).toBe(
       '10.9.0.3',
@@ -361,7 +367,9 @@ describe('client address (ADR 0008 section 1)', () => {
       clientIp(req({ ...withKey, 'x-shotx-bff-key': `${TEST_BFF_KEY}x` }, '10.9.0.3'), trust),
     ).toBe('10.9.0.3');
     // No key configured: never trusted.
-    expect(clientIp(req(withKey, '10.9.0.3'), { ...trust, bffKey: null })).toBe('10.9.0.3');
+    expect(
+      clientIp(req(withKey, '10.9.0.3'), { ...trust, bffKeys: { users: null, admins: null } }),
+    ).toBe('10.9.0.3');
     // A value that isn't an address: the next source.
     expect(clientIp(req({ ...withKey, 'x-shotx-client-ip': 'evil' }, '10.9.0.3'), trust)).toBe(
       '10.9.0.3',

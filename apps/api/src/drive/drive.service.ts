@@ -33,7 +33,6 @@ import {
   type SortOrder,
   type TrashItem,
   type TrashItemsResponse,
-  uploadsBlockedBy,
   type UpdateFileBody,
   type UpdateFolderBody,
   availableBytes,
@@ -46,13 +45,13 @@ import {
 import { and, asc, desc, eq, inArray, isNotNull, isNull, type SQL, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { recordActivity } from '../activity/activity';
-import type { ApiConfig } from '../config';
+import { type ApiConfig, billingOnline } from '../config';
 import { type Db, isUniqueViolation, type Queryable, rows, type Tx } from '../db/db';
 import { ApiError, notFound } from '../http/api-error';
 import { validationError } from '../http/zod';
 import { SignedUrls } from '../media/signed-urls';
 import { API_CONFIG, CLOCK, type Clock, DATABASE, QUEUE_SENDER, type QueueSender } from '../tokens';
-import { currentSubscription, storageCounters } from './account';
+import { currentSubscription, storageCounters, uploadGate, uploadsBlockedUnder } from './account';
 import { ancestorsOf, insertFolder, liveFolder, subtreeMaxDepth } from './folders';
 import { DriveFileMapper, mediaKindOf, toDriveFolder } from './media-urls';
 import { fileFolderIs, folderParentIs, withFreeName } from './names';
@@ -729,11 +728,16 @@ export class DriveService {
     }
     const target = new Date(now.getTime() + this.config.retention.faceIndexExpiryDays * MS_PER_DAY);
     const { before, after } = await this.db.transaction(async (tx) => {
-      const subscription = await currentSubscription(tx, ownerId);
-      if (!subscriptionAllowsSharing(subscription?.status ?? null)) {
-        throw new ApiError('SUBSCRIPTION_INACTIVE', 'Face indexing needs an active subscription', {
-          status: subscription?.status ?? null,
-        });
+      // ADR 0010: only with BILLING_MODE=gateway does face indexing need a subscription.
+      if (billingOnline(this.config)) {
+        const subscription = await currentSubscription(tx, ownerId);
+        if (!subscriptionAllowsSharing(subscription?.status ?? null)) {
+          throw new ApiError(
+            'SUBSCRIPTION_INACTIVE',
+            'Face indexing needs an active subscription',
+            { status: subscription?.status ?? null },
+          );
+        }
       }
       const current = await liveFolder(tx, ownerId, id, 'update');
       if (current === null) throw notFound('Folder');
@@ -833,11 +837,14 @@ export class DriveService {
         const counters = await storageCounters(tx, ownerId);
         const trashBytes = await trashedQuotaBytes(tx, ownerId);
         const state = { ...counters, quotaBytes: subscription?.quotaBytes ?? 0 };
+        // ADR 0010: no limit while STORAGE_QUOTA_ENFORCED=false (quota and available are null),
+        // and no subscription gate while BILLING_MODE=offline.
+        const gate = uploadGate(this.config);
         return {
           usedBytes: counters.usedBytes,
           reservedBytes: counters.reservedBytes,
-          quotaBytes: state.quotaBytes,
-          availableBytes: availableBytes(state),
+          quotaBytes: gate.quota ? state.quotaBytes : null,
+          availableBytes: gate.quota ? availableBytes(state) : null,
           trashBytes,
           subscription:
             subscription === null
@@ -847,7 +854,7 @@ export class DriveService {
                   planCode: subscription.planCode,
                   periodEnd: subscription.periodEnd.toISOString(),
                 },
-          uploadsBlockedBy: uploadsBlockedBy(subscription?.status ?? null, state),
+          uploadsBlockedBy: uploadsBlockedUnder(gate, subscription?.status ?? null, state),
         };
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' },

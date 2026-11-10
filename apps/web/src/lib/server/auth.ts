@@ -55,6 +55,11 @@ export function authDeps(requestHeaders: Headers): AuthDeps {
 }
 
 export interface LoginOptions {
+  /**
+   * Photographer email + password (ADR 0010): always with API-issued tokens (the API's
+   * photographer sign-in has no switch), never with Cognito.
+   */
+  password: boolean;
   /** Identity providers to offer, in display order. */
   oidc: OidcProvider[];
   /** Show the development sign-in form (AUTH_PROVIDER=local and the API offers it). */
@@ -67,7 +72,9 @@ export interface LoginOptions {
  */
 export async function loginOptions(): Promise<LoginOptions | null> {
   const config = webConfig();
-  if (!apiIssuesTokens(config.authProvider)) return { oidc: [...OIDC_PROVIDERS], devLogin: false };
+  if (!apiIssuesTokens(config.authProvider)) {
+    return { password: false, oidc: [...OIDC_PROVIDERS], devLogin: false };
+  }
   const providers = await fetchLoginProviders({
     apiInternalUrl: config.apiInternalUrl,
     client: config.authClient,
@@ -75,6 +82,7 @@ export async function loginOptions(): Promise<LoginOptions | null> {
   });
   if (providers === null) return null;
   return {
+    password: true,
     oidc: OIDC_PROVIDERS.filter((p) => providers.oidc.includes(p)),
     devLogin: config.authProvider === 'local' && providers.devLogin,
   };

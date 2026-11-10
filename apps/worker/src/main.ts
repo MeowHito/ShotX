@@ -8,8 +8,7 @@ import { Redis } from 'ioredis';
 import { S3ObjectStore } from './aws/object-store';
 import { workerS3ClientOptions } from './aws/s3-client';
 import { SqsQueueClient } from './aws/queue-client';
-import { createEmailProvider } from './billing/email';
-import { createRenewalGateway } from './billing/gateway';
+import { createSubscriptionJobDeps, logBillingJobs } from './billing/mode';
 import { BullMqConsumer } from './bullmq/consumer';
 import { createBullMqConnection } from './bullmq/options';
 import { syncJobSchedulers } from './bullmq/schedules';
@@ -175,6 +174,25 @@ async function main(): Promise<void> {
     faceSearchEnabled: config.features.faceSearch,
   });
 
+  // ADR 0010: with BILLING_MODE=offline no gateway or email provider is created, the billing jobs
+  // aren't scheduled (loadWorkerQueueConfig) and the jobs handler skips them if sent anyway.
+  logBillingJobs(config.billingMode, log);
+  const subscriptions = createSubscriptionJobDeps(
+    {
+      billingMode: config.billingMode,
+      paymentGateway: config.paymentGateway,
+      billing: config.billing,
+      email: config.email,
+      lifecycle: config.retention.subscription,
+      publicBaseUrl: config.app.publicBaseUrl,
+    },
+    () => {
+      // Only called with EMAIL_PROVIDER=ses, which is when sesClient is loaded.
+      if (config.sesClient === null) throw new Error('EMAIL_PROVIDER=ses without SES client');
+      return new SESv2Client(awsClientOptions(config.sesClient));
+    },
+  );
+
   const handlers: Record<QueueName, MessageHandler> = {
     media: createMediaHandler({
       db,
@@ -229,17 +247,7 @@ async function main(): Promise<void> {
         worker.jobDedupeTtlSeconds,
       ),
       trashRetentionDays: config.retention.trashRetentionDays,
-      subscriptions: {
-        gateway: createRenewalGateway(config.paymentGateway),
-        email: createEmailProvider(config.email, () => {
-          // Only called with EMAIL_PROVIDER=ses, which is when sesClient is loaded.
-          if (config.sesClient === null) throw new Error('EMAIL_PROVIDER=ses without SES client');
-          return new SESv2Client(awsClientOptions(config.sesClient));
-        }),
-        billing: config.billing,
-        lifecycle: config.retention.subscription,
-        publicBaseUrl: config.app.publicBaseUrl,
-      },
+      subscriptions,
       batchSize: worker.jobBatchSize,
       maxRuntimeMs: worker.maxProcessingMs.jobs,
     }),
@@ -264,6 +272,7 @@ async function main(): Promise<void> {
   log.info('worker started', {
     queues: CONSUMED_QUEUES.join(','),
     queueBackend: config.queue.backend,
+    billingMode: config.billingMode,
   });
   await Promise.all(consumers.map((c) => c.start()));
 }

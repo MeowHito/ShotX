@@ -12,6 +12,7 @@ import {
   secret,
 } from './fields';
 import {
+  EXAMPLE_ADMIN_BFF_KEY_FINGERPRINTS,
   EXAMPLE_BFF_KEY_FINGERPRINTS,
   EXAMPLE_SIGNING_KEY_FINGERPRINTS,
   EXAMPLE_TOTP_KEY_FINGERPRINTS,
@@ -26,8 +27,9 @@ import { assertLocalStage, isLocalStage } from './stage-gate';
  * Who signs people in (ADR 0008 section 4):
  * - `cognito`: the Cognito user pools (ADR 0002). The default, so every AWS stage stays on it
  *   until infra/ is removed;
- * - `shotx`: the API issues its own tokens: LINE and Google (OIDC, run by the API) for the users
- *   pool, email + password + TOTP for the admins pool. Settings: loadShotxAuthConfig;
+ * - `shotx`: the API issues its own tokens: LINE and Google (OIDC, run by the API) and
+ *   photographer email + password (ADR 0010) for the users pool, email + password + TOTP for the
+ *   admins pool. Settings: loadShotxAuthConfig;
  * - `local`: `shotx` plus the development identity provider (`POST /auth/dev/login`, any email,
  *   users pool only). Refused anywhere but APP_STAGE=local with a non-production NODE_ENV.
  */
@@ -57,44 +59,156 @@ export function loadAuthProviderConfig(env: Env): AuthProviderConfig {
 
 const LOCAL_ONLY_STAGE = 'local';
 
-// --- BFF key (web, admin and api) ----------------------------------------------------------------
+// --- BFF keys (web: AUTH_BFF_KEY, admin: AUTH_ADMIN_BFF_KEY, api: both) --------------------------
+//
+// Each BFF has its own key (ADR 0010 round 2), sent in the same header (BFF_KEY_HEADER). The API
+// tells the caller by the key: the web key is the users pool's, the admin key the admins pool's.
+// A compromised web server therefore can't reach admin routes or admin sign-in even with a
+// stolen admin token. Which key each route accepts is its RouteContract `bffKey` (BffKeyScope).
+// web reads only AUTH_BFF_KEY (loadBffAuthConfig), the admin app only AUTH_ADMIN_BFF_KEY
+// (loadAdminBffAuthConfig), the api both (loadBffKeysConfig, which refuses equal values).
+
+const bffKeyField = () =>
+  z.string().min(32, { error: 'must be at least 32 characters' }).optional();
 
 const bffEnvSchema = z.object({
   AUTH_PROVIDER: z.enum(AUTH_PROVIDER_NAMES).default('cognito'),
-  /** Shared by web, admin and api; at least 32 characters. */
-  AUTH_BFF_KEY: z.string().min(32, { error: 'must be at least 32 characters' }).optional(),
+  /** The web app's key (users pool); web and api. At least 32 characters. */
+  AUTH_BFF_KEY: bffKeyField(),
+});
+
+const adminBffEnvSchema = z.object({
+  AUTH_PROVIDER: z.enum(AUTH_PROVIDER_NAMES).default('cognito'),
+  /** The admin app's key (admins pool); admin and api. At least 32 characters. */
+  AUTH_ADMIN_BFF_KEY: bffKeyField(),
 });
 
 export interface BffAuthConfig {
   /**
-   * Sent by web and admin in BFF_KEY_HEADER on every server-side call to the API (BFF proxy, SSR
-   * and `bff` routes). Secret: never log it.
+   * The calling app's key, sent in BFF_KEY_HEADER on every server-side call to the API (BFF
+   * proxy, SSR and `bff` routes). Secret: never log it.
    */
   key: string;
 }
 
+function checkBffKey(
+  env: Env,
+  name: 'AUTH_BFF_KEY' | 'AUTH_ADMIN_BFF_KEY',
+  provider: AuthProviderName,
+  value: string | undefined,
+  published: ReadonlySet<string>,
+): BffAuthConfig | null {
+  if (provider === 'local') assertLocalStage(env, 'AUTH_PROVIDER=local', 'BFF auth');
+  if (value === undefined) {
+    if (provider === 'cognito') return null;
+    throw new Error(`Invalid BFF auth configuration: ${name} is required`);
+  }
+  if (!isLocalStage(env, 'BFF auth') && isPublishedExample(published, value)) {
+    throw new Error(
+      `Invalid BFF auth configuration: ${name} is the published .env.example placeholder (allowed only on APP_STAGE=${LOCAL_ONLY_STAGE}); generate your own`,
+    );
+  }
+  return { key: value };
+}
+
 /**
- * Reads AUTH_BFF_KEY (web, admin and api). Required with AUTH_PROVIDER=shotx or local, where the
- * `bff` sign-in routes need it. Optional with `cognito`: null when unset (AWS stages today), and
- * when set it lets the BFFs pass the client IP (BFF_CLIENT_IP_HEADER) there too. The published
- * .env.example value is refused anywhere but APP_STAGE=local.
+ * Reads AUTH_BFF_KEY, the web app's key (web; the api reads it through loadBffKeysConfig).
+ * Required with AUTH_PROVIDER=shotx or local, where the `bff` sign-in routes need it. Optional
+ * with `cognito`: null when unset (AWS stages today), and when set it lets web pass the client IP
+ * (BFF_CLIENT_IP_HEADER) there too. The published .env.example value is refused anywhere but
+ * APP_STAGE=local. Never reads AUTH_ADMIN_BFF_KEY.
  */
 export function loadBffAuthConfig(env: Env): BffAuthConfig | null {
   const e = parseEnv(bffEnvSchema, env, 'BFF auth');
-  if (e.AUTH_PROVIDER === 'local') assertLocalStage(env, 'AUTH_PROVIDER=local', 'BFF auth');
-  if (e.AUTH_BFF_KEY === undefined) {
-    if (e.AUTH_PROVIDER === 'cognito') return null;
-    throw new Error('Invalid BFF auth configuration: AUTH_BFF_KEY is required');
-  }
-  if (
-    !isLocalStage(env, 'BFF auth') &&
-    isPublishedExample(EXAMPLE_BFF_KEY_FINGERPRINTS, e.AUTH_BFF_KEY)
-  ) {
+  return checkBffKey(
+    env,
+    'AUTH_BFF_KEY',
+    e.AUTH_PROVIDER,
+    e.AUTH_BFF_KEY,
+    EXAMPLE_BFF_KEY_FINGERPRINTS,
+  );
+}
+
+/**
+ * Reads AUTH_ADMIN_BFF_KEY, the admin app's key (admin; the api reads it through
+ * loadBffKeysConfig). Same rules as loadBffAuthConfig: at least 32 characters, required with
+ * shotx or local, null with `cognito` when unset, the published placeholder refused off
+ * APP_STAGE=local. Never reads AUTH_BFF_KEY (the admin app must not hold the web key; the api
+ * checks the two differ).
+ */
+export function loadAdminBffAuthConfig(env: Env): BffAuthConfig | null {
+  const e = parseEnv(adminBffEnvSchema, env, 'admin BFF auth');
+  return checkBffKey(
+    env,
+    'AUTH_ADMIN_BFF_KEY',
+    e.AUTH_PROVIDER,
+    e.AUTH_ADMIN_BFF_KEY,
+    EXAMPLE_ADMIN_BFF_KEY_FINGERPRINTS,
+  );
+}
+
+/** The api's BFF keys, by the pool whose BFF holds each. Secret: never log this object. */
+export interface BffKeysConfig {
+  /** AUTH_BFF_KEY (web). Null only with `cognito` when unset. */
+  users: BffAuthConfig | null;
+  /**
+   * AUTH_ADMIN_BFF_KEY (admin app). Null only with `cognito` when unset: then every `admins`
+   * scoped route (admin routes, admin sign-in, admins-pool refresh/logout) refuses.
+   */
+  admins: BffAuthConfig | null;
+}
+
+/**
+ * Reads both BFF keys (api only): loadBffAuthConfig and loadAdminBffAuthConfig, and refuses equal
+ * values (one key would again open both apps' routes). Which key a request carries decides its
+ * BFF pool; see BffKeyScope for what each route accepts. Compare keys in constant time.
+ */
+export function loadBffKeysConfig(env: Env): BffKeysConfig {
+  const users = loadBffAuthConfig(env);
+  const admins = loadAdminBffAuthConfig(env);
+  if (users !== null && admins !== null && users.key === admins.key) {
     throw new Error(
-      `Invalid BFF auth configuration: AUTH_BFF_KEY is the published .env.example placeholder (allowed only on APP_STAGE=${LOCAL_ONLY_STAGE}); generate your own`,
+      'Invalid BFF auth configuration: AUTH_ADMIN_BFF_KEY must be different from AUTH_BFF_KEY',
     );
   }
-  return { key: e.AUTH_BFF_KEY };
+  return { users, admins };
+}
+
+// --- Password policy (api, web, admin; no secrets) -----------------------------------------------
+
+const adminPasswordPolicyEnvSchema = z.object({
+  /**
+   * Shortest admin password: enforced by the operator CLI when it sets one (infra/cdk.json
+   * adminPasswordMinLength), and by POST /admin/users, reset-password and the sign-in password
+   * step (ADR 0010).
+   */
+  ADMIN_PASSWORD_MIN_LENGTH: int(12, 128).default(14),
+});
+
+const photographerPasswordPolicyEnvSchema = z.object({
+  /** Shortest new photographer password, in Unicode code points (create, reset, change). */
+  PHOTOGRAPHER_PASSWORD_MIN_LENGTH: int(8, 128).default(10),
+});
+
+/** A pool's password length policy (see passwordPolicyViolation for the other rules). */
+export interface PasswordLengthPolicy {
+  minLength: number;
+}
+
+/**
+ * Reads PHOTOGRAPHER_PASSWORD_MIN_LENGTH (8-128, default 10). Needs no signing key or secret, so
+ * web can show the rule in its forms; loadShotxAuthConfig uses the same function, so the two
+ * never drift. The API's PASSWORD_TOO_WEAK stays the authority.
+ */
+export function loadPhotographerPasswordPolicy(env: Env): PasswordLengthPolicy {
+  const e = parseEnv(photographerPasswordPolicyEnvSchema, env, 'photographer password policy');
+  return { minLength: e.PHOTOGRAPHER_PASSWORD_MIN_LENGTH };
+}
+
+/** Reads ADMIN_PASSWORD_MIN_LENGTH (12-128, default 14), secret-free like the photographer one. */
+export function loadAdminPasswordPolicy(env: Env): PasswordLengthPolicy {
+  const e = parseEnv(adminPasswordPolicyEnvSchema, env, 'admin password policy');
+  return { minLength: e.ADMIN_PASSWORD_MIN_LENGTH };
 }
 
 // --- Token issuer (api) --------------------------------------------------------------------------
@@ -257,7 +371,9 @@ const shotxAuthEnvSchema = z
     /**
      * How long an unconfirmed TOTP enrolment (admin_credentials.totp_confirmed_at null, counted
      * from the enrolment by the operator CLI) can be confirmed by a first sign-in. After it the
-     * account needs the CLI's reset-totp. Enforced by the api.
+     * account needs the CLI's reset-totp. Enforced by the api. Doesn't apply to the `enrol_totp`
+     * sign-in step of admins created in the admin app: that secret lives only in the challenge
+     * until its first code confirms it (ADMIN_SIGN_IN_STEPS).
      */
     ADMIN_TOTP_ENROLMENT_TTL_SECONDS: int(SECONDS_PER_HOUR, 30 * SECONDS_PER_DAY).default(
       7 * SECONDS_PER_DAY,
@@ -265,8 +381,6 @@ const shotxAuthEnvSchema = z
     ADMIN_MFA_CHALLENGE_TTL_SECONDS: int(60, 15 * SECONDS_PER_MINUTE).default(
       5 * SECONDS_PER_MINUTE,
     ),
-    /** Enforced by the operator CLI when it sets a password (infra/cdk.json adminPasswordMinLength). */
-    ADMIN_PASSWORD_MIN_LENGTH: int(12, 128).default(14),
     /** Failed admin sign-ins (password or code), per normalized email and per client IP. */
     ADMIN_LOGIN_RATE_PER_ACCOUNT: requests.default(5),
     ADMIN_LOGIN_RATE_PER_ACCOUNT_WINDOW_SECONDS: windowSeconds.default(15 * SECONDS_PER_MINUTE),
@@ -275,6 +389,30 @@ const shotxAuthEnvSchema = z
     /** Consecutive failures that lock an admin account (admin_credentials.locked_until), and for how long. */
     ADMIN_LOGIN_LOCKOUT_THRESHOLD: int(3, 100).default(10),
     ADMIN_LOGIN_LOCKOUT_SECONDS: int(60, SECONDS_PER_DAY).default(15 * SECONDS_PER_MINUTE),
+    // Photographer email + password sign-in (ADR 0010), mirroring the admin keys. The password
+    // minimums (ADMIN_/PHOTOGRAPHER_PASSWORD_MIN_LENGTH) are read by the secret-free policy
+    // loaders below, which loadShotxAuthConfig reuses.
+    /** Failed photographer sign-ins, per normalized email and per client IP. */
+    PHOTOGRAPHER_LOGIN_RATE_PER_ACCOUNT: requests.default(5),
+    PHOTOGRAPHER_LOGIN_RATE_PER_ACCOUNT_WINDOW_SECONDS: windowSeconds.default(
+      15 * SECONDS_PER_MINUTE,
+    ),
+    PHOTOGRAPHER_LOGIN_RATE_PER_IP: requests.default(20),
+    PHOTOGRAPHER_LOGIN_RATE_PER_IP_WINDOW_SECONDS: windowSeconds.default(15 * SECONDS_PER_MINUTE),
+    /**
+     * Consecutive failures (sign-in or a wrong current password) that lock a photographer account
+     * (user_password_credentials.locked_until), and for how long.
+     */
+    PHOTOGRAPHER_LOGIN_LOCKOUT_THRESHOLD: int(3, 100).default(10),
+    PHOTOGRAPHER_LOGIN_LOCKOUT_SECONDS: int(60, SECONDS_PER_DAY).default(15 * SECONDS_PER_MINUTE),
+    /**
+     * Lifetime of the restricted session of a sign-in with a temporary password (the refresh
+     * family's `expires_at`; PASSWORD_CHANGE_CLAIM). At least AUTH_ACCESS_TOKEN_TTL_SECONDS.
+     */
+    PHOTOGRAPHER_PASSWORD_CHANGE_SESSION_TTL_SECONDS: int(
+      5 * SECONDS_PER_MINUTE,
+      2 * SECONDS_PER_HOUR,
+    ).default(30 * SECONDS_PER_MINUTE),
   })
   .superRefine((e, ctx) => {
     const together = (a: keyof typeof e, b: keyof typeof e) => {
@@ -302,6 +440,13 @@ const shotxAuthEnvSchema = z
       ctx.addIssue({
         code: 'custom',
         message: 'AUTH_USERS_SIGNING_KEY and AUTH_ADMINS_SIGNING_KEY must be different keys',
+      });
+    }
+    if (e.PHOTOGRAPHER_PASSWORD_CHANGE_SESSION_TTL_SECONDS < e.AUTH_ACCESS_TOKEN_TTL_SECONDS) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'PHOTOGRAPHER_PASSWORD_CHANGE_SESSION_TTL_SECONDS must be at least AUTH_ACCESS_TOKEN_TTL_SECONDS',
       });
     }
     for (const pool of ['USERS', 'ADMINS'] as const) {
@@ -353,6 +498,16 @@ export interface AdminSignInConfig {
   lockout: { threshold: number; seconds: number };
 }
 
+/** Photographer email + password sign-in (ADR 0010). Needs no secret. */
+export interface PhotographerSignInConfig {
+  /** PHOTOGRAPHER_PASSWORD_MIN_LENGTH. */
+  passwordMinLength: number;
+  rateLimits: { perAccount: RateLimitRule; perIp: RateLimitRule };
+  lockout: { threshold: number; seconds: number };
+  /** PHOTOGRAPHER_PASSWORD_CHANGE_SESSION_TTL_SECONDS. */
+  passwordChangeSessionTtlSeconds: number;
+}
+
 export interface ShotxAuthConfig {
   provider: 'shotx' | 'local';
   algorithm: typeof AUTH_TOKEN_ALGORITHM;
@@ -371,6 +526,8 @@ export interface ShotxAuthConfig {
   devLogin: { pool: 'users' } | null;
   /** Null when the admins pool is off. */
   admin: AdminSignInConfig | null;
+  /** Always on with `shotx` and `local` (users pool). */
+  photographer: PhotographerSignInConfig;
 }
 
 /**
@@ -398,6 +555,9 @@ export function loadShotxAuthConfig(env: Env): ShotxAuthConfig {
   }
   const local = e.AUTH_PROVIDER === 'local';
   if (local) assertLocalStage(env, 'AUTH_PROVIDER=local', 'ShotX auth');
+  // Validated whether or not the admins pool is on, as before.
+  const adminPasswordPolicy = loadAdminPasswordPolicy(env);
+  const photographerPasswordPolicy = loadPhotographerPasswordPolicy(env);
 
   const usersKey = e.AUTH_USERS_SIGNING_KEY ?? fail('AUTH_USERS_SIGNING_KEY is required');
   const adminsOn =
@@ -531,7 +691,7 @@ export function loadShotxAuthConfig(env: Env): ShotxAuthConfig {
             },
             challengeTtlSeconds: e.ADMIN_MFA_CHALLENGE_TTL_SECONDS,
             totpEnrolmentTtlSeconds: e.ADMIN_TOTP_ENROLMENT_TTL_SECONDS,
-            passwordMinLength: e.ADMIN_PASSWORD_MIN_LENGTH,
+            passwordMinLength: adminPasswordPolicy.minLength,
             rateLimits: {
               perAccount: {
                 limit: e.ADMIN_LOGIN_RATE_PER_ACCOUNT,
@@ -547,6 +707,24 @@ export function loadShotxAuthConfig(env: Env): ShotxAuthConfig {
               seconds: e.ADMIN_LOGIN_LOCKOUT_SECONDS,
             },
           },
+    photographer: {
+      passwordMinLength: photographerPasswordPolicy.minLength,
+      rateLimits: {
+        perAccount: {
+          limit: e.PHOTOGRAPHER_LOGIN_RATE_PER_ACCOUNT,
+          windowSeconds: e.PHOTOGRAPHER_LOGIN_RATE_PER_ACCOUNT_WINDOW_SECONDS,
+        },
+        perIp: {
+          limit: e.PHOTOGRAPHER_LOGIN_RATE_PER_IP,
+          windowSeconds: e.PHOTOGRAPHER_LOGIN_RATE_PER_IP_WINDOW_SECONDS,
+        },
+      },
+      lockout: {
+        threshold: e.PHOTOGRAPHER_LOGIN_LOCKOUT_THRESHOLD,
+        seconds: e.PHOTOGRAPHER_LOGIN_LOCKOUT_SECONDS,
+      },
+      passwordChangeSessionTtlSeconds: e.PHOTOGRAPHER_PASSWORD_CHANGE_SESSION_TTL_SECONDS,
+    },
   };
 }
 

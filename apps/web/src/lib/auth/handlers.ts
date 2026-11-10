@@ -18,7 +18,13 @@ export const AUTH_PATHS = {
   logout: '/auth/logout',
   /** The development sign-in form's target (AUTH_PROVIDER=local only). */
   devLogin: '/auth/dev-login',
+  /** Photographer email + password sign-in (JSON, src/lib/auth/password). */
+  passwordSignIn: '/auth/sign-in',
+  /** The signed-in photographer's password change (JSON, src/lib/auth/password). */
+  changePassword: '/auth/password',
   loginPage: '/login',
+  /** The forced change of a temporary password (ADR 0010), outside the studio layout. */
+  changePasswordPage: '/change-password',
   /** infra `auth.logoutPath`. */
   afterLogout: '/',
 } as const;
@@ -50,12 +56,17 @@ const DEFAULT_REFRESH_MAX_AGE = 30 * 24 * 60 * 60;
 export const LOGIN_ERROR_REASONS = ['cancelled', 'failed', 'expired', 'invalid'] as const;
 export type LoginErrorReason = (typeof LOGIN_ERROR_REASONS)[number];
 
-/** API codes worth telling the person about on the login page; anything else is `failed`. */
+/**
+ * API codes worth telling the person about on the login page; anything else is `failed`.
+ * ACCOUNT_DISABLED: a disabled LINE/Google photographer (ADR 0010; not yet in the OIDC callback's
+ * contract errors, shown if the API sends it).
+ */
 export const LOGIN_ERROR_CODES = [
   ErrorCode.AUTH_PROVIDER_UNAVAILABLE,
   ErrorCode.LOGIN_STATE_INVALID,
   ErrorCode.IDENTITY_PROVIDER_ERROR,
   ErrorCode.RATE_LIMITED,
+  ErrorCode.ACCOUNT_DISABLED,
 ] as const;
 export type LoginErrorCode = (typeof LOGIN_ERROR_CODES)[number];
 

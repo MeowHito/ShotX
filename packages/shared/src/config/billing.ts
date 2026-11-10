@@ -70,7 +70,37 @@ export function loadBillingConfig(env: Env): BillingConfig {
   };
 }
 
-// --- Payment gateway (api only) -------------------------------------------------------------------
+// --- Billing mode (api, worker, web) --------------------------------------------------------------
+
+/**
+ * BILLING_MODE values (ADR 0010). Not to be confused with BILLING_MODES (`subscriptions.billing`:
+ * prepaid or auto_renew).
+ * - `offline` (default): no payment gateway. Photographers pay the owner in cash and an admin
+ *   creates their account (and may record the payment, POST /admin/cash-payments). The billing
+ *   routes answer NOT_FOUND (plans, checkout, payments, subscription, webhooks), the worker runs
+ *   no subscription transitions, renewals or lifecycle emails, uploads and shares don't depend on
+ *   a subscription (SUBSCRIPTION_INACTIVE never fires) and the studio hides plans and checkout.
+ *   No loader requires a gateway setting or secret (loadPaymentGatewayConfig returns null).
+ * - `gateway`: online billing as in Phase 4 (PAYMENT_GATEWAY and its secrets required). Its
+ *   mapping of admin-created accounts to plans is decided by a later ADR.
+ */
+export const BILLING_OPERATING_MODES = ['offline', 'gateway'] as const;
+export type BillingOperatingMode = (typeof BILLING_OPERATING_MODES)[number];
+
+const billingModeEnvSchema = z.object({
+  BILLING_MODE: z.enum(BILLING_OPERATING_MODES).default('offline'),
+});
+
+export interface BillingModeConfig {
+  mode: BillingOperatingMode;
+}
+
+/** Reads BILLING_MODE (default `offline`). api and worker; needs no secret. */
+export function loadBillingModeConfig(env: Env): BillingModeConfig {
+  return { mode: parseEnv(billingModeEnvSchema, env, 'billing mode').BILLING_MODE };
+}
+
+// --- Payment gateway (api and worker) -------------------------------------------------------------
 
 /**
  * Secret environment variables per gateway. infra injects them from Secrets Manager; nothing ever
@@ -123,11 +153,14 @@ export interface PaymentGatewayConfig {
 }
 
 /**
- * Reads PAYMENT_GATEWAY (default `fake`), PAYMENT_WEBHOOK_TOLERANCE_SECONDS (300) and the selected
- * gateway's secrets (PAYMENT_GATEWAY_SECRET_ENV, each required, at least 16 characters). Throws
- * when APP_STAGE is `prod` and the gateway is `fake` (NODE_ENV doesn't matter).
+ * Null with BILLING_MODE=offline (the default, ADR 0010): then nothing below is read or required,
+ * not even on APP_STAGE=prod. With BILLING_MODE=gateway: reads PAYMENT_GATEWAY (default `fake`),
+ * PAYMENT_WEBHOOK_TOLERANCE_SECONDS (300) and the selected gateway's secrets
+ * (PAYMENT_GATEWAY_SECRET_ENV, each required, at least 16 characters), and throws when APP_STAGE
+ * is `prod` and the gateway is `fake` (NODE_ENV doesn't matter).
  */
-export function loadPaymentGatewayConfig(env: Env): PaymentGatewayConfig {
+export function loadPaymentGatewayConfig(env: Env): PaymentGatewayConfig | null {
+  if (loadBillingModeConfig(env).mode === 'offline') return null;
   const e = parseEnv(gatewayEnvSchema, env, 'payment gateway');
   if (e.APP_STAGE === PRODUCTION_APP_STAGE && e.PAYMENT_GATEWAY === 'fake') {
     throw new Error(

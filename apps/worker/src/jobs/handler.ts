@@ -2,6 +2,7 @@ import { parseQueueMessage, type ScheduledJobType, type WorkerSweepSettings } fr
 import type { ObjectStore } from '../aws/object-store';
 import type { Db } from '../db';
 import type { FaceProvider } from '@shotx/face';
+import { isBillingJob } from '../billing/mode';
 import { errorFields, type LogFields } from '../logger';
 import type { QueueSender } from '../queue/sender';
 import type { MessageHandler } from '../sqs/consumer';
@@ -27,8 +28,13 @@ export interface JobsHandlerDeps {
    * account purge.
    */
   faces: FaceProvider;
-  /** subscriptions.transition.daily: gateway, email, billing and lifecycle settings. */
-  subscriptions: Omit<SubscriptionJobDeps, 'faces'>;
+  /**
+   * subscriptions.transition.daily: gateway, email, billing and lifecycle settings. Null with
+   * BILLING_MODE=offline (ADR 0010; createSubscriptionJobDeps): the billing jobs are then
+   * acknowledged without running (a schedule left on, or EventBridge on the AWS stacks, may still
+   * send them).
+   */
+  subscriptions: Omit<SubscriptionJobDeps, 'faces'> | null;
   /** Where faces.reconcile.daily keeps scans between runs. */
   orphanScans: OrphanScanStore;
   /** FACE_ORPHAN_GRACE_MS. */
@@ -79,6 +85,10 @@ export function createJobsHandler(deps: JobsHandlerDeps): MessageHandler {
       log.warn('scheduled job type not implemented; acknowledged without running');
       return;
     }
+    if (isBillingJob(job.type) && deps.subscriptions === null) {
+      log.info('billing job skipped: BILLING_MODE=offline; acknowledged without running');
+      return;
+    }
 
     try {
       if (await deps.ledger.isDone(job.type, job.scheduledTime)) {
@@ -127,6 +137,8 @@ export function createJobsHandler(deps: JobsHandlerDeps): MessageHandler {
         result = { ...(await runStatsRollup(ctx)) };
         break;
       case 'subscriptions.transition.daily':
+        // Never null here: billing jobs returned above while offline.
+        if (deps.subscriptions === null) return;
         result = {
           ...(await runSubscriptionTransitions(ctx, { ...deps.subscriptions, faces: deps.faces })),
         };

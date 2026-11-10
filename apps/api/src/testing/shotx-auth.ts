@@ -38,15 +38,29 @@ export function ed25519PublicKeyBase64(privateKeyBase64: string): string {
 }
 
 export const TEST_BFF_KEY = 'test-bff-key-0123456789abcdef0123456789';
+/** AUTH_ADMIN_BFF_KEY of the tests: the admin app's key, distinct from web's TEST_BFF_KEY. */
+export const TEST_ADMIN_BFF_KEY = 'test-admin-bff-key-fedcba9876543210fedcba';
 export const TEST_LINE_CHANNEL_ID = '1234567890';
 export const TEST_LINE_CHANNEL_SECRET = 'test-line-channel-secret-0123456789';
 export const TEST_GOOGLE_CLIENT_ID = '1234567890-testclient.apps.googleusercontent.com';
 export const TEST_GOOGLE_CLIENT_SECRET = 'test-google-client-secret';
 export const TEST_TOTP_KEY = randomBytes(32).toString('base64');
 
+/**
+ * The key the right app would send (BffKeyScope): the admin app's for admin sign-in steps and
+ * admin routes and for admins-pool refresh/logout bodies, web's otherwise.
+ */
+export function bffKeyFor(path: string, body?: unknown): string {
+  const pool = (body as { pool?: unknown } | undefined)?.pool;
+  return path.startsWith('/api/auth/admin/') || path.startsWith('/api/admin/') || pool === 'admins'
+    ? TEST_ADMIN_BFF_KEY
+    : TEST_BFF_KEY;
+}
+
 /** Everything AUTH_PROVIDER=shotx (or local) needs. Keys are generated once per test process. */
 export const TEST_SHOTX_AUTH_ENV: Env = {
   AUTH_BFF_KEY: TEST_BFF_KEY,
+  AUTH_ADMIN_BFF_KEY: TEST_ADMIN_BFF_KEY,
   AUTH_USERS_SIGNING_KEY: ed25519PrivateKeyBase64(),
   AUTH_USERS_SIGNING_KEY_ID: 'users-test-1',
   AUTH_ADMINS_SIGNING_KEY: ed25519PrivateKeyBase64(),

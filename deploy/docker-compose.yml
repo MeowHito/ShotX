@@ -5,8 +5,9 @@
 #
 # Only the proxy publishes ports (Docker-published ports bypass ufw). Every other service is on
 # private networks:
-#   edge   proxy, web, api               the proxy has a fixed address: api trusts X-Forwarded-For
-#                                        only from it (TRUSTED_PROXY_ADDRESSES)
+#   edge   proxy, web, admin, api        the proxy has a fixed address: api trusts X-Forwarded-For
+#                                        only from it (TRUSTED_PROXY_ADDRESSES); web and admin
+#                                        pass the client IP with the BFF key instead
 #   data   postgres, redis and their     internal: no route out
 #          clients
 #   egress worker, backup, monitor       outbound only (R2, Rekognition, SES, the alert webhook)
@@ -45,10 +46,12 @@ services:
       - '443:443/udp'
     environment:
       SHOTX_DOMAIN: ${SHOTX_DOMAIN:?set SHOTX_DOMAIN}
+      SHOTX_ADMIN_DOMAIN: ${SHOTX_ADMIN_DOMAIN:?set SHOTX_ADMIN_DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
       PROXY_API_MAX_BODY: ${PROXY_API_MAX_BODY:-2MB}
       PROXY_SELFIE_MAX_BODY: ${PROXY_SELFIE_MAX_BODY:-16MB}
       PROXY_WEB_MAX_BODY: ${PROXY_WEB_MAX_BODY:-2MB}
+      PROXY_ADMIN_MAX_BODY: ${PROXY_ADMIN_MAX_BODY:-1MB}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -56,6 +59,8 @@ services:
     networks:
       edge:
         ipv4_address: ${SHOTX_PROXY_IP:-172.30.0.10}
+    # Not on admin: the main site must not wait for (or fail with) the admin app. Until admin is
+    # healthy, only the admin site answers 502.
     depends_on:
       web:
         condition: service_healthy
@@ -116,6 +121,52 @@ services:
           memory: ${WEB_MEMORY:-768m}
     logging: *logging
 
+  # Admin console on its own subdomain (ADR 0010; SHOTX_ADMIN_DOMAIN). It reaches the api over
+  # the edge network (API_INTERNAL_URL), never through the proxy: the proxy answers 404 for
+  # /api/admin/* and /api/auth/admin/* on the main domain.
+  admin:
+    image: ${SHOTX_IMAGE_PREFIX:-shotx}/admin:${SHOTX_IMAGE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: apps/admin/Dockerfile
+    restart: unless-stopped
+    <<: *hardening
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /app/apps/admin/.next/cache:size=128m
+    # NODE_ENV comes from the image (production) and env/common.env; not overridden here.
+    env_file:
+      - *env-common
+      - path: ${SHOTX_ENV_DIR:-./env}/admin.env
+        required: true
+    environment:
+      PORT: '3001'
+      # Admin sign-in (password + TOTP) is issued by the api (ADR 0008 section 4, ADR 0010).
+      AUTH_PROVIDER: shotx
+      API_INTERNAL_URL: http://api:4000
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3001/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '${ADMIN_CPUS:-0.5}'
+          memory: ${ADMIN_MEMORY:-384m}
+    logging: *logging
+
   api:
     image: ${SHOTX_IMAGE_PREFIX:-shotx}/api:${SHOTX_IMAGE_TAG:-latest}
     build:
@@ -145,8 +196,8 @@ services:
       PGHOST: postgres
       PGPORT: '5432'
       PGSSLMODE: disable
-      # Exactly the proxy's address on the edge network (one address, never a range: web shares
-      # the network).
+      # Exactly the proxy's address on the edge network (one address, never a range: web and
+      # admin share the network, and their calls must not count as the proxy's).
       TRUSTED_PROXY_ADDRESSES: ${SHOTX_PROXY_IP:-172.30.0.10}
     networks:
       - edge

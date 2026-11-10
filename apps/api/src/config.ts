@@ -1,10 +1,12 @@
 import {
+  type AdminConsoleConfig,
   type ApiLimitsConfig,
+  type BillingModeConfig,
   type AppConfig,
   type AuthPool,
   type AuthProviderConfig,
   type AwsConfig,
-  type BffAuthConfig,
+  type BffKeysConfig,
   type BillingConfig,
   type CaptchaConfig,
   type CloudFrontSigningConfig,
@@ -17,13 +19,15 @@ import {
   type FaceSearchUploadConfig,
   type FeatureFlags,
   type MediaUrlSignerConfig,
+  loadAdminConsoleConfig,
   loadApiLimitsConfig,
+  loadBillingModeConfig,
   loadAppConfig,
   loadAuthProviderConfig,
   apiIssuesTokens,
   type AwsClientConfig,
   loadAwsConfig,
-  loadBffAuthConfig,
+  loadBffKeysConfig,
   loadBillingConfig,
   loadCaptchaConfig,
   loadCloudFrontSigningConfig,
@@ -47,6 +51,7 @@ import {
   loadShareConfig,
   loadSharePasswordHashConfig,
   loadShotxAuthConfig,
+  loadStorageQuotaConfig,
   loadTrustedProxyConfig,
   loadUploadConfig,
   loadWorkerSettings,
@@ -60,10 +65,13 @@ import {
   type ShareConfig,
   type SharePasswordHashConfig,
   type ShotxAuthConfig,
+  type StorageQuotaConfig,
   type TrustedProxyConfig,
   type UploadConfig,
   runsOffAws,
 } from '@shotx/shared';
+
+import type { ClientIpTrust } from './http/client';
 
 /** Port the API listens on when PORT is unset (infra sets 4000 too; health is `/api/health`). */
 export const API_DEFAULT_PORT = 4000;
@@ -131,10 +139,12 @@ export interface ApiConfig {
    */
   shotxAuth: ShotxAuthConfig | null;
   /**
-   * AUTH_BFF_KEY: required on the `bff` sign-in routes and to trust BFF_CLIENT_IP_HEADER. Null
-   * when unset (only allowed with `cognito`). Secret: never log it.
+   * The two BFF keys (ADR 0010 round 2): `users` = AUTH_BFF_KEY (web), `admins` =
+   * AUTH_ADMIN_BFF_KEY (admin app); never equal. Each `bff` and `admin` route accepts the key of
+   * its RouteContract `bffKey` scope (BffGuard, BffKeyGuard); either key lets the API trust
+   * BFF_CLIENT_IP_HEADER. Each is null only when unset with `cognito`. Secret: never log it.
    */
-  bff: BffAuthConfig | null;
+  bffKeys: BffKeysConfig;
   /** TRUSTED_PROXY_ADDRESSES: reverse proxies whose X-Forwarded-For is trusted. */
   trustedProxies: TrustedProxyConfig;
   /**
@@ -175,8 +185,23 @@ export interface ApiConfig {
   /** argon2id parameters of new share password hashes. */
   password: SharePasswordHashConfig;
   billing: BillingConfig;
-  /** Secret (gateway keys): never log it. `fake` is refused in production by the loader. */
-  paymentGateway: PaymentGatewayConfig;
+  /**
+   * BILLING_MODE (ADR 0010): `offline` (default) answers NOT_FOUND on every billing route, builds
+   * no payment gateway, and uploads, shares and face indexing don't depend on a subscription.
+   */
+  billingMode: BillingModeConfig;
+  /**
+   * Secret (gateway keys): never log it. `fake` is refused in production by the loader. Null with
+   * BILLING_MODE=offline (nothing is read).
+   */
+  paymentGateway: PaymentGatewayConfig | null;
+  /**
+   * STORAGE_QUOTA_ENFORCED (ADR 0010; default false): uploads and copies are checked against the
+   * plan quota only when true. storage_usage is maintained exactly either way.
+   */
+  storageQuota: StorageQuotaConfig;
+  /** ADMIN_LIST_PAGE_SIZE: default page size of the admin users and cash-payment lists. */
+  adminConsole: AdminConsoleConfig;
   /** `fake` is refused in production by the loader. */
   email: EmailConfig;
 }
@@ -200,7 +225,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     auth,
     cognito: auth.provider === 'cognito' ? loadCognitoConfig(env, ['users', 'admins']) : null,
     shotxAuth: apiIssuesTokens(auth.provider) ? loadShotxAuthConfig(env) : null,
-    bff: loadBffAuthConfig(env),
+    bffKeys: loadBffKeysConfig(env),
     trustedProxies: loadTrustedProxyConfig(env),
     offAws: runsOffAws(env),
     rekognitionClient: loadFaceRekognitionClientConfig(env),
@@ -216,9 +241,17 @@ export function loadApiConfig(env: Env): ApiConfig {
     queues: loadApiQueueConfig(env),
     password: loadSharePasswordHashConfig(env),
     billing: loadBillingConfig(env),
+    billingMode: loadBillingModeConfig(env),
     paymentGateway: loadPaymentGatewayConfig(env),
+    storageQuota: loadStorageQuotaConfig(env),
+    adminConsole: loadAdminConsoleConfig(env),
     email: loadEmailConfig(env),
   };
+}
+
+/** True with BILLING_MODE=gateway: subscriptions gate uploads, shares and face indexing. */
+export function billingOnline(config: Pick<ApiConfig, 'billingMode'>): boolean {
+  return config.billingMode.mode === 'gateway';
 }
 
 /** Key prefix of every Redis key the API writes: `shotx:<stage>:api:`. */
@@ -227,8 +260,16 @@ export function redisKeyPrefix(config: Pick<ApiConfig, 'app'>): string {
 }
 
 /** Which callers may tell the API the client address (http/client clientIp). */
-export function clientIpTrust(config: Pick<ApiConfig, 'bff' | 'trustedProxies'>) {
-  return { bffKey: config.bff?.key ?? null, proxies: config.trustedProxies };
+export function clientIpTrust(
+  config: Pick<ApiConfig, 'bffKeys' | 'trustedProxies'>,
+): ClientIpTrust {
+  return {
+    bffKeys: {
+      users: config.bffKeys.users?.key ?? null,
+      admins: config.bffKeys.admins?.key ?? null,
+    },
+    proxies: config.trustedProxies,
+  };
 }
 
 /** Cookies get `Secure` unless the site itself is plain http (localhost development). */

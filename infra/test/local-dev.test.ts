@@ -56,6 +56,7 @@ const VPS_ONLY = [
   SCHEDULE_TIMEZONE_ENV,
   ...Object.values(SCHEDULED_JOB_ENV).flatMap((names) => Object.values(names)),
   'AUTH_BFF_KEY',
+  'AUTH_ADMIN_BFF_KEY',
   ...Object.values(AUTH_SIGNING_KEY_ENV).flatMap((names) => Object.values(names)),
   'ADMIN_TOTP_ENCRYPTION_KEY',
   'LINE_LOGIN_CHANNEL_ID',

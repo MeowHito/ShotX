@@ -22,6 +22,7 @@ import {
 import { DATABASE_BACKENDS, type TestDatabase } from '../testing/database';
 import { TestApi, type TestResponse } from '../testing/harness';
 import {
+  bffKeyFor,
   FakeOidcProviders,
   localAuthEnv,
   shotxEnv,
@@ -67,13 +68,16 @@ for (const backend of DATABASE_BACKENDS) {
       await database?.close();
     });
 
-    /** A BFF call: the shared key plus the end user's address. */
+    /**
+     * A BFF call: the calling app's key plus the end user's address. The admin app's key for the
+     * admin sign-in steps and admins-pool refreshes (BffKeyScope), web's otherwise.
+     */
     const bff = <T = unknown>(
       method: string,
       path: string,
       body?: unknown,
       ip = nextIp(),
-      key = TEST_BFF_KEY,
+      key = bffKeyFor(path, body),
     ): Promise<TestResponse<T>> =>
       api.request<T>(method, path, {
         body,
@@ -454,7 +458,8 @@ for (const backend of DATABASE_BACKENDS) {
           .where(eq(adminCredentials.userId, enrolment.userId));
         expect(cred?.totpConfirmedAt).toBeNull();
         expect(cred?.passwordHash).toMatch(/^\$argon2id\$/);
-        expect(cred?.totpSecretEncrypted.toString('latin1')).not.toContain(
+        expect(cred?.mustChangePassword).toBe(false);
+        expect(cred?.totpSecretEncrypted?.toString('latin1')).not.toContain(
           base32Decode(enrolment.secretBase32).toString('latin1'),
         );
         expect((await audits('auth.admin.created')).at(-1)?.targetId).toBe(enrolment.userId);
@@ -705,12 +710,14 @@ for (const backend of DATABASE_BACKENDS) {
           }),
         } as unknown as ExecutionContext;
         await expect(guard.canActivate(context)).resolves.toBe(true);
-        // Lockout ends access at once (the token itself is still unexpired).
+        // A lockout only blocks new sign-ins: the live session keeps working (no sign-out by
+        // guessing someone's password), while a new sign-in is refused.
         await api.db
           .update(adminCredentials)
           .set({ lockedUntil: new Date(api.clock.now().getTime() + 60_000) })
           .where(eq(adminCredentials.userId, enrolment.userId));
-        await expect(guard.canActivate(context)).rejects.toMatchObject({ code: 'UNAUTHENTICATED' });
+        await expect(guard.canActivate(context)).resolves.toBe(true);
+        expect((await login('guard@example.com', password)).status).toBe(429);
         await unlockAdmin(ops(), 'guard@example.com');
         await expect(guard.canActivate(context)).resolves.toBe(true);
         // An operator reset revokes the sessions.

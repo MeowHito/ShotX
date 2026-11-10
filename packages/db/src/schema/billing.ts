@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -14,6 +15,7 @@ import {
 import { plans, subscriptions, users } from './accounts';
 import { createdAt, id, timestamptz } from './columns';
 import {
+  authPool,
   billingActor,
   checkoutChangeType,
   checkoutStatus,
@@ -311,5 +313,67 @@ export const subscriptionEvents = pgTable(
       'subscription_events_actor_user',
       sql`(${t.actor} IN ('photographer', 'admin')) = (${t.actorUserId} IS NOT NULL)`,
     ),
+  ],
+);
+
+/**
+ * Cash payments an admin records (migration 0011, ADR 0010; optional, for the owner's own
+ * bookkeeping). A ledger: rows are never updated or deleted, and each is inserted in one
+ * transaction with its `admin.cash_payment.created` audit_log row. Not a gateway payment: no VAT
+ * split, no subscription. Money is integer satang.
+ *
+ * - (photographer_id, photographer_pool) references users (id, auth_pool) with the pool fixed to
+ *   `users`, and (recorded_by_id, recorded_by_pool) with `admins`: the payer is never an admin and
+ *   the recorder always is (role `admin` iff admins pool). The api also checks the payer's role is
+ *   `photographer` (NOT_FOUND otherwise).
+ * - `paid_at`: when the cash changed hands (the admin enters it), at most a day after the row was
+ *   recorded (`cash_payments_paid_at_not_future`).
+ * - `note`: 1-500 characters or null.
+ * - POST /admin/cash-payments is idempotent per recording admin and `Idempotency-Key`
+ *   (`cash_payments_idempotency_unique`), with `request_sha256` (hex SHA-256 of the canonical
+ *   request) telling a replay from a reused key (IDEMPOTENCY_KEY_REUSED).
+ */
+export const cashPayments = pgTable(
+  'cash_payments',
+  {
+    id: id(),
+    photographerId: uuid('photographer_id').notNull(),
+    photographerPool: authPool('photographer_pool').notNull().default('users'),
+    amountSatang: integer('amount_satang').notNull(),
+    paidAt: timestamptz('paid_at').notNull(),
+    note: text('note'),
+    recordedById: uuid('recorded_by_id').notNull(),
+    recordedByPool: authPool('recorded_by_pool').notNull().default('admins'),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestSha256: text('request_sha256').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'cash_payments_photographer_fk',
+      columns: [t.photographerId, t.photographerPool],
+      foreignColumns: [users.id, users.authPool],
+    }),
+    foreignKey({
+      name: 'cash_payments_recorded_by_admin_fk',
+      columns: [t.recordedById, t.recordedByPool],
+      foreignColumns: [users.id, users.authPool],
+    }),
+    unique('cash_payments_idempotency_unique').on(t.recordedById, t.idempotencyKey),
+    index('cash_payments_photographer_paid_idx').on(t.photographerId, t.paidAt.desc(), t.id.desc()),
+    index('cash_payments_paid_idx').on(t.paidAt.desc(), t.id.desc()),
+    check('cash_payments_photographer_pool', sql`${t.photographerPool} = 'users'`),
+    check('cash_payments_recorded_by_pool', sql`${t.recordedByPool} = 'admins'`),
+    check('cash_payments_amount_positive', sql`${t.amountSatang} > 0`),
+    check(
+      'cash_payments_note_length',
+      sql`${t.note} IS NULL OR char_length(${t.note}) BETWEEN 1 AND 500`,
+    ),
+    check(
+      'cash_payments_paid_at_not_future',
+      sql`${t.paidAt} <= ${t.createdAt} + interval '1 day'`,
+    ),
+    check('cash_payments_idempotency_key_format', sql`${t.idempotencyKey} ~ '^[!-~]{1,255}$'`),
+    check('cash_payments_request_sha256_hex', sql`${t.requestSha256} ~ '^[0-9a-f]{64}$'`),
   ],
 );

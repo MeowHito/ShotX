@@ -1,5 +1,6 @@
 import {
   apiPath,
+  BILLING_OPERATING_MODES,
   BILLING_ROUTES,
   CONSENT_POLICY_FACE_PROVIDER,
   CONSENT_POLICY_VERSIONS,
@@ -563,12 +564,19 @@ export const configSchema = z
     /** Payments (api: checkout and webhooks; worker: auto-renew charges). */
     billing: z.object({
       /**
+       * BILLING_MODE (web, api, worker; ADR 0010). Required, so every stage states it. `offline`:
+       * no gateway; api and worker get no PAYMENT_* variable or secret and no gateway secret is
+       * created or imported (the settings below are kept for when the gateway is switched on).
+       * `gateway`: online billing with the settings below.
+       */
+      mode: z.enum(BILLING_OPERATING_MODES),
+      /**
        * PAYMENT_GATEWAY. `fake` (the default, for non-production stages) signs webhooks with a
        * generated secret; the `prod` stage must name a real gateway.
        */
       paymentGateway: z.enum(PAYMENT_GATEWAYS).default('fake'),
       /**
-       * Secrets Manager secret (ap-southeast-1) the operator creates before deploy: a JSON object
+       * With mode `gateway`: the Secrets Manager secret (ap-southeast-1) the operator creates before deploy: a JSON object
        * with one key per PAYMENT_GATEWAY_SECRET_ENV[paymentGateway] name, e.g.
        * {"PAYMENT_OMISE_PUBLIC_KEY": "...", "PAYMENT_OMISE_SECRET_KEY": "...", ...}. Ignored for
        * `fake`, whose webhook secret infra generates.
@@ -846,9 +854,11 @@ export const configSchema = z
     faceConfig('api');
 
     // Billing and email. The shared loaders refuse `fake` in production; so does synth for the
-    // production stage.
+    // production stage. Gateway settings only matter with BILLING_MODE=gateway: offline, the
+    // services read none of them (loadPaymentGatewayConfig returns null).
+    const gatewayMode = c.billing.mode === 'gateway';
     if (c.stage === PRODUCTION_STAGE) {
-      if (c.billing.paymentGateway === 'fake') {
+      if (gatewayMode && c.billing.paymentGateway === 'fake') {
         ctx.addIssue({
           code: 'custom',
           path: ['billing', 'paymentGateway'],
@@ -863,7 +873,11 @@ export const configSchema = z
         });
       }
     }
-    if (c.billing.paymentGateway !== 'fake' && !SECRET_NAME.test(c.billing.gatewaySecretName)) {
+    if (
+      gatewayMode &&
+      c.billing.paymentGateway !== 'fake' &&
+      !SECRET_NAME.test(c.billing.gatewaySecretName)
+    ) {
       ctx.addIssue({
         code: 'custom',
         path: ['billing', 'gatewaySecretName'],

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { newPasswordSchema } from '../account/password-accounts';
 import { opaqueTokenSchema } from '../account/tokens';
 import { AUTH_POOLS, OIDC_PROVIDERS } from '../domain';
 
@@ -8,11 +9,13 @@ import { AUTH_POOLS, OIDC_PROVIDERS } from '../domain';
 // browser never sees a refresh token.
 
 /**
- * Header with the shared BFF key (AUTH_BFF_KEY, loadBffAuthConfig). Web and admin send it on
- * every server-side call to the API: the `/bff/*` proxy, server-side rendering and the `bff`
- * routes. On `bff` routes a missing or wrong key is UNAUTHENTICATED; on other routes a wrong key
- * is ignored (the request is treated as coming from the browser) and only means the client IP
- * header below is not trusted.
+ * Header with the calling BFF's key: web sends AUTH_BFF_KEY (loadBffAuthConfig), the admin app
+ * AUTH_ADMIN_BFF_KEY (loadAdminBffAuthConfig); the API knows both (loadBffKeysConfig). Each sends
+ * it on every server-side call to the API: the `/bff/*` proxy, server-side rendering and the
+ * `bff` routes. On `bff` and `admin` routes a missing or wrong key, or the other app's key where
+ * the route's `bffKey` (BffKeyScope) doesn't accept it, is UNAUTHENTICATED; on other routes a
+ * wrong key is ignored (the request is treated as coming from the browser) and only means the
+ * client IP header below is not trusted.
  */
 export const BFF_KEY_HEADER = 'x-shotx-bff-key';
 
@@ -128,26 +131,111 @@ export type RefreshBody = z.input<typeof refreshBodySchema>;
 export const logoutBodySchema = z.strictObject({ refreshToken: opaqueTokenSchema });
 export type LogoutBody = z.input<typeof logoutBodySchema>;
 
+/** A password typed at sign-in: anything up to 1024 characters (never trimmed). */
+const signInPasswordSchema = z.string().min(1).max(1024);
+
+// --- Admin sign-in (password, then steps, then TOTP) ---------------------------------------------
+
 /**
  * Admin step 1. Wrong email or password, or no such admin: INVALID_CREDENTIALS (one code, same
- * timing). Too many failures per account or IP, or a locked account: RATE_LIMITED.
+ * timing). Too many failures per account or IP, or a locked account: RATE_LIMITED. A disabled
+ * admin with the right password: ACCOUNT_DISABLED.
  */
 export const adminLoginBodySchema = z.strictObject({
   email: z.email().max(254),
-  password: z.string().min(1).max(1024),
+  password: signInPasswordSchema,
 });
 export type AdminLoginBody = z.input<typeof adminLoginBodySchema>;
 
-export const adminLoginResponseSchema = z.object({
+/**
+ * What an admin sign-in asks for next (ADR 0010). Every step answers with a fresh one-time
+ * `challengeId` for the next step (the previous one is used up), valid for
+ * ADMIN_MFA_CHALLENGE_TTL_SECONDS; a challenge sent to another step's route is
+ * LOGIN_STATE_INVALID. The order is fixed, and `totp` is always last:
+ *
+ *   POST /auth/admin/login ─┬─ must_change_password ──> change_password ── POST /auth/admin/password
+ *                           │                                                   │
+ *                           ├─ no TOTP secret ───────> enrol_totp <─────────────┤ (no secret)
+ *                           │                              │                    │
+ *                           └─ TOTP set ─────────────> totp <───────────────────┘ (secret set)
+ *                                                        │   (enrol_totp: the same code step)
+ *                                                  POST /auth/admin/mfa ──> tokens
+ *
+ * - `change_password`: the password is temporary (an admin created the account in the admin app
+ *   or reset its password; `admin_credentials.must_change_password`). Accounts made by the
+ *   operator CLI start with `false`.
+ * - `enrol_totp`: the account has no TOTP secret yet (created in the admin app). The API generates
+ *   a secret for this sign-in and returns its `otpauthUri` once, to this admin only (never to the
+ *   creating admin); the admin app shows it as a QR code. The first valid code at
+ *   POST /auth/admin/mfa confirms it.
+ * - `totp`: an enrolled (CLI enrolment may still be unconfirmed) secret: enter the code.
+ *
+ * Nothing is written to admin_credentials before the final step succeeds: the API keeps the new
+ * password hash and the new TOTP secret (encrypted with ADMIN_TOTP_ENCRYPTION_KEY) in the
+ * challenge, and the successful POST /auth/admin/mfa stores them, clears
+ * `must_change_password` and sets `totp_confirmed_at`, in one transaction. An abandoned sign-in
+ * leaves the account as it was (the temporary password still works; a new enrolment secret is
+ * generated next time).
+ */
+export const ADMIN_SIGN_IN_STEPS = ['change_password', 'enrol_totp', 'totp'] as const;
+export type AdminSignInStep = (typeof ADMIN_SIGN_IN_STEPS)[number];
+
+const adminChallenge = {
   /** One-time, valid for ADMIN_MFA_CHALLENGE_TTL_SECONDS. */
   challengeId: opaqueTokenSchema,
   expiresIn: z.number().int().positive(),
+};
+
+export const adminChangePasswordStepSchema = z.object({
+  step: z.literal('change_password'),
+  ...adminChallenge,
 });
+
+export const adminEnrolTotpStepSchema = z.object({
+  step: z.literal('enrol_totp'),
+  ...adminChallenge,
+  /**
+   * `otpauth://totp/<issuer>:<email>?secret=<base32>&issuer=...&algorithm=SHA1&digits=<6|8>&period=<s>`
+   * (ADMIN_TOTP_DIGITS, ADMIN_TOTP_PERIOD_SECONDS). Secret: shown once, never logged or cached.
+   */
+  otpauthUri: z.string().startsWith('otpauth://totp/').max(2048),
+});
+
+export const adminTotpStepSchema = z.object({ step: z.literal('totp'), ...adminChallenge });
+
+/**
+ * POST /auth/admin/login answers with the first step. Changed in ADR 0010: it now always has
+ * `step` (before, it was `{ challengeId, expiresIn }`, which is the `totp` step).
+ */
+export const adminLoginResponseSchema = z.discriminatedUnion('step', [
+  adminChangePasswordStepSchema,
+  adminEnrolTotpStepSchema,
+  adminTotpStepSchema,
+]);
 export type AdminLoginResponse = z.output<typeof adminLoginResponseSchema>;
 
 /**
- * Admin step 2: the TOTP code. The first valid code of an account whose TOTP is not yet confirmed
- * (enrolled by the operator CLI) confirms it. Wrong, stale or replayed code: MFA_INVALID (the
+ * Admin step `change_password`: the new password (ADMIN_PASSWORD_MIN_LENGTH, policy:
+ * PASSWORD_TOO_WEAK, including `same_as_current` for the temporary password). The challenge must
+ * come from a `change_password` step, else LOGIN_STATE_INVALID.
+ */
+export const adminChangePasswordBodySchema = z.strictObject({
+  challengeId: opaqueTokenSchema,
+  newPassword: newPasswordSchema,
+});
+export type AdminChangePasswordBody = z.input<typeof adminChangePasswordBodySchema>;
+
+/** After the password step: enrol TOTP (no secret yet) or enter the code (secret set). */
+export const adminChangePasswordResponseSchema = z.discriminatedUnion('step', [
+  adminEnrolTotpStepSchema,
+  adminTotpStepSchema,
+]);
+export type AdminChangePasswordResponse = z.output<typeof adminChangePasswordResponseSchema>;
+
+/**
+ * Admin final step: the TOTP code, for a `totp` or an `enrol_totp` challenge. The first valid code
+ * of an account whose TOTP is not yet confirmed (enrolled by the operator CLI, or the secret of
+ * this sign-in's `enrol_totp` step) confirms it. Wrong, stale or replayed code: MFA_INVALID (the
  * challenge stays usable until it expires or the rate limit trips).
  */
 export const adminMfaBodySchema = z.strictObject({
@@ -155,3 +243,55 @@ export const adminMfaBodySchema = z.strictObject({
   code: z.string().regex(/^(\d{6}|\d{8})$/, { error: 'must be 6 or 8 digits' }),
 });
 export type AdminMfaBody = z.input<typeof adminMfaBodySchema>;
+
+// --- Photographer sign-in (email + password, ADR 0010) -------------------------------------------
+
+/**
+ * Photographers sign in at the studio with the email and password an admin gave them. Wrong email
+ * or password, no such photographer, or an account without password credentials:
+ * INVALID_CREDENTIALS (one code, same timing; an unknown email verifies a dummy hash). Too many
+ * failures per account or IP, or a locked account (PHOTOGRAPHER_LOGIN_LOCKOUT_*): RATE_LIMITED
+ * with `Retry-After`. A disabled account with the right password: ACCOUNT_DISABLED. Viewers keep
+ * LINE/Google; this route never creates a `users` row.
+ */
+export const photographerSignInBodySchema = z.strictObject({
+  email: z.email().max(254),
+  password: signInPasswordSchema,
+});
+export type PhotographerSignInBody = z.input<typeof photographerSignInBodySchema>;
+
+/**
+ * - `signed_in`: a normal session (access token `amr` ["pwd"], `idp` `password`).
+ * - `change_password`: the password is temporary (`must_change_password`). The tokens are a
+ *   restricted session: the access token carries PASSWORD_CHANGE_CLAIM, the refresh family ends
+ *   after PHOTOGRAPHER_PASSWORD_CHANGE_SESSION_TTL_SECONDS (`refreshExpiresIn`), and only
+ *   PASSWORD_CHANGE_ALLOWED_ROUTES work; everything else is PASSWORD_CHANGE_REQUIRED. The web app
+ *   shows the change form and calls POST /auth/photographer/password with the password just typed
+ *   as `currentPassword`.
+ * The BFF stores the tokens in its session cookie in both cases.
+ */
+export const photographerSignInResponseSchema = z.discriminatedUnion('step', [
+  authTokenResponseSchema.extend({ step: z.literal('signed_in') }),
+  authTokenResponseSchema.extend({ step: z.literal('change_password') }),
+]);
+export type PhotographerSignInResponse = z.output<typeof photographerSignInResponseSchema>;
+
+/**
+ * Change the signed-in photographer's own password: the forced first change (restricted session)
+ * and any later change. Wrong `currentPassword`: PASSWORD_INCORRECT (counts towards the lockout;
+ * when locked: RATE_LIMITED). Policy (PHOTOGRAPHER_PASSWORD_MIN_LENGTH, `same_as_current`, ...):
+ * PASSWORD_TOO_WEAK. On success the API stores the new hash, clears `must_change_password`, sets
+ * `password_changed_at`, revokes every session of the account (the current one too) and answers
+ * with a new normal session, which the BFF stores in place of the old one.
+ */
+export const photographerChangePasswordBodySchema = z.strictObject({
+  currentPassword: signInPasswordSchema,
+  newPassword: newPasswordSchema,
+});
+export type PhotographerChangePasswordBody = z.input<typeof photographerChangePasswordBodySchema>;
+
+/** The new session after a password change. */
+export const photographerChangePasswordResponseSchema = authTokenResponseSchema;
+export type PhotographerChangePasswordResponse = z.output<
+  typeof photographerChangePasswordResponseSchema
+>;

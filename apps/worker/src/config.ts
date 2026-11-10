@@ -4,6 +4,7 @@ import {
   type AwsClientConfig,
   type AwsConfig,
   type BillingConfig,
+  type BillingOperatingMode,
   type BullMqQueueSettings,
   type EmailConfig,
   type Env,
@@ -12,6 +13,7 @@ import {
   loadAppConfig,
   loadAwsConfig,
   loadBillingConfig,
+  loadBillingModeConfig,
   loadEmailConfig,
   loadFaceConfig,
   loadFeatureFlags,
@@ -42,6 +44,7 @@ import {
   SQS_MAX_VISIBILITY_TIMEOUT_SECONDS,
   type WorkerSettings,
 } from '@shotx/shared';
+import { schedulesForBillingMode } from './billing/mode';
 
 /** Queues the worker consumes: every queue (media, faces, zip, jobs). */
 export const CONSUMED_QUEUES = QUEUE_NAMES;
@@ -98,14 +101,21 @@ export interface WorkerConfig {
   multipartPartBytes: number;
   /** WORKER_* settings and LOG_LEVEL (loadWorkerSettings in @shotx/shared). */
   worker: WorkerSettings;
+  /**
+   * BILLING_MODE (ADR 0010, default `offline`): with `offline` the billing jobs
+   * (BILLING_JOB_TYPES: subscription transitions, renewal charges, billing emails) are neither
+   * scheduled nor run; every other job and consumer runs in both modes.
+   */
+  billingMode: BillingOperatingMode;
   /** Billing tunables (auto-renew attempts and lead, VAT) for subscriptions.transition.daily. */
   billing: BillingConfig;
-  /** EMAIL_PROVIDER and the sender (lifecycle emails and receipts). */
+  /** EMAIL_PROVIDER and the sender (lifecycle emails and receipts; used in gateway mode only). */
   email: EmailConfig;
   /**
-   * PAYMENT_GATEWAY and its secrets, for auto-renew charges. Secret: never log this object.
+   * PAYMENT_GATEWAY and its secrets, for auto-renew charges; null with BILLING_MODE=offline, when
+   * no PAYMENT_* setting is read or required. Secret: never log this object.
    */
-  paymentGateway: PaymentGatewayConfig;
+  paymentGateway: PaymentGatewayConfig | null;
 }
 
 /** Everything the worker reads from the environment, validated at start-up. */
@@ -127,17 +137,26 @@ export function loadWorkerConfig(env: Env): WorkerConfig {
     zip: loadShareConfig(env).zip,
     multipartPartBytes: loadUploadConfig(env).partBytes,
     worker: loadWorkerSettings(env),
+    billingMode: loadBillingModeConfig(env).mode,
     billing: loadBillingConfig(env),
     email: loadEmailConfig(env),
     paymentGateway: loadPaymentGatewayConfig(env),
   };
 }
 
-/** QUEUE_BACKEND and its settings for the consumed queues. */
+/**
+ * QUEUE_BACKEND and its settings for the consumed queues. The BullMQ schedules are the ones the
+ * worker registers: with BILLING_MODE=offline the billing jobs are disabled
+ * (schedulesForBillingMode).
+ */
 export function loadWorkerQueueConfig(env: Env): WorkerQueueConfig {
   const backend = loadQueueBackendConfig(env, CONSUMED_QUEUES);
   if (backend.backend === 'bullmq') {
-    return { ...backend, schedules: loadScheduledJobsConfig(env) };
+    const schedules = schedulesForBillingMode(
+      loadScheduledJobsConfig(env),
+      loadBillingModeConfig(env).mode,
+    );
+    return { ...backend, schedules };
   }
   const visibilityTimeoutSeconds = loadQueueVisibilityTimeouts(env, CONSUMED_QUEUES);
   for (const queue of CONSUMED_QUEUES) {

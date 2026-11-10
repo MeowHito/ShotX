@@ -12,6 +12,8 @@ import {
 import Link from 'next/link';
 import { getTranslations } from 'next-intl/server';
 import { SiteFooter, SiteHeader } from '@/components/site/site-header';
+import { AUTH_PATHS } from '@/lib/auth/handlers';
+import { billingOffline } from '@/lib/server/config';
 
 const STEPS = ['upload', 'share', 'find'] as const;
 
@@ -29,10 +31,14 @@ const FEATURES: {
 
 /**
  * The public home page: a calm editorial hero for photographers, how it works, what is
- * included, and how faces are handled. Only honest copy: no numbers, logos or quotes.
+ * included, and how faces are handled. Only honest copy: no numbers, logos or quotes. No sign-up
+ * or trial (ADR 0010: an admin opens each photographer's account), and nothing about plans or
+ * payment while BILLING_MODE=offline.
  */
 export default async function HomePage() {
   const t = await getTranslations('home');
+  const offline = billingOffline();
+  const features = offline ? FEATURES.filter((f) => f.id !== 'pricing') : FEATURES;
   return (
     <>
       <SiteHeader />
@@ -50,18 +56,20 @@ export default async function HomePage() {
             </p>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
               <Link
-                href="/studio"
+                href={AUTH_PATHS.loginPage}
                 className={cn(buttonVariants({ size: 'lg' }), 'h-12 rounded-full px-6 text-base')}
               >
                 {t('start')}
                 <ArrowRightIcon aria-hidden />
               </Link>
-              <Link
-                href="/pricing"
-                className="text-sm font-semibold text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
-              >
-                {t('pricing')}
-              </Link>
+              {offline ? null : (
+                <Link
+                  href="/pricing"
+                  className="text-sm font-semibold text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+                >
+                  {t('pricing')}
+                </Link>
+              )}
             </div>
             <p className="text-sm text-muted-foreground">{t('micro')}</p>
           </div>
@@ -95,7 +103,7 @@ export default async function HomePage() {
               </h2>
             </div>
             <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {FEATURES.map(({ id, icon: Icon }) => (
+              {features.map(({ id, icon: Icon }) => (
                 <li key={id} className="space-y-3 rounded-xl border bg-background p-6 shadow-card">
                   <Icon className="size-6 text-primary" strokeWidth={1.75} aria-hidden />
                   <h3 className="text-lg">{t(`features.${id}.title`)}</h3>
@@ -131,19 +139,10 @@ export default async function HomePage() {
           <p className="text-muted-foreground">{t('ctaBody')}</p>
           <div className="flex flex-wrap justify-center gap-3">
             <Link
-              href="/studio"
+              href={AUTH_PATHS.loginPage}
               className={cn(buttonVariants({ size: 'lg' }), 'h-12 rounded-full px-6 text-base')}
             >
               {t('start')}
-            </Link>
-            <Link
-              href="/login"
-              className={cn(
-                buttonVariants({ size: 'lg', variant: 'outline' }),
-                'h-12 rounded-full px-6 text-base',
-              )}
-            >
-              {t('login')}
             </Link>
           </div>
         </section>

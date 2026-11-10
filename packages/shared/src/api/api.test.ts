@@ -216,7 +216,7 @@ describe('upload schemas', () => {
 });
 
 describe('route table', () => {
-  it('covers every Phase 2, 3 and 4 route of the spec, the added ones and auth (ADR 0008)', () => {
+  it('covers every Phase 2, 3 and 4 route of the spec, the added ones, auth (ADR 0008) and accounts (ADR 0010)', () => {
     const routes = ALL_ROUTES.map((r) => `${r.method} ${r.path}`);
     expect(routes).toEqual([
       'GET /drive/folders/:id/children',
@@ -277,7 +277,18 @@ describe('route table', () => {
       'POST /auth/refresh',
       'POST /auth/logout',
       'POST /auth/admin/login',
+      'POST /auth/admin/password',
       'POST /auth/admin/mfa',
+      'POST /auth/photographer/sign-in',
+      // ADR 0010: photographer account and the admin app.
+      'POST /auth/photographer/password',
+      'GET /admin/users',
+      'POST /admin/users',
+      'GET /admin/users/:id',
+      'PATCH /admin/users/:id',
+      'POST /admin/users/:id/reset-password',
+      'GET /admin/cash-payments',
+      'POST /admin/cash-payments',
     ]);
     expect(new Set(routes).size).toBe(routes.length);
   });

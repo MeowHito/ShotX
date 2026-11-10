@@ -235,7 +235,14 @@ describe('share scope', () => {
 
 describe('share availability and gates', () => {
   const now = new Date('2026-10-25T05:00:00Z');
-  const live = { isActive: true, expiresAt: null, targetLive: true, subscriptionStatus: 'active' };
+  const live = {
+    isActive: true,
+    expiresAt: null,
+    targetLive: true,
+    ownerStatus: 'active',
+    subscriptionGates: true,
+    subscriptionStatus: 'active',
+  } as const;
 
   it('checks revoked, expired, then unavailable', () => {
     expect(shareAvailability({ ...live, subscriptionStatus: 'active' }, now)).toEqual({ ok: true });
@@ -259,6 +266,37 @@ describe('share availability and gates', () => {
     expect(
       shareAvailability({ ...live, subscriptionStatus: 'trial', targetLive: false }, now),
     ).toMatchObject({ reason: 'unavailable' });
+  });
+
+  it('makes a disabled owner unavailable, after revoked and expired (ADR 0010)', () => {
+    expect(shareAvailability({ ...live, ownerStatus: 'disabled' }, now)).toEqual({
+      ok: false,
+      code: 'SHARE_EXPIRED',
+      reason: 'unavailable',
+    });
+    expect(
+      shareAvailability({ ...live, ownerStatus: 'disabled', subscriptionGates: false }, now),
+    ).toMatchObject({ reason: 'unavailable' });
+    expect(
+      shareAvailability({ ...live, ownerStatus: 'disabled', isActive: false }, now),
+    ).toMatchObject({ reason: 'revoked' });
+    expect(
+      shareAvailability({ ...live, ownerStatus: 'disabled', expiresAt: now }, now),
+    ).toMatchObject({ reason: 'expired' });
+  });
+
+  it('ignores the subscription when it does not gate (BILLING_MODE=offline)', () => {
+    const offline = { ...live, subscriptionGates: false };
+    for (const subscriptionStatus of ['expired', 'purged', null] as const) {
+      expect(shareAvailability({ ...offline, subscriptionStatus }, now)).toEqual({ ok: true });
+    }
+    // Everything else still applies.
+    expect(shareAvailability({ ...offline, targetLive: false }, now)).toMatchObject({
+      reason: 'unavailable',
+    });
+    expect(shareAvailability({ ...offline, isActive: false }, now)).toMatchObject({
+      reason: 'revoked',
+    });
   });
 
   it('derives the owner-facing status', () => {

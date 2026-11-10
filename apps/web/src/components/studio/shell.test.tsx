@@ -11,14 +11,22 @@ import { RecentView } from './recent-view';
 import { SearchView } from './search-view';
 import { activeNav, SidebarNav } from './sidebar-nav';
 import { storageLevel } from './storage-meter';
+import { DEFAULT_STUDIO_CONFIG, StudioProvider } from './studio-context';
 import { StudioShellView } from './studio-shell';
+
+const GATEWAY = { ...DEFAULT_STUDIO_CONFIG, billingMode: 'gateway' } as const;
 
 const GB = 1024 ** 3;
 const MAC = { platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh)' } as Navigator;
 
 function renderShell(
   fake: FakeApi,
-  options: { pathname?: string; onSearch?: (href: string) => void; nav?: Navigator } = {},
+  options: {
+    pathname?: string;
+    onSearch?: (href: string) => void;
+    nav?: Navigator;
+    config?: typeof DEFAULT_STUDIO_CONFIG;
+  } = {},
 ) {
   const onSearch = vi.fn<(href: string) => void>(options.onSearch);
   const view = renderWithProviders(
@@ -27,6 +35,7 @@ function renderShell(
       user={{ name: 'สมชาย ถ่ายภาพ', email: 'somchai@example.com' }}
       onSearch={onSearch}
       nav={options.nav}
+      config={options.config}
     >
       <p>page content</p>
     </StudioShellView>,
@@ -43,12 +52,12 @@ describe('aside', () => {
     const links = within(screen.getByRole('navigation', { name: th.studio.navLabel })).getAllByRole(
       'link',
     );
+    // BILLING_MODE=offline (the default, ADR 0010): no plans and payment.
     expect(links.map((l) => l.textContent)).toEqual([
       'ไดรฟ์ของฉัน',
       'ล่าสุด',
       'ลิงก์ที่แชร์',
       'ถังขยะ',
-      'แพ็กเกจและการชำระเงิน',
     ]);
     expect(links[0]).toHaveAttribute('aria-current', 'page');
     expect(links.filter((l) => l.hasAttribute('aria-current'))).toHaveLength(1);
@@ -58,9 +67,38 @@ describe('aside', () => {
     expect(activeNav('/studio/search')).toBeNull();
   });
 
+  it('lists plans and payment only with BILLING_MODE=gateway', () => {
+    renderWithProviders(
+      <StudioProvider config={GATEWAY}>
+        <SidebarNav pathname="/studio/billing" />
+      </StudioProvider>,
+      { api: apiClientFor(new FakeApi().fetch) },
+    );
+    const billing = screen.getByRole('link', { name: th.studio.billing });
+    expect(billing).toHaveAttribute('href', '/studio/billing');
+    expect(billing).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('without a storage limit shows the used bytes only: no bar, no limit, no upgrade', async () => {
+    const fake = new FakeApi({ quotaBytes: null, usedBytes: 2 * GB });
+    const { aside } = renderShell(fake);
+    expect(await within(aside).findAllByText('ใช้ไป 2 GB')).not.toHaveLength(0);
+    expect(within(aside).queryByRole('progressbar')).toBeNull();
+    expect(within(aside).queryByText(/จาก/)).toBeNull();
+    expect(within(aside).queryByRole('link', { name: th.studio.storage.add })).toBeNull();
+    expect(within(aside).queryByText(th.studio.storage.full)).toBeNull();
+  });
+
+  it('with a quota but BILLING_MODE=offline keeps the bar and offers nothing to buy', async () => {
+    const fake = new FakeApi({ quotaBytes: 10 * GB, usedBytes: Math.round(9.7 * GB) });
+    const { aside } = renderShell(fake);
+    expect(await within(aside).findAllByText(th.studio.storage.full)).not.toHaveLength(0);
+    expect(within(aside).queryByRole('link', { name: th.studio.storage.add })).toBeNull();
+  });
+
   it('shows "ใช้ไป X จาก Y" with a thin bar and the button to add storage', async () => {
     const fake = new FakeApi({ quotaBytes: 10 * GB, usedBytes: 2 * GB });
-    const { aside } = renderShell(fake);
+    const { aside } = renderShell(fake, { config: GATEWAY });
     expect(await within(aside).findAllByText('ใช้ไป 2 GB จาก 10 GB')).not.toHaveLength(0);
     const bar = within(aside).getAllByRole('progressbar', { name: th.studio.storage.title })[0];
     expect(bar).toHaveAttribute('data-level', 'ok');
@@ -202,6 +240,10 @@ describe('top bar', () => {
     const menu = await screen.findByRole('menu');
     expect(within(menu).getByText('สมชาย ถ่ายภาพ')).toBeInTheDocument();
     expect(within(menu).getByText('somchai@example.com')).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: th.studio.settings })).toHaveAttribute(
+      'href',
+      '/studio/settings',
+    );
     await user.click(within(menu).getByRole('menuitem', { name: th.studio.logout }));
     await waitFor(() => expect(submitted).toHaveBeenCalledTimes(1));
     expect(submitted.mock.results[0]?.value).toBe('/auth/logout');

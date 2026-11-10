@@ -7,6 +7,7 @@ import { useTranslations } from 'next-intl';
 import { BILLING_HREF } from '@/components/drive/paths';
 import { useDriveUsage } from '@/lib/drive/queries';
 import { formatBytes } from '@/lib/format';
+import { useStudio } from './studio-context';
 
 /** Used share of the quota from which the meter turns amber, and red. */
 export const STORAGE_WARN_RATIO = 0.8;
@@ -21,21 +22,42 @@ export function storageLevel(used: number, quota: number): StorageLevel {
 }
 
 /**
- * The aside's storage block: "used X of Y" (studio.storage.used) over a thin bar (amber near the limit, red when
- * full) and the button to buy more space. `compact` is the rail on tablets (icon and bar only).
+ * The aside's storage block. With a quota: "used X of Y" (studio.storage.used) over a thin bar
+ * (amber near the limit, red when full). Without one (STORAGE_QUOTA_ENFORCED=false, the API's
+ * quotaBytes null; ADR 0010): only "used X", no bar and no limit. The button to buy more space
+ * shows only while photographers can pay online (BILLING_MODE=gateway). `compact` is the rail on
+ * tablets (icon and bar only).
  */
 export function StorageMeter({ compact = false }: { compact?: boolean }) {
   const t = useTranslations('studio.storage');
+  const { config } = useStudio();
   const usage = useDriveUsage();
   const data = usage.data;
   if (data === undefined) return null;
   const used = data.usedBytes + data.reservedBytes;
-  const level = storageLevel(used, data.quotaBytes);
-  const percent = data.quotaBytes > 0 ? (used / data.quotaBytes) * 100 : 100;
+  const quota = data.quotaBytes;
+  const canBuy = config.billingMode === 'gateway';
+
+  if (quota === null) {
+    return (
+      <section aria-label={t('title')} className="space-y-1.5">
+        <div
+          className={cn('flex items-center gap-2 text-sm font-medium', compact && 'justify-center')}
+        >
+          <CloudIcon className="size-4 text-muted-foreground" aria-hidden />
+          <span className={cn(compact && 'sr-only')}>{t('title')}</span>
+        </div>
+        <p className={cn('text-xs text-muted-foreground', compact && 'sr-only')}>
+          {t('usedOnly', { used: formatBytes(used) })}
+        </p>
+      </section>
+    );
+  }
+
+  const level = storageLevel(used, quota);
+  const percent = quota > 0 ? (used / quota) * 100 : 100;
   const text =
-    data.quotaBytes > 0
-      ? t('used', { used: formatBytes(used), quota: formatBytes(data.quotaBytes) })
-      : t('noPlan');
+    quota > 0 ? t('used', { used: formatBytes(used), quota: formatBytes(quota) }) : t('noPlan');
 
   return (
     <section aria-label={t('title')} className="space-y-2.5">
@@ -57,7 +79,7 @@ export function StorageMeter({ compact = false }: { compact?: boolean }) {
         )}
       />
       <p className={cn('text-xs text-muted-foreground', compact && 'sr-only')}>{text}</p>
-      {level !== 'ok' && data.quotaBytes > 0 ? (
+      {level !== 'ok' && quota > 0 ? (
         <p
           className={cn(
             'text-xs font-medium',
@@ -68,7 +90,7 @@ export function StorageMeter({ compact = false }: { compact?: boolean }) {
           {level === 'full' ? t('full') : t('nearlyFull')}
         </p>
       ) : null}
-      {compact ? (
+      {!canBuy ? null : compact ? (
         <Link
           href={BILLING_HREF}
           aria-label={t('add')}

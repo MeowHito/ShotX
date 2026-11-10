@@ -23,13 +23,15 @@ import { clientIp, ipHash, sha256Hex } from '../http/client';
 import { readCookies, setCookie } from '../http/cookies';
 import {
   API_CONFIG,
+  CLOCK,
+  type Clock,
   DATABASE,
   KEY_VALUE_STORE,
   type KeyValueStore,
   TOKEN_VERIFIER,
   type TokenVerifier,
 } from '../tokens';
-import { bearerToken, provisionUser, userById } from './users';
+import { assertUserSessionLive, bearerToken, provisionUser, userById } from './users';
 
 /** Who is calling a public route, resolved by PublicGuard (see share/viewer in @shotx/shared). */
 export interface PublicContext {
@@ -90,6 +92,7 @@ export class PublicGuard implements CanActivate {
     @Inject(TOKEN_VERIFIER) private readonly verifier: TokenVerifier,
     @Inject(DATABASE) private readonly db: Db,
     @Inject(KEY_VALUE_STORE) private readonly store: KeyValueStore,
+    @Inject(CLOCK) private readonly clock: Clock,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -129,6 +132,13 @@ export class PublicGuard implements CanActivate {
       const identity = await this.verifier.verify(token);
       if (identity.pool !== 'users') throw unauthenticated('This route needs a users-pool token');
       const user = await provisionUser(this.db, identity);
+      // ADR 0010, as in the user guards: a disabled account or an ended session is signed out,
+      // and a restricted session (PASSWORD_CHANGE_CLAIM) must change its password first.
+      if (user.status !== 'active') throw unauthenticated('Session ended');
+      await assertUserSessionLive(this.db, identity, user.id, this.clock.now());
+      if (identity.passwordChange === true) {
+        throw new ApiError('PASSWORD_CHANGE_REQUIRED', 'Change your temporary password first');
+      }
       return { kind: 'user', viewerId: user.id };
     }
     const session = cookies.get(VIEWER_SESSION_COOKIE);
@@ -137,7 +147,7 @@ export class PublicGuard implements CanActivate {
     const userId = await this.store.get(viewerSessionKey(sha256Hex(session)));
     if (userId === null) throw unauthenticated('Viewer session expired');
     const user = await userById(this.db, userId);
-    if (user === null) throw unauthenticated('Viewer session expired');
+    if (user?.status !== 'active') throw unauthenticated('Viewer session expired');
     return { kind: 'user', viewerId: user.id };
   }
 }

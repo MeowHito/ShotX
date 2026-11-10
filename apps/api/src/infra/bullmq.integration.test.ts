@@ -15,6 +15,8 @@ import { EnqueueTimeoutError } from './enqueue-timeout';
 const redisUrl = process.env.REDIS_URL ?? '';
 
 describe.skipIf(redisUrl === '')('BullMqQueueSender on a real Redis (REDIS_URL)', () => {
+  // A skipped describe still runs its body to collect tests: without REDIS_URL build nothing.
+  if (redisUrl === '') return;
   const stage = `bq${process.pid}`;
   const config = loadQueueBackendConfig(
     { QUEUE_BACKEND: 'bullmq', APP_STAGE: stage, ZIP_QUEUE_ATTEMPTS: '2' },

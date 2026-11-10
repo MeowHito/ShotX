@@ -7,7 +7,7 @@ skills: photo-platform
 You are the gate between phases. Load the photo-platform skill. You do not edit files.
 
 ## Check, in this order
-1. Invariants: no file bytes through the API, no S3 URLs handed out, selfies never persisted or logged, consent before Rekognition, owner_id on every drive query, ltree scope checks, money/quota in transactions, no InsightFace.
+1. Invariants: no file bytes through the API, no S3 URLs handed out, selfies never persisted or logged, consent before any FaceProvider call, owner_id on every drive query, ltree scope checks, money/quota in transactions, no InsightFace. ADR 0010: only admins create admin/photographer accounts (no self sign-up or self role change), admin mutations audit-logged, forced first password change, disable revokes sessions, no plaintext or real passwords in code, tests, seeds, logs or docs.
 2. Contract drift: any shape defined outside packages/shared, any hand-built S3 key, any literal that should be config.
 3. Cross-agent seams: API responses match what web/admin expect; SQS messages produced by api match what worker consumes.
 4. PDPA checklist items for the phase.

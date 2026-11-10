@@ -87,9 +87,10 @@ export class Services extends Construct {
   /**
    * The selected gateway's secrets (api and worker), one JSON key per
    * PAYMENT_GATEWAY_SECRET_ENV[billing.paymentGateway] name. Generated for `fake`; created by the
-   * operator (billing.gatewaySecretName) for a real gateway.
+   * operator (billing.gatewaySecretName) for a real gateway. Undefined with billing.mode
+   * `offline` (ADR 0010): no gateway, so no secret and no PAYMENT_* variable anywhere.
    */
-  readonly paymentGatewaySecret: secretsmanager.ISecret;
+  readonly paymentGatewaySecret: secretsmanager.ISecret | undefined;
   readonly logGroups: Record<ServiceName, logs.LogGroup>;
 
   constructor(scope: Construct, id: string, props: ServicesProps) {
@@ -213,33 +214,43 @@ export class Services extends Construct {
       },
     });
     // Payments and email (api and worker: the worker charges auto-renewals and sends reminders).
-    const gateway = config.billing.paymentGateway;
+    // BILLING_MODE goes to web too (it hides plans and checkout when offline). The gateway, its
+    // secret and PAYMENT_* are wired only with billing.mode `gateway` (ADR 0010).
+    const billingMode = config.billing.mode;
+    const gateway = billingMode === 'gateway' ? config.billing.paymentGateway : undefined;
     this.paymentGatewaySecret =
-      gateway === 'fake'
-        ? new secretsmanager.Secret(this, 'PaymentGatewaySecret', {
-            secretName: `${prefix}/payment-gateway-fake`,
-            description: 'PAYMENT_FAKE_WEBHOOK_SECRET: HMAC key of fake gateway webhooks',
-            generateSecretString: {
-              secretStringTemplate: '{}',
-              generateStringKey: PAYMENT_GATEWAY_SECRET_ENV.fake[0],
-              passwordLength: config.billing.fakeWebhookSecretLength,
-              excludePunctuation: true,
-              includeSpace: false,
-            },
-          })
-        : secretsmanager.Secret.fromSecretNameV2(
-            this,
-            'PaymentGatewaySecret',
-            config.billing.gatewaySecretName,
+      gateway === undefined
+        ? undefined
+        : gateway === 'fake'
+          ? new secretsmanager.Secret(this, 'PaymentGatewaySecret', {
+              secretName: `${prefix}/payment-gateway-fake`,
+              description: 'PAYMENT_FAKE_WEBHOOK_SECRET: HMAC key of fake gateway webhooks',
+              generateSecretString: {
+                secretStringTemplate: '{}',
+                generateStringKey: PAYMENT_GATEWAY_SECRET_ENV.fake[0],
+                passwordLength: config.billing.fakeWebhookSecretLength,
+                excludePunctuation: true,
+                includeSpace: false,
+              },
+            })
+          : secretsmanager.Secret.fromSecretNameV2(
+              this,
+              'PaymentGatewaySecret',
+              config.billing.gatewaySecretName,
+            );
+    const gatewaySecret = this.paymentGatewaySecret;
+    const paymentSecrets: Record<string, ecs.Secret> =
+      gateway === undefined || gatewaySecret === undefined
+        ? {}
+        : Object.fromEntries(
+            PAYMENT_GATEWAY_SECRET_ENV[gateway].map((name) => [
+              name,
+              ecs.Secret.fromSecretsManager(gatewaySecret, name),
+            ]),
           );
-    const paymentSecrets: Record<string, ecs.Secret> = Object.fromEntries(
-      PAYMENT_GATEWAY_SECRET_ENV[gateway].map((name) => [
-        name,
-        ecs.Secret.fromSecretsManager(this.paymentGatewaySecret, name),
-      ]),
-    );
     const billing = {
-      PAYMENT_GATEWAY: gateway,
+      BILLING_MODE: billingMode,
+      ...(gateway === undefined ? {} : { PAYMENT_GATEWAY: gateway }),
       EMAIL_PROVIDER: config.email.provider,
       EMAIL_FROM_ADDRESS: config.email.fromAddress,
       EMAIL_FROM_NAME: config.email.fromName,
@@ -279,6 +290,7 @@ export class Services extends Construct {
         MEDIA_BUCKET: bucket.bucketName,
         ...extra.common,
         ...extra.web,
+        BILLING_MODE: billingMode,
       },
       admin: {
         ...base,

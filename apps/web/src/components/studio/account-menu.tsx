@@ -9,8 +9,10 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@shotx/ui';
-import { KeyboardIcon, LogOutIcon } from 'lucide-react';
+import { KeyboardIcon, LogOutIcon, SettingsIcon } from 'lucide-react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
+import { SETTINGS_HREF } from '@/components/drive/paths';
 import { AUTH_PATHS } from '@/lib/auth/handlers';
 import type { ApiClient } from '@/lib/api/client';
 import { shortcutHint } from '@/lib/studio/shortcuts';
@@ -22,7 +24,7 @@ export interface StudioUser {
   email: string | null;
 }
 
-/** The account button (initial) with the name, email, shortcuts help and logout. */
+/** The account button (initial) with the name, email, account settings, shortcuts help and logout. */
 export function AccountMenu({
   user,
   publicApi,
@@ -64,6 +66,12 @@ export function AccountMenu({
             ) : null}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
+          <DropdownMenuItem asChild>
+            <Link href={SETTINGS_HREF}>
+              <SettingsIcon aria-hidden />
+              {t('settings')}
+            </Link>
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={studio.showShortcuts}>
             <KeyboardIcon aria-hidden />
             {t('shortcuts')}

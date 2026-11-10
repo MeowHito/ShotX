@@ -78,3 +78,27 @@ export function loadUploadConfig(env: Env): UploadConfig {
     initPresignedParts: e.UPLOAD_INIT_PRESIGNED_PARTS,
   };
 }
+
+// --- Storage quota switch (ADR 0010) --------------------------------------------------------------
+
+const storageQuotaEnvSchema = z.object({
+  /**
+   * Whether uploads (and copies) are checked against the plan quota. Default false (ADR 0010: no
+   * storage limit for now). When false, POST /uploads/init and POST /drive/files/:id/copy never
+   * answer QUOTA_EXCEEDED, and GET /drive/usage reports `quotaBytes` and `availableBytes` as null.
+   * `storage_usage` is still maintained exactly either way (reservation at init, release on abort,
+   * the worker's commit, nightly reconciliation), so a limit can be switched on later and admins
+   * see who uses how much. Per-file size limits and the MIME allowlist always apply.
+   * `true`/`false` (also 1/0, yes/no, on/off).
+   */
+  STORAGE_QUOTA_ENFORCED: z.stringbool().default(false),
+});
+
+export interface StorageQuotaConfig {
+  enforced: boolean;
+}
+
+/** Reads STORAGE_QUOTA_ENFORCED (api and worker; default false). */
+export function loadStorageQuotaConfig(env: Env): StorageQuotaConfig {
+  return { enforced: parseEnv(storageQuotaEnvSchema, env, 'storage quota').STORAGE_QUOTA_ENFORCED };
+}

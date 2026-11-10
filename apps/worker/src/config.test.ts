@@ -35,15 +35,26 @@ const env = {
   FACES_QUEUE_VISIBILITY_TIMEOUT_SECONDS: '900',
   ZIP_QUEUE_VISIBILITY_TIMEOUT_SECONDS: '300',
   JOBS_QUEUE_VISIBILITY_TIMEOUT_SECONDS: '900',
-  // Phase 4: plain env plus the gateway's ECS secrets (PAYMENT_GATEWAY_SECRET_ENV).
-  PAYMENT_GATEWAY: 'omise',
-  PAYMENT_OMISE_PUBLIC_KEY: 'pkey_test_0123456789abcdef',
-  PAYMENT_OMISE_SECRET_KEY: 'skey_test_0123456789abcdef',
-  PAYMENT_OMISE_WEBHOOK_SECRET: 'whsec_test_0123456789abcdef',
+  // ADR 0010: no BILLING_MODE (offline) and no PAYMENT_* setting at all.
   EMAIL_PROVIDER: 'ses',
   EMAIL_FROM_ADDRESS: 'no-reply@shotx.example',
   EMAIL_FROM_NAME: 'ShotX',
 };
+
+/** Online billing (Phase 4): BILLING_MODE=gateway plus the gateway's secrets. */
+const gatewayEnv = {
+  ...env,
+  BILLING_MODE: 'gateway',
+  PAYMENT_GATEWAY: 'omise',
+  PAYMENT_OMISE_PUBLIC_KEY: 'pkey_test_0123456789abcdef',
+  PAYMENT_OMISE_SECRET_KEY: 'skey_test_0123456789abcdef',
+  PAYMENT_OMISE_WEBHOOK_SECRET: 'whsec_test_0123456789abcdef',
+};
+
+/** The env without the given keys. */
+function omit(source: Record<string, string | undefined>, ...keys: string[]) {
+  return Object.fromEntries(Object.entries(source).filter(([key]) => !keys.includes(key)));
+}
 
 describe('worker config', () => {
   it('accepts what infra sets on the worker task', () => {
@@ -81,7 +92,9 @@ describe('worker config', () => {
       provider: 'ses',
       from: { address: 'no-reply@shotx.example', name: 'ShotX' },
     });
-    expect(config.paymentGateway.gateway).toBe('omise');
+    expect(config.billingMode).toBe('offline');
+    expect(config.paymentGateway).toBeNull();
+    expect(loadWorkerConfig(gatewayEnv).paymentGateway?.gateway).toBe('omise');
     expect(config.retention.subscription).toEqual({
       graceDays: 14,
       purgeAfterExpiryDays: 45,
@@ -101,7 +114,7 @@ describe('worker config', () => {
     expect(() => loadWorkerConfig({ ...env, ZIP_RESULT_TTL_SECONDS: '259200' })).toThrow();
     // Fakes are refused on the prod stage only (staging runs NODE_ENV=production with fakes);
     // secrets are required and never echoed.
-    const prod = { ...env, APP_STAGE: 'prod' };
+    const prod = { ...gatewayEnv, APP_STAGE: 'prod' };
     expect(() => loadWorkerConfig({ ...prod, EMAIL_PROVIDER: 'fake' })).toThrow(/fake/);
     expect(() => loadWorkerConfig({ ...prod, PAYMENT_GATEWAY: 'fake' })).toThrow(/fake/);
     expect(() => loadWorkerConfig({ ...env, EMAIL_FROM_ADDRESS: undefined })).toThrow(
@@ -109,7 +122,7 @@ describe('worker config', () => {
     );
     let message = '';
     try {
-      loadWorkerConfig({ ...env, PAYMENT_OMISE_SECRET_KEY: 'short-secret' });
+      loadWorkerConfig({ ...gatewayEnv, PAYMENT_OMISE_SECRET_KEY: 'short-secret' });
     } catch (error) {
       message = (error as Error).message;
     }
@@ -128,6 +141,83 @@ describe('worker config', () => {
     expect(() => loadWorkerConfig({ ...env, MEDIA_QUEUE_VISIBILITY_TIMEOUT_SECONDS: '2' })).toThrow(
       /heartbeats/,
     );
+  });
+});
+
+describe('worker config by BILLING_MODE (ADR 0010)', () => {
+  /** Production-style: NODE_ENV=production on APP_STAGE=prod. */
+  const prod = { ...env, APP_STAGE: 'prod' };
+  /** The VPS of ADR 0008: QUEUE_BACKEND=bullmq, no SQS URLs or visibility timeouts. */
+  const onBullMq = (source: Record<string, string | undefined>) => ({
+    ...omit(
+      source,
+      ...Object.keys(source).filter((k) => /_QUEUE_URL$|_VISIBILITY_TIMEOUT_SECONDS$/.test(k)),
+    ),
+    QUEUE_BACKEND: 'bullmq',
+  });
+  const prodVps = onBullMq(prod);
+
+  it('loads offline with no PAYMENT_* variable, also on APP_STAGE=prod with NODE_ENV=production', () => {
+    for (const source of [env, prod, prodVps, { ...prod, BILLING_MODE: 'offline' }]) {
+      expect(Object.keys(source).filter((k) => k.startsWith('PAYMENT_'))).toEqual([]);
+      const config = loadWorkerConfig(source);
+      expect(config.app.nodeEnv).toBe('production');
+      expect(config.billingMode).toBe('offline');
+      expect(config.paymentGateway).toBeNull();
+    }
+    expect(loadWorkerConfig(prod).app.stage).toBe('prod');
+  });
+
+  it('reads no PAYMENT_* value offline: stray, fake or short ones are ignored', () => {
+    const stray = {
+      ...prod,
+      PAYMENT_GATEWAY: 'fake',
+      PAYMENT_WEBHOOK_TOLERANCE_SECONDS: 'x',
+      PAYMENT_OMISE_SECRET_KEY: 'short',
+    };
+    expect(loadWorkerConfig(stray).paymentGateway).toBeNull();
+  });
+
+  it('requires the gateway and its secrets with BILLING_MODE=gateway', () => {
+    expect(() => loadWorkerConfig({ ...prod, BILLING_MODE: 'gateway' })).toThrow(/fake/);
+    let message = '';
+    try {
+      loadWorkerConfig(omit({ ...gatewayEnv, APP_STAGE: 'prod' }, 'PAYMENT_OMISE_WEBHOOK_SECRET'));
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/PAYMENT_OMISE_WEBHOOK_SECRET/);
+    expect(message).not.toContain('skey_test_0123456789abcdef');
+    expect(loadWorkerConfig({ ...gatewayEnv, APP_STAGE: 'prod' }).billingMode).toBe('gateway');
+    expect(() => loadWorkerConfig({ ...env, BILLING_MODE: 'online' })).toThrow(/BILLING_MODE/);
+  });
+
+  it('schedules no billing job offline, even when its schedule is switched on', () => {
+    const offline = loadWorkerConfig({
+      ...prodVps,
+      SCHEDULE_SUBSCRIPTIONS_TRANSITION_DAILY_ENABLED: 'true',
+    }).queue;
+    if (offline.backend !== 'bullmq') throw new Error('expected bullmq');
+    expect(offline.schedules.jobs['subscriptions.transition.daily'].enabled).toBe(false);
+    for (const type of [
+      'stats.rollup.hourly',
+      'trash.purge.daily',
+      'faces.expire.daily',
+      'faces.reconcile.daily',
+      'quota.reconcile.nightly',
+      'media.sweep',
+      'faces.sweep',
+      'auth.sessions.purge.daily',
+    ] as const) {
+      expect(offline.schedules.jobs[type].enabled).toBe(true);
+    }
+
+    const gateway = loadWorkerConfig(onBullMq(gatewayEnv)).queue;
+    if (gateway.backend !== 'bullmq') throw new Error('expected bullmq');
+    expect(gateway.schedules.jobs['subscriptions.transition.daily']).toEqual({
+      cron: '0 1 * * *',
+      enabled: true,
+    });
   });
 });
 

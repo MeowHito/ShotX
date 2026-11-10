@@ -32,6 +32,8 @@ export const DEFAULT_STUDIO_CONFIG: ClientStudioConfig = {
   processingPollMs: 3000,
   zipPollIntervalMs: 2000,
   zipPollTimeoutMs: 15 * 60_000,
+  // BILLING_MODE's default (ADR 0010).
+  billingMode: 'offline',
 };
 
 interface StudioContextValue {

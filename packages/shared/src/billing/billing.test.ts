@@ -24,6 +24,8 @@ import {
   isEgressAnomalous,
   loadEmailConfig,
   loadPaymentGatewayConfig,
+  loadBillingModeConfig,
+  BILLING_OPERATING_MODES,
   normalizedPaymentEventSchema,
   PAYMENT_GATEWAY_SECRET_ENV,
   periodPriceSatang,
@@ -658,37 +660,82 @@ describe('fake gateway webhooks', () => {
 
 describe('billing config', () => {
   it('selects the gateway and requires only its secrets; refuses fake on the prod stage', () => {
-    expect(loadPaymentGatewayConfig({ PAYMENT_FAKE_WEBHOOK_SECRET: 'x'.repeat(16) })).toEqual({
+    expect(
+      loadPaymentGatewayConfig({
+        BILLING_MODE: 'gateway',
+        PAYMENT_FAKE_WEBHOOK_SECRET: 'x'.repeat(16),
+      }),
+    ).toEqual({
       gateway: 'fake',
       webhookToleranceSeconds: 300,
       secrets: { PAYMENT_FAKE_WEBHOOK_SECRET: 'x'.repeat(16) },
     });
-    expect(() => loadPaymentGatewayConfig({})).toThrow(/PAYMENT_FAKE_WEBHOOK_SECRET/);
-    const fake = { PAYMENT_FAKE_WEBHOOK_SECRET: 'x'.repeat(16) };
-    expect(() => loadPaymentGatewayConfig({ APP_STAGE: 'prod', ...fake })).toThrow(
-      /APP_STAGE=prod/,
+    expect(() => loadPaymentGatewayConfig({ BILLING_MODE: 'gateway' })).toThrow(
+      /PAYMENT_FAKE_WEBHOOK_SECRET/,
     );
+    const fake = { PAYMENT_FAKE_WEBHOOK_SECRET: 'x'.repeat(16) };
     expect(() =>
-      loadPaymentGatewayConfig({ APP_STAGE: 'prod', NODE_ENV: 'development', ...fake }),
+      loadPaymentGatewayConfig({ BILLING_MODE: 'gateway', APP_STAGE: 'prod', ...fake }),
+    ).toThrow(/APP_STAGE=prod/);
+    expect(() =>
+      loadPaymentGatewayConfig({
+        BILLING_MODE: 'gateway',
+        APP_STAGE: 'prod',
+        NODE_ENV: 'development',
+        ...fake,
+      }),
     ).toThrow(/APP_STAGE=prod/);
     // Every ECS service runs with NODE_ENV=production; non-prod stages may use the fake gateway.
     for (const stage of ['staging', 'dev', 'local', undefined]) {
       expect(
-        loadPaymentGatewayConfig({ APP_STAGE: stage, NODE_ENV: 'production', ...fake }).gateway,
+        loadPaymentGatewayConfig({
+          BILLING_MODE: 'gateway',
+          APP_STAGE: stage,
+          NODE_ENV: 'production',
+          ...fake,
+        })?.gateway,
       ).toBe('fake');
     }
     const omise = Object.fromEntries(
       PAYMENT_GATEWAY_SECRET_ENV.omise.map((k) => [k, 'y'.repeat(20)]),
     );
     expect(
-      loadPaymentGatewayConfig({ APP_STAGE: 'prod', PAYMENT_GATEWAY: 'omise', ...omise }).gateway,
+      loadPaymentGatewayConfig({
+        BILLING_MODE: 'gateway',
+        APP_STAGE: 'prod',
+        PAYMENT_GATEWAY: 'omise',
+        ...omise,
+      })?.gateway,
     ).toBe('omise');
     // Error messages never repeat secret values.
     try {
-      loadPaymentGatewayConfig({ PAYMENT_FAKE_WEBHOOK_SECRET: 'short-secret' });
+      loadPaymentGatewayConfig({
+        BILLING_MODE: 'gateway',
+        PAYMENT_FAKE_WEBHOOK_SECRET: 'short-secret',
+      });
     } catch (error) {
       expect(String(error)).not.toContain('short-secret');
     }
+  });
+
+  it('needs no gateway setting or secret with BILLING_MODE=offline (the default, ADR 0010)', () => {
+    expect(loadBillingModeConfig({})).toEqual({ mode: 'offline' });
+    expect(loadBillingModeConfig({ BILLING_MODE: 'gateway' })).toEqual({ mode: 'gateway' });
+    expect(() => loadBillingModeConfig({ BILLING_MODE: 'online' })).toThrow(/BILLING_MODE/);
+    expect(BILLING_OPERATING_MODES).toEqual(['offline', 'gateway']);
+    // No secrets, even on prod, even with a gateway named: nothing is read.
+    expect(loadPaymentGatewayConfig({})).toBeNull();
+    expect(loadPaymentGatewayConfig({ APP_STAGE: 'prod' })).toBeNull();
+    expect(
+      loadPaymentGatewayConfig({
+        BILLING_MODE: 'offline',
+        PAYMENT_GATEWAY: 'omise',
+        APP_STAGE: 'prod',
+      }),
+    ).toBeNull();
+    expect(() =>
+      loadPaymentGatewayConfig({ BILLING_MODE: 'gateway', PAYMENT_GATEWAY: 'omise' }),
+    ).toThrow(/PAYMENT_OMISE_WEBHOOK_SECRET/);
   });
 
   it('reads the email sender and refuses the fake provider on the prod stage', () => {

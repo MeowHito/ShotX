@@ -21,7 +21,7 @@ import {
 import { and, asc, desc, eq, gte, isNull, lt, lte, type SQL, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import { hashPassword } from '../auth/password';
-import type { ApiConfig } from '../config';
+import { type ApiConfig, billingOnline } from '../config';
 import { type Db, isUniqueViolation, type Queryable } from '../db/db';
 import { currentSubscription } from '../drive/account';
 import { liveFolder } from '../drive/folders';
@@ -147,11 +147,14 @@ export class SharesService {
         ? null
         : await hashPassword(body.password, this.config.password.argon2id);
     return this.db.transaction(async (tx) => {
-      const subscription = await currentSubscription(tx, ownerId);
-      if (!subscriptionAllowsSharing(subscription?.status ?? null)) {
-        throw new ApiError('SUBSCRIPTION_INACTIVE', 'Sharing needs an active subscription', {
-          status: subscription?.status ?? null,
-        });
+      // ADR 0010: only with BILLING_MODE=gateway does sharing need a subscription.
+      if (billingOnline(this.config)) {
+        const subscription = await currentSubscription(tx, ownerId);
+        if (!subscriptionAllowsSharing(subscription?.status ?? null)) {
+          throw new ApiError('SUBSCRIPTION_INACTIVE', 'Sharing needs an active subscription', {
+            status: subscription?.status ?? null,
+          });
+        }
       }
       let target: { targetFileId: string | null; targetFolderId: string | null };
       if (body.target.type === 'file') {

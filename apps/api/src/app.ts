@@ -15,16 +15,22 @@ import { ExpressAdapter } from '@nestjs/platform-express';
 import express from 'express';
 import type { FaceProvider } from '@shotx/face';
 import type { EmailProvider, PaymentGatewayAdapter } from '@shotx/shared';
+import { AdminController } from './admin/admin.controller';
+import { AdminUsersService } from './admin/admin-users.service';
+import { CashPaymentsService } from './admin/cash-payments.service';
 import { AdminGuard } from './auth/admin.guard';
 import { AdminSignIn } from './auth/admin-sign-in';
 import { AuthController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
-import { BffGuard } from './auth/bff.guard';
+import { BffGuard, BffKeyGuard } from './auth/bff.guard';
 import type { OidcDeps } from './auth/oidc';
+import { PhotographerAccountController } from './auth/photographer-account.controller';
 import { PhotographerGuard, UserGuard } from './auth/photographer.guard';
+import { PhotographerSignIn } from './auth/photographer-sign-in';
 import { createShotxAuth, SHOTX_AUTH } from './auth/shotx-auth';
 import { CAPTCHA_VERIFIER, type CaptchaVerifier, TurnstileVerifier } from './public/captcha';
 import { OriginGuard, PublicGuard } from './auth/public.guard';
+import { BillingEnabledGuard } from './billing/billing-enabled.guard';
 import { BillingController } from './billing/billing.controller';
 import { BillingService } from './billing/billing.service';
 import { createEmailProvider } from './billing/email';
@@ -152,6 +158,8 @@ export class AppModule {
         PublicShareController,
         BillingController,
         AuthController,
+        PhotographerAccountController,
+        AdminController,
       ],
       providers: [
         { provide: API_CONFIG, useValue: deps.config },
@@ -171,8 +179,12 @@ export class AppModule {
         },
         {
           provide: PAYMENT_GATEWAY,
+          // BILLING_MODE=offline (ADR 0010): no gateway is built, whatever the caller passes.
           useValue:
-            deps.paymentGateway ?? createPaymentGateway(deps.config.paymentGateway, deps.clock),
+            deps.config.paymentGateway === null
+              ? null
+              : (deps.paymentGateway ??
+                createPaymentGateway(deps.config.paymentGateway, deps.clock)),
         },
         { provide: EMAIL_PROVIDER, useValue: deps.email ?? createEmailProvider(deps.config.email) },
         { provide: SHOTX_AUTH, useValue: createShotxAuth(deps.config, deps.clock, deps.oidc) },
@@ -200,12 +212,17 @@ export class AppModule {
         SharePageService,
         FaceService,
         DownloadsService,
+        BillingEnabledGuard,
         BillingService,
         WebhookService,
         BffGuard,
+        BffKeyGuard,
         AdminGuard,
         AuthService,
         AdminSignIn,
+        PhotographerSignIn,
+        AdminUsersService,
+        CashPaymentsService,
       ],
     };
   }

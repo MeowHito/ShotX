@@ -1,6 +1,7 @@
 import {
   ERROR_CODES,
   ErrorCode,
+  PASSWORD_POLICY_REASONS,
   PLAN_CHANGE_INVALID_REASONS,
   REJECTED_FILE_TYPE_HINTS,
   SHARE_UNAVAILABLE_REASONS,
@@ -15,6 +16,7 @@ import {
   type ErrorMessage,
   messageForCode,
   messageForNotice,
+  messageForPasswordPolicy,
 } from './messages';
 
 const t = createTranslator({ locale: 'th', messages: th, namespace: 'errors' });
@@ -149,6 +151,50 @@ describe('error message map', () => {
         }),
       ),
     ).toContain('หมดเวลา 12:15');
+  });
+
+  it('gives the account codes (ADR 0010) Thai messages', () => {
+    expect(render(messageForCode(ErrorCode.PASSWORD_CHANGE_REQUIRED, undefined))).toContain(
+      'ตั้งรหัสผ่านใหม่',
+    );
+    expect(render(messageForCode(ErrorCode.ACCOUNT_DISABLED, undefined))).toBe(
+      'บัญชีนี้ถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบ',
+    );
+    expect(render(messageForCode(ErrorCode.INVALID_CREDENTIALS, undefined))).toBe(
+      'อีเมลหรือรหัสผ่านไม่ถูกต้อง',
+    );
+    for (const code of [
+      ErrorCode.EMAIL_TAKEN,
+      ErrorCode.LAST_ADMIN,
+      ErrorCode.CANNOT_MODIFY_SELF,
+      ErrorCode.PASSWORD_TOO_WEAK,
+    ]) {
+      expect(render(messageForCode(code, undefined)), code).toMatch(/[฀-๿]/);
+    }
+  });
+
+  it('says why a new password is too weak, with the minimum length', () => {
+    for (const reason of PASSWORD_POLICY_REASONS) {
+      const m = messageForCode(ErrorCode.PASSWORD_TOO_WEAK, { reason, minLength: 12 });
+      expect(m).toEqual(messageForPasswordPolicy(reason, 12));
+      expect(m.key).toBe(`passwordPolicy.${reason}`);
+      expect(render(m), reason).toMatch(/[฀-๿]/);
+    }
+    expect(
+      render(messageForCode(ErrorCode.PASSWORD_TOO_WEAK, { reason: 'too_short', minLength: 12 })),
+    ).toBe('รหัสผ่านใหม่ต้องมีอย่างน้อย 12 ตัวอักษร');
+    expect(
+      render(
+        messageForCode(ErrorCode.PASSWORD_TOO_WEAK, { reason: 'same_as_current', minLength: 10 }),
+      ),
+    ).toBe('รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านปัจจุบัน');
+    // A wrong current password is PASSWORD_INCORRECT; a locked account is RATE_LIMITED.
+    expect(render(messageForCode(ErrorCode.PASSWORD_INCORRECT, undefined))).toBe(
+      'รหัสผ่านไม่ถูกต้อง',
+    );
+    expect(
+      render(messageForCode(ErrorCode.RATE_LIMITED, { retryAfterSeconds: 900, captcha: null })),
+    ).toBe('ส่งคำขอบ่อยเกินไป กรุณารออีก 15 นาทีแล้วลองใหม่');
   });
 
   it('maps the DOWNGRADE_EXCEEDS_QUOTA notice', () => {

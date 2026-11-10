@@ -13,14 +13,21 @@ export default async function StudioLayout({ children }: { children: ReactNode }
   const viewer = await viewerState();
   if (!viewer.signedIn) redirect(`${AUTH_PATHS.loginPage}?next=/studio`);
   const user = viewer.user === null ? null : { name: viewer.user.name, email: viewer.user.email };
+  const config = clientStudioConfig();
 
   return (
-    // GET /me first: viewers who aren't photographers yet get the onboarding screen.
+    // GET /me first: a temporary password goes to the password change, and accounts that aren't
+    // photographers' are told to ask the admin (ADR 0010).
     <StudioGate>
       <UploadProvider config={clientUploadConfig()}>
         {/* useSearchParams (the search field) needs a Suspense boundary. */}
         <Suspense>
-          <StudioShell user={user} banner={<SubscriptionBanner />} config={clientStudioConfig()}>
+          <StudioShell
+            user={user}
+            // Subscriptions only exist with online billing (BILLING_MODE=gateway).
+            banner={config.billingMode === 'gateway' ? <SubscriptionBanner /> : undefined}
+            config={config}
+          >
             {children}
           </StudioShell>
         </Suspense>

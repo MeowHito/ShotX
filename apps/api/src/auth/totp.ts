@@ -170,3 +170,8 @@ export function otpauthUri(input: {
   });
   return `otpauth://totp/${label}?${query.toString().replace(/\+/g, '%20')}`;
 }
+
+/** The issuer authenticator apps show for admin TOTP: `ShotX Admin` on prod, else with the stage. */
+export function adminTotpIssuer(stage: string): string {
+  return stage === 'prod' ? 'ShotX Admin' : `ShotX Admin (${stage})`;
+}

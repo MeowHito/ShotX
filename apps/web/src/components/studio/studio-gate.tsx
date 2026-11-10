@@ -1,22 +1,38 @@
 'use client';
 
-import { Alert, Button, Input, Label } from '@shotx/ui';
-import { CheckIcon } from 'lucide-react';
+import { Alert, Button } from '@shotx/ui';
 import { useTranslations } from 'next-intl';
-import { type FormEvent, type ReactNode, useId, useState } from 'react';
+import { type ReactNode, useEffect } from 'react';
+import { goToPasswordChange } from '@/components/providers';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
-import { useBecomePhotographer, useMe } from '@/lib/studio/queries';
+import { useMe } from '@/lib/studio/queries';
+import { LogoutButton } from './logout-button';
 
 /**
- * Wraps the studio. After sign-in it asks `GET /me`; a user who isn't a photographer yet sees the
- * onboarding screen (POST /me/photographer starts the trial) instead of the drive, whose routes
- * would answer FORBIDDEN.
+ * Wraps the studio. After sign-in it asks `GET /me` (the one studio route a restricted session may
+ * call) and only then renders the drive:
+ * - `passwordChangeRequired` (a temporary password, ADR 0010): straight to the change-password
+ *   page, before any drive route answers PASSWORD_CHANGE_REQUIRED;
+ * - not a photographer (a LINE/Google viewer account): accounts come from admins only, so the
+ *   page says to ask the admin for one. There is no self-serve upgrade any more.
  */
-export function StudioGate({ children }: { children: ReactNode }) {
+export function StudioGate({
+  children,
+  onPasswordChangeRequired = goToPasswordChange,
+}: {
+  children: ReactNode;
+  /** Tests observe the redirect. */
+  onPasswordChangeRequired?: () => void;
+}) {
   const t = useTranslations();
   const describe = useErrorMessage();
   const me = useMe();
-  if (me.isPending) {
+  const mustChange = me.data?.passwordChangeRequired === true;
+  useEffect(() => {
+    if (mustChange) onPasswordChangeRequired();
+  }, [mustChange, onPasswordChangeRequired]);
+
+  if (me.isPending || mustChange) {
     return (
       <p className="py-16 text-center text-muted-foreground" role="status">
         {t('common.loading')}
@@ -37,64 +53,22 @@ export function StudioGate({ children }: { children: ReactNode }) {
       </div>
     );
   }
-  if (me.data.role !== 'photographer') return <Onboarding defaultName={me.data.name ?? ''} />;
+  if (me.data.role !== 'photographer') return <NotPhotographer />;
   return <>{children}</>;
 }
 
-const POINTS = ['upload', 'share', 'stats'] as const;
-
-export function Onboarding({ defaultName }: { defaultName: string }) {
-  const to = useTranslations('onboarding');
-  const describe = useErrorMessage();
-  const inputId = useId();
-  const become = useBecomePhotographer();
-  const [name, setName] = useState(defaultName);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setError(null);
-    try {
-      // The cached `me` becomes a photographer and StudioGate renders the drive.
-      await become.mutateAsync(name.trim() || undefined);
-    } catch (err) {
-      setError(describe(err));
-    }
-  }
-
+/** A signed-in account that isn't a photographer's: ask the admin (ADR 0010, no self sign-up). */
+export function NotPhotographer() {
+  const tn = useTranslations('notPhotographer');
   return (
-    <form
-      onSubmit={(e) => void submit(e)}
-      className="mx-auto flex max-w-md flex-col gap-5 px-4 py-12"
-      noValidate
-    >
+    <div className="mx-auto flex max-w-md flex-col gap-5 px-4 py-12">
       <div className="space-y-2">
-        <h1 className="text-2xl font-bold">{to('title')}</h1>
-        <p className="text-muted-foreground">{to('body')}</p>
+        <h1 className="text-2xl font-bold">{tn('title')}</h1>
+        <p className="text-muted-foreground">{tn('body')}</p>
       </div>
-      <ul className="space-y-2">
-        {POINTS.map((point) => (
-          <li key={point} className="flex items-start gap-2 text-sm">
-            <CheckIcon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-            {to(`points.${point}`)}
-          </li>
-        ))}
-      </ul>
-      <div className="grid gap-2">
-        <Label htmlFor={inputId}>{to('nameLabel')}</Label>
-        <Input
-          id={inputId}
-          value={name}
-          maxLength={200}
-          placeholder={to('namePlaceholder')}
-          onChange={(e) => setName(e.target.value)}
-          autoComplete="name"
-        />
+      <div>
+        <LogoutButton />
       </div>
-      {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
-      <Button type="submit" size="lg" disabled={become.isPending}>
-        {become.isPending ? to('starting') : to('start')}
-      </Button>
-    </form>
+    </div>
   );
 }

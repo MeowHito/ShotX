@@ -1,4 +1,5 @@
 import {
+  allowedDuringPasswordChange,
   checkUploadDeclaration,
   DRIVE_ROUTES,
   type DriveFile,
@@ -58,7 +59,8 @@ interface Upload {
 
 export interface FakeApiOptions {
   pageSize?: number;
-  quotaBytes?: number;
+  /** The plan quota; null while STORAGE_QUOTA_ENFORCED=false (ADR 0010: no storage limit). */
+  quotaBytes?: number | null;
   usedBytes?: number;
   uploadsBlockedBy?: DriveUsageResponse['uploadsBlockedBy'];
   partBytes?: number;
@@ -69,6 +71,11 @@ export interface FakeApiOptions {
   role?: MeResponse['role'];
   /** FACE_SEARCH_ENABLED as the API reports it (me.features.faceSearch). */
   faceSearch?: boolean;
+  /**
+   * A restricted session (ADR 0010): me.passwordChangeRequired, and every photographer or user
+   * route but PASSWORD_CHANGE_ALLOWED_ROUTES answers PASSWORD_CHANGE_REQUIRED.
+   */
+  passwordChangeRequired?: boolean;
   /** ZIP_MAX_FILES (share meta `zip.maxFiles`). */
   zipMaxFiles?: number;
   /** ZIP_MAX_BYTES (each fake file is 1000 bytes). */
@@ -143,6 +150,7 @@ export class FakeApi {
       initPresignedParts: 2,
       role: 'photographer',
       faceSearch: false,
+      passwordChangeRequired: false,
       zipMaxFiles: 500,
       zipMaxBytes: 2 * 1024 ** 3,
       maxSelfies: 3,
@@ -161,6 +169,7 @@ export class FakeApi {
       createdAt: NOW,
       subscription: this.options.role === 'photographer' ? TRIAL : null,
       features: { faceSearch: this.options.faceSearch },
+      passwordChangeRequired: this.options.passwordChangeRequired,
     };
   }
 
@@ -256,6 +265,13 @@ export class FakeApi {
       return json(404, { code: 'NOT_FOUND', message: `wrong prefix ${prefix}` });
     }
     try {
+      if (
+        this.me.passwordChangeRequired &&
+        (route.auth === 'photographer' || route.auth === 'user') &&
+        !allowedDuringPasswordChange(route)
+      ) {
+        throw new Fail('PASSWORD_CHANGE_REQUIRED');
+      }
       const params = route.params ? parse(route.params, paramsOf(route, path), 'params') : {};
       const query = route.query
         ? parse(route.query, Object.fromEntries(url.searchParams), 'query')
@@ -764,11 +780,12 @@ export class FakeApi {
       }
       case DRIVE_ROUTES.usage: {
         const used = this.options.usedBytes;
+        const quota = this.options.quotaBytes;
         return {
           usedBytes: used,
           reservedBytes: this.reservedBytes,
-          quotaBytes: this.options.quotaBytes,
-          availableBytes: Math.max(0, this.options.quotaBytes - used - this.reservedBytes),
+          quotaBytes: quota,
+          availableBytes: quota === null ? null : Math.max(0, quota - used - this.reservedBytes),
           trashBytes: 0,
           subscription: {
             status: 'active',
@@ -805,10 +822,14 @@ export class FakeApi {
           { image: 100 * 1024 * 1024, video: 5 * 1024 ** 3 },
         );
         if (!decl.ok) throw new Fail(decl.code, decl.details);
-        const available = this.options.quotaBytes - this.options.usedBytes - this.reservedBytes;
-        if (b.size > available) {
+        const quota = this.options.quotaBytes;
+        const available =
+          quota === null
+            ? Number.POSITIVE_INFINITY
+            : quota - this.options.usedBytes - this.reservedBytes;
+        if (quota !== null && b.size > available) {
           throw new Fail('QUOTA_EXCEEDED', {
-            quotaBytes: this.options.quotaBytes,
+            quotaBytes: quota,
             usedBytes: this.options.usedBytes,
             reservedBytes: this.reservedBytes,
             requestedBytes: b.size,
@@ -928,11 +949,6 @@ const TRIAL: NonNullable<MeResponse['subscription']> = {
   periodEnd: '2026-11-08T05:00:00.000Z',
   cancelAtPeriodEnd: false,
 };
-
-/** The trial a new photographer gets (POST /me/photographer). */
-export function trialSubscription(): NonNullable<MeResponse['subscription']> {
-  return { ...TRIAL };
-}
 
 function paramsOf(route: RouteContract, path: string): Record<string, string> {
   const names = route.path.split('/');

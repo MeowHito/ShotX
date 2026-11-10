@@ -345,8 +345,15 @@ describe('me', () => {
         cancelAtPeriodEnd: false,
       },
       features: { faceSearch: false },
+      passwordChangeRequired: false,
     };
     expect(meResponseSchema.parse(me)).toEqual(me);
+    expect(
+      meResponseSchema.parse({ ...me, passwordChangeRequired: true }).passwordChangeRequired,
+    ).toBe(true);
+    expect(meResponseSchema.safeParse({ ...me, passwordChangeRequired: undefined }).success).toBe(
+      false,
+    );
     expect(meResponseSchema.safeParse({ ...me, role: 'admin' }).success).toBe(false);
     expect(becomePhotographerBodySchema.parse({})).toEqual({});
     expect(becomePhotographerBodySchema.parse({ name: '  สตูดิโอ ' })).toEqual({ name: 'สตูดิโอ' });

@@ -32,7 +32,7 @@ export function authTokenIssuer(stage: string, pool: AuthPool): string {
 /**
  * Authentication methods (`amr` claim). `pwd`, `otp` and `mfa` are RFC 8176 values; `fed`
  * (signed in at LINE or Google) and `dev` (development login, APP_STAGE=local) are ShotX's.
- * - users pool: `["fed"]` or `["dev"]`;
+ * - users pool: `["fed"]`, `["dev"]`, or `["pwd"]` (photographer email + password, ADR 0010);
  * - admins pool: `["pwd", "otp", "mfa"]` after password + TOTP.
  */
 export const AUTH_METHODS = ['fed', 'dev', 'pwd', 'otp', 'mfa'] as const;
@@ -51,11 +51,22 @@ export function hasRequiredAmr(pool: AuthPool, amr: readonly string[]): boolean 
 export const ACCESS_TOKEN_USE = 'access';
 
 /**
+ * Claim set to `true` on the access tokens of a photographer sign-in whose password is temporary
+ * (`user_password_credentials.must_change_password`, ADR 0010). Such a session may only call the
+ * routes in PASSWORD_CHANGE_ALLOWED_ROUTES (see api/routes); every other photographer or user
+ * route answers PASSWORD_CHANGE_REQUIRED. Users pool and `password:` subjects only; never on
+ * admins-pool tokens (admins change a temporary password inside the sign-in steps instead).
+ * Refresh re-reads `must_change_password`, so the claim can't outlive the change.
+ */
+export const PASSWORD_CHANGE_CLAIM = 'pwd_change';
+
+/**
  * Claims of a ShotX access token, without the per-pool checks (see accessTokenClaimsSchemaFor).
  * - `sub`: `users.auth_subject` (prefixed, see account/auth-subject);
  * - `sid`: `auth_sessions.family_id` of the session that issued it (logout, revocation);
  * - `idp`: the identity provider (the subject's prefix);
- * - `amr`: how the person signed in (AUTH_METHODS).
+ * - `amr`: how the person signed in (AUTH_METHODS);
+ * - `pwd_change`: see PASSWORD_CHANGE_CLAIM.
  * Email and name are not in access tokens: the token response and GET /me carry them.
  */
 export const accessTokenClaimsSchema = z.object({
@@ -69,6 +80,8 @@ export const accessTokenClaimsSchema = z.object({
   idp: z.enum(AUTH_SUBJECT_PROVIDERS),
   amr: z.array(z.enum(AUTH_METHODS)).min(1),
   token_use: z.literal(ACCESS_TOKEN_USE),
+  /** PASSWORD_CHANGE_CLAIM: present (true) only on restricted photographer sessions. */
+  [PASSWORD_CHANGE_CLAIM]: z.literal(true).optional(),
 });
 export type AccessTokenClaims = z.output<typeof accessTokenClaimsSchema>;
 
@@ -91,7 +104,14 @@ export function accessTokenClaimsSchemaFor(stage: string, pool: AuthPool) {
     .refine((c) => hasRequiredAmr(pool, c.amr), {
       error: 'missing required authentication methods',
       path: ['amr'],
-    });
+    })
+    .refine(
+      (c) => c[PASSWORD_CHANGE_CLAIM] !== true || (pool === 'users' && c.idp === 'password'),
+      {
+        error: 'only photographer password sessions can require a password change',
+        path: [PASSWORD_CHANGE_CLAIM],
+      },
+    );
 }
 
 /**

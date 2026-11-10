@@ -29,8 +29,13 @@ import {
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import { type ApiConfig, apiSendsMediaJobs } from '../config';
-import { type Db, isUniqueViolation, type Queryable, rows, type Tx } from '../db/db';
-import { currentSubscription, storageCounters } from '../drive/account';
+import { type Db, isUniqueViolation, type Queryable, type Tx } from '../db/db';
+import {
+  currentSubscription,
+  reserveQuotaBytes,
+  storageCounters,
+  uploadGate,
+} from '../drive/account';
 import { insertFolder, liveFolder, newId } from '../drive/folders';
 import { DriveFileMapper, toDriveFolder } from '../drive/media-urls';
 import { folderParentIs, withFreeName } from '../drive/names';
@@ -169,22 +174,30 @@ export class UploadService {
           }
         }
 
-        // FOR SHARE: a plan change (FOR UPDATE in the billing transactions) and this
-        // reservation serialise, so the quota read below is the one the reservation runs under.
-        const subscription = await currentSubscription(tx, ownerId, { lock: 'share' });
-        if (!subscriptionAllowsUploads(subscription?.status ?? null)) {
-          throw new ApiError('SUBSCRIPTION_INACTIVE', 'Uploads need an active subscription', {
-            status: subscription?.status ?? null,
-          });
+        // ADR 0010: the subscription gates uploads only with BILLING_MODE=gateway, and the
+        // quota only with STORAGE_QUOTA_ENFORCED; `quotaBytes` null reserves without a limit.
+        const gate = uploadGate(this.config);
+        let quotaBytes: number | null = null;
+        if (gate.subscription || gate.quota) {
+          // FOR SHARE: a plan change (FOR UPDATE in the billing transactions) and this
+          // reservation serialise, so the quota read below is the one the reservation runs under.
+          const subscription = await currentSubscription(tx, ownerId, { lock: 'share' });
+          if (gate.subscription && !subscriptionAllowsUploads(subscription?.status ?? null)) {
+            throw new ApiError('SUBSCRIPTION_INACTIVE', 'Uploads need an active subscription', {
+              status: subscription?.status ?? null,
+            });
+          }
+          if (gate.quota) {
+            quotaBytes = subscription?.quotaBytes ?? 0;
+            // Cheap pre-check so a full account doesn't open a multipart upload; the guarded
+            // statement below is what decides.
+            const precheck = reserveQuota(
+              { ...(await storageCounters(tx, ownerId)), quotaBytes },
+              body.size,
+            );
+            if (!precheck.ok) throw quotaExceeded(precheck.details);
+          }
         }
-        const quotaBytes = subscription?.quotaBytes ?? 0;
-        // Cheap pre-check so a full account doesn't open a multipart upload; the guarded
-        // statement below is what decides.
-        const precheck = reserveQuota(
-          { ...(await storageCounters(tx, ownerId)), quotaBytes },
-          body.size,
-        );
-        if (!precheck.ok) throw quotaExceeded(precheck.details);
 
         let parent: Folder | null = null;
         if (body.folderId !== null) {
@@ -210,16 +223,7 @@ export class UploadService {
         });
         opened = { key, uploadId };
 
-        const reserved = await rows<{ used_bytes: string }>(
-          tx,
-          sql`INSERT INTO ${storageUsage} (photographer_id, used_bytes, reserved_bytes)
-              SELECT ${ownerId}::uuid, 0, ${body.size}::bigint WHERE ${body.size}::bigint <= ${quotaBytes}::bigint
-              ON CONFLICT (photographer_id) DO UPDATE
-                SET reserved_bytes = ${storageUsage}.reserved_bytes + EXCLUDED.reserved_bytes
-                WHERE ${storageUsage}.used_bytes + ${storageUsage}.reserved_bytes + EXCLUDED.reserved_bytes <= ${quotaBytes}::bigint
-              RETURNING used_bytes::text`,
-        );
-        if (reserved.length === 0) {
+        if (!(await reserveQuotaBytes(tx, ownerId, body.size, quotaBytes)) && quotaBytes !== null) {
           const again = reserveQuota(
             { ...(await storageCounters(tx, ownerId)), quotaBytes },
             body.size,

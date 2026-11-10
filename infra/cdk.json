@@ -223,7 +223,9 @@
           },
           "web": {},
           "admin": {},
-          "api": {},
+          "api": {
+            "STORAGE_QUOTA_ENFORCED": "false"
+          },
           "worker": {}
         }
       },
@@ -320,6 +322,7 @@
         "policyVersion": "2026-10-25"
       },
       "billing": {
+        "mode": "offline",
         "paymentGateway": "omise",
         "gatewaySecretName": "shotx/prod/payment-gateway",
         "fakeWebhookSecretLength": 64

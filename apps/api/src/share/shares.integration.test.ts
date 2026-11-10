@@ -360,58 +360,37 @@ for (const backend of DATABASE_BACKENDS) {
         );
       });
 
-      it('makes a photographer with one 14-day trial, idempotently', async () => {
+      it('never makes a photographer: POST /me/photographer is FORBIDDEN (ADR 0010)', async () => {
         const token = await api.auth.token('users', 'becoming-photographer');
         // A viewer can't use photographer routes (and gets provisioned on the way).
         expect((await api.request('GET', '/api/drive/usage', { token })).body).toMatchObject({
           code: 'FORBIDDEN',
         });
-        const res = await api.request('POST', apiPath(ME_ROUTES.becomePhotographer), {
-          token,
-          body: { name: 'Studio A' },
-        });
-        expect(res.status).toBe(200);
-        const me = meResponseSchema.parse(res.body);
-        expect(me).toMatchObject({
-          role: 'photographer',
-          name: 'Studio A',
-          subscription: {
-            status: 'trial',
-            planCode: 'trial',
-            cancelAtPeriodEnd: false,
-            periodEnd: new Date(api.clock.now().getTime() + 14 * 86_400_000).toISOString(),
-          },
-        });
-        const twice = await api.request('POST', apiPath(ME_ROUTES.becomePhotographer), {
-          token,
-          body: {},
-        });
-        expect(meResponseSchema.parse(twice.body).subscription).toEqual(me.subscription);
-        const subs = await api.db
-          .select()
-          .from(subscriptions)
-          .where(eq(subscriptions.photographerId, me.id));
-        expect(subs).toHaveLength(1);
-        expect((await api.request('GET', '/api/drive/usage', { token })).status).toBe(200);
-        const usage = await api.usage(me.id);
-        expect(usage).toMatchObject({ usedBytes: 0, reservedBytes: 0 });
-        // Concurrent calls still make one trial.
-        const token2 = await api.auth.token('users', 'racing-photographer');
-        await Promise.all(
-          [1, 2, 3].map(() =>
-            api.request('POST', apiPath(ME_ROUTES.becomePhotographer), { token: token2, body: {} }),
-          ),
-        );
-        const [racer] = await api.db
+        for (const body of [{ name: 'Studio A' }, {}, { unknown: true }]) {
+          const res = await api.request('POST', apiPath(ME_ROUTES.becomePhotographer), {
+            token,
+            body,
+          });
+          expect(res.status).toBe(403);
+          expect(res.body).toMatchObject({ code: 'FORBIDDEN' });
+        }
+        const [viewer] = await api.db
           .select()
           .from(users)
-          .where(eq(users.authSubject, 'racing-photographer'));
+          .where(eq(users.authSubject, 'becoming-photographer'));
+        expect(viewer?.role).toBe('user');
         expect(
           await api.db
             .select()
             .from(subscriptions)
-            .where(and(eq(subscriptions.photographerId, racer?.id ?? ''))),
-        ).toHaveLength(1);
+            .where(and(eq(subscriptions.photographerId, viewer?.id ?? ''))),
+        ).toHaveLength(0);
+        expect((await api.request('GET', '/api/drive/usage', { token })).status).toBe(403);
+        // GET /me says the session is not restricted.
+        const me = meResponseSchema.parse(
+          (await api.request('GET', apiPath(ME_ROUTES.get), { token })).body,
+        );
+        expect(me).toMatchObject({ role: 'user', passwordChangeRequired: false });
       });
     });
   });

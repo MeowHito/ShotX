@@ -17,7 +17,12 @@ import { DriveBrowser } from './drive-browser';
 
 const WINDOWS = { platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
 const MAC = { platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' };
-const CONFIG = { processingPollMs: 40, zipPollIntervalMs: 5, zipPollTimeoutMs: 5000 };
+const CONFIG = {
+  processingPollMs: 40,
+  zipPollIntervalMs: 5,
+  zipPollTimeoutMs: 5000,
+  billingMode: 'offline',
+} as const;
 
 function Studio({
   fake,

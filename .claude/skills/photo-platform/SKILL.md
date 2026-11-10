@@ -1,11 +1,11 @@
 ---
 name: photo-platform
-description: Architecture, settled decisions and business rules for the photo-distribution platform — a Google Drive-like web app where photographers buy storage plans, upload and share photos and videos by link, and event attendees find their own photos by scanning their face (Amazon Rekognition), plus an admin analytics dashboard, built on AWS with Next.js, NestJS and PostgreSQL. Use this skill for ANY work on this project, including writing, reviewing or debugging code, DB schema and migrations, APIs, upload/folder/share/download features, face search, plans, quota and payments, admin metrics and charts, PDPA and consent, AWS infrastructure and cost questions, even when the request doesn't name the project (for example add a rename button, fix the upload bug, ทำหน้าสแกนหน้า, เพิ่มกราฟรายได้แอดมิน, ตั้งราคาแพ็กเกจ).
+description: Architecture, settled decisions and business rules for the photo-distribution platform — a Google Drive-like web app where photographers (accounts created by an admin after a cash payment) upload and share photos and videos by link, and event attendees find their own photos by scanning their face (self-hosted, free), plus an admin app for user management and analytics, built with Next.js, NestJS and PostgreSQL on a VPS with Cloudflare R2. Use this skill for ANY work on this project, including writing, reviewing or debugging code, DB schema and migrations, APIs, upload/folder/share/download features, face search, user accounts and roles, admin user management, cash payments, quota, admin metrics and charts, PDPA and consent, AWS infrastructure and cost questions, even when the request doesn't name the project (for example add a rename button, fix the upload bug, ทำหน้าสแกนหน้า, เพิ่มกราฟรายได้แอดมิน, สร้าง user ให้ตากล้อง).
 ---
 
 # Photo distribution platform
 
-Photographers buy a storage plan, upload photos and videos into a Drive-like folder tree, and share files or folders by link. Anyone with a link can scan their face (live camera or a photo from the device) to see and download the photos they appear in. Admins see revenue and per-photographer usage. The operator is a large company in Thailand: UI copy is Thai, code/comments/commits are English, money is THB.
+An admin creates each photographer's account after the photographer pays in cash; the photographer signs in with email and password, uploads photos and videos into their own Drive-like folder tree, and shares files or folders by link. Anyone with a link can scan their face (live camera or a photo from the device) to see and download the photos they appear in. Admins create and manage accounts (admin or photographer) and see per-photographer usage. The operator is a large company in Thailand: UI copy is Thai, code/comments/commits are English, money is THB.
 
 Three things decide whether this product succeeds. When a design choice trades against them, they win:
 
@@ -16,6 +16,7 @@ Three things decide whether this product succeeds. When a design choice trades a
 ## How to work on this project
 
 - Before writing code, find the section below that governs the feature and keep every invariant.
+- **Current conditions (ADR 0010, 2026-11-10) override older text below:** no online payment yet (cash to the owner, recorded by an admin), accounts created only by admins in the admin app (role `admin` or `photographer`), photographers sign in with email + password, no storage limit (usage still tracked), face scan stays self-hosted and free (ADR 0009). Infrastructure is the VPS + R2 + BullMQ of ADR 0008; read AWS names below (S3, SQS, CloudFront, Cognito, Rekognition) as their ADR 0008/0009 replacements.
 - The decisions here are settled. If a request conflicts with one, say so and propose the change explicitly as an ADR in `docs/adr/` instead of silently deviating.
 - When something is underspecified, pick the option most consistent with these rules and state the assumption in your summary or PR description.
 - All tunables (thresholds, limits, prices, retention, cost constants) live in config or the DB, never as literals in code.
@@ -26,9 +27,16 @@ Three things decide whether this product succeeds. When a design choice trades a
 
 | Role | Can do |
 |---|---|
-| `photographer` | Buy/renew a plan, full CRUD on own drive, create and revoke shares, see own stats |
+| `photographer` | Account created by an admin (after a cash payment); signs in with email + password; full CRUD on own drive (like Google Drive, one drive per user, no storage limit for now), create and revoke shares, see own stats, change own password |
 | `user` (viewer) | Open share links (anonymous, or LINE/Google login when the share requires it), scan face, download what the share allows |
-| `admin` | Read across all tenants, manage plans and prices, take down files/shares. MFA required; every action audit-logged |
+| `admin` | Create users and choose their role (`admin` or `photographer`), reset passwords, disable/enable accounts, record cash payments, read across all tenants, take down files/shares. Email + password + TOTP (MFA required); every action audit-logged |
+
+Accounts (ADR 0010):
+
+- No self sign-up and no self-serve upgrade to photographer. Only an admin creates `admin` and `photographer` accounts, in the admin app. The bootstrap admin `action.in.th@gmail.com` is created once with the operator CLI; its password is typed on stdin and never written to the repo, `.claude/`, docs, env files or logs.
+- An admin-set password (create or reset) is temporary: the first sign-in must change it (`PASSWORD_CHANGE_REQUIRED`).
+- Disabling an account revokes all its sessions and blocks sign-in; a disabled photographer's shares stop working; files are never deleted by disabling. An admin can't disable or demote themself, and the last active admin can't be disabled.
+- Role doesn't change between `admin` and `photographer` on an existing account (different auth pools); create a new account.
 
 Enforce ownership server-side in one place (NestJS guard plus service-level `owner_id` checks). Never trust an owner or photographer id sent by the client.
 
@@ -46,8 +54,8 @@ Enforce ownership server-side in one place (NestJS guard plus service-level `own
 | Database | PostgreSQL on RDS Multi-AZ with `ltree`; Redis (ElastiCache) for cache, rate limits, short-lived grants |
 | Media | S3 (private) + CloudFront flat-rate Business plan, OAC, signed URLs |
 | Face AI | Self-hosted behind a `FaceProvider` interface (ADR 0009): ONNX models (YuNet detection + a recogniser; SFace is the dev placeholder) in api/worker, embeddings in Postgres pgvector (HNSW). Amazon Rekognition stays selectable (`FACE_PROVIDER=rekognition`) until Phase 0 is done |
-| Auth | Amazon Cognito; Google and LINE Login as OIDC providers; MFA for admins |
-| Payments | Thai gateway with PromptPay QR, cards and signed webhooks (e.g. Omise/Opn, 2C2P, Stripe) |
+| Auth | Issued by the API (ADR 0008 §4). Photographers: email + password (argon2id) on accounts created by admins (ADR 0010). Admins: email + password + TOTP. Viewers: LINE/Google login when a share requires it |
+| Payments | **Offline for now (ADR 0010):** photographers pay cash; an admin records it and creates the account. The gateway code (PromptPay QR, cards, signed webhooks) stays switched off (`BILLING_MODE=offline`) until the bank sends its details |
 | Infra / ops | ECS Fargate, AWS CDK (TypeScript), GitHub Actions, CloudWatch, Sentry |
 | Region | `ap-southeast-1` (Singapore) for everything: Rekognition runs there and only reads S3 objects in its own region |
 
@@ -77,13 +85,18 @@ docs/adr/    architecture decision records
 - **Selfies are never persisted** — not in S3, the DB, logs or Sentry. Process in memory and discard. Exclude face-search request bodies from all logging and error reporting.
 - **No scan without consent.** A `consents` row for the current policy version must exist for the viewer or session before any call to the face provider. The policy version's texts must name `FACE_PROVIDER`'s processor (`CONSENT_POLICY_FACE_PROVIDER`).
 - **Tenant isolation.** Every drive query filters by `owner_id`; share access is checked with `ltree` path containment, never by trusting paths from the client.
-- **Money and quota change inside DB transactions.** Payment webhooks are verified and idempotent. Money is stored as integer satang.
+- **Money and quota change inside DB transactions.** Payment webhooks are verified and idempotent. Money is stored as integer satang. Cash payments recorded by admins are ledger rows written in a transaction with an `audit_log` row.
+- **Accounts come from admins only.** No route lets anyone create an `admin` or `photographer` account or raise their own role. Every admin user-management action writes `audit_log`.
 - **No InsightFace pretrained models** (buffalo_l, antelopev2, …). Their license is non-commercial research only. Face recognition goes through `FaceProvider`; a production model must have a commercial licence and be added to the model registry by ADR (ADR 0009). Face embeddings are biometric data: backups exclude `face_vectors`.
 
 ## Data model (PostgreSQL)
 
 ```
-users            id, email, name, role(photographer|admin|user), cognito_sub, created_at
+users            id, email, name, role(photographer|admin|user), auth_pool, auth_subject, created_at
+                 + status(active|disabled), created_by (ADR 0010; contracts names the columns)
+user credentials photographer password (argon2id), must_change_password, failed_attempts,
+                 locked_until (ADR 0010; admins keep admin_credentials with TOTP)
+cash payments    optional: photographer_id, amount_satang, paid_at, note, recorded_by (ADR 0010)
 plans            id, code, name, quota_bytes, price_month_satang, price_year_satang, is_active
 subscriptions    id, photographer_id, plan_id, status(trial|active|grace|expired|purged),
                  billing(prepaid|auto_renew), period_end, cancel_at_period_end
@@ -183,6 +196,8 @@ Build the evaluation harness before the product UI: one real event plus 20–30 
 
 ## Plans, quota and billing
 
+> **Not active (ADR 0010).** Payment is offline (cash to the owner, optionally recorded by an admin), there is no checkout, webhook or subscription lifecycle, and uploads are not limited by a quota (`STORAGE_QUOTA_ENFORCED=false`). Still do: maintain `storage_usage` exactly (reservation, release, nightly reconciliation) so limits can return and admins see usage; keep per-file size limits and the MIME allowlist. Account access is the account status (`active`/`disabled`) only. The text below describes online billing for when the bank's details arrive; a new ADR will map admin-created accounts to plans then.
+
 Seed plans (prices include 7% VAT; editable by admins):
 
 | code | quota | THB / month | THB / year |
@@ -208,7 +223,9 @@ Trial: 2 GB for 14 days, face search included.
 
 ## Admin dashboard
 
-All pages read from rollups; charts use ECharts.
+Charts read from rollups and use ECharts.
+
+- **Users (first page to build, ADR 0010)**: list and search accounts (role, status, storage used, last sign-in), create a user (email, name, role `admin` or `photographer`, initial password), reset password, disable/enable, optional cash-payment record per photographer. Confirm dialog on every mutation; every mutation audit-logged.
 
 - **Revenue**: MRR (monthly equivalent of active subscriptions, ex-VAT), revenue by month (bar), plan mix (donut), new vs churned (line), ARPU.
 - **Photographers**: leaderboard sortable by downloads, unique downloaders, scans, visitors and storage used. Drill-down: shares, funnel (visitors → scanners → downloaders), top photos, bytes served, and estimated cost vs revenue (profit per account) to find loss-making accounts.
@@ -252,9 +269,12 @@ upload    POST /uploads/init   POST /uploads/:id/complete   DELETE /uploads/:id
 share     POST /shares   PATCH /shares/:id   GET /shares/:id/stats
 public    GET /s/:token   GET /s/:token/items   POST /s/:token/unlock   POST /s/:token/consent
           POST /s/:token/face-search   POST /s/:token/downloads   GET /zip-jobs/:id
-billing   GET /plans   POST /billing/checkout   POST /billing/webhooks/:gateway
+auth      POST /auth/photographer/sign-in   POST /auth/password (change own password)   (ADR 0010)
+billing   GET /plans   POST /billing/checkout   POST /billing/webhooks/:gateway      (off: BILLING_MODE=offline)
 admin     GET /admin/metrics/revenue   GET /admin/photographers   GET /admin/photographers/:id
           GET /admin/system   POST /admin/takedowns
+          GET /admin/users   POST /admin/users   PATCH /admin/users/:id (name, status)
+          POST /admin/users/:id/reset-password   POST /admin/cash-payments (optional)  (ADR 0010)
 ```
 
 ## Build order
@@ -265,12 +285,13 @@ Finish each phase with tests and a demo before starting the next.
 1. **Foundations**: monorepo, CDK stacks, Cognito auth and roles, DB migrations, CI.
 2. **Drive**: upload pipeline, derivatives, folders, rename and move, trash, restore, purge.
 3. **Sharing, face search, downloads**: share page, consent, search, zip.
-4. **Billing**: plans, checkout, webhooks, quota enforcement, subscription lifecycle.
+4. **Accounts (ADR 0010, replaces Billing for now)**: admin-created accounts with roles, photographer email/password sign-in with forced first change, admin users page, billing and quota switched off, optional cash-payment ledger.
+4b. **Billing (later, new ADR)**: plans, checkout, webhooks, quota enforcement, subscription lifecycle.
 5. **Admin**: rollups, dashboards, moderation, audit log.
 6. **Extras**: watermarked previews, `face_only` mode with Rekognition Face Liveness, per-photo sales with a platform commission, tax invoices.
 
 ## Testing
 
-- Unit: quota reservation and release, `ltree` scope checks (including moved folders and trash), the subscription state machine, webhook idempotency, threshold bucketing.
+- Unit: account rules (only admins create accounts, forced password change, disabled account can't sign in and its sessions are revoked, last-admin guard), quota reservation and release, `ltree` scope checks (including moved folders and trash), the subscription state machine, webhook idempotency, threshold bucketing.
 - Integration: S3/SQS flows against LocalStack; Rekognition through a fake `FaceProvider` with deterministic matches.
 - E2E (Playwright, mobile viewport): upload → share → consent → scan → download.

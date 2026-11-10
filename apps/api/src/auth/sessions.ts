@@ -62,7 +62,7 @@ export type RotateResult =
   | { kind: 'reused'; userId: string; familyId: string };
 
 /** Revokes every live row of a family. */
-async function revokeFamily(q: Queryable, familyId: string, now: Date): Promise<void> {
+export async function revokeFamily(q: Queryable, familyId: string, now: Date): Promise<void> {
   await q
     .update(authSessions)
     .set({ revokedAt: now })
@@ -75,7 +75,7 @@ export async function writeAuthAudit(
   entry: {
     actorId: string | null;
     action: AuthAuditAction;
-    targetType: 'user' | 'admin_login';
+    targetType: 'user' | 'admin_login' | 'photographer_login';
     targetId: string;
     meta: Record<string, unknown>;
     now: Date;
@@ -297,24 +297,35 @@ export function storeRefreshGrace(
   };
 }
 
-/** Sign out: revokes the family of the token. Unknown or revoked tokens are fine (idempotent). */
+/**
+ * Sign out: revokes the family of the token. Unknown or revoked tokens are fine (idempotent).
+ * With `pool`, a token of another pool is treated as unknown (nothing revoked): POST /auth/logout
+ * only signs out sessions of the calling app's pool (BffKeyScope `request`).
+ */
 export async function revokeSessionByToken(
   q: Queryable,
   refreshToken: string,
   now: Date,
+  pool?: AuthPool,
 ): Promise<void> {
   const [row] = await q
-    .select({ familyId: authSessions.familyId })
+    .select({ familyId: authSessions.familyId, pool: authSessions.pool })
     .from(authSessions)
     .where(eq(authSessions.refreshTokenHash, refreshTokenHash(refreshToken)))
     .limit(1);
-  if (row !== undefined) await revokeFamily(q, row.familyId, now);
+  if (row === undefined || (pool !== undefined && row.pool !== pool)) return;
+  await revokeFamily(q, row.familyId, now);
 }
 
-/** Revokes every session of a user (operator CLI: TOTP or password reset). */
-export async function revokeUserSessions(q: Queryable, userId: string, now: Date): Promise<void> {
-  await q
+/**
+ * Revokes every session of a user (operator CLI resets; admin disable, reset-password and a
+ * photographer's password change, ADR 0010). Returns how many live families were revoked.
+ */
+export async function revokeUserSessions(q: Queryable, userId: string, now: Date): Promise<number> {
+  const revoked = await q
     .update(authSessions)
     .set({ revokedAt: now })
-    .where(and(eq(authSessions.userId, userId), isNull(authSessions.revokedAt)));
+    .where(and(eq(authSessions.userId, userId), isNull(authSessions.revokedAt)))
+    .returning({ familyId: authSessions.familyId });
+  return new Set(revoked.map((r) => r.familyId)).size;
 }

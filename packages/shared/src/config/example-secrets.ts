@@ -28,6 +28,14 @@ export const EXAMPLE_BFF_KEY_FINGERPRINTS: ReadonlySet<string> = new Set([
   '3b97c99a6e427e9c0208cc7b649eb82880ba0815d3485325938d88a5c2dd4c47',
 ]);
 
+/**
+ * AUTH_ADMIN_BFF_KEY (ADR 0010 round 2). The proposed .env.example placeholder is
+ * `local-dev-only-admin-bff-key-change-me-0123456789`.
+ */
+export const EXAMPLE_ADMIN_BFF_KEY_FINGERPRINTS: ReadonlySet<string> = new Set([
+  '271e35ae003c9b32fdc535683b52222a0ac0ff4a7a338a97c8219b2def2fa6f2',
+]);
+
 export function isPublishedExample(fingerprints: ReadonlySet<string>, data: Uint8Array | string) {
   return fingerprints.has(sha256Hex(data));
 }

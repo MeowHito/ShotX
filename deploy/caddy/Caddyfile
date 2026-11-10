@@ -1,9 +1,12 @@
 # ShotX reverse proxy (ADR 0008 sections 1 and 6). Caddy gets and renews the TLS certificate.
 #
 # - Routes mirror CloudFront's behaviours: /api/* -> api, everything else (including /bff/*) -> web.
+#   The api's admin routes (/api/admin/*, /api/auth/admin/*) answer 404 here: only the admin app
+#   calls them, over the internal network (API_INTERNAL_URL).
+# - {$SHOTX_ADMIN_DOMAIN} (ADR 0010) -> admin, the whole site; it has no /api/* of its own.
 # - X-Forwarded-For is the TCP peer only, never appended to: the client's copy is stripped below,
 #   and with no trusted_proxies Caddy's reverse_proxy sets it to {remote_host}. api
-#   (TRUSTED_PROXY_ADDRESSES) and web take the last entry.
+#   (TRUSTED_PROXY_ADDRESSES), web and admin take the last entry.
 # - Headers only web may set on calls to the api are stripped from every request.
 # - Request bodies are streamed (Caddy never buffers them to disk) and never logged; selfies on
 #   /api/s/*/face-search and /api/s/*/face-deletion stay in memory only.
@@ -19,8 +22,9 @@ http://:8081 {
 	respond /healthz 200
 }
 
-{$SHOTX_DOMAIN} {
-	# Never trust what a client sends here.
+# Both sites: never trust what a client sends here (forwarding headers, the headers only web and
+# admin may set on calls to the api), the same security headers, and the same access log.
+(edge_common) {
 	request_header -X-Shotx-Bff-Key
 	request_header -X-Shotx-Client-Ip
 	request_header -X-Forwarded-For
@@ -52,11 +56,23 @@ http://:8081 {
 			}
 		}
 	}
+}
+
+{$SHOTX_DOMAIN} {
+	import edge_common
 
 	@selfie path_regexp selfie ^/api/s/[^/]+/face-(search|deletion)$
+	# The api's admin routes are for the admin app only, which calls api:4000 directly. The path
+	# matcher is case-insensitive and matches the cleaned, percent-decoded path (merged slashes,
+	# no dot segments), as the api routes it.
+	@adminApi path /api/admin /api/admin/* /api/auth/admin /api/auth/admin/*
 
 	# `route` keeps this order; the first matching `handle` wins.
 	route {
+		handle @adminApi {
+			respond 404
+		}
+
 		handle @selfie {
 			request_body {
 				max_size {$PROXY_SELFIE_MAX_BODY}
@@ -81,4 +97,15 @@ http://:8081 {
 			reverse_proxy web:3000
 		}
 	}
+}
+
+# Admin console (ADR 0010): every path to the admin app, which proxies its own /bff/* calls to the
+# api over the internal network.
+{$SHOTX_ADMIN_DOMAIN} {
+	import edge_common
+
+	request_body {
+		max_size {$PROXY_ADMIN_MAX_BODY}
+	}
+	reverse_proxy admin:3001
 }
