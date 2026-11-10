@@ -5,11 +5,13 @@ import {
   type AuthAuditAction,
   authSubject,
   AUTH_SUBJECT_MAX_LENGTH,
+  passwordPolicyViolation,
 } from '@shotx/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { findAdminByEmail, normalizeAdminEmail } from '../auth/admin-sign-in';
 import { hashPassword } from '../auth/password';
+import { isCommonPassword } from '../auth/password-policy';
 import { revokeUserSessions } from '../auth/sessions';
 import {
   adminTotpIssuer,
@@ -61,11 +63,21 @@ export interface TotpEnrolment {
   secretBase32: string;
 }
 
-function checkPassword(ctx: AdminOpsContext, password: string): void {
-  if (password.length < ctx.admin.passwordMinLength) {
-    throw new AdminOpsError(`Password must be at least ${ctx.admin.passwordMinLength} characters`);
-  }
+/**
+ * The same policy as passwords set in the admin app (ADR 0010): ADMIN_PASSWORD_MIN_LENGTH, not too
+ * simple, not containing the email, not on the common list. Messages never include the password.
+ */
+function checkPassword(ctx: AdminOpsContext, password: string, email: string): void {
+  const min = ctx.admin.passwordMinLength;
   if (password.length > 1024) throw new AdminOpsError('Password must be at most 1024 characters');
+  const violation = passwordPolicyViolation(password, { minLength: min, email });
+  if (violation === 'too_short')
+    throw new AdminOpsError(`Password must be at least ${min} characters`);
+  if (violation === 'contains_email')
+    throw new AdminOpsError('Password must not contain the email');
+  if (violation !== null)
+    throw new AdminOpsError('Password is too simple; use a longer, random one');
+  if (isCommonPassword(password)) throw new AdminOpsError('Password is too common');
 }
 
 async function audit(
@@ -125,7 +137,7 @@ export async function createAdmin(
   if (!email.success) throw new AdminOpsError('Invalid email');
   const name = nameSchema.safeParse(input.name);
   if (!name.success) throw new AdminOpsError('Invalid name (1-200 characters)');
-  checkPassword(ctx, input.password);
+  checkPassword(ctx, input.password, email.data);
   if ((await findAdminByEmail(ctx.db, email.data)) !== null) {
     throw new AdminOpsError('An admin with this email already exists');
   }
@@ -224,7 +236,7 @@ export async function resetAdminPassword(
   email: string,
   password: string,
 ): Promise<void> {
-  checkPassword(ctx, password);
+  checkPassword(ctx, password, email.trim());
   const row = await requireAdmin(ctx, email);
   const passwordHash = await hashPassword(password, ctx.argon2id);
   const now = ctx.now();

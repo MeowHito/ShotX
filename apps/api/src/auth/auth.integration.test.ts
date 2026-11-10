@@ -785,6 +785,16 @@ for (const backend of DATABASE_BACKENDS) {
         await expect(resetAdminPassword(ops(), 'reset@example.com', 'short')).rejects.toThrow(
           /at least/,
         );
+        // The CLI applies the admin app's full policy (ADR 0010), not only the length.
+        await expect(
+          resetAdminPassword(ops(), 'reset@example.com', 'aaaaaaaaaaaaaaaaaaaa'),
+        ).rejects.toThrow(/too simple/);
+        await expect(
+          resetAdminPassword(ops(), 'reset@example.com', 'xx reset@example.com xx'),
+        ).rejects.toThrow(/must not contain the email/);
+        await expect(
+          createAdmin(ops(), { email: 'policy@example.com', name: 'P', password: 'qwertyuiop' }),
+        ).rejects.toThrow(/at least/); // every common-list entry is shorter than the admin minimum;
         await expect(
           createAdmin(ops(), { email: 'RESET@example.com', name: 'dup', password }),
         ).rejects.toThrow(/already exists/);

@@ -1,6 +1,5 @@
 import 'reflect-metadata';
 import { userInfo } from 'node:os';
-import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import { createDb, createPool, loadDatabaseConfig } from '@shotx/db';
 import { loadApiConfig } from '../config';
@@ -13,6 +12,7 @@ import {
   type TotpEnrolment,
   unlockAdmin,
 } from './admin-ops';
+import { readPassword } from './read-password';
 
 // Operator CLI for ShotX admin accounts (AUTH_PROVIDER=shotx or local). Runs with the API's
 // environment, e.g. in the api container:
@@ -26,25 +26,6 @@ import {
 // on a terminal), never from arguments, so it stays out of shell history and `ps`.
 
 const USAGE = `Usage: admin <create|reset-totp|reset-password|unlock> --email <email> [--name <name>]`;
-
-/** Reads one line from stdin; on a terminal the typed characters are not echoed. */
-function readPassword(prompt: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const tty = process.stdin.isTTY;
-    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: tty });
-    if (tty) {
-      process.stdout.write(prompt);
-      // Swallow the echo of typed characters.
-      (rl as unknown as { _writeToOutput: (s: string) => void })._writeToOutput = () => undefined;
-    }
-    rl.once('line', (line) => {
-      rl.close();
-      if (tty) process.stdout.write('\n');
-      resolve(line);
-    });
-    rl.once('close', () => reject(new AdminOpsError('No password given on stdin')));
-  });
-}
 
 function printEnrolment(enrolment: TotpEnrolment): void {
   // Shown once: the secret is stored encrypted and can't be displayed again (reset-totp instead).
