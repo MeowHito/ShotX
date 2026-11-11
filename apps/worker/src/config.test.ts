@@ -221,6 +221,43 @@ describe('worker config by BILLING_MODE (ADR 0010)', () => {
   });
 });
 
+describe('worker config with EMAIL_PROVIDER=off', () => {
+  it('loads on a prod-style VPS env with no SES_*, no EMAIL_FROM_ADDRESS and no PAYMENT_*', () => {
+    const prodOff = {
+      ...omit(
+        env,
+        'EMAIL_FROM_ADDRESS',
+        'EMAIL_FROM_NAME',
+        ...Object.keys(env).filter((k) => /_QUEUE_URL$|_VISIBILITY_TIMEOUT_SECONDS$/.test(k)),
+      ),
+      APP_STAGE: 'prod',
+      NODE_ENV: 'production',
+      QUEUE_BACKEND: 'bullmq',
+      EMAIL_PROVIDER: 'off',
+      FACE_PROVIDER: 'self-hosted',
+      STORAGE_ENDPOINT_URL: 'https://0123456789abcdef.r2.cloudflarestorage.com',
+      STORAGE_REGION: 'auto',
+      STORAGE_ACCESS_KEY_ID: 'worker-key',
+      STORAGE_SECRET_ACCESS_KEY: 'worker-secret',
+      STORAGE_ORIGINALS_CLASS: 'STANDARD',
+      AWS_IGNORE_CONFIGURED_ENDPOINT_URLS: 'true',
+    };
+    expect(Object.keys(prodOff).filter((k) => /^(SES_|PAYMENT_|EMAIL_FROM_)/.test(k))).toEqual([]);
+    const config = loadWorkerConfig(prodOff);
+    expect(config.app).toMatchObject({ nodeEnv: 'production', stage: 'prod' });
+    expect(config.offAws).toBe(true);
+    expect(config.email).toEqual({ provider: 'off', from: null });
+    expect(config.sesClient).toBeNull();
+    expect(config.paymentGateway).toBeNull();
+    expect(() => assertOffAwsQueue(config)).not.toThrow();
+    expect(() => assertOffAwsStorage(config)).not.toThrow();
+    // Sending providers still need their sender.
+    expect(() => loadWorkerConfig({ ...prodOff, EMAIL_PROVIDER: 'ses' })).toThrow(
+      /EMAIL_FROM_ADDRESS|SES_/,
+    );
+  });
+});
+
 describe('worker config on BullMQ', () => {
   /** The VPS: no queue URLs or visibility timeouts, QUEUE_BACKEND=bullmq. */
   const vps = Object.fromEntries(

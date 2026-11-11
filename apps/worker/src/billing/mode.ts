@@ -61,11 +61,13 @@ export interface SubscriptionJobConfig {
  * The subscriptions job's dependencies, or null with BILLING_MODE=offline: then no renewal
  * gateway and no email provider are created (the billing emails are their only use in the
  * worker), and the jobs handler acknowledges `subscriptions.transition.daily` without running it.
- * `sesClient` is called only with EMAIL_PROVIDER=ses in gateway mode.
+ * `sesClient` is called only with EMAIL_PROVIDER=ses in gateway mode; `log` receives the
+ * template-only entries of EMAIL_PROVIDER=off.
  */
 export function createSubscriptionJobDeps(
   config: SubscriptionJobConfig,
   sesClient: () => SesV2Sender,
+  log: Logger,
 ): Omit<SubscriptionJobDeps, 'faces'> | null {
   if (!billingJobsEnabled(config.billingMode)) return null;
   if (config.paymentGateway === null) {
@@ -74,7 +76,7 @@ export function createSubscriptionJobDeps(
   }
   return {
     gateway: createRenewalGateway(config.paymentGateway),
-    email: createEmailProvider(config.email, sesClient),
+    email: createEmailProvider(config.email, sesClient, log),
     billing: config.billing,
     lifecycle: config.lifecycle,
     publicBaseUrl: config.publicBaseUrl,

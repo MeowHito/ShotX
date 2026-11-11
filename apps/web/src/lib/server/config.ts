@@ -238,15 +238,25 @@ export interface ClientStudioConfig {
    * prompts anywhere in the studio (the billing routes answer NOT_FOUND).
    */
   billingMode: BillingOperatingMode;
+  /**
+   * A viewer can sign in (viewerLoginAvailable of GET /auth/providers; src/lib/server/auth
+   * viewerLoginOptions). False: shares can't be set to require_login (LOGIN_PROVIDER_UNAVAILABLE).
+   */
+  viewerLoginAvailable: boolean;
 }
 
-export function clientStudioConfig(env: Env = process.env): ClientStudioConfig {
+export function clientStudioConfig(
+  env: Env = process.env,
+  /** From viewerLoginOptions (an API call, so the layout passes it in). */
+  viewerLogin = true,
+): ClientStudioConfig {
   const e = parseEnv(webShareEnvSchema, env, 'web share');
   return {
     processingPollMs: e.WEB_DRIVE_PROCESSING_POLL_MS,
     zipPollIntervalMs: e.WEB_ZIP_POLL_INTERVAL_MS,
     zipPollTimeoutMs: e.WEB_ZIP_POLL_TIMEOUT_MS,
     billingMode: billingMode(env),
+    viewerLoginAvailable: viewerLogin,
   };
 }
 

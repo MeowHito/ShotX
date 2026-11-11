@@ -119,6 +119,11 @@ export class TestApi {
       oidc?: (clock: TestClock) => Partial<OidcDeps>;
       /** CAPTCHA_PROVIDER=turnstile: the verifier (FakeCaptchaVerifier; never the network). */
       captchaVerifier?: CaptchaVerifier;
+      /**
+       * Let the app build the EMAIL_PROVIDER of its config (createEmailProvider; e.g. `off`)
+       * instead of injecting the FakeEmailProvider. Never `ses` (no client in tests).
+       */
+      configuredEmail?: boolean;
     } = {},
   ): Promise<TestApi> {
     const config = testConfig(options.env, options.limits);
@@ -154,7 +159,7 @@ export class TestApi {
         queue,
         faceProvider,
         paymentGateway: gateway,
-        email,
+        ...(options.configuredEmail === true ? {} : { email }),
         events,
         oidc: options.oidc?.(clock) ?? {},
         ...(options.captchaVerifier === undefined

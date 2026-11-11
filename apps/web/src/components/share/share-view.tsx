@@ -16,6 +16,7 @@ import { type ReactNode, useCallback, useMemo, useState } from 'react';
 import { DriveGrid } from '@/components/drive/drive-grid';
 import type { ApiClient } from '@/lib/api/client';
 import { isApiError } from '@/lib/api/errors';
+import { ALL_VIEWER_LOGINS, type ViewerLoginOptions } from '@/lib/auth/viewer-login';
 import type { ClientFaceConfig, ClientShareConfig } from '@/lib/face/config';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import {
@@ -41,6 +42,8 @@ export interface SharePageProps {
   initialMeta: ShareMetaResponse | null;
   /** The visitor has a web session (session or refresh cookie). */
   signedIn: boolean;
+  /** How a viewer can sign in for a require_login share (default: LINE and Google). */
+  viewerLogin?: ViewerLoginOptions;
   faceConfig: ClientFaceConfig;
   shareConfig: ClientShareConfig;
   /** Tests: the fake API, canvas, camera and browser side effects. */
@@ -67,7 +70,12 @@ export function SharePage({ testing, ...props }: SharePageProps) {
   );
 }
 
-function ShareGate({ token, initialMeta, shareConfig }: SharePageProps) {
+function ShareGate({
+  token,
+  initialMeta,
+  shareConfig,
+  viewerLogin = ALL_VIEWER_LOGINS,
+}: SharePageProps) {
   const t = useTranslations();
   const describe = useErrorMessage();
   const { signedIn, ensureViewerSession } = useShareApi();
@@ -123,7 +131,7 @@ function ShareGate({ token, initialMeta, shareConfig }: SharePageProps) {
         </p>
       );
     }
-    return <LoginRequired token={token} />;
+    return <LoginRequired token={token} options={viewerLogin} />;
   }
   if (meta.data.access.locked) return <PasswordForm token={token} />;
   return <ShareContent token={token} meta={meta.data} shareConfig={shareConfig} />;

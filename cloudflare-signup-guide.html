@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloudflare Signup Guide</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --line: #e4e4e0;
+    --accent: #f38020; --accent-bg: #fff1e5; --ok: #1f8a4c; --ok-bg: #e7f5ec;
+    --risk: #b3261e; --risk-bg: #fdecea; --code-bg: #f0f0ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141416; --card: #1d1d20; --text: #ececef; --muted: #a0a0a8; --line: #2e2e33;
+      --accent: #ffa057; --accent-bg: #3a2614; --ok: #6fd39a; --ok-bg: #16301f;
+      --risk: #ff8a80; --risk-bg: #3a1a18; --code-bg: #26262b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141416; --card: #1d1d20; --text: #ececef; --muted: #a0a0a8; --line: #2e2e33;
+    --accent: #ffa057; --accent-bg: #3a2614; --ok: #6fd39a; --ok-bg: #16301f;
+    --risk: #ff8a80; --risk-bg: #3a1a18; --code-bg: #26262b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 17px/1.7 "Sarabun", "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 780px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+  .step { display: grid; grid-template-columns: 44px 1fr; gap: 14px; }
+  .num { width: 40px; height: 40px; border-radius: 50%; background: var(--accent-bg); color: var(--accent);
+    font-weight: 700; font-size: 18px; display: flex; align-items: center; justify-content: center; }
+  .step h2 { font-size: 19px; margin: 6px 0 6px; }
+  ol, ul { margin: 6px 0 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  .path { display: inline-block; background: var(--code-bg); padding: 1px 8px; border-radius: 6px; font-size: 15px; }
+  code { background: var(--code-bg); padding: 1px 6px; border-radius: 5px; font-size: 15px; word-break: break-all; }
+  .warn { border-left: 4px solid var(--risk); background: var(--risk-bg); }
+  .good { border-left: 4px solid var(--ok); background: var(--ok-bg); }
+  .tip { color: var(--muted); font-size: 15px; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  a { color: var(--accent); }
+  footer { color: var(--muted); font-size: 14px; margin-top: 36px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>คู่มือสมัคร Cloudflare สำหรับทีมบัญชี</h1>
+  <p class="sub">ใช้สำหรับเว็บ ShotX (snap.action.in.th) · ทำแค่ 6 ขั้น ใช้เวลาประมาณ 15–20 นาที · ส่วนเทคนิคทีมไอทีจะทำต่อเอง</p>
+
+  <div class="card good">
+    <b>ใช้ Cloudflare ทำอะไร</b>
+    <ul>
+      <li><b>R2</b>: ที่เก็บรูปทั้งหมดของเว็บ และ backup ฐานข้อมูล</li>
+      <li><b>Turnstile</b>: กันบอตเข้ามายิงเว็บ ใช้ฟรี</li>
+    </ul>
+  </div>
+
+  <div class="card warn">
+    <b>ห้ามทำ</b>
+    <ul>
+      <li>ห้ามส่งรหัสผ่าน รหัส 2FA หรือข้อมูลบัตรทางแชต อีเมล หรือ LINE ให้ใคร รวมถึงทีมไอที</li>
+      <li>ไม่ต้องสร้าง API token หรือ bucket เอง ทีมไอทีจะทำ</li>
+      <li>ไม่ต้องย้ายโดเมนมาไว้ที่ Cloudflare และไม่ต้องสมัครแพ็กเกจ Pro หรือ Business</li>
+    </ul>
+  </div>
+
+  <div class="card step"><div class="num">1</div><div>
+    <h2>สมัครบัญชีด้วยอีเมลของบริษัท</h2>
+    <ol>
+      <li>เข้า <a href="https://dash.cloudflare.com/sign-up">https://dash.cloudflare.com/sign-up</a></li>
+      <li>ใช้<b>อีเมลกลางของบริษัท</b> เช่น it@ หรือ accounting@ ไม่ใช้อีเมลส่วนตัวของพนักงาน ถ้าพนักงานคนนั้นลาออก บริษัทจะยังเข้าบัญชีได้</li>
+      <li>ตั้งรหัสผ่านยาวอย่างน้อย 16 ตัว ไม่ซ้ำกับที่อื่น แล้วเก็บไว้ในที่จัดการรหัสผ่านของบริษัท</li>
+      <li>เปิดอีเมลยืนยันจาก Cloudflare แล้วกดยืนยัน (Verify email)</li>
+    </ol>
+    <p class="tip">ถ้า Cloudflare ถามว่าจะเพิ่มเว็บไซต์หรือโดเมน ให้กดข้ามไปได้เลย</p>
+  </div></div>
+
+  <div class="card step"><div class="num">2</div><div>
+    <h2>เปิดการยืนยันตัวตนสองชั้น (2FA) <span style="color:var(--risk)">· สำคัญมาก</span></h2>
+    <ol>
+      <li>กดรูปคนมุมขวาบน → <span class="path">Profile</span> → <span class="path">Authentication</span></li>
+      <li>เปิด <b>Two-Factor Authentication</b> แล้วสแกน QR ด้วยแอป Authenticator ในมือถือ เช่น Google Authenticator หรือ Microsoft Authenticator</li>
+      <li>Cloudflare จะให้ <b>Backup codes</b> มาชุดหนึ่ง ให้ดาวน์โหลดเก็บไว้ในที่ปลอดภัย ถ้ามือถือหาย ต้องใช้ code พวกนี้เข้าบัญชี</li>
+    </ol>
+    <p class="tip">บัญชีนี้ถือข้อมูลรูปของลูกค้าทั้งหมด ถ้าไม่มี 2FA แค่รหัสผ่านรั่วก็เข้าบัญชีได้แล้ว</p>
+  </div></div>
+
+  <div class="card step"><div class="num">3</div><div>
+    <h2>ใส่ข้อมูลบริษัทและบัตรที่ใช้จ่ายเงิน</h2>
+    <ol>
+      <li>เมนูซ้าย → <span class="path">Manage Account</span> → <span class="path">Billing</span></li>
+      <li><b>Billing profile</b>: ใส่ชื่อบริษัท ที่อยู่ และอีเมลรับใบแจ้งหนี้ ควรเป็นอีเมลของทีมบัญชี</li>
+      <li><span class="path">Payment methods</span> → <span class="path">Add Payment Method</span> → ใส่บัตรเครดิตหรือเดบิตของบริษัท
+        <br><span class="tip">รับบัตร Visa/Mastercard, PayPal, Apple Pay, Google Pay และ UnionPay</span></li>
+      <li>ธนาคารอาจส่ง OTP มาให้ยืนยันบัตร ให้กรอกให้เรียบร้อย</li>
+    </ol>
+    <p class="tip"><b>ต้องใส่บัตรก่อนขั้นที่ 4</b> เคยมีคนเจอปัญหาว่า ถ้าไปเปิด R2 ก่อนใส่บัตร หน้าจอจะวนกลับไปมา ใส่บัตรไม่ได้</p>
+  </div></div>
+
+  <div class="card step"><div class="num">4</div><div>
+    <h2>เปิดใช้ R2 (ที่เก็บรูป)</h2>
+    <ol>
+      <li>เมนูซ้าย → <span class="path">Storage &amp; databases</span> → <span class="path">R2</span> → <span class="path">Overview</span></li>
+      <li>กดซื้อหรือเปิดใช้ R2 (Purchase R2 / Add R2) แล้วทำตามขั้นตอนชำระเงินจนเสร็จ</li>
+      <li>เสร็จแล้วจะเห็นหน้า R2 Overview ที่ยังไม่มี bucket ปล่อยไว้แบบนั้นได้เลย ทีมไอทีจะสร้างเอง</li>
+    </ol>
+    <p class="tip">R2 จ่ายตามที่ใช้จริง ไม่มีค่ารายเดือนตายตัว มีโควตาฟรีให้ทุกเดือน (ดูประมาณการค่าใช้จ่ายด้านล่าง)</p>
+  </div></div>
+
+  <div class="card step"><div class="num">5</div><div>
+    <h2>เชิญคนจากทีมไอทีเข้าบัญชี</h2>
+    <ol>
+      <li>เมนูซ้าย → <span class="path">Manage Account</span> → <span class="path">Members</span> → <span class="path">Invite</span></li>
+      <li>ใส่อีเมลของคนในทีมไอทีที่จะตั้งค่าระบบ</li>
+      <li>เลือกสิทธิ์ (Role) เป็น <b>Administrator</b> และให้ครอบคลุมทั้งบัญชี (All domains / account-wide) ห้ามเลือก Super Administrator</li>
+      <li>กดส่งคำเชิญ คนที่ถูกเชิญต้องสมัครบัญชี Cloudflare ของตัวเองและเปิด 2FA เหมือนกัน</li>
+    </ol>
+    <p class="tip">ทำแบบนี้ ไม่ต้องให้รหัสผ่านบัญชีบริษัทกับใคร และถ้าคนนั้นออกไป ก็กดลบสิทธิ์ได้ทันที</p>
+  </div></div>
+
+  <div class="card step"><div class="num">6</div><div>
+    <h2>ส่งข้อมูลนี้กลับให้ทีมไอที</h2>
+    <p style="margin:4px 0">ข้อมูลพวกนี้ไม่ใช่ความลับ ส่งทางแชตได้</p>
+    <ul>
+      <li>☐ อีเมลที่ใช้สมัครบัญชี Cloudflare</li>
+      <li>☐ <b>Account ID</b>: อยู่ในหน้า R2 Overview ด้านขวา หรือหน้าแรกของบัญชี เป็นตัวอักษรยาว 32 ตัว</li>
+      <li>☐ ยืนยันว่าเปิด R2 เรียบร้อยแล้ว</li>
+      <li>☐ ยืนยันว่าส่งคำเชิญให้ใครไปแล้ว และคนนั้นรับคำเชิญแล้ว</li>
+      <li>☐ ยืนยันว่าเปิด 2FA แล้ว และเก็บ backup codes เรียบร้อยแล้ว</li>
+    </ul>
+  </div></div>
+
+  <h2 style="font-size:20px;margin:30px 0 10px">ประมาณการค่าใช้จ่าย R2</h2>
+  <div class="card">
+    <p style="margin-top:0">ประมาณการสำหรับงานวันละ 2,000 รูป 3 วัน (6,000 รูป) รวมรูปย่อและ backup ใช้พื้นที่ประมาณ 80–100 GB</p>
+    <div class="scroll">
+    <table>
+      <tr><th>รายการ</th><th>ราคา (USD)</th><th>ประมาณ/เดือน</th></tr>
+      <tr><td>พื้นที่เก็บข้อมูล</td><td>ฟรี 10 GB แรก จากนั้น $0.015 ต่อ GB</td><td>~$1.5</td></tr>
+      <tr><td>การเขียนไฟล์ (อัปโหลด)</td><td>ฟรี 1 ล้านครั้งแรก</td><td>~$0</td></tr>
+      <tr><td>การอ่านไฟล์ (ลูกค้าดูรูป)</td><td>ฟรี 10 ล้านครั้งแรก</td><td>~$0</td></tr>
+      <tr><td>ค่าดาวน์โหลดรูปออก (egress)</td><td><b>ฟรี</b></td><td>$0</td></tr>
+      <tr><td>Turnstile</td><td>ฟรี</td><td>$0</td></tr>
+    </table>
+    </div>
+    <p class="tip">รวมประมาณ <b>$1–3 ต่อเดือน (ไม่ถึง 100 บาท)</b> ค่าจะเพิ่มตามจำนวนรูปที่เก็บไว้ ราคาเป็นของ Cloudflare ณ ตอนเขียนคู่มือ ให้ดูราคาล่าสุดในหน้า Billing</p>
+  </div>
+
+  <footer>ShotX · คู่มือนี้ไม่มีข้อมูลลับ ส่งต่อได้ · ขั้นต่อจากนี้ (สร้าง bucket, token, Turnstile) ทีมไอทีทำเอง</footer>
+</main>
+</body>
+</html>

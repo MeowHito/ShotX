@@ -7,6 +7,11 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { type FormEvent, useId, useState } from 'react';
 import { AUTH_PATHS } from '@/lib/auth/handlers';
+import {
+  ALL_VIEWER_LOGINS,
+  canViewerSignIn,
+  type ViewerLoginOptions,
+} from '@/lib/auth/viewer-login';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useUnlockShare } from '@/lib/share/queries';
 
@@ -51,33 +56,53 @@ function loginHref(provider: 'line' | 'google', token: string): string {
   return `${AUTH_PATHS.login}?${new URLSearchParams({ provider, next: `/s/${token}` }).toString()}`;
 }
 
+const PROVIDER_STYLES = {
+  line: cn(buttonVariants({ size: 'lg' }), 'bg-[#06C755] text-white hover:bg-[#06C755]/90'),
+  google: buttonVariants({ size: 'lg', variant: 'outline' }),
+} as const;
+
 /**
- * require_login: sign in with LINE or Google, then come back to this page, which
- * creates the viewer session (POST /bff/me/viewer-session) and reloads.
+ * require_login: sign in with LINE or Google (only those configured), then come back to this
+ * page, which creates the viewer session (POST /bff/me/viewer-session) and reloads. With no
+ * viewer sign-in at all (LINE/Google off in production) it says so and to contact the
+ * photographer, instead of showing buttons that can't work.
  */
-export function LoginRequired({ token }: { token: string }) {
+export function LoginRequired({
+  token,
+  options = ALL_VIEWER_LOGINS,
+}: {
+  token: string;
+  options?: ViewerLoginOptions;
+}) {
   const tl = useTranslations('share.login');
+  if (!canViewerSignIn(options)) {
+    return (
+      <div className="mx-auto flex max-w-sm flex-col gap-4 py-12">
+        <LogInIcon className="size-10 text-muted-foreground" aria-hidden />
+        <h1 className="text-2xl font-bold">{tl('unavailableTitle')}</h1>
+        <p className="text-muted-foreground">{tl('unavailableBody')}</p>
+      </div>
+    );
+  }
   return (
     <div className="mx-auto flex max-w-sm flex-col gap-4 py-12">
       <LogInIcon className="size-10 text-primary" aria-hidden />
       <h1 className="text-2xl font-bold">{tl('title')}</h1>
       <p className="text-muted-foreground">{tl('body')}</p>
       {/* Plain links: route handlers that redirect to LINE or Google. */}
-      <a
-        href={loginHref('line', token)}
-        className={cn(
-          buttonVariants({ size: 'lg' }),
-          'bg-[#06C755] text-white hover:bg-[#06C755]/90',
-        )}
-      >
-        {tl('line')}
-      </a>
-      <a
-        href={loginHref('google', token)}
-        className={buttonVariants({ size: 'lg', variant: 'outline' })}
-      >
-        {tl('google')}
-      </a>
+      {options.oidc.map((provider) => (
+        <a key={provider} href={loginHref(provider, token)} className={PROVIDER_STYLES[provider]}>
+          {tl(provider)}
+        </a>
+      ))}
+      {options.devLogin ? (
+        <a
+          href={`${AUTH_PATHS.loginPage}?${new URLSearchParams({ next: `/s/${token}` }).toString()}`}
+          className={buttonVariants({ size: 'lg', variant: 'outline' })}
+        >
+          {tl('devLogin')}
+        </a>
+      ) : null}
     </div>
   );
 }

@@ -62,6 +62,8 @@ const errorCodes = {
   CANNOT_MODIFY_SELF:
     'ปิดใช้งานหรือรีเซ็ตรหัสผ่านบัญชีของตัวเองไม่ได้ ให้แอดมินคนอื่นทำให้ (เปลี่ยนชื่อตัวเองได้)',
   PASSWORD_TOO_WEAK: 'รหัสผ่านไม่ผ่านเกณฑ์ความปลอดภัย กรุณาตั้งรหัสผ่านใหม่',
+  LOGIN_PROVIDER_UNAVAILABLE:
+    'ยังเปิดให้ผู้ชมเข้าสู่ระบบไม่ได้ (ยังไม่ได้ตั้งค่า LINE หรือ Google) จึงตั้งลิงก์ให้ต้องเข้าสู่ระบบก่อนดูไม่ได้',
 } as const satisfies Record<ErrorCode, string>;
 
 /** PASSWORD_TOO_WEAK details.reason, with the pool's minimum length. */

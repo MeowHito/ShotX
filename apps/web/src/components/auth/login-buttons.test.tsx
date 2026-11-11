@@ -47,6 +47,8 @@ describe('studio sign-in (ADR 0010)', () => {
     expect(screen.getByLabelText(th.login.email)).toBeInTheDocument();
     expect(screen.queryAllByRole('link')).toHaveLength(0);
     expect(screen.queryByText(th.login.noProviders)).toBeNull();
+    expect(screen.queryByText(th.login.or)).toBeNull();
+    expect(screen.queryByText(th.login.legacy)).toBeNull();
   });
 });
 

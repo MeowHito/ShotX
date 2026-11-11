@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { userPasswordCredentials, users } from '@shotx/db';
 import {
+  authProvidersOf,
   type AuthPool,
   type AuthProvidersResponse,
   type AuthTokenResponse,
@@ -157,12 +158,8 @@ export class AuthService {
   }
 
   providers(): AuthProvidersResponse {
-    const auth = this.shotx();
-    return {
-      oidc: auth.oidc.enabled(),
-      devLogin: auth.config.devLogin !== null,
-      adminLogin: auth.issuer.poolEnabled('admins'),
-    };
+    // The same answer the share guard decides require_login with (authProvidersOf).
+    return authProvidersOf(this.shotx().config);
   }
 
   /** The exact redirect URI the API accepts. */

@@ -52,16 +52,40 @@ export const authTokenResponseSchema = z.object({
 });
 export type AuthTokenResponse = z.output<typeof authTokenResponseSchema>;
 
-/** What the sign-in page may offer (nothing secret). */
+/**
+ * What the sign-in page may offer (nothing secret; authProvidersOf builds it from the config).
+ * Web reads it to decide what to show: no LINE/Google buttons for providers that are missing, and
+ * no `require_login` toggle on the share form when viewerLoginAvailable is false.
+ */
 export const authProvidersResponseSchema = z.object({
-  /** OIDC providers with credentials configured. */
-  oidc: z.array(z.enum(OIDC_PROVIDERS)),
+  /**
+   * OIDC providers with credentials configured, in OIDC_PROVIDERS order, no duplicates. May be
+   * empty: since 2026-11-11 a deployment may run with neither LINE nor Google (photographers and
+   * admins sign in with passwords; OIDC is only for viewers of `require_login` shares).
+   */
+  oidc: z
+    .array(z.enum(OIDC_PROVIDERS))
+    .max(OIDC_PROVIDERS.length)
+    .refine((list) => new Set(list).size === list.length, { error: 'must not repeat a provider' }),
   /** POST /auth/dev/login is available (AUTH_PROVIDER=local). */
   devLogin: z.boolean(),
   /** Admin sign-in (password + TOTP) is available. */
   adminLogin: z.boolean(),
 });
 export type AuthProvidersResponse = z.output<typeof authProvidersResponseSchema>;
+
+/**
+ * True when a viewer can sign in to the users pool (an OIDC provider is enabled, or the dev login
+ * with AUTH_PROVIDER=local), so a share may use `require_login`. False: POST /shares and
+ * PATCH /shares/:id with `requireLogin: true` answer LOGIN_PROVIDER_UNAVAILABLE, and web hides
+ * the toggle. Only meaningful when the API issues tokens (AUTH_PROVIDER=shotx or local); with
+ * `cognito` the hosted UI federates LINE/Google and the guard doesn't apply.
+ */
+export function viewerLoginAvailable(
+  providers: Pick<AuthProvidersResponse, 'oidc' | 'devLogin'>,
+): boolean {
+  return providers.oidc.length > 0 || providers.devLogin;
+}
 
 /**
  * Path of the web app's OIDC callback page. `redirectUri` of POST /auth/oidc/:provider/start must

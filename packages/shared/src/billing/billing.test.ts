@@ -12,8 +12,13 @@ import {
   createCheckoutBodySchema,
   type CurrentSubscription,
   downgradeQuotaNotice,
+  DROPPED_EMAIL_MESSAGE_ID,
+  type DroppedEmailLogEntry,
+  droppedEmailLogEntry,
   dueLifecycleSteps,
   dueRenewalReminder,
+  type EmailMessage,
+  EMAIL_PROVIDERS,
   EMAIL_TEMPLATE_NAMES,
   EMAIL_TEMPLATE_PARAMS,
   EMAIL_TEMPLATES,
@@ -24,6 +29,8 @@ import {
   isEgressAnomalous,
   loadEmailConfig,
   loadPaymentGatewayConfig,
+  loadSesClientConfig,
+  OffEmailProvider,
   loadBillingModeConfig,
   BILLING_OPERATING_MODES,
   normalizedPaymentEventSchema,
@@ -754,6 +761,98 @@ describe('billing config', () => {
     expect(loadEmailConfig({ APP_STAGE: 'prod', EMAIL_PROVIDER: 'ses', ...from }).provider).toBe(
       'ses',
     );
+  });
+
+  describe('EMAIL_PROVIDER=off (launch decision 2026-11-11)', () => {
+    const prodVps = {
+      APP_STAGE: 'prod',
+      NODE_ENV: 'production',
+      AUTH_PROVIDER: 'shotx',
+      STORAGE_ENDPOINT_URL: 'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com',
+      AWS_IGNORE_CONFIGURED_ENDPOINT_URLS: 'true',
+    };
+
+    it('loads on prod with no SES_* setting and no EMAIL_FROM_ADDRESS', () => {
+      expect(EMAIL_PROVIDERS).toEqual(['ses', 'fake', 'off']);
+      expect(loadEmailConfig({ ...prodVps, EMAIL_PROVIDER: 'off' })).toEqual({
+        provider: 'off',
+        from: null,
+      });
+      expect(loadSesClientConfig({ ...prodVps, EMAIL_PROVIDER: 'off' })).toBeNull();
+      for (const stage of ['staging', 'local', undefined]) {
+        expect(loadEmailConfig({ APP_STAGE: stage, EMAIL_PROVIDER: 'off' }).provider).toBe('off');
+      }
+    });
+
+    it('reads no SES_* value at all, not even leftovers or REPLACE_ME placeholders', () => {
+      const leftovers = {
+        SES_REGION: 'not a region',
+        SES_ENDPOINT_URL: 'nope',
+        SES_ACCESS_KEY_ID: 'REPLACE_ME',
+        AWS_ENDPOINT_URL: 'http://localhost:4566',
+      };
+      const env = { ...prodVps, EMAIL_PROVIDER: 'off', ...leftovers };
+      expect(loadEmailConfig(env)).toEqual({ provider: 'off', from: null });
+      expect(loadSesClientConfig(env)).toBeNull();
+    });
+
+    it('still validates EMAIL_FROM_ADDRESS when it is set', () => {
+      expect(() =>
+        loadEmailConfig({ ...prodVps, EMAIL_PROVIDER: 'off', EMAIL_FROM_ADDRESS: 'nope' }),
+      ).toThrow(/EMAIL_FROM_ADDRESS/);
+      expect(
+        loadEmailConfig({ ...prodVps, EMAIL_PROVIDER: 'off', EMAIL_FROM_ADDRESS: 'a@b.co' }),
+      ).toEqual({ provider: 'off', from: null });
+    });
+
+    it('keeps fake refused on prod and EMAIL_FROM_ADDRESS required for ses and fake', () => {
+      expect(() =>
+        loadEmailConfig({ ...prodVps, EMAIL_PROVIDER: 'fake', EMAIL_FROM_ADDRESS: 'a@b.co' }),
+      ).toThrow(/EMAIL_PROVIDER=fake on APP_STAGE=prod/);
+      // Unset EMAIL_PROVIDER is `fake`, so prod must choose `ses` or `off` explicitly.
+      expect(() => loadEmailConfig({ ...prodVps, EMAIL_FROM_ADDRESS: 'a@b.co' })).toThrow(
+        /APP_STAGE=prod/,
+      );
+      for (const provider of ['ses', 'fake']) {
+        expect(() => loadEmailConfig({ APP_STAGE: 'staging', EMAIL_PROVIDER: provider })).toThrow(
+          /EMAIL_FROM_ADDRESS/,
+        );
+      }
+    });
+  });
+});
+
+describe('OffEmailProvider', () => {
+  const message: EmailMessage<'grace_started'> = {
+    to: 'photographer@example.com',
+    template: 'grace_started',
+    locale: 'th',
+    params: { graceEndsAt: '2026-12-01T00:00:00Z', billingUrl: 'https://p.example.com/b' },
+    idempotencyKey: 'notice:0190f0a0-0000-7000-8000-000000000001:grace',
+  };
+
+  it('drops the message and logs only its template', async () => {
+    const logged: DroppedEmailLogEntry[] = [];
+    const provider = new OffEmailProvider((entry) => logged.push(entry));
+    await expect(provider.send(message)).resolves.toEqual({
+      messageId: DROPPED_EMAIL_MESSAGE_ID,
+      dropped: true,
+    });
+    expect(logged).toEqual([
+      { event: 'email.dropped', provider: 'off', template: 'grace_started' },
+    ]);
+    const text = JSON.stringify(logged);
+    for (const secret of [message.to, message.idempotencyKey, message.params.billingUrl]) {
+      expect(text).not.toContain(secret);
+    }
+    expect(droppedEmailLogEntry(message)).toEqual(logged[0]);
+  });
+
+  it('never rejects, even when the logger throws', async () => {
+    const provider = new OffEmailProvider(() => {
+      throw new Error('logger down');
+    });
+    await expect(provider.send(message)).resolves.toMatchObject({ dropped: true });
   });
 });
 

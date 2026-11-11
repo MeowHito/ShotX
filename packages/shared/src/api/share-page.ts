@@ -72,7 +72,11 @@ export const shareMetaResponseSchema = z.object({
   expiresAt: isoDateTimeSchema.nullable(),
   /** For this request: what the page must ask for before showing anything. */
   access: z.object({
-    /** require_login and no signed-in viewer: show the LINE/Google sign-in. */
+    /**
+     * require_login and no signed-in viewer: show the LINE/Google sign-in (the buttons of
+     * GET /auth/providers). When that lists no provider (a share made while one was on), show
+     * that sign-in is unavailable instead of empty buttons; the gate still holds.
+     */
     loginRequired: z.boolean(),
     /** Password share not unlocked by this browser: show the password form. */
     locked: z.boolean(),

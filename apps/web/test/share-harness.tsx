@@ -1,3 +1,4 @@
+import type { ViewerLoginOptions } from '@/lib/auth/viewer-login';
 import { TURNSTILE_SCRIPT_URL } from '@shotx/shared';
 import { vi } from 'vitest';
 import { FaceDeletionPage } from '@/components/share/face-deletion-page';
@@ -163,6 +164,7 @@ export function renderSharePage(
     scenario?: Partial<FaceScenario>;
     faceConfig?: ClientFaceConfig;
     loadTurnstile?: TurnstileLoader;
+    viewerLogin?: ViewerLoginOptions;
   } = {},
 ) {
   const { scenario, canvas, detect, loadDetector, rendered, toJpeg } = faceHarness(
@@ -177,6 +179,7 @@ export function renderSharePage(
       token={token}
       initialMeta={null}
       signedIn={options.signedIn ?? false}
+      viewerLogin={options.viewerLogin}
       faceConfig={options.faceConfig ?? FACE_CONFIG}
       shareConfig={SHARE_CONFIG}
       testing={{

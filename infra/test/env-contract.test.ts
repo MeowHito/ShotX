@@ -359,6 +359,19 @@ describe('.env.example', () => {
     expect(unread).toEqual([]);
   });
 
+  it('accepts email off and no LINE/Google sign-in (the VPS launch settings)', () => {
+    const launch = Object.fromEntries(
+      Object.entries({ ...complete, EMAIL_PROVIDER: 'off' }).filter(
+        ([k]) => !/^(EMAIL_FROM_|SES_|LINE_LOGIN_|GOOGLE_OAUTH_)/.test(k),
+      ),
+    );
+    expect(loadEmailConfig(launch)).toEqual({ provider: 'off', from: null });
+    expect(loadSesClientConfig(launch)).toBeNull();
+    expect(() =>
+      loadShotxAuthConfig({ ...launch, APP_STAGE: 'local', NODE_ENV: 'development' }),
+    ).not.toThrow();
+  });
+
   it('works for the worker against docker compose as it is', () => {
     const local = Object.fromEntries(Object.entries(envExample).filter(([, v]) => v !== ''));
     for (const load of SERVICE_LOADERS.worker) expect(() => load(local)).not.toThrow();

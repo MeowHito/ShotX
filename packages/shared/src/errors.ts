@@ -136,8 +136,8 @@ export const ErrorCode = {
   // Sign-in issued by the API (ADR 0008 section 4, AUTH_ROUTES). Never says whether an account
   // exists.
   /**
-   * The identity provider is not enabled here (LINE or Google without credentials in
-   * AUTH_PROVIDER=local). Details: AuthProviderUnavailableDetails.
+   * The identity provider is not enabled here: LINE or Google without both its id and secret, on
+   * any stage (POST /auth/oidc/:provider/start). Details: AuthProviderUnavailableDetails.
    */
   AUTH_PROVIDER_UNAVAILABLE: 'AUTH_PROVIDER_UNAVAILABLE',
   /**
@@ -208,6 +208,15 @@ export const ErrorCode = {
   CANNOT_MODIFY_SELF: 'CANNOT_MODIFY_SELF',
   /** A new password breaks the policy. Details: PasswordTooWeakDetails. */
   PASSWORD_TOO_WEAK: 'PASSWORD_TOO_WEAK',
+
+  // Viewer sign-in switched off (2026-11-11 launch without LINE/Google).
+  /**
+   * POST /shares or PATCH /shares/:id with `requireLogin: true` while no viewer can sign in (no
+   * LINE or Google configured and no dev login; viewerLoginAvailable is false). Nothing is
+   * changed. Not sent with AUTH_PROVIDER=cognito, for `requireLogin: false`, or for a PATCH that
+   * leaves `requireLogin` out (an existing `require_login` share stays editable). Details: none.
+   */
+  LOGIN_PROVIDER_UNAVAILABLE: 'LOGIN_PROVIDER_UNAVAILABLE',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -268,6 +277,7 @@ export const ERROR_HTTP_STATUS = {
   LAST_ADMIN: 409,
   CANNOT_MODIFY_SELF: 403,
   PASSWORD_TOO_WEAK: 422,
+  LOGIN_PROVIDER_UNAVAILABLE: 409,
 } as const satisfies Record<ErrorCode, number>;
 
 /** Body of every API error response. */

@@ -191,6 +191,7 @@ async function main(): Promise<void> {
       if (config.sesClient === null) throw new Error('EMAIL_PROVIDER=ses without SES client');
       return new SESv2Client(awsClientOptions(config.sesClient));
     },
+    log,
   );
 
   const handlers: Record<QueueName, MessageHandler> = {

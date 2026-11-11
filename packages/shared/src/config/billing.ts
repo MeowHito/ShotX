@@ -179,36 +179,85 @@ export function loadPaymentGatewayConfig(env: Env): PaymentGatewayConfig | null 
 
 // --- Email (api and worker) -----------------------------------------------------------------------
 
-export const EMAIL_PROVIDERS = ['ses', 'fake'] as const;
+/**
+ * EMAIL_PROVIDER values:
+ * - `ses`: Amazon SES (client from SES_*, loadSesClientConfig).
+ * - `fake`: records messages (tests and local runs). Refused on APP_STAGE=prod.
+ * - `off` (the owner's launch decision of 2026-11-11): sending is switched off on purpose. Allowed
+ *   on every stage, including prod. No SES_* setting is read or required, and neither is
+ *   EMAIL_FROM_ADDRESS (EmailConfig.from is null). api and worker use OffEmailProvider
+ *   (billing/email), which drops every message and logs only its template
+ *   (DroppedEmailLogEntry), never the recipient, parameters or body.
+ */
+export const EMAIL_PROVIDERS = ['ses', 'fake', 'off'] as const;
 export type EmailProviderName = (typeof EMAIL_PROVIDERS)[number];
 
-const emailEnvSchema = z.object({
-  APP_STAGE: appStage,
-  /** `ses` (Amazon SES, client from SES_*) or `fake` (records messages; refused on APP_STAGE=prod). */
-  EMAIL_PROVIDER: z.enum(EMAIL_PROVIDERS).default('fake'),
-  /** Sender of every email, e.g. `no-reply@photos.example.com` (an SES-verified identity). */
-  EMAIL_FROM_ADDRESS: z.email({ error: 'must be an email address' }).max(254),
-  /** Display name of the sender (Thai allowed). */
-  EMAIL_FROM_NAME: z.string().trim().min(1).max(100).default('ShotX'),
-});
+/** The providers that actually render and send (or record) messages: everything but `off`. */
+export type SendingEmailProviderName = Exclude<EmailProviderName, 'off'>;
 
-export interface EmailConfig {
-  provider: EmailProviderName;
-  from: { address: string; name: string };
+const emailEnvSchema = z
+  .object({
+    APP_STAGE: appStage,
+    /** `ses`, `fake` (refused on APP_STAGE=prod) or `off` (nothing is sent). Default `fake`. */
+    EMAIL_PROVIDER: z.enum(EMAIL_PROVIDERS).default('fake'),
+    /**
+     * Sender of every email, e.g. `no-reply@photos.example.com` (an SES-verified identity).
+     * Required unless EMAIL_PROVIDER=off; with `off` it is optional, but validated when set.
+     */
+    EMAIL_FROM_ADDRESS: z.email({ error: 'must be an email address' }).max(254).optional(),
+    /** Display name of the sender (Thai allowed). */
+    EMAIL_FROM_NAME: z.string().trim().min(1).max(100).default('ShotX'),
+  })
+  .superRefine((e, ctx) => {
+    if (e.EMAIL_PROVIDER !== 'off' && e.EMAIL_FROM_ADDRESS === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EMAIL_FROM_ADDRESS'],
+        message: `is required unless EMAIL_PROVIDER=off`,
+      });
+    }
+  });
+
+/** The sender of every email. */
+export interface EmailSender {
+  address: string;
+  name: string;
 }
 
+/** EMAIL_PROVIDER=ses or fake. */
+export interface SendingEmailConfig {
+  provider: SendingEmailProviderName;
+  from: EmailSender;
+}
+
+/** EMAIL_PROVIDER=off: nothing is sent, so there is no sender. */
+export interface OffEmailConfig {
+  provider: 'off';
+  from: null;
+}
+
+/** Narrow on `provider`: `from` is set for `ses` and `fake`, null for `off`. */
+export type EmailConfig = SendingEmailConfig | OffEmailConfig;
+
 /**
- * Reads EMAIL_PROVIDER (default `fake`), EMAIL_FROM_ADDRESS (required) and EMAIL_FROM_NAME
- * (`ShotX`). Throws when APP_STAGE is `prod` and the provider is `fake` (NODE_ENV doesn't matter).
- * The SES client (with `ses`): loadSesClientConfig (aws-clients.ts).
+ * Reads EMAIL_PROVIDER (default `fake`), EMAIL_FROM_ADDRESS (required unless `off`) and
+ * EMAIL_FROM_NAME (`ShotX`). Throws when APP_STAGE is `prod` and the provider is `fake` (NODE_ENV
+ * doesn't matter); `off` is allowed on every stage. With `ses` and `fake` the SES_* values are
+ * validated (format only); with `off` no SES_* setting is read. The SES client (with `ses`):
+ * loadSesClientConfig (aws-clients.ts).
  */
 export function loadEmailConfig(env: Env): EmailConfig {
   const e = parseEnv(emailEnvSchema, env, 'email');
   if (e.APP_STAGE === PRODUCTION_APP_STAGE && e.EMAIL_PROVIDER === 'fake') {
     throw new Error('Invalid email configuration: EMAIL_PROVIDER=fake on APP_STAGE=prod');
   }
+  if (e.EMAIL_PROVIDER === 'off') return { provider: 'off', from: null };
   // Validates every SES_* value; the keys are enforced by loadSesClientConfig.
   loadAwsClientConfig(env, AWS_CLIENT_ENV.ses, 'email', { required: false });
+  if (e.EMAIL_FROM_ADDRESS === undefined) {
+    // Unreachable: the schema requires it unless `off`.
+    throw new Error('Invalid email configuration: EMAIL_FROM_ADDRESS is required');
+  }
   return {
     provider: e.EMAIL_PROVIDER,
     from: { address: e.EMAIL_FROM_ADDRESS, name: e.EMAIL_FROM_NAME },

@@ -34,6 +34,7 @@ import {
 } from '../testing/database';
 import { testJobQueues } from '../testing/jobs';
 import { MemoryObjectStore } from '../testing/memory-aws';
+import { OffEmailProvider } from '@shotx/shared';
 import { FakeEmailProvider } from './email';
 import { FakeRenewalGateway, UnavailableRenewalGateway } from './gateway';
 import {
@@ -185,15 +186,20 @@ describe('billing jobs by BILLING_MODE (ADR 0010)', () => {
           email: { provider: 'ses', from: { address: 'no-reply@shotx.example', name: 'ShotX' } },
         }),
         ses,
+        silentLogger,
       ),
     ).toBeNull();
     expect(ses).not.toHaveBeenCalled();
   });
 
   it('creates the gateway and email provider in gateway mode, unchanged', () => {
-    const deps = createSubscriptionJobDeps(subscriptionConfig(), () => {
-      throw new Error('not with EMAIL_PROVIDER=fake');
-    });
+    const deps = createSubscriptionJobDeps(
+      subscriptionConfig(),
+      () => {
+        throw new Error('not with EMAIL_PROVIDER=fake');
+      },
+      silentLogger,
+    );
     expect(deps?.gateway).toBeInstanceOf(FakeRenewalGateway);
     expect(deps?.email).toBeInstanceOf(FakeEmailProvider);
     expect(deps?.publicBaseUrl).toBe('https://shotx.example');
@@ -202,13 +208,46 @@ describe('billing jobs by BILLING_MODE (ADR 0010)', () => {
         paymentGateway: { gateway: 'omise', webhookToleranceSeconds: 300, secrets: {} },
       }),
       () => ({ send: () => Promise.resolve({}) }),
+      silentLogger,
     );
     expect(omise?.gateway).toBeInstanceOf(UnavailableRenewalGateway);
     expect(() =>
-      createSubscriptionJobDeps(subscriptionConfig({ paymentGateway: null }), () => {
-        throw new Error('unused');
-      }),
+      createSubscriptionJobDeps(
+        subscriptionConfig({ paymentGateway: null }),
+        () => {
+          throw new Error('unused');
+        },
+        silentLogger,
+      ),
     ).toThrow(/BILLING_MODE=gateway/);
+  });
+
+  it('drops billing emails with EMAIL_PROVIDER=off in gateway mode, logging the template only', async () => {
+    const log = memoryLogger();
+    const ses = vi.fn(() => ({ send: () => Promise.resolve({}) }));
+    const deps = createSubscriptionJobDeps(
+      subscriptionConfig({ email: loadEmailConfig({ EMAIL_PROVIDER: 'off' }) }),
+      ses,
+      log,
+    );
+    expect(deps?.email).toBeInstanceOf(OffEmailProvider);
+    await expect(
+      deps?.email.send({
+        to: 'secret-recipient@example.com',
+        template: 'grace_started',
+        locale: 'th',
+        params: { graceEndsAt: '2026-12-15T00:00:00+07:00', billingUrl: 'https://shotx.example/b' },
+        idempotencyKey: 'grace:acct-123',
+      }),
+    ).resolves.toEqual({ messageId: 'email-off', dropped: true });
+    expect(ses).not.toHaveBeenCalled();
+    expect(log.entries).toHaveLength(1);
+    expect(log.entries[0]?.fields).toEqual({
+      event: 'email.dropped',
+      provider: 'off',
+      template: 'grace_started',
+    });
+    expect(JSON.stringify(log.entries)).not.toMatch(/secret-recipient|acct-123|shotx\.example\/b/);
   });
 
   it('logs one start-up line per mode', () => {

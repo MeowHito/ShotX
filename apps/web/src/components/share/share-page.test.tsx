@@ -108,6 +108,36 @@ describe('share page: states', () => {
     expect(fake.callsTo(ME_ROUTES.createViewerSession)).toHaveLength(0);
   });
 
+  it('login required, only Google configured: offers Google only', async () => {
+    const fake = new FakeApi();
+    const share = fake.addPublicShare({ requireLogin: true });
+    renderSharePage(fake, share.token, { viewerLogin: { oidc: ['google'], devLogin: false } });
+    expect(await screen.findByRole('link', { name: th.share.login.google })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: th.share.login.line })).toBeNull();
+  });
+
+  it('login required but no viewer sign-in at all: says to contact the photographer, no buttons', async () => {
+    const fake = new FakeApi();
+    const share = fake.addPublicShare({ requireLogin: true });
+    renderSharePage(fake, share.token, { viewerLogin: { oidc: [], devLogin: false } });
+    expect(
+      await screen.findByRole('heading', { name: th.share.login.unavailableTitle }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(th.share.login.unavailableBody)).toHaveTextContent('ติดต่อช่างภาพ');
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+    expect(screen.queryByRole('heading', { name: th.share.login.title })).toBeNull();
+  });
+
+  it('login required with only the dev login (local): links to the sign-in page', async () => {
+    const fake = new FakeApi();
+    const share = fake.addPublicShare({ requireLogin: true });
+    renderSharePage(fake, share.token, { viewerLogin: { oidc: [], devLogin: true } });
+    expect(await screen.findByRole('link', { name: th.share.login.devLogin })).toHaveAttribute(
+      'href',
+      `/login?next=${encodeURIComponent(`/s/${share.token}`)}`,
+    );
+  });
+
   it('login required, signed in: creates the viewer session through the BFF, then shows photos', async () => {
     const fake = new FakeApi();
     const share = fake.addPublicShare({ requireLogin: true });

@@ -4,8 +4,10 @@ import {
   EMAIL_TEMPLATES,
   type EmailMessage,
   type EmailTemplate,
+  OffEmailProvider,
 } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
+import { memoryLogger, silentLogger } from '../logger';
 import {
   createEmailProvider,
   FakeEmailProvider,
@@ -153,14 +155,50 @@ describe('email providers', () => {
   it('selects SES or the fake from EMAIL_PROVIDER', () => {
     const from = { address: 'a@b.example', name: 'ShotX' };
     const client = { send: () => Promise.resolve({}) };
-    expect(createEmailProvider({ provider: 'ses', from }, () => client)).toBeInstanceOf(
-      SesEmailProvider,
-    );
     expect(
-      createEmailProvider({ provider: 'fake', from }, () => {
-        throw new Error('no SES client for the fake');
-      }),
+      createEmailProvider({ provider: 'ses', from }, () => client, silentLogger),
+    ).toBeInstanceOf(SesEmailProvider);
+    expect(
+      createEmailProvider(
+        { provider: 'fake', from },
+        () => {
+          throw new Error('no SES client for the fake');
+        },
+        silentLogger,
+      ),
     ).toBeInstanceOf(FakeEmailProvider);
+  });
+
+  it('EMAIL_PROVIDER=off drops every message and logs only the template', async () => {
+    const log = memoryLogger();
+    const off = createEmailProvider(
+      { provider: 'off', from: null },
+      () => {
+        throw new Error('no SES client with off');
+      },
+      log,
+    );
+    expect(off).toBeInstanceOf(OffEmailProvider);
+    for (const template of EMAIL_TEMPLATE_NAMES) {
+      await expect(off.send(samples[template])).resolves.toEqual({
+        messageId: 'email-off',
+        dropped: true,
+      });
+    }
+    expect(log.entries.map((e) => e.fields)).toEqual(
+      EMAIL_TEMPLATE_NAMES.map((template) => ({
+        event: 'email.dropped',
+        provider: 'off',
+        template,
+      })),
+    );
+    const logged = JSON.stringify(log.entries);
+    for (const template of EMAIL_TEMPLATE_NAMES) {
+      const message = samples[template];
+      expect(logged).not.toContain(message.to);
+      expect(logged).not.toContain(message.idempotencyKey);
+      expect(logged).not.toContain(renderEmail(message).subject);
+    }
   });
 
   it('the fake records, fails on demand and flags duplicates', async () => {

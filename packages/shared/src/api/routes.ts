@@ -595,6 +595,7 @@ export const SHARE_ROUTES = {
       ErrorCode.NOT_FOUND,
       ErrorCode.SUBSCRIPTION_INACTIVE,
       ErrorCode.FEATURE_DISABLED,
+      ErrorCode.LOGIN_PROVIDER_UNAVAILABLE,
     ),
   },
   /** Added: the studio's share list (optionally of one file or folder). */
@@ -626,7 +627,12 @@ export const SHARE_ROUTES = {
     params: idParamsSchema,
     body: updateShareBodySchema,
     response: ownerShareSchema,
-    errors: signedIn(ErrorCode.NOT_FOUND, ErrorCode.CONFLICT, ErrorCode.FEATURE_DISABLED),
+    errors: signedIn(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.CONFLICT,
+      ErrorCode.FEATURE_DISABLED,
+      ErrorCode.LOGIN_PROVIDER_UNAVAILABLE,
+    ),
   },
   /** Added: revoke (is_active = false), final and idempotent. */
   revoke: {
@@ -941,7 +947,7 @@ export const BILLING_ROUTES = {
  * audit_log (AUTH_AUDIT_ACTIONS).
  */
 export const AUTH_ROUTES = {
-  /** What the sign-in pages may offer. */
+  /** What the sign-in pages may offer (`oidc` may be empty: authProvidersOf). */
   providers: {
     method: 'GET',
     path: '/auth/providers',

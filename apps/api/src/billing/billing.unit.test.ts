@@ -106,6 +106,7 @@ describe('email templates', () => {
 
   it('builds the SESv2 SendEmail input (identity default configuration set)', async () => {
     const config = loadApiConfig(testEnv({ EMAIL_FROM_NAME: 'ShotX ภาพงานวิ่ง' })).email;
+    if (config.provider === 'off') throw new Error('expected a sending provider');
     const input = sesV2Input(config, message('purge_warning'));
     expect(input).toEqual({
       FromEmailAddress: fromHeader(config.from),

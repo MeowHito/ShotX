@@ -6,6 +6,7 @@ import type { AuthDeps } from '../auth/handlers';
 import type { AuthProvider } from '../auth/provider';
 import { cookieNames, decodeSession, type Session } from '../auth/session';
 import { createShotxAuthProvider, fetchLoginProviders } from '../auth/shotx';
+import { ALL_VIEWER_LOGINS, canViewerSignIn, type ViewerLoginOptions } from '../auth/viewer-login';
 import { clientIpFromHeaders, type ServerCallContext } from '../bff/client-ip';
 import { type WebConfig, webConfig } from './config';
 
@@ -86,6 +87,22 @@ export async function loginOptions(): Promise<LoginOptions | null> {
     oidc: OIDC_PROVIDERS.filter((p) => providers.oidc.includes(p)),
     devLogin: config.authProvider === 'local' && providers.devLogin,
   };
+}
+
+/**
+ * The viewer sign-ins for require_login shares and the studio's share form. With Cognito, LINE
+ * and Google (the guard doesn't apply). When GET /auth/providers fails nothing is known, so both
+ * are offered as before: the API still refuses `requireLogin: true` without a provider.
+ */
+export async function viewerLoginOptions(): Promise<ViewerLoginOptions> {
+  const options = await loginOptions();
+  if (options === null) return ALL_VIEWER_LOGINS;
+  return { oidc: options.oidc, devLogin: options.devLogin };
+}
+
+/** viewerLoginAvailable of {@link viewerLoginOptions}. */
+export async function viewerLoginIsAvailable(): Promise<boolean> {
+  return canViewerSignIn(await viewerLoginOptions());
 }
 
 export interface ViewerState {

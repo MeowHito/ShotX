@@ -6,7 +6,7 @@ import { getTranslations } from 'next-intl/server';
 import { cache } from 'react';
 import { ShareUnavailable } from '@/components/share/share-gates';
 import { SharePage } from '@/components/share/share-view';
-import { requestServerCallContext, viewerState } from '@/lib/server/auth';
+import { requestServerCallContext, viewerLoginOptions, viewerState } from '@/lib/server/auth';
 import { clientFaceConfig, clientShareConfig, webConfig } from '@/lib/server/config';
 import { fetchShareMeta, shareOpenGraph } from '@/lib/server/share';
 
@@ -61,11 +61,16 @@ export default async function ShareTokenPage({ params }: { params: Params }) {
     );
   }
   const viewer = await viewerState();
+  // Only a require_login share needs to know how viewers can sign in (one API call).
+  const meta = result.kind === 'ok' ? result.meta : null;
+  const viewerLogin =
+    meta === null || meta.access.loginRequired ? await viewerLoginOptions() : undefined;
   return (
     <SharePage
       token={token}
       initialMeta={result.kind === 'ok' ? result.meta : null}
       signedIn={viewer.signedIn}
+      viewerLogin={viewerLogin}
       faceConfig={clientFaceConfig()}
       shareConfig={clientShareConfig()}
     />

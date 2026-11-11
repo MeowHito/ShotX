@@ -3,9 +3,10 @@ import { CHECKOUT_CHANGE_TYPES, PAYMENT_METHODS } from '../domain';
 import { satangSchema } from './money';
 
 /**
- * The email adapter. Types only: `SesEmailProvider` (placeholder until SES is set up) and
- * `FakeEmailProvider` (records messages, for tests and local runs) live in the api and worker,
- * selected by EMAIL_PROVIDER (loadEmailConfig). Shared defines the templates, their i18n keys and
+ * The email adapter. `SesEmailProvider` (placeholder until SES is set up) and `FakeEmailProvider`
+ * (records messages, for tests and local runs) live in the api and worker; OffEmailProvider
+ * (EMAIL_PROVIDER=off: drops every message) lives here so both use the same one. Selected by
+ * EMAIL_PROVIDER (loadEmailConfig). Shared defines the templates, their i18n keys and
  * their parameters; the Thai subject and body text live in the api/worker messages (`th`), keyed
  * by EMAIL_TEMPLATES[template].subjectKey / bodyKey, so every template must have both strings.
  * Amounts are satang (render as THB with 2 decimals), times are ISO 8601 (render in Asia/Bangkok).
@@ -85,9 +86,59 @@ export interface EmailMessage<T extends EmailTemplate = EmailTemplate> {
   idempotencyKey: string;
 }
 
+/** What a provider answers for one message it accepted. */
+export interface EmailSendResult {
+  messageId: string;
+  /**
+   * True when the message was dropped on purpose (EMAIL_PROVIDER=off), not sent. Callers treat it
+   * like a success (notices and receipts are marked done, so nothing old is sent once email is
+   * switched on); absent or false for every real send.
+   */
+  dropped?: boolean;
+}
+
 export interface EmailProvider {
   /** Sends one message. Throws on failure; the caller logs the notice only after success. */
-  send<T extends EmailTemplate>(message: EmailMessage<T>): Promise<{ messageId: string }>;
+  send<T extends EmailTemplate>(message: EmailMessage<T>): Promise<EmailSendResult>;
+}
+
+/** `messageId` of every message OffEmailProvider drops. */
+export const DROPPED_EMAIL_MESSAGE_ID = 'email-off';
+
+/**
+ * The one log entry OffEmailProvider writes per dropped message: the template only. Never the
+ * recipient, parameters, rendered text or idempotency key (which can contain account ids).
+ */
+export interface DroppedEmailLogEntry {
+  event: 'email.dropped';
+  provider: 'off';
+  template: EmailTemplate;
+}
+
+/** The log entry of a dropped message (reads `template` only). */
+export function droppedEmailLogEntry(
+  message: Pick<EmailMessage, 'template'>,
+): DroppedEmailLogEntry {
+  return { event: 'email.dropped', provider: 'off', template: message.template };
+}
+
+/**
+ * EMAIL_PROVIDER=off (allowed on every stage, prod included): accepts every message without
+ * rendering or sending it, and calls `log` with droppedEmailLogEntry only. api and worker pass
+ * their logger, e.g. `new OffEmailProvider((entry) => logger.info(entry))`. Never rejects (not
+ * even when `log` throws), so callers' retry paths stay idle.
+ */
+export class OffEmailProvider implements EmailProvider {
+  constructor(private readonly log: (entry: DroppedEmailLogEntry) => void) {}
+
+  send<T extends EmailTemplate>(message: EmailMessage<T>): Promise<EmailSendResult> {
+    try {
+      this.log(droppedEmailLogEntry(message));
+    } catch {
+      // A failing logger must not turn a deliberate no-op into a send failure.
+    }
+    return Promise.resolve({ messageId: DROPPED_EMAIL_MESSAGE_ID, dropped: true });
+  }
 }
 
 /** Path of the studio billing page that emails link to (PUBLIC_BASE_URL + this). */

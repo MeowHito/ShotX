@@ -3,6 +3,7 @@ import { ERROR_CODES, ERROR_DETAILS_SCHEMAS, ERROR_HTTP_STATUS, ErrorCode } from
 import {
   adminLoginBodySchema,
   adminMfaBodySchema,
+  authProvidersResponseSchema,
   authTokenResponseSchema,
   bffClientIpSchema,
   devLoginBodySchema,
@@ -10,8 +11,9 @@ import {
   oidcProviderParamsSchema,
   oidcStartBodySchema,
   refreshBodySchema,
+  viewerLoginAvailable,
 } from './auth';
-import { ALL_ROUTES, apiPath, AUTH_ROUTES } from './routes';
+import { ALL_ROUTES, apiPath, AUTH_ROUTES, SHARE_ROUTES } from './routes';
 
 const token = 'A'.repeat(43);
 
@@ -126,5 +128,49 @@ describe('auth error codes', () => {
     expect(
       ERROR_DETAILS_SCHEMAS.AUTH_PROVIDER_UNAVAILABLE.safeParse({ provider: 'google' }).success,
     ).toBe(true);
+  });
+});
+
+describe('no viewer login provider (launch decision 2026-11-11)', () => {
+  it('GET /auth/providers allows an empty OIDC list, in order and without repeats', () => {
+    expect(
+      authProvidersResponseSchema.parse({ oidc: [], devLogin: false, adminLogin: true }),
+    ).toEqual({ oidc: [], devLogin: false, adminLogin: true });
+    expect(
+      authProvidersResponseSchema.safeParse({
+        oidc: ['line', 'google'],
+        devLogin: false,
+        adminLogin: true,
+      }).success,
+    ).toBe(true);
+    expect(
+      authProvidersResponseSchema.safeParse({
+        oidc: ['line', 'line'],
+        devLogin: false,
+        adminLogin: true,
+      }).success,
+    ).toBe(false);
+    expect(AUTH_ROUTES.providers.response).toBe(authProvidersResponseSchema);
+  });
+
+  it('a viewer can sign in only with an OIDC provider or the dev login', () => {
+    expect(viewerLoginAvailable({ oidc: [], devLogin: false })).toBe(false);
+    expect(viewerLoginAvailable({ oidc: ['line'], devLogin: false })).toBe(true);
+    expect(viewerLoginAvailable({ oidc: [], devLogin: true })).toBe(true);
+  });
+
+  it('share create and update declare LOGIN_PROVIDER_UNAVAILABLE (409, no details)', () => {
+    expect(ErrorCode.LOGIN_PROVIDER_UNAVAILABLE).toBe('LOGIN_PROVIDER_UNAVAILABLE');
+    expect(ERROR_HTTP_STATUS.LOGIN_PROVIDER_UNAVAILABLE).toBe(409);
+    expect(Object.keys(ERROR_DETAILS_SCHEMAS)).not.toContain('LOGIN_PROVIDER_UNAVAILABLE');
+    expect(SHARE_ROUTES.create.errors).toContain(ErrorCode.LOGIN_PROVIDER_UNAVAILABLE);
+    expect(SHARE_ROUTES.update.errors).toContain(ErrorCode.LOGIN_PROVIDER_UNAVAILABLE);
+    // Only the routes that can set require_login.
+    const declaring = ALL_ROUTES.filter((route) =>
+      (route.errors as readonly string[]).includes(ErrorCode.LOGIN_PROVIDER_UNAVAILABLE),
+    )
+      .map((route) => `${route.method} ${route.path}`)
+      .sort();
+    expect(declaring).toEqual(['PATCH /shares/:id', 'POST /shares']);
   });
 });

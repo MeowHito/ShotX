@@ -22,6 +22,7 @@ const CONFIG = {
   zipPollIntervalMs: 5,
   zipPollTimeoutMs: 5000,
   billingMode: 'offline',
+  viewerLoginAvailable: true,
 } as const;
 
 function Studio({

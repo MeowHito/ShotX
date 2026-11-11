@@ -308,6 +308,9 @@ export function handlePhase3(
       if (b.mode === 'face_only' && !api.options.faceSearch) {
         throw new Fail('FEATURE_DISABLED', FEATURE_OFF);
       }
+      if (b.requireLogin && !api.options.viewerLoginAvailable) {
+        throw new Fail('LOGIN_PROVIDER_UNAVAILABLE');
+      }
       const token = generateShareToken();
       const share: OwnerShare = {
         id: crypto.randomUUID(),
@@ -344,6 +347,10 @@ export function handlePhase3(
       const { password, ...settings } = body as UpdateShareBody;
       if (settings.mode === 'face_only' && !api.options.faceSearch) {
         throw new Fail('FEATURE_DISABLED', FEATURE_OFF);
+      }
+      // Only an explicit `true`: a PATCH without requireLogin keeps an existing one editable.
+      if (settings.requireLogin === true && !api.options.viewerLoginAvailable) {
+        throw new Fail('LOGIN_PROVIDER_UNAVAILABLE');
       }
       const defined = Object.fromEntries(
         Object.entries(settings).filter(([, v]) => v !== undefined),

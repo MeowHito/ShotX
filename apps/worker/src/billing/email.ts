@@ -1,12 +1,20 @@
 import { SendEmailCommand } from '@aws-sdk/client-sesv2';
-import type { EmailConfig, EmailMessage, EmailProvider, EmailTemplate } from '@shotx/shared';
+import {
+  type EmailConfig,
+  type EmailMessage,
+  type EmailProvider,
+  type EmailSender,
+  type EmailTemplate,
+  OffEmailProvider,
+} from '@shotx/shared';
+import type { Logger } from '../logger';
 import { type RenderedEmail, renderEmail } from './email-templates';
 
 /**
  * The `From` header: `"Name" <address>`, with a non-ASCII (e.g. Thai) display name as a MIME
  * encoded word, which SES requires.
  */
-export function formatFromAddress(from: EmailConfig['from']): string {
+export function formatFromAddress(from: EmailSender): string {
   const ascii = /^[\x20-\x7e]*$/.test(from.name);
   const name = ascii
     ? `"${from.name.replace(/["\\]/g, (c) => `\\${c}`)}"`
@@ -27,7 +35,7 @@ export interface SesV2Sender {
 export class SesEmailProvider implements EmailProvider {
   constructor(
     private readonly client: SesV2Sender,
-    private readonly from: EmailConfig['from'],
+    private readonly from: EmailSender,
   ) {}
 
   async send<T extends EmailTemplate>(message: EmailMessage<T>): Promise<{ messageId: string }> {
@@ -95,12 +103,24 @@ export class FakeEmailProvider implements EmailProvider {
   }
 }
 
-/** `ses` needs the SESv2 client of the worker's region (and endpoint, for LocalStack). */
+/**
+ * EMAIL_PROVIDER: `ses` needs the SESv2 client of the worker's region (and endpoint, for
+ * LocalStack); `off` drops every message and logs only droppedEmailLogEntry (event, provider,
+ * template) on `log`, never the recipient, parameters or body.
+ */
 export function createEmailProvider(
   config: EmailConfig,
   sesClient: () => SesV2Sender,
+  log: Logger,
 ): EmailProvider {
-  return config.provider === 'ses'
-    ? new SesEmailProvider(sesClient(), config.from)
-    : new FakeEmailProvider();
+  switch (config.provider) {
+    case 'ses':
+      return new SesEmailProvider(sesClient(), config.from);
+    case 'fake':
+      return new FakeEmailProvider();
+    case 'off':
+      return new OffEmailProvider((entry) =>
+        log.info('email dropped (EMAIL_PROVIDER=off)', { ...entry }),
+      );
+  }
 }

@@ -76,6 +76,11 @@ export interface FakeApiOptions {
    * route but PASSWORD_CHANGE_ALLOWED_ROUTES answers PASSWORD_CHANGE_REQUIRED.
    */
   passwordChangeRequired?: boolean;
+  /**
+   * viewerLoginAvailable at the API (LINE/Google or dev login on). False: POST /shares and
+   * PATCH /shares/:id with `requireLogin: true` answer LOGIN_PROVIDER_UNAVAILABLE.
+   */
+  viewerLoginAvailable?: boolean;
   /** ZIP_MAX_FILES (share meta `zip.maxFiles`). */
   zipMaxFiles?: number;
   /** ZIP_MAX_BYTES (each fake file is 1000 bytes). */
@@ -151,6 +156,7 @@ export class FakeApi {
       role: 'photographer',
       faceSearch: false,
       passwordChangeRequired: false,
+      viewerLoginAvailable: true,
       zipMaxFiles: 500,
       zipMaxBytes: 2 * 1024 ** 3,
       maxSelfies: 3,

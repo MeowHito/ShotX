@@ -271,7 +271,10 @@ CloudWatch alarms and WAF go away. Their replacements are required before launch
 
 1. Is a 24-hour recovery point acceptable for payments, or should WAL archiving to R2 (point-in-
    time recovery) be added? What recovery time is acceptable?
-2. Which VPS provider and size, and what is its monthly bandwidth quota?
+2. Which VPS provider and size, and what is its monthly bandwidth quota? **Answered 2026-11-11:**
+   Hostinger KVM 8 (8 vCPU, 32 GB, 400 GB NVMe, 32 TB/month) in Kuala Lumpur, Malaysia, because
+   Hostinger has no Singapore VPS. This changes the processor location for the DPO (biometric
+   vectors in Postgres are in Malaysia) and the volume is not encrypted at rest.
 3. Keep Amazon SES for email, or which replacement?
 4. LINE only shares email after LINE approves the permission. Must photographers give a verified
    email at onboarding (renewal reminders, receipts, data-subject contact), or use LINE Official

@@ -3,10 +3,14 @@ import {
   BILLING_TIME_ZONE,
   EMAIL_TEMPLATE_PARAMS,
   EMAIL_TEMPLATES,
+  type DroppedEmailLogEntry,
   type EmailConfig,
   type EmailMessage,
   type EmailProvider,
+  type EmailSender,
   type EmailTemplate,
+  OffEmailProvider,
+  type SendingEmailConfig,
 } from '@shotx/shared';
 import type { z } from 'zod';
 
@@ -175,14 +179,14 @@ export interface SesV2SendEmailInput {
 export type SesV2SendEmail = (input: SesV2SendEmailInput) => Promise<{ MessageId?: string }>;
 
 /** `"Name" <address>` with the display name RFC 2047-encoded (Thai names are allowed). */
-export function fromHeader(from: EmailConfig['from']): string {
+export function fromHeader(from: EmailSender): string {
   const encoded = `=?UTF-8?B?${Buffer.from(from.name, 'utf8').toString('base64')}?=`;
   return `${encoded} <${from.address}>`;
 }
 
 /** The SESv2 SendEmail input of a message (rendered Thai text, plain text body). */
 export function sesV2Input<T extends EmailTemplate>(
-  config: EmailConfig,
+  config: SendingEmailConfig,
   message: EmailMessage<T>,
 ): SesV2SendEmailInput {
   const rendered = renderEmail(message);
@@ -206,7 +210,7 @@ export function sesV2Input<T extends EmailTemplate>(
  */
 export class SesEmailProvider implements EmailProvider {
   constructor(
-    private readonly config: EmailConfig,
+    private readonly config: SendingEmailConfig,
     private readonly sendEmail: SesV2SendEmail | null = null,
   ) {}
 
@@ -217,12 +221,22 @@ export class SesEmailProvider implements EmailProvider {
   }
 }
 
-/** The provider EMAIL_PROVIDER selects. */
+/**
+ * The provider EMAIL_PROVIDER selects. `off`: OffEmailProvider, which drops every message and
+ * passes `log` only the template (DroppedEmailLogEntry: never the recipient, parameters, body or
+ * idempotency key). main.ts and createApiApp pass the app logger.
+ */
 export function createEmailProvider(
   config: EmailConfig,
   sesSend: SesV2SendEmail | null = null,
+  log: (entry: DroppedEmailLogEntry) => void = () => undefined,
 ): EmailProvider {
-  return config.provider === 'ses'
-    ? new SesEmailProvider(config, sesSend)
-    : new FakeEmailProvider();
+  switch (config.provider) {
+    case 'ses':
+      return new SesEmailProvider(config, sesSend);
+    case 'fake':
+      return new FakeEmailProvider();
+    case 'off':
+      return new OffEmailProvider(log);
+  }
 }

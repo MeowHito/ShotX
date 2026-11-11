@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { AUTH_TOKEN_ALGORITHM, AUTH_TOKEN_AUDIENCES, authTokenIssuer } from '../account/tokens';
-import type { AuthPool, OidcProvider } from '../domain';
+import type { AuthProvidersResponse } from '../api/auth';
+import { type AuthPool, OIDC_PROVIDERS, type OidcProvider } from '../domain';
 import { type Env, parseEnv } from './env';
 import type { RateLimitRule } from './face';
 import {
@@ -27,9 +28,9 @@ import { assertLocalStage, isLocalStage } from './stage-gate';
  * Who signs people in (ADR 0008 section 4):
  * - `cognito`: the Cognito user pools (ADR 0002). The default, so every AWS stage stays on it
  *   until infra/ is removed;
- * - `shotx`: the API issues its own tokens: LINE and Google (OIDC, run by the API) and
- *   photographer email + password (ADR 0010) for the users pool, email + password + TOTP for the
- *   admins pool. Settings: loadShotxAuthConfig;
+ * - `shotx`: the API issues its own tokens: photographer email + password (ADR 0010) and, for
+ *   viewers on `require_login` shares, LINE and Google (OIDC, run by the API, each optional) for
+ *   the users pool; email + password + TOTP for the admins pool. Settings: loadShotxAuthConfig;
  * - `local`: `shotx` plus the development identity provider (`POST /auth/dev/login`, any email,
  *   users pool only). Refused anywhere but APP_STAGE=local with a non-production NODE_ENV.
  */
@@ -343,13 +344,16 @@ const shotxAuthEnvSchema = z
     /** OIDC start, OIDC callback and dev login, per client IP. */
     AUTH_LOGIN_RATE_PER_IP: requests.default(30),
     AUTH_LOGIN_RATE_PER_IP_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
-    /** LINE Login channel (users pool). */
+    /**
+     * LINE Login channel (users pool, viewers only). Optional on every stage: LINE sign-in is on
+     * only when both the id and the secret are set.
+     */
     LINE_LOGIN_CHANNEL_ID: z
       .string()
       .regex(/^\d{1,20}$/, { error: 'must be a LINE channel id (digits)' })
       .optional(),
     LINE_LOGIN_CHANNEL_SECRET: secret().optional(),
-    /** Google OAuth client (users pool). */
+    /** Google OAuth client (users pool, viewers only). Optional like LINE: both or neither. */
     GOOGLE_OAUTH_CLIENT_ID: z
       .string()
       .regex(/^[0-9]+-[0-9A-Za-z_]+\.apps\.googleusercontent\.com$/, {
@@ -459,6 +463,25 @@ const shotxAuthEnvSchema = z
     }
   });
 
+/**
+ * The placeholder deploy/env/*.env.example ships for secrets. In the LINE and Google values it is
+ * refused outside APP_STAGE=local (loadShotxAuthConfig).
+ */
+export const OIDC_TEMPLATE_PLACEHOLDER = 'REPLACE_ME';
+
+/** The environment variables of each OIDC provider (users pool, viewers). */
+export const OIDC_PROVIDER_ENV = {
+  line: { clientId: 'LINE_LOGIN_CHANNEL_ID', clientSecret: 'LINE_LOGIN_CHANNEL_SECRET' },
+  google: { clientId: 'GOOGLE_OAUTH_CLIENT_ID', clientSecret: 'GOOGLE_OAUTH_CLIENT_SECRET' },
+} as const satisfies Record<OidcProvider, { clientId: string; clientSecret: string }>;
+
+const OIDC_ENV_NAMES = [
+  OIDC_PROVIDER_ENV.line.clientId,
+  OIDC_PROVIDER_ENV.line.clientSecret,
+  OIDC_PROVIDER_ENV.google.clientId,
+  OIDC_PROVIDER_ENV.google.clientSecret,
+] as const;
+
 /** One pool's signing keys. Private keys are secret: never log them. */
 export interface AuthSigningKeys {
   /** Signs new tokens (`kid` in the JWS header). Normalized PKCS#8 PEM. */
@@ -520,7 +543,10 @@ export interface ShotxAuthConfig {
   oidcHttpTimeoutMs: number;
   /** AUTH_REFRESH_REUSE_GRACE_SECONDS (0: off). */
   refreshReuseGraceSeconds: number;
-  /** Null for a provider without credentials (allowed only with `local`). */
+  /**
+   * Null for a provider that isn't configured (any stage). Secret: use enabledOidcProviders for
+   * the names alone.
+   */
   oidc: Record<OidcProvider, OidcClientConfig | null>;
   /** The development identity provider: `local` only, and always the users pool. */
   devLogin: { pool: 'users' } | null;
@@ -533,12 +559,19 @@ export interface ShotxAuthConfig {
 /**
  * The API's token issuer settings (AUTH_PROVIDER=shotx or local; throws with `cognito`).
  *
- * - `shotx`: everything is required: AUTH_USERS_SIGNING_KEY, AUTH_ADMINS_SIGNING_KEY (different
- *   keys), LINE_LOGIN_CHANNEL_ID/SECRET, GOOGLE_OAUTH_CLIENT_ID/SECRET and
- *   ADMIN_TOTP_ENCRYPTION_KEY.
- * - `local` (APP_STAGE=local only): AUTH_USERS_SIGNING_KEY is required; LINE and Google are each
- *   enabled only when configured; the admins pool only when AUTH_ADMINS_SIGNING_KEY and
- *   ADMIN_TOTP_ENCRYPTION_KEY are both set. The dev login is on and issues users-pool tokens only.
+ * - `shotx`: AUTH_USERS_SIGNING_KEY, AUTH_ADMINS_SIGNING_KEY (different keys) and
+ *   ADMIN_TOTP_ENCRYPTION_KEY are required.
+ * - `local` (APP_STAGE=local only): AUTH_USERS_SIGNING_KEY is required; the admins pool is on only
+ *   when AUTH_ADMINS_SIGNING_KEY and ADMIN_TOTP_ENCRYPTION_KEY are both set. The dev login is on
+ *   and issues users-pool tokens only.
+ *
+ * LINE and Google are optional with both, on every stage including prod (the owner's launch
+ * decision of 2026-11-11: since ADR 0010 OIDC serves only viewers of `require_login` shares). Each
+ * is enabled only when its id and secret are both set (one without the other is refused), and a
+ * value still holding the deploy template's OIDC_TEMPLATE_PLACEHOLDER is refused outside
+ * APP_STAGE=local. With none enabled, GET /auth/providers lists `oidc: []`, the OIDC routes answer
+ * AUTH_PROVIDER_UNAVAILABLE and a share can't be set to `require_login`
+ * (LOGIN_PROVIDER_UNAVAILABLE; see viewerLoginAvailable).
  *
  * Each pool has its own Ed25519 key and `kid`, plus an optional previous public key and `kid`
  * accepted while rotating; a previous key may not be the other pool's current key. The published
@@ -566,10 +599,7 @@ export function loadShotxAuthConfig(env: Env): ShotxAuthConfig {
     if (e.AUTH_ADMINS_SIGNING_KEY === undefined) fail('AUTH_ADMINS_SIGNING_KEY is required');
     if (e.ADMIN_TOTP_ENCRYPTION_KEY === undefined) fail('ADMIN_TOTP_ENCRYPTION_KEY is required');
   }
-  if (!local) {
-    if (e.LINE_LOGIN_CHANNEL_ID === undefined) fail('LINE_LOGIN_CHANNEL_ID is required');
-    if (e.GOOGLE_OAUTH_CLIENT_ID === undefined) fail('GOOGLE_OAUTH_CLIENT_ID is required');
-  }
+  // LINE and Google are optional on every stage; `together` above pairs each id with its secret.
 
   // The .env.example placeholders are public: refused anywhere but APP_STAGE=local.
   if (!isLocalStage(env, 'ShotX auth')) {
@@ -593,6 +623,15 @@ export function loadShotxAuthConfig(env: Env): ShotxAuthConfig {
       isPublishedExample(EXAMPLE_TOTP_KEY_FINGERPRINTS, e.ADMIN_TOTP_ENCRYPTION_KEY)
     ) {
       published('ADMIN_TOTP_ENCRYPTION_KEY');
+    }
+    // deploy/env/api.env.example ships REPLACE_ME for the OIDC values. The ids fail their format;
+    // the secrets would pass it, so a half-filled pair would otherwise enable a dead provider.
+    for (const name of OIDC_ENV_NAMES) {
+      if (e[name]?.includes(OIDC_TEMPLATE_PLACEHOLDER) === true) {
+        fail(
+          `${name} is still the deploy template placeholder ${OIDC_TEMPLATE_PLACEHOLDER}: set the real value, or leave the provider's id and secret both empty to switch it off`,
+        );
+      }
     }
   }
 
@@ -725,6 +764,27 @@ export function loadShotxAuthConfig(env: Env): ShotxAuthConfig {
       },
       passwordChangeSessionTtlSeconds: e.PHOTOGRAPHER_PASSWORD_CHANGE_SESSION_TTL_SECONDS,
     },
+  };
+}
+
+/**
+ * The OIDC providers that are enabled (id and secret both set), in OIDC_PROVIDERS order. Names
+ * only, nothing secret: what GET /auth/providers answers as `oidc` (possibly empty).
+ */
+export function enabledOidcProviders(config: Pick<ShotxAuthConfig, 'oidc'>): OidcProvider[] {
+  return OIDC_PROVIDERS.filter((p) => config.oidc[p] !== null);
+}
+
+/**
+ * The body of GET /auth/providers for this configuration (secret-free): enabled OIDC providers,
+ * whether the dev login and the admin sign-in exist. Web and admin read it from that route (they
+ * never hold the OIDC secrets); the api builds the route's answer and the share guard from it.
+ */
+export function authProvidersOf(config: ShotxAuthConfig): AuthProvidersResponse {
+  return {
+    oidc: enabledOidcProviders(config),
+    devLogin: config.devLogin !== null,
+    adminLogin: config.admin !== null,
   };
 }
 

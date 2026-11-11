@@ -6,14 +6,14 @@ import { StudioShell } from '@/components/studio/studio-shell';
 import { UploadPanel } from '@/components/upload/upload-panel';
 import { UploadProvider } from '@/components/upload/upload-context';
 import { AUTH_PATHS } from '@/lib/auth/handlers';
-import { viewerState } from '@/lib/server/auth';
+import { viewerLoginIsAvailable, viewerState } from '@/lib/server/auth';
 import { clientStudioConfig, clientUploadConfig } from '@/lib/server/config';
 
 export default async function StudioLayout({ children }: { children: ReactNode }) {
   const viewer = await viewerState();
   if (!viewer.signedIn) redirect(`${AUTH_PATHS.loginPage}?next=/studio`);
   const user = viewer.user === null ? null : { name: viewer.user.name, email: viewer.user.email };
-  const config = clientStudioConfig();
+  const config = clientStudioConfig(process.env, await viewerLoginIsAvailable());
 
   return (
     // GET /me first: a temporary password goes to the password change, and accounts that aren't

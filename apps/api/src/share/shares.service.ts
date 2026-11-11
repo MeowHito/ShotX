@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { files, folders, shareDailyStats, shares } from '@shotx/db';
 import {
+  authProvidersOf,
   type createShareBodySchema,
   decodeOpaqueCursor,
   encodeOpaqueCursor,
@@ -17,6 +18,7 @@ import {
   shareUrl,
   subscriptionAllowsSharing,
   type updateShareBodySchema,
+  viewerLoginAvailable,
 } from '@shotx/shared';
 import { and, asc, desc, eq, gte, isNull, lt, lte, type SQL, sql } from 'drizzle-orm';
 import type { z } from 'zod';
@@ -137,10 +139,27 @@ export class SharesService {
     return at;
   }
 
+  /**
+   * LOGIN_PROVIDER_UNAVAILABLE for `requireLogin: true` while no viewer could sign in: the API
+   * issues tokens and neither LINE nor Google is configured nor the dev login on
+   * (viewerLoginAvailable). Never with AUTH_PROVIDER=cognito.
+   */
+  private assertViewerLoginAvailable(requireLogin: boolean | undefined): void {
+    const auth = this.config.shotxAuth;
+    if (requireLogin !== true || auth === null) return;
+    if (!viewerLoginAvailable(authProvidersOf(auth))) {
+      throw new ApiError(
+        'LOGIN_PROVIDER_UNAVAILABLE',
+        'No viewer sign-in (LINE or Google) is configured, so a share cannot require login',
+      );
+    }
+  }
+
   // --- POST /shares ----------------------------------------------------------------------------
 
   async create(ownerId: string, body: CreateBody): Promise<OwnerShare> {
     if (body.mode === 'face_only' && !this.config.features.faceSearch) throw featureDisabled();
+    this.assertViewerLoginAvailable(body.requireLogin);
     const expiresAt = this.expiry(body.expiresAt, ['body', 'expiresAt']);
     const passwordHash =
       body.password === null
@@ -256,6 +275,8 @@ export class SharesService {
    * hash, so every earlier unlock proof stops matching (ShareAccess.isUnlocked).
    */
   async update(ownerId: string, id: string, body: UpdateBody): Promise<OwnerShare> {
+    // Only when turning it on: an existing require_login share stays editable.
+    this.assertViewerLoginAvailable(body.requireLogin);
     const passwordHash =
       body.password === undefined
         ? undefined

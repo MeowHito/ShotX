@@ -186,7 +186,15 @@ export class AppModule {
               : (deps.paymentGateway ??
                 createPaymentGateway(deps.config.paymentGateway, deps.clock)),
         },
-        { provide: EMAIL_PROVIDER, useValue: deps.email ?? createEmailProvider(deps.config.email) },
+        {
+          provide: EMAIL_PROVIDER,
+          useValue:
+            deps.email ??
+            // EMAIL_PROVIDER=off: one structured line per dropped message, template only.
+            createEmailProvider(deps.config.email, null, (entry) => {
+              logger.log(JSON.stringify(entry), 'Email');
+            }),
+        },
         { provide: SHOTX_AUTH, useValue: createShotxAuth(deps.config, deps.clock, deps.oidc) },
         {
           provide: CAPTCHA_VERIFIER,

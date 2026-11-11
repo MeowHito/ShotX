@@ -16,6 +16,7 @@ import {
 import { Alert, Button, Checkbox, Input, Label } from '@shotx/ui';
 import { useTranslations } from 'next-intl';
 import { type FormEvent, type ReactNode, useId, useState } from 'react';
+import { useStudio } from '@/components/studio/studio-context';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 
 /** Thailand has no DST: end of a Bangkok day is always 23:59:59.999 at +07:00. */
@@ -51,10 +52,15 @@ function Row({ children }: { children: ReactNode }) {
 /**
  * Share settings: mode (face_only only for folders and only while face search is enabled),
  * downloads and their size, login, password and expiry. Validates with the shared schemas.
+ * "Require login" needs a viewer sign-in (studio config viewerLoginAvailable): without one the
+ * toggle is hidden with a note, except on an existing require_login share, which can still turn
+ * it off (but not back on). An edit sends `requireLogin` only when it changed, so such a share
+ * stays editable (the API refuses `requireLogin: true` with LOGIN_PROVIDER_UNAVAILABLE).
  */
 export function ShareForm(props: ShareFormProps) {
   const t = useTranslations('shareForm');
   const describe = useErrorMessage();
+  const loginAvailable = useStudio().config.viewerLoginAvailable;
   const id = useId();
   const existing = props.kind === 'edit' ? props.share : null;
   const targetType = existing?.target.type ?? (props.kind === 'create' ? props.targetType : 'file');
@@ -113,7 +119,7 @@ export function ShareForm(props: ShareFormProps) {
           mode,
           allowDownload,
           downloadSize,
-          requireLogin,
+          requireLogin: loginAvailable && requireLogin,
           password: pw.value ?? null,
           expiresAt,
         });
@@ -122,7 +128,7 @@ export function ShareForm(props: ShareFormProps) {
           mode,
           allowDownload,
           downloadSize,
-          requireLogin,
+          ...(requireLogin !== props.share.requireLogin ? { requireLogin } : {}),
           expiresAt,
           ...(pw.value !== undefined ? { password: pw.value } : {}),
         });
@@ -183,17 +189,25 @@ export function ShareForm(props: ShareFormProps) {
         </div>
       ) : null}
 
-      <Row>
-        <Checkbox
-          id={`${id}-login`}
-          checked={requireLogin}
-          onCheckedChange={(v) => setRequireLogin(v === true)}
-        />
-        <div className="grid gap-0.5">
-          <Label htmlFor={`${id}-login`}>{t('requireLogin')}</Label>
-          <span className="text-xs text-muted-foreground">{t('requireLoginHint')}</span>
-        </div>
-      </Row>
+      {loginAvailable || existing?.requireLogin === true ? (
+        <Row>
+          <Checkbox
+            id={`${id}-login`}
+            checked={requireLogin}
+            // Without a viewer sign-in it can only be turned off.
+            disabled={!loginAvailable && !requireLogin}
+            onCheckedChange={(v) => setRequireLogin(v === true)}
+          />
+          <div className="grid gap-0.5">
+            <Label htmlFor={`${id}-login`}>{t('requireLogin')}</Label>
+            <span className="text-xs text-muted-foreground">
+              {loginAvailable ? t('requireLoginHint') : t('requireLoginTurnOffOnly')}
+            </span>
+          </div>
+        </Row>
+      ) : (
+        <p className="text-xs text-muted-foreground">{t('requireLoginUnavailable')}</p>
+      )}
 
       <Row>
         <Checkbox

@@ -173,6 +173,12 @@ describe('error message map', () => {
     }
   });
 
+  it('explains LOGIN_PROVIDER_UNAVAILABLE (require login without LINE/Google)', () => {
+    const text = render(messageForCode(ErrorCode.LOGIN_PROVIDER_UNAVAILABLE, undefined));
+    expect(text).toContain('LINE หรือ Google');
+    expect(text).toContain('ต้องเข้าสู่ระบบก่อนดูไม่ได้');
+  });
+
   it('says why a new password is too weak, with the minimum length', () => {
     for (const reason of PASSWORD_POLICY_REASONS) {
       const m = messageForCode(ErrorCode.PASSWORD_TOO_WEAK, { reason, minLength: 12 });

@@ -149,7 +149,8 @@ const secretAccessKey = () =>
  * outside APP_STAGE=local https on an AWS host only) and both keys (both or neither; required when
  * runsOffAws). Off AWS outside APP_STAGE=local, every AWS_ENDPOINT_URL / AWS_ENDPOINT_URL_*
  * variable is refused and AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true is required. `required: false`
- * (the client won't be built, e.g. EMAIL_PROVIDER=fake) skips these requirements.
+ * (the client won't be built, e.g. EMAIL_PROVIDER=fake) skips these requirements. EMAIL_PROVIDER=off
+ * doesn't call this for SES at all (loadEmailConfig, loadSesClientConfig).
  */
 export function loadAwsClientConfig(
   env: Env,
@@ -258,12 +259,15 @@ export function loadFaceRekognitionClientConfig(env: Env): AwsClientConfig | nul
 /**
  * The SES client (api and worker) with EMAIL_PROVIDER=ses, like loadRekognitionClientConfig but
  * from SES_REGION, SES_ENDPOINT_URL, SES_ACCESS_KEY_ID and SES_SECRET_ACCESS_KEY. Null with
- * EMAIL_PROVIDER=fake (the SES_* values are still validated). Secret: never log it.
+ * EMAIL_PROVIDER=fake (the SES_* values are still validated, format only) and with `off` (no SES_*
+ * setting is read at all, so leftover or placeholder values can't stop a launch without email).
+ * Secret: never log it.
  */
 export function loadSesClientConfig(env: Env): AwsClientConfig | null {
   // Built here, not at module level: billing.ts imports this module too.
   const schema = z.object({ EMAIL_PROVIDER: z.enum(EMAIL_PROVIDERS).default('fake') });
   const { EMAIL_PROVIDER } = parseEnv(schema, env, 'SES client');
+  if (EMAIL_PROVIDER === 'off') return null;
   const config = loadAwsClientConfig(env, AWS_CLIENT_ENV.ses, 'SES client', {
     required: EMAIL_PROVIDER === 'ses',
   });

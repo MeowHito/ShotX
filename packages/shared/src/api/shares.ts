@@ -43,7 +43,9 @@ const settings = {
 /**
  * Create a share of a live file (`ready`) or live folder of the caller. `face_only` needs a folder
  * target, and FACE_SEARCH_ENABLED (else FEATURE_DISABLED). Needs a trial, active or grace
- * subscription (else SUBSCRIPTION_INACTIVE).
+ * subscription (else SUBSCRIPTION_INACTIVE; not checked with BILLING_MODE=offline).
+ * `requireLogin: true` needs a viewer sign-in (viewerLoginAvailable: LINE or Google configured,
+ * or the dev login), else LOGIN_PROVIDER_UNAVAILABLE (409); AUTH_PROVIDER=cognito skips the check.
  */
 export const createShareBodySchema = z
   .strictObject({
@@ -122,7 +124,10 @@ export type ListSharesResponse = z.output<typeof listSharesResponseSchema>;
 /**
  * Change settings of a share that isn't revoked (revoked: CONFLICT). The token and target never
  * change. `password: null` removes the password; a new or removed password locks out everyone who
- * unlocked the old one. Switching to `face_only` follows the create rules.
+ * unlocked the old one. Switching to `face_only` follows the create rules. `requireLogin: true`
+ * follows the create rule (LOGIN_PROVIDER_UNAVAILABLE without a viewer sign-in), also when the
+ * share already requires login; leaving `requireLogin` out or sending `false` is always allowed,
+ * so an owner can still edit or relax a `require_login` share made while a provider was on.
  */
 export const updateShareBodySchema = z
   .strictObject({

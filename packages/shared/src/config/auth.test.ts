@@ -1,13 +1,18 @@
 import { createPrivateKey, createPublicKey, generateKeyPairSync } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { viewerLoginAvailable } from '../api/auth';
 import {
   apiIssuesTokens,
   AUTH_PROVIDER_NAMES,
+  authProvidersOf,
+  enabledOidcProviders,
   loadAuthClientConfig,
   loadAuthProviderConfig,
   loadBffAuthConfig,
   loadShotxAuthConfig,
+  OIDC_PROVIDER_ENV,
+  OIDC_TEMPLATE_PLACEHOLDER,
 } from './auth';
 
 const SECRET = 'x'.repeat(32);
@@ -239,7 +244,7 @@ describe('loadShotxAuthConfig', () => {
     ).toThrow(/must be an Ed25519 public key/);
   });
 
-  it('requires every provider and the admins pool with shotx', () => {
+  it('requires the signing keys and the admins pool with shotx', () => {
     for (const [key, message] of [
       ['AUTH_USERS_SIGNING_KEY', /AUTH_USERS_SIGNING_KEY is required/],
       ['AUTH_ADMINS_SIGNING_KEY', /AUTH_ADMINS_SIGNING_KEY is required/],
@@ -247,15 +252,97 @@ describe('loadShotxAuthConfig', () => {
     ] as const) {
       expect(() => loadShotxAuthConfig(without(shotx, key)), key).toThrow(message);
     }
-    expect(() =>
-      loadShotxAuthConfig(without(shotx, 'LINE_LOGIN_CHANNEL_ID', 'LINE_LOGIN_CHANNEL_SECRET')),
-    ).toThrow(/LINE_LOGIN_CHANNEL_ID is required/);
-    expect(() =>
-      loadShotxAuthConfig(without(shotx, 'GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET')),
-    ).toThrow(/GOOGLE_OAUTH_CLIENT_ID is required/);
-    expect(() => loadShotxAuthConfig(without(shotx, 'LINE_LOGIN_CHANNEL_SECRET'))).toThrow(
-      /must be set together/,
+  });
+
+  describe('LINE and Google are optional on every stage (launch decision 2026-11-11)', () => {
+    const noOidc = without(
+      shotx,
+      'LINE_LOGIN_CHANNEL_ID',
+      'LINE_LOGIN_CHANNEL_SECRET',
+      'GOOGLE_OAUTH_CLIENT_ID',
+      'GOOGLE_OAUTH_CLIENT_SECRET',
     );
+
+    it('loads prod shotx with neither provider, and the providers list is empty', () => {
+      const config = loadShotxAuthConfig(noOidc);
+      expect(config.oidc).toEqual({ line: null, google: null });
+      expect(enabledOidcProviders(config)).toEqual([]);
+      expect(authProvidersOf(config)).toEqual({ oidc: [], devLogin: false, adminLogin: true });
+      expect(viewerLoginAvailable(authProvidersOf(config))).toBe(false);
+      // Empty values (`LINE_LOGIN_CHANNEL_ID=` in an env file) count as unset.
+      const blank = {
+        ...shotx,
+        LINE_LOGIN_CHANNEL_ID: '',
+        LINE_LOGIN_CHANNEL_SECRET: '',
+        GOOGLE_OAUTH_CLIENT_ID: '',
+        GOOGLE_OAUTH_CLIENT_SECRET: '',
+      };
+      expect(enabledOidcProviders(loadShotxAuthConfig(blank))).toEqual([]);
+    });
+
+    it('enables each provider on its own when both its id and secret are set', () => {
+      const lineOnly = loadShotxAuthConfig(
+        without(shotx, 'GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET'),
+      );
+      expect(enabledOidcProviders(lineOnly)).toEqual(['line']);
+      expect(lineOnly.oidc.line).toEqual({
+        clientId: '1234567890',
+        clientSecret: 'line-channel-secret',
+      });
+      expect(viewerLoginAvailable(authProvidersOf(lineOnly))).toBe(true);
+      const googleOnly = loadShotxAuthConfig(
+        without(shotx, 'LINE_LOGIN_CHANNEL_ID', 'LINE_LOGIN_CHANNEL_SECRET'),
+      );
+      expect(enabledOidcProviders(googleOnly)).toEqual(['google']);
+      expect(enabledOidcProviders(loadShotxAuthConfig(shotx))).toEqual(['line', 'google']);
+    });
+
+    it('still refuses one half of a pair without the other', () => {
+      for (const key of [
+        'LINE_LOGIN_CHANNEL_ID',
+        'LINE_LOGIN_CHANNEL_SECRET',
+        'GOOGLE_OAUTH_CLIENT_ID',
+        'GOOGLE_OAUTH_CLIENT_SECRET',
+      ]) {
+        expect(() => loadShotxAuthConfig(without(shotx, key)), key).toThrow(/must be set together/);
+      }
+    });
+
+    it('refuses the deploy template placeholder in OIDC values outside APP_STAGE=local', () => {
+      expect(OIDC_TEMPLATE_PLACEHOLDER).toBe('REPLACE_ME');
+      for (const name of ['LINE_LOGIN_CHANNEL_SECRET', 'GOOGLE_OAUTH_CLIENT_SECRET']) {
+        for (const stage of [{}, { APP_STAGE: 'staging', NODE_ENV: 'development' }]) {
+          expect(() =>
+            loadShotxAuthConfig({ ...shotx, ...stage, [name]: OIDC_TEMPLATE_PLACEHOLDER }),
+          ).toThrow(new RegExp(`${name} is still the deploy template placeholder`));
+        }
+      }
+      // The ids as deploy/env/api.env.example ships them fail their format.
+      expect(() =>
+        loadShotxAuthConfig({ ...shotx, LINE_LOGIN_CHANNEL_ID: OIDC_TEMPLATE_PLACEHOLDER }),
+      ).toThrow(/LINE_LOGIN_CHANNEL_ID/);
+      expect(() =>
+        loadShotxAuthConfig({
+          ...shotx,
+          GOOGLE_OAUTH_CLIENT_ID: `${OIDC_TEMPLATE_PLACEHOLDER}.apps.googleusercontent.com`,
+        }),
+      ).toThrow(/GOOGLE_OAUTH_CLIENT_ID/);
+      // Locally a placeholder is only a broken provider, as before.
+      expect(
+        loadShotxAuthConfig({
+          ...local,
+          LINE_LOGIN_CHANNEL_ID: '1234567890',
+          LINE_LOGIN_CHANNEL_SECRET: OIDC_TEMPLATE_PLACEHOLDER,
+        }).oidc.line,
+      ).not.toBeNull();
+    });
+
+    it('keeps the variable names of each provider', () => {
+      expect(OIDC_PROVIDER_ENV).toEqual({
+        line: { clientId: 'LINE_LOGIN_CHANNEL_ID', clientSecret: 'LINE_LOGIN_CHANNEL_SECRET' },
+        google: { clientId: 'GOOGLE_OAUTH_CLIENT_ID', clientSecret: 'GOOGLE_OAUTH_CLIENT_SECRET' },
+      });
+    });
   });
 
   it('throws with cognito', () => {
@@ -417,11 +504,22 @@ describe('published .env.example secrets (review M2)', () => {
         { AUTH_USERS_PREVIOUS_KEY_ID: 'old' },
       ],
     ];
+    // Also on prod without LINE/Google (launch decision 2026-11-11): optional OIDC relaxes nothing.
+    const noOidc = without(
+      shotx,
+      'LINE_LOGIN_CHANNEL_ID',
+      'LINE_LOGIN_CHANNEL_SECRET',
+      'GOOGLE_OAUTH_CLIENT_ID',
+      'GOOGLE_OAUTH_CLIENT_SECRET',
+    );
     for (const [name, value, extra] of cases) {
-      const env = { ...shotx, ...extra, [name]: value };
-      for (const stage of [{}, { APP_STAGE: 'staging', NODE_ENV: 'development' }]) {
+      for (const env of [
+        { ...shotx, ...extra, [name]: value },
+        { ...shotx, APP_STAGE: 'staging', NODE_ENV: 'development', ...extra, [name]: value },
+        { ...noOidc, ...extra, [name]: value },
+      ]) {
         try {
-          loadShotxAuthConfig({ ...env, ...stage });
+          loadShotxAuthConfig(env);
           expect.unreachable(name);
         } catch (error) {
           expect(String(error), name).toContain(

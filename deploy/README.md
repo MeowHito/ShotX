@@ -16,22 +16,37 @@ operator runs every step.
   start. Caddy gets a separate certificate for it.
 - **Bootstrap admin:** the person who runs the one-time `create` command below for
   `action.in.th@gmail.com`, types its password and enrols TOTP on their own device.
-- **VPS:** size (open question 2; the defaults fit 4 vCPU / 8 GB), with an encrypted volume.
+- **VPS:** chosen 2026-11-11: Hostinger KVM 8 (8 vCPU, 32 GB RAM, 400 GB NVMe) in Kuala Lumpur,
+  Malaysia (Hostinger has no Singapore VPS). The memory limits fit with room to spare; 4 vCPU /
+  16 GB is the smallest size that leaves headroom. Hostinger offers no encrypted volume: backups
+  are age-encrypted and media lives in R2, but the Postgres volume (including `face_vectors`) is
+  not encrypted at rest; record this for the DPO.
+- **Server hardening (done once, before the first deploy):** a `deploy` user with an SSH key,
+  `PasswordAuthentication no`, `PermitRootLogin no`, `AllowUsers deploy`, fail2ban for sshd,
+  ufw allowing only 22/tcp, 80/tcp, 443/tcp and 443/udp, the Hostinger VPS firewall with the same
+  rules, unattended security upgrades, and Docker from Docker's apt repository with rotated
+  json-file logs. Only the proxy publishes ports (Docker bypasses ufw for published ports).
 - **Cloudflare R2:** the media bucket and a separate backup bucket with a bucket lock, both with
   location hint `apac`. Tokens: api (Object Read & Write, media bucket), worker (same), an
   optional read-only signing token, backup (Object Read & Write, backup bucket only), and a
   short-lived admin token for `r2/setup-bucket.ts`.
-- **AWS (ap-southeast-1):** IAM users `shotx-<stage>-api` and `shotx-<stage>-worker`, limited to the
-  Rekognition actions in `env/api.env.example` / `env/worker.env.example` on `collection/pg-*`,
-  plus `ses:SendEmail`/`ses:SendRawEmail` from the verified identity. Turn on CloudTrail and an AWS
-  Budgets alarm, and rotate the keys.
+- **AWS (ap-southeast-1), email only:** face recognition runs on the VPS (ADR 0009), so no
+  Rekognition access is needed. With `EMAIL_PROVIDER=ses`, one IAM user per service (api, worker)
+  limited to `ses:SendEmail`/`ses:SendRawEmail` from the verified identity. Turn on CloudTrail and
+  an AWS Budgets alarm, and rotate the keys. Not needed while `EMAIL_PROVIDER=off` (launch).
 - **age key pair** for the backups: `age-keygen -o key.txt` on the owner's machine. Only the public
   key (`age1...`) goes into `env/backup.env`. Keep a second, break-glass key offline too and list
   both.
 - **Alerts:** a webhook URL (`ALERT_WEBHOOK_URL`) and an external uptime check (below). Optionally a
   heartbeat URL (`MONITOR_HEARTBEAT_URL`).
-- **Sign-in and mail:** the LINE Login channel, the Google OAuth client, the Cloudflare Turnstile
-  keys and SES sending.
+- **Captcha:** the Cloudflare Turnstile keys (required).
+- **Email (optional, off at launch):** `EMAIL_PROVIDER=off` in `env/common.env` sends nothing and
+  needs no AWS keys. When SES sending is verified, switch to `ses`, set `EMAIL_FROM_ADDRESS` and
+  uncomment the `SES_*` keys in `env/api.env` and `env/worker.env`.
+- **Viewer sign-in (optional, none at launch):** a LINE Login channel and/or a Google OAuth
+  client, used only by shares with `require_login`. Each is enabled only when both its id and
+  secret are set in `env/api.env`; leave the lines commented out otherwise (a leftover
+  `REPLACE_ME` is refused).
 - **Payments:** none for now. `BILLING_MODE=offline` (ADR 0010): photographers pay the owner in
   cash and an admin creates their account. The Omise keys are needed only when the gateway is
   switched on (`BILLING_MODE=gateway`, a later ADR): then uncomment `PAYMENT_GATEWAY` in
@@ -54,7 +69,10 @@ chmod 600 .env.production env/*.env
 REDIS_APP_PASSWORD=... REDIS_MONITOR_PASSWORD=... \
   docker compose --env-file .env.production run --rm --no-deps -e REDIS_APP_PASSWORD \
   -e REDIS_MONITOR_PASSWORD migrate redis-acl > redis/users.acl
-chmod 600 redis/users.acl
+# The redis container runs as uid 999 / gid 1000 (redis:7.2-alpine): give that group read access.
+sudo chown "$(id -u):1000" redis/users.acl && chmod 640 redis/users.acl
+# Redis wants memory overcommit for AOF rewrites (fork):
+echo 'vm.overcommit_memory = 1' | sudo tee /etc/sysctl.d/90-redis.conf && sudo sysctl -p /etc/sysctl.d/90-redis.conf
 
 docker compose --env-file .env.production build
 docker compose --env-file .env.production up -d     # migrate runs before api and worker
@@ -195,9 +213,11 @@ Before the first deploy, and re-checked after any provider change:
       monitor alerts while swap is on (`MONITOR_ALLOW_SWAP=false`).
 - [ ] **Volume encryption at rest:** the provider's encrypted volume, or LUKS for `/var/lib/docker`
       and the repository checkout.
-- [ ] **Secrets:** `deploy/.env.production`, `deploy/env/*.env` and `deploy/redis/users.acl` mode
-      0600, owned by the deploy user, never committed (`deploy/.gitignore`). Anyone in the `docker`
-      group can read them through `docker inspect`, so keep that group to the operators.
+- [ ] **Secrets:** `deploy/.env.production` and `deploy/env/*.env` mode 0600 and
+      `deploy/redis/users.acl` mode 0640 (group = the redis container's gid 1000; it holds only
+      password hashes), all owned by the deploy user, never committed (`deploy/.gitignore`). Anyone
+      in the `docker` group can read them through `docker inspect`, so keep that group to the
+      operators.
 - [ ] **Time:** NTP on (`timedatectl`): signed URLs, tokens and TOTP depend on it.
 - [ ] **Docker:** current Engine and Compose; `live-restore` on; no TCP socket exposed.
 - [ ] **Backups:** the backup bucket has a bucket lock of at least `BACKUP_RETENTION_DAYS`, the age

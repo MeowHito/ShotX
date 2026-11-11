@@ -195,6 +195,8 @@ function secretSamples(): Record<string, string> {
     AUTH_USERS_SIGNING_KEY: ed25519(),
     AUTH_ADMINS_SIGNING_KEY: ed25519(),
     ADMIN_TOTP_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+    // Commented out in the examples (email off, no LINE/Google at launch); used by the
+    // "switched on later" case below.
     REKOGNITION_ACCESS_KEY_ID: 'AKIAEXAMPLE000000001',
     SES_ACCESS_KEY_ID: 'AKIAEXAMPLE000000002',
     LINE_LOGIN_CHANNEL_ID: '1234567890',
@@ -440,6 +442,54 @@ describe.skipIf(!hasCompose)('docker compose config', () => {
     }
     expect(loadPaymentGatewayConfig(withSamples(env('api')))).toBeNull();
     expect(loadStorageQuotaConfig(env('api')).enforced).toBe(false);
+  });
+
+  it('launches with email off and no LINE/Google sign-in (no SES_* or OIDC keys anywhere)', () => {
+    for (const s of ['api', 'worker']) {
+      const e = withSamples(env(s));
+      expect(e.EMAIL_PROVIDER, s).toBe('off');
+      expect(e, s).not.toHaveProperty('EMAIL_FROM_ADDRESS');
+      expect(loadEmailConfig(e), s).toEqual({ provider: 'off', from: null });
+      expect(loadSesClientConfig(e), s).toBeNull();
+    }
+    for (const [name] of Object.entries(services)) {
+      const keys = Object.keys(env(name));
+      expect(
+        keys.filter((k) =>
+          /^(SES_ACCESS_KEY_ID|SES_SECRET_ACCESS_KEY|LINE_LOGIN_|GOOGLE_OAUTH_)/.test(k),
+        ),
+        name,
+      ).toEqual([]);
+    }
+    expect(() => loadShotxAuthConfig(withSamples(env('api')))).not.toThrow();
+  });
+
+  it('accepts SES and LINE/Google once switched on, and refuses a leftover REPLACE_ME', () => {
+    const samples = secretSamples();
+    const on = (s: string) => ({
+      ...withSamples(env(s)),
+      EMAIL_PROVIDER: 'ses',
+      EMAIL_FROM_ADDRESS: 'no-reply@photos.example.com',
+      SES_ACCESS_KEY_ID: samples.SES_ACCESS_KEY_ID ?? '',
+      SES_SECRET_ACCESS_KEY: randomBytes(30).toString('base64'),
+    });
+    for (const s of ['api', 'worker']) {
+      const e = on(s);
+      expect(loadEmailConfig(e).provider, s).toBe('ses');
+      expect(loadSesClientConfig(e), s).not.toBeNull();
+    }
+    const oidc = {
+      ...on('api'),
+      LINE_LOGIN_CHANNEL_ID: samples.LINE_LOGIN_CHANNEL_ID ?? '',
+      LINE_LOGIN_CHANNEL_SECRET: randomBytes(24).toString('hex'),
+      GOOGLE_OAUTH_CLIENT_ID: samples.GOOGLE_OAUTH_CLIENT_ID ?? '',
+      GOOGLE_OAUTH_CLIENT_SECRET: randomBytes(24).toString('base64url'),
+    };
+    for (const load of LOADERS.api ?? []) expect(() => load(oidc)).not.toThrow();
+    expect(() =>
+      loadShotxAuthConfig({ ...oidc, LINE_LOGIN_CHANNEL_SECRET: 'REPLACE_ME' }),
+    ).toThrow();
+    expect(() => loadShotxAuthConfig({ ...oidc, LINE_LOGIN_CHANNEL_ID: 'REPLACE_ME' })).toThrow();
   });
 
   it('starts api and worker only after a successful migrate', () => {
