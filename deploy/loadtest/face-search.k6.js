@@ -1,5 +1,5 @@
 // Post-race face-search spike against a STAGING copy (deploy/LOADTEST.md). Never production:
-// every scan calls Rekognition (billed) and writes consents and activity events.
+// every scan runs face search on the server and writes consents and activity events.
 //
 //   k6 run -e BASE_URL=https://staging.photos.example.com -e PRODUCTION_HOST=photos.example.com \
 //     -e I_AM_SURE_THIS_IS_STAGING=yes -e SHARE_TOKENS=tok1,tok2 \
@@ -14,7 +14,10 @@ import { Counter, Trend } from 'k6/metrics';
 
 const BASE_URL = __ENV.BASE_URL;
 const TOKENS = (__ENV.SHARE_TOKENS || '').split(',').filter((t) => t !== '');
-const POLICY_VERSION = __ENV.CONSENT_POLICY_VERSION || '2026-10-25';
+// The staging VPS's CONSENT_POLICY_VERSION (env/common.env): the self-hosted policy naming Kuala
+// Lumpur, Malaysia. Override when staging runs another version; a mismatch fails with
+// CONSENT_REQUIRED.
+const POLICY_VERSION = __ENV.CONSENT_POLICY_VERSION || '2026-11-11';
 const SELFIE_COUNT = Number(__ENV.SELFIE_COUNT || '1');
 const SELFIE_DIR = __ENV.SELFIE_DIR || './selfies';
 

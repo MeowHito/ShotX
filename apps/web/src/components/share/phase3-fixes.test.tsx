@@ -103,6 +103,10 @@ describe('ขอลบใบหน้าของฉัน', () => {
     // The deletion text, not the face-search one.
     expect(await screen.findByRole('heading', { name: deletionPolicy.title })).toBeInTheDocument();
     expect(screen.queryByText(searchPolicy.title)).not.toBeInTheDocument();
+    expect(screen.getByText(deletionPolicy.points.processor)).toBeInTheDocument();
+    expect(
+      screen.getByText(th.consent.policies.face_deletion['2026-11-11'].points.transfer),
+    ).toBeInTheDocument();
     await userEvent.click(screen.getByRole('checkbox', { name: deletionPolicy.checkbox }));
     await userEvent.click(screen.getByRole('button', { name: th.consent.acceptDeletion }));
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)[0]).toMatchObject({

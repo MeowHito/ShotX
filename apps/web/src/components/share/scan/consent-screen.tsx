@@ -9,13 +9,14 @@ import {
 } from '@shotx/shared';
 import { Alert, Button, Checkbox, Label } from '@shotx/ui';
 import { ShieldCheckIcon } from 'lucide-react';
-import { useTranslations } from 'next-intl';
+import { useMessages, useTranslations } from 'next-intl';
 import { useId, useState } from 'react';
 import { isApiError } from '@/lib/api/errors';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useGiveConsent } from '@/lib/share/queries';
 
-const POINTS = ['purpose', 'noStorage', 'results', 'processor', 'withdraw'] as const;
+/** Display order of a policy's points; a version shows those it has (`transfer` from 2026-11-11). */
+const POINTS = ['purpose', 'noStorage', 'results', 'processor', 'transfer', 'withdraw'] as const;
 
 /** A version string the API sent, if this build has its text. */
 export function knownPolicyVersion(value: unknown): ConsentPolicyVersion | null {
@@ -61,6 +62,7 @@ export function ConsentScreen({
   onDecline: () => void;
 }) {
   const t = useTranslations('consent');
+  const messages = useMessages();
   const tc = useTranslations('errors.client');
   const describe = useErrorMessage();
   const duration = useDurationText();
@@ -100,6 +102,8 @@ export function ConsentScreen({
 
   const values = { ttl: resultTtlSeconds === null ? '' : duration(resultTtlSeconds) };
   const key = `policies.${purpose}.${version}` as const;
+  const policyPoints = messages.consent.policies[purpose][version].points;
+  const points = POINTS.filter((point) => point in policyPoints);
 
   return (
     <section aria-labelledby={`${checkboxId}-title`} className="space-y-4">
@@ -114,8 +118,11 @@ export function ConsentScreen({
       </div>
       <p className="text-sm">{t(`${key}.intro`)}</p>
       <ul className="list-disc space-y-2 pl-5 text-sm">
-        {POINTS.map((point) => (
-          <li key={point}>{t(`${key}.points.${point}`, values)}</li>
+        {points.map((point) => (
+          // Not every version has every point (checked above); th.test formats each one.
+          <li key={point}>
+            {t(`${key}.points.${point}` as `${typeof key}.points.results`, values)}
+          </li>
         ))}
       </ul>
       <div className="flex items-start gap-3 rounded-xl border bg-sidebar p-4">

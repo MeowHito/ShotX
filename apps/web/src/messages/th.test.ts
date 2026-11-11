@@ -137,6 +137,29 @@ describe('Thai messages', () => {
     expect(search.points.results).not.toMatch(/\d+ ชั่วโมง/);
   });
 
+  it('2026-11-11 names Kuala Lumpur and the transfer outside Thailand; older texts are unchanged', () => {
+    expect(LATEST_CONSENT_POLICY_VERSION).toBe('2026-11-11');
+    for (const purpose of CONSENT_PURPOSES) {
+      const current = th.consent.policies[purpose]['2026-11-11'].points;
+      expect(current.processor).toContain('เซิร์ฟเวอร์ของเราเอง');
+      expect(current.processor).toContain('กรุงกัวลาลัมเปอร์ ประเทศมาเลเซีย');
+      expect(current.processor).toContain('เช่าจากผู้ให้บริการเซิร์ฟเวอร์');
+      expect(current.processor).not.toContain('สิงคโปร์');
+      expect(current.transfer).toContain('นอกประเทศไทย');
+      expect(current.transfer).toContain('ประเทศมาเลเซีย');
+      expect(current.transfer).toContain('มาตรา 28');
+      expect(current.transfer).toContain('เฉพาะผู้ดูแลระบบ');
+      expect(current.transfer).toContain('เข้ารหัสข้อมูลสำรอง');
+      expect(current.transfer).not.toContain('Amazon');
+      // Released versions keep their text and have no transfer point.
+      expect(th.consent.policies[purpose]['2026-10-29'].points.processor).toContain('สิงคโปร์');
+      expect('transfer' in th.consent.policies[purpose]['2026-10-29'].points).toBe(false);
+      expect('transfer' in th.consent.policies[purpose]['2026-10-25'].points).toBe(false);
+    }
+    // The search text says when results go away, with the API's TTL.
+    expect(th.consent.policies.face_search['2026-11-11'].points.transfer).toContain('{ttl}');
+  });
+
   it('have the scan UI wording the spec requires', () => {
     expect(th.results.strong).toBe('ใช่คุณ');
     expect(th.results.maybe).toBe('อาจจะเป็นคุณ');

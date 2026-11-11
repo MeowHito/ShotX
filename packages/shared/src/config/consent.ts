@@ -12,17 +12,20 @@ import { FACE_PROVIDERS, type FaceProviderName } from './face-provider';
  * version, which makes earlier consents of both purposes stale. The DPO or legal team approves
  * every version before launch.
  */
-export const CONSENT_POLICY_VERSIONS = ['2026-10-25', '2026-10-29'] as const;
+export const CONSENT_POLICY_VERSIONS = ['2026-10-25', '2026-10-29', '2026-11-11'] as const;
 export type ConsentPolicyVersion = (typeof CONSENT_POLICY_VERSIONS)[number];
 
 /**
  * The face processor each version's texts name: 2026-10-25 names Amazon Web Services
- * (Rekognition), 2026-10-29 our own servers (ADR 0009). The API refuses a CONSENT_POLICY_VERSION
- * that names another processor than FACE_PROVIDER, so viewers never consent to the wrong one.
+ * (Rekognition), 2026-10-29 our own servers in Singapore (ADR 0009; no longer true, kept because
+ * existing `consents` rows reference it), 2026-11-11 our own servers in Kuala Lumpur, Malaysia
+ * (Hostinger VPS, ADR 0008 open question 2). The API refuses a CONSENT_POLICY_VERSION that names
+ * another processor than FACE_PROVIDER, so viewers never consent to the wrong one.
  */
 export const CONSENT_POLICY_FACE_PROVIDER = {
   '2026-10-25': 'rekognition',
   '2026-10-29': 'self-hosted',
+  '2026-11-11': 'self-hosted',
 } as const satisfies Record<ConsentPolicyVersion, FaceProviderName>;
 
 /** The newest version whose texts name `provider`. */

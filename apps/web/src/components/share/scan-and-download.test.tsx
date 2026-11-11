@@ -72,6 +72,13 @@ describe('consent', () => {
     const policy = th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION];
     expect(screen.getByRole('heading', { name: policy.title })).toBeInTheDocument();
     expect(screen.getByText(policy.points.noStorage)).toBeInTheDocument();
+    expect(screen.getByText(policy.points.processor)).toBeInTheDocument();
+    // The transfer to Malaysia (PDPA section 28) is its own point, right after the processor.
+    const items = screen.getAllByRole('listitem').map((li) => li.textContent ?? '');
+    const processorAt = items.indexOf(policy.points.processor);
+    expect(items[processorAt + 1]).toContain('มาตรา 28');
+    expect(items[processorAt + 1]).toContain('ประเทศมาเลเซีย');
+    expect(items[processorAt + 1]).toContain('เมื่อครบ 24 ชั่วโมง');
     expect(screen.getByText(`ฉบับวันที่ ${LATEST_CONSENT_POLICY_VERSION}`)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));

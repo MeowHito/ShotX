@@ -1,3 +1,4 @@
+import { latestConsentPolicyVersion } from '@shotx/shared';
 import { RekognitionFaceProvider, SelfHostedFaceProvider } from '@shotx/face';
 import { describe, expect, it } from 'vitest';
 import { testConfig } from './testing/fakes';
@@ -34,7 +35,7 @@ describe('apiFaceProvider (ADR 0009)', () => {
   it('runs self-hosted off AWS without Rekognition keys, with the matching consent version', () => {
     const config = testConfig(vps);
     expect(config.rekognitionClient).toBeNull();
-    expect(config.consent.policyVersion).toBe('2026-10-29');
+    expect(config.consent.policyVersion).toBe(latestConsentPolicyVersion('self-hosted'));
     expect(config.face.thresholds).toEqual({ strong: 50, maybe: 36 });
     const face = apiFaceProvider(config, null as never, pool);
     expect(face.provider).toBeInstanceOf(SelfHostedFaceProvider);
