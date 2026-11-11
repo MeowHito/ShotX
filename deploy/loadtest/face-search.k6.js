@@ -14,10 +14,10 @@ import { Counter, Trend } from 'k6/metrics';
 
 const BASE_URL = __ENV.BASE_URL;
 const TOKENS = (__ENV.SHARE_TOKENS || '').split(',').filter((t) => t !== '');
-// The staging VPS's CONSENT_POLICY_VERSION (env/common.env): the self-hosted policy naming Kuala
-// Lumpur, Malaysia. Override when staging runs another version; a mismatch fails with
+// The consent policy version staging's api uses: the newest for the self-hosted provider (the api
+// picks it when CONSENT_POLICY_VERSION is unset). Override after a bump; a mismatch fails with
 // CONSENT_REQUIRED.
-const POLICY_VERSION = __ENV.CONSENT_POLICY_VERSION || '2026-11-11';
+const POLICY_VERSION = __ENV.CONSENT_POLICY_VERSION || '2026-11-11b';
 const SELFIE_COUNT = Number(__ENV.SELFIE_COUNT || '1');
 const SELFIE_DIR = __ENV.SELFIE_DIR || './selfies';
 

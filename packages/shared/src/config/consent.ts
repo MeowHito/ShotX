@@ -1,9 +1,12 @@
 import { z } from 'zod';
 import { type Env, parseEnv } from './env';
 import { FACE_PROVIDERS, type FaceProviderName } from './face-provider';
+import { LOCAL_DEV_APP_STAGE } from './stage-gate';
 
 /**
- * Every consent policy version that exists, oldest first. A version has one Thai text per
+ * Every consent policy version that exists, oldest first. Only the newest version per face processor
+ * collects new consents (outside APP_STAGE=local, see loadConsentConfig); older ones are retired but
+ * stay here with their texts, because existing `consents` rows reference them. A version has one Thai text per
  * consent purpose (CONSENT_PURPOSES: `face_search`, `face_deletion`). The texts live in the web
  * app's i18n messages, keyed by purpose and version
  * (`satisfies Record<ConsentPurpose, Record<ConsentPolicyVersion, …>>`, so a new version or
@@ -12,20 +15,27 @@ import { FACE_PROVIDERS, type FaceProviderName } from './face-provider';
  * version, which makes earlier consents of both purposes stale. The DPO or legal team approves
  * every version before launch.
  */
-export const CONSENT_POLICY_VERSIONS = ['2026-10-25', '2026-10-29', '2026-11-11'] as const;
+export const CONSENT_POLICY_VERSIONS = [
+  '2026-10-25',
+  '2026-10-29',
+  '2026-11-11',
+  '2026-11-11b',
+] as const;
 export type ConsentPolicyVersion = (typeof CONSENT_POLICY_VERSIONS)[number];
 
 /**
  * The face processor each version's texts name: 2026-10-25 names Amazon Web Services
  * (Rekognition), 2026-10-29 our own servers in Singapore (ADR 0009; no longer true, kept because
  * existing `consents` rows reference it), 2026-11-11 our own servers in Kuala Lumpur, Malaysia
- * (Hostinger VPS, ADR 0008 open question 2). The API refuses a CONSENT_POLICY_VERSION that names
+ * (Hostinger VPS, ADR 0008 open question 2), 2026-11-11b the same processor with the simpler text
+ * the owner approved. The API refuses a CONSENT_POLICY_VERSION that names
  * another processor than FACE_PROVIDER, so viewers never consent to the wrong one.
  */
 export const CONSENT_POLICY_FACE_PROVIDER = {
   '2026-10-25': 'rekognition',
   '2026-10-29': 'self-hosted',
   '2026-11-11': 'self-hosted',
+  '2026-11-11b': 'self-hosted',
 } as const satisfies Record<ConsentPolicyVersion, FaceProviderName>;
 
 /** The newest version whose texts name `provider`. */
@@ -54,10 +64,13 @@ export const LATEST_CONSENT_POLICY_VERSION: ConsentPolicyVersion = CONSENT_POLIC
 ] as ConsentPolicyVersion;
 
 const consentEnvSchema = z.object({
+  APP_STAGE: z.string().optional(),
   FACE_PROVIDER: z.enum(FACE_PROVIDERS).default('self-hosted'),
   /**
    * The version viewers must accept before a scan. Raising it makes every earlier consent stale:
    * viewers see the new text and accept again. Default: the newest version for FACE_PROVIDER.
+   * Outside APP_STAGE=local only that newest version is accepted (no new consents under a retired
+   * text); local may pin an older one for tests.
    */
   CONSENT_POLICY_VERSION: z.enum(CONSENT_POLICY_VERSIONS).optional(),
   /**
@@ -77,7 +90,8 @@ export interface ConsentConfig {
 
 /**
  * Reads CONSENT_POLICY_VERSION (default: the newest version naming FACE_PROVIDER's processor;
- * one naming another processor is refused) and IP_HASH_SECRET (required; api only).
+ * one naming another processor is refused, and outside APP_STAGE=local so is a retired one, i.e.
+ * any version but that newest) and IP_HASH_SECRET (required; api only).
  */
 export function loadConsentConfig(env: Env): ConsentConfig {
   const e = parseEnv(consentEnvSchema, env, 'consent');
@@ -85,6 +99,12 @@ export function loadConsentConfig(env: Env): ConsentConfig {
   if (CONSENT_POLICY_FACE_PROVIDER[policyVersion] !== e.FACE_PROVIDER) {
     throw new Error(
       `Invalid consent configuration: CONSENT_POLICY_VERSION ${policyVersion} names the ${CONSENT_POLICY_FACE_PROVIDER[policyVersion]} face processor, but FACE_PROVIDER is ${e.FACE_PROVIDER}`,
+    );
+  }
+  const latest = latestConsentPolicyVersion(e.FACE_PROVIDER);
+  if (policyVersion !== latest && e.APP_STAGE !== LOCAL_DEV_APP_STAGE) {
+    throw new Error(
+      `Invalid consent configuration: CONSENT_POLICY_VERSION ${policyVersion} is retired; the current version for FACE_PROVIDER ${e.FACE_PROVIDER} is ${latest} (older versions may be pinned only with APP_STAGE=${LOCAL_DEV_APP_STAGE})`,
     );
   }
   return { policyVersion, ipHashSecret: e.IP_HASH_SECRET };

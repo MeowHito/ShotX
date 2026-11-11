@@ -69,18 +69,42 @@ describe('consent', () => {
     const share = scanShare(fake);
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    const policy = th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION];
+    const policy = th.consent.policies.face_search['2026-11-11b'];
+    expect(LATEST_CONSENT_POLICY_VERSION).toBe('2026-11-11b');
     expect(screen.getByRole('heading', { name: policy.title })).toBeInTheDocument();
-    expect(screen.getByText(policy.points.noStorage)).toBeInTheDocument();
-    expect(screen.getByText(policy.points.processor)).toBeInTheDocument();
-    // The transfer to Malaysia (PDPA section 28) is its own point, right after the processor.
-    const items = screen.getAllByRole('listitem').map((li) => li.textContent ?? '');
-    const processorAt = items.indexOf(policy.points.processor);
-    expect(items[processorAt + 1]).toContain('มาตรา 28');
-    expect(items[processorAt + 1]).toContain('ประเทศมาเลเซีย');
-    expect(items[processorAt + 1]).toContain('เมื่อครบ 24 ชั่วโมง');
+    // The short text: exactly the four bullets, visible.
+    const consent = screen.getByRole('region', { name: policy.title });
+    const bullets = within(consent).getAllByRole('list')[0] as HTMLElement;
+    expect(
+      within(bullets)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual([
+      policy.points.purpose,
+      policy.points.noStorage,
+      'ผลการค้นหาเก็บไว้ให้ดาวน์โหลดได้ 24 ชั่วโมง หลังการค้นหาครั้งล่าสุด แล้วลบเอง',
+      policy.points.processor,
+    ]);
+    for (const li of within(bullets).getAllByRole('listitem')) expect(li).toBeVisible();
+    // The legal detail: collapsed until "อ่านรายละเอียด" is opened.
+    const summary = within(consent).getByText(th.consent.details);
+    const details = summary.closest('details') as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    const transfer = within(details).getByText(policy.details.transfer);
+    expect(transfer).not.toBeVisible();
+    expect(within(details).getByText(policy.details.sensitive)).not.toBeVisible();
+    await userEvent.click(summary);
+    expect(details.open).toBe(true);
+    expect(transfer).toBeVisible();
+    expect(within(details).getByText(policy.details.backups)).toBeVisible();
+    expect(within(details).getByRole('link', { name: th.consent.deleteMyFace })).toHaveAttribute(
+      'href',
+      `/s/${share.token}/delete-my-face`,
+    );
     expect(screen.getByText(`ฉบับวันที่ ${LATEST_CONSENT_POLICY_VERSION}`)).toBeInTheDocument();
 
+    // No consent, no scan: the camera isn't offered and nothing is posted.
+    expect(screen.queryByRole('button', { name: th.capture.openCamera })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
     expect(screen.getByText(th.consent.mustCheck)).toBeInTheDocument();
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)).toHaveLength(0);

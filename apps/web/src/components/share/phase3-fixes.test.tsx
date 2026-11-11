@@ -76,7 +76,7 @@ describe('limits come from share meta, not web env', () => {
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     expect(
       await screen.findByText(
-        'ผลการค้นหา (รายการรูปที่ตรงกับคุณ) เก็บไว้ไม่เกิน 6 ชั่วโมง เพื่อให้คุณเปิดดูและดาวน์โหลดรูปได้',
+        'ผลการค้นหาเก็บไว้ให้ดาวน์โหลดได้ 6 ชั่วโมง หลังการค้นหาครั้งล่าสุด แล้วลบเอง',
       ),
     ).toBeInTheDocument();
   });
@@ -86,7 +86,7 @@ describe('limits come from share meta, not web env', () => {
     const share = scanShare(fake);
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    expect(await screen.findByText(/เก็บไว้ไม่เกิน 30 นาที/)).toBeInTheDocument();
+    expect(await screen.findByText(/ดาวน์โหลดได้ 30 นาที หลังการค้นหา/)).toBeInTheDocument();
   });
 });
 
@@ -105,7 +105,7 @@ describe('ขอลบใบหน้าของฉัน', () => {
     expect(screen.queryByText(searchPolicy.title)).not.toBeInTheDocument();
     expect(screen.getByText(deletionPolicy.points.processor)).toBeInTheDocument();
     expect(
-      screen.getByText(th.consent.policies.face_deletion['2026-11-11'].points.transfer),
+      screen.getByText(th.consent.policies.face_deletion['2026-11-11b'].points.transfer),
     ).toBeInTheDocument();
     await userEvent.click(screen.getByRole('checkbox', { name: deletionPolicy.checkbox }));
     await userEvent.click(screen.getByRole('button', { name: th.consent.acceptDeletion }));

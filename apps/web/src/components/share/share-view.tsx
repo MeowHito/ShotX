@@ -331,14 +331,27 @@ function ShareContent({
         />
       )}
 
-      {/* "delete my face" is a PDPA right: offered whether or not face search is on. */}
+      {/*
+       * "delete my face" is a PDPA right, offered whether or not face search is on. With face
+       * search on, the scan is the page's face option and this is one small, muted line at the
+       * bottom (also linked from the consent details); without it, it is the only face option.
+       */}
       <footer className="flex flex-col items-start gap-1 border-t pt-4 text-sm">
-        <Link
-          href={faceDeletionHref(token)}
-          className="text-primary underline-offset-4 hover:underline"
-        >
-          {t('share.deleteMyFace')}
-        </Link>
+        {scanAvailable ? (
+          <Link
+            href={faceDeletionHref(token)}
+            className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+          >
+            {t('share.deleteMyFaceQuiet')}
+          </Link>
+        ) : (
+          <Link
+            href={faceDeletionHref(token)}
+            className="text-primary underline-offset-4 hover:underline"
+          >
+            {t('share.deleteMyFace')}
+          </Link>
+        )}
         {meta.faceSearch.consented ? (
           <Button
             variant="link"

@@ -184,20 +184,59 @@ describe('loadConsentConfig', () => {
   it('picks the newest version naming FACE_PROVIDER and refuses one naming another processor', () => {
     expect(CONSENT_POLICY_FACE_PROVIDER['2026-10-29']).toBe('self-hosted');
     expect(CONSENT_POLICY_FACE_PROVIDER['2026-11-11']).toBe('self-hosted');
-    expect(latestConsentPolicyVersion('self-hosted')).toBe('2026-11-11');
+    expect(CONSENT_POLICY_FACE_PROVIDER['2026-11-11b']).toBe('self-hosted');
+    expect(CONSENT_POLICY_VERSIONS.at(-1)).toBe('2026-11-11b');
+    expect(latestConsentPolicyVersion('self-hosted')).toBe('2026-11-11b');
     expect(latestConsentPolicyVersion('rekognition')).toBe('2026-10-25');
-    expect(loadConsentConfig({ IP_HASH_SECRET: secret }).policyVersion).toBe('2026-11-11');
-    // Older versions stay known (existing consents rows reference them) and still parse.
+    expect(loadConsentConfig({ IP_HASH_SECRET: secret }).policyVersion).toBe('2026-11-11b');
     expect(
-      loadConsentConfig({ IP_HASH_SECRET: secret, CONSENT_POLICY_VERSION: '2026-10-29' })
+      loadConsentConfig({ IP_HASH_SECRET: secret, CONSENT_POLICY_VERSION: '2026-11-11b' })
         .policyVersion,
-    ).toBe('2026-10-29');
+    ).toBe('2026-11-11b');
     expect(
       loadConsentConfig({ IP_HASH_SECRET: secret, FACE_PROVIDER: 'rekognition' }).policyVersion,
     ).toBe('2026-10-25');
     expect(() =>
       loadConsentConfig({ IP_HASH_SECRET: secret, CONSENT_POLICY_VERSION: '2026-10-25' }),
     ).toThrow(/names the rekognition face processor, but FACE_PROVIDER is self-hosted/);
+  });
+
+  it('refuses a retired version outside APP_STAGE=local, which may still pin one for tests', () => {
+    // Retired versions stay in the list (existing consents rows reference them and keep their texts).
+    for (const retired of ['2026-10-29', '2026-11-11'] as const) {
+      expect(CONSENT_POLICY_VERSIONS).toContain(retired);
+      for (const stage of [{}, { APP_STAGE: 'prod' }, { APP_STAGE: 'staging' }]) {
+        expect(() =>
+          loadConsentConfig({ ...stage, IP_HASH_SECRET: secret, CONSENT_POLICY_VERSION: retired }),
+        ).toThrow(
+          new RegExp(`CONSENT_POLICY_VERSION ${retired} is retired; .* is 2026-11-11b`),
+        );
+      }
+      expect(
+        loadConsentConfig({
+          APP_STAGE: 'local',
+          IP_HASH_SECRET: secret,
+          CONSENT_POLICY_VERSION: retired,
+        }).policyVersion,
+      ).toBe(retired);
+    }
+    // The newest Rekognition version is current for that provider on every stage.
+    expect(
+      loadConsentConfig({
+        APP_STAGE: 'prod',
+        FACE_PROVIDER: 'rekognition',
+        IP_HASH_SECRET: secret,
+        CONSENT_POLICY_VERSION: '2026-10-25',
+      }).policyVersion,
+    ).toBe('2026-10-25');
+    // The processor check still wins on local: a pin never names the wrong processor.
+    expect(() =>
+      loadConsentConfig({
+        APP_STAGE: 'local',
+        IP_HASH_SECRET: secret,
+        CONSENT_POLICY_VERSION: '2026-10-25',
+      }),
+    ).toThrow(/names the rekognition face processor/);
   });
 
   it('accepts only versions that have a text, and never prints the secret', () => {

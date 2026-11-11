@@ -8,15 +8,29 @@ import {
   ErrorCode,
 } from '@shotx/shared';
 import { Alert, Button, Checkbox, Label } from '@shotx/ui';
-import { ShieldCheckIcon } from 'lucide-react';
+import { ChevronDownIcon, ShieldCheckIcon } from 'lucide-react';
+import Link from 'next/link';
 import { useMessages, useTranslations } from 'next-intl';
 import { useId, useState } from 'react';
 import { isApiError } from '@/lib/api/errors';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useGiveConsent } from '@/lib/share/queries';
+import { faceDeletionHref } from '../share-gates';
 
 /** Display order of a policy's points; a version shows those it has (`transfer` from 2026-11-11). */
 const POINTS = ['purpose', 'noStorage', 'results', 'processor', 'transfer', 'withdraw'] as const;
+
+/** Order of the "read the details" points (consent.details; 2026-11-11b face search). */
+const DETAILS = [
+  'sensitive',
+  'selfie',
+  'index',
+  'processor',
+  'transfer',
+  'backups',
+  'rights',
+  'contact',
+] as const;
 
 /** A version string the API sent, if this build has its text. */
 export function knownPolicyVersion(value: unknown): ConsentPolicyVersion | null {
@@ -102,8 +116,18 @@ export function ConsentScreen({
 
   const values = { ttl: resultTtlSeconds === null ? '' : duration(resultTtlSeconds) };
   const key = `policies.${purpose}.${version}` as const;
-  const policyPoints = messages.consent.policies[purpose][version].points;
-  const points = POINTS.filter((point) => point in policyPoints);
+  const policy: {
+    intro?: string;
+    points: Partial<Record<(typeof POINTS)[number], string>>;
+    details?: Record<(typeof DETAILS)[number], string>;
+  } = messages.consent.policies[purpose][version];
+  const points = POINTS.filter((point) => point in policy.points);
+  /**
+   * A part of this version's text, formatted with `values`. Versions differ in which parts they
+   * have (checked above against the messages), so the key is built at run time; th.test formats
+   * every part of every version.
+   */
+  const text = (path: string) => t(`${key}.${path}` as `${typeof key}.points.results`, values);
 
   return (
     <section aria-labelledby={`${checkboxId}-title`} className="space-y-4">
@@ -116,15 +140,42 @@ export function ConsentScreen({
           <p className="text-xs text-muted-foreground">{t('version', { version })}</p>
         </div>
       </div>
-      <p className="text-sm">{t(`${key}.intro`)}</p>
+      {policy.intro !== undefined ? <p className="text-sm">{text('intro')}</p> : null}
       <ul className="list-disc space-y-2 pl-5 text-sm">
         {points.map((point) => (
-          // Not every version has every point (checked above); th.test formats each one.
-          <li key={point}>
-            {t(`${key}.points.${point}` as `${typeof key}.points.results`, values)}
-          </li>
+          <li key={point}>{text(`points.${point}`)}</li>
         ))}
       </ul>
+      {policy.details !== undefined ? (
+        // Native <details>: collapsed by default, its summary is a keyboard-operable button.
+        <details className="group rounded-xl border px-4 py-3 text-sm">
+          <summary className="flex cursor-pointer list-none items-center gap-2 font-medium text-primary outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+            {t('details')}
+            <ChevronDownIcon
+              className="size-4 transition-transform group-open:rotate-180"
+              aria-hidden
+            />
+          </summary>
+          <ul className="mt-3 list-disc space-y-2 pl-5 text-muted-foreground">
+            {DETAILS.map((point) => (
+              <li key={point}>
+                {text(`details.${point}`)}
+                {point === 'rights' && purpose === 'face_search' ? (
+                  <>
+                    {' '}
+                    <Link
+                      href={faceDeletionHref(token)}
+                      className="text-primary underline underline-offset-4"
+                    >
+                      {t('deleteMyFace')}
+                    </Link>
+                  </>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
       <div className="flex items-start gap-3 rounded-xl border bg-sidebar p-4">
         <Checkbox
           id={checkboxId}

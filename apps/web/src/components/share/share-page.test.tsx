@@ -159,6 +159,18 @@ describe('share page: states', () => {
     expect(screen.queryByRole('list', { name: th.share.galleryLabel })).not.toBeInTheDocument();
   });
 
+  it('face search on: only a small, muted "delete my face" line at the bottom', async () => {
+    const fake = new FakeApi({ faceSearch: true });
+    const share = fake.addPublicShare({ faceSearchAvailable: true });
+    renderSharePage(fake, share.token);
+    expect(await screen.findByRole('button', { name: th.share.scan })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: th.share.deleteMyFace })).toBeNull();
+    const quiet = screen.getByRole('link', { name: th.share.deleteMyFaceQuiet });
+    expect(quiet).toHaveAttribute('href', `/s/${share.token}/delete-my-face`);
+    expect(quiet).toHaveClass('text-xs', 'text-muted-foreground');
+    expect(quiet.closest('footer')).not.toBeNull();
+  });
+
   it('flag off: no scan or consent links, but "ขอลบใบหน้าของฉัน" is still offered', async () => {
     const fake = new FakeApi({ faceSearch: false });
     const share = fake.addPublicShare({ faceSearchAvailable: false });
@@ -170,6 +182,7 @@ describe('share page: states', () => {
       'href',
       `/s/${share.token}/delete-my-face`,
     );
+    expect(screen.queryByRole('link', { name: th.share.deleteMyFaceQuiet })).toBeNull();
     // face_only without face search can't show anything; it says so instead of offering a scan.
     const faceOnly = fake.addPublicShare({ mode: 'face_only', faceSearchAvailable: false });
     renderSharePage(fake, faceOnly.token);

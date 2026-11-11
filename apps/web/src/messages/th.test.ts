@@ -7,6 +7,8 @@ import {
   CONSENT_POLICY_FACE_PROVIDER,
   CONSENT_POLICY_VERSIONS,
   CONSENT_PURPOSES,
+  type ConsentPolicyVersion,
+  type ConsentPurpose,
   DOWNLOAD_SIZES,
   PAYMENT_STATUSES,
   PLAN_CHANGE_INVALID_REASONS,
@@ -103,6 +105,12 @@ describe('Thai messages', () => {
     expect(th.pricing.vatIncluded).toContain('รวมภาษีมูลค่าเพิ่ม');
   });
 
+  /** A version's whole text: visible points and intro plus the "อ่านรายละเอียด" details. */
+  const fullText = (purpose: ConsentPurpose, version: ConsentPolicyVersion) =>
+    leaves(th.consent.policies[purpose][version])
+      .map(([, text]) => text)
+      .join('\n');
+
   it('have consent text for every purpose and policy version, in Thai', () => {
     expect(Object.keys(th.consent.policies).sort()).toEqual([...CONSENT_PURPOSES].sort());
     for (const purpose of CONSENT_PURPOSES) {
@@ -113,21 +121,24 @@ describe('Thai messages', () => {
         for (const [key, text] of leaves(th.consent.policies[purpose][version])) {
           expect(text, `${purpose}.${version}.${key}`).toMatch(/[฀-๿]/);
         }
-        // Every text names PDPA's sensitive-data section and the no-storage promise.
-        const policy = th.consent.policies[purpose][version];
-        expect(policy.intro).toContain('มาตรา 26');
-        expect(policy.points.noStorage).toContain('ไม่มีการบันทึกภาพเซลฟี');
+        // Every text (visible or behind "อ่านรายละเอียด") names PDPA's sensitive-data section
+        // and the no-storage promise.
+        const text = fullText(purpose, version);
+        expect(text, `${purpose}.${version}`).toContain('มาตรา 26');
+        expect(text, `${purpose}.${version}`).toContain('ไม่มีการบันทึกภาพเซลฟี');
       }
     }
     // Each version names the processor CONSENT_POLICY_FACE_PROVIDER says it does (ADR 0009).
     for (const purpose of CONSENT_PURPOSES) {
       for (const version of CONSENT_POLICY_VERSIONS) {
-        const { processor } = th.consent.policies[purpose][version].points;
+        const text = fullText(purpose, version);
         if (CONSENT_POLICY_FACE_PROVIDER[version] === 'rekognition') {
-          expect(processor).toContain('Amazon Web Services');
+          expect(th.consent.policies[purpose][version].points.processor).toContain(
+            'Amazon Web Services',
+          );
         } else {
-          expect(processor).not.toContain('Amazon');
-          expect(processor).toContain('เซิร์ฟเวอร์ของเราเอง');
+          expect(text, `${purpose}.${version}`).not.toContain('Amazon');
+          expect(text, `${purpose}.${version}`).toContain('เซิร์ฟเวอร์ของเราเอง');
         }
       }
     }
@@ -138,7 +149,6 @@ describe('Thai messages', () => {
   });
 
   it('2026-11-11 names Kuala Lumpur and the transfer outside Thailand; older texts are unchanged', () => {
-    expect(LATEST_CONSENT_POLICY_VERSION).toBe('2026-11-11');
     for (const purpose of CONSENT_PURPOSES) {
       const current = th.consent.policies[purpose]['2026-11-11'].points;
       expect(current.processor).toContain('เซิร์ฟเวอร์ของเราเอง');
@@ -148,16 +158,55 @@ describe('Thai messages', () => {
       expect(current.transfer).toContain('นอกประเทศไทย');
       expect(current.transfer).toContain('ประเทศมาเลเซีย');
       expect(current.transfer).toContain('มาตรา 28');
-      expect(current.transfer).toContain('เฉพาะผู้ดูแลระบบ');
-      expect(current.transfer).toContain('เข้ารหัสข้อมูลสำรอง');
       expect(current.transfer).not.toContain('Amazon');
       // Released versions keep their text and have no transfer point.
       expect(th.consent.policies[purpose]['2026-10-29'].points.processor).toContain('สิงคโปร์');
       expect('transfer' in th.consent.policies[purpose]['2026-10-29'].points).toBe(false);
       expect('transfer' in th.consent.policies[purpose]['2026-10-25'].points).toBe(false);
     }
-    // The search text says when results go away, with the API's TTL.
     expect(th.consent.policies.face_search['2026-11-11'].points.transfer).toContain('{ttl}');
+  });
+
+  it('2026-11-11b: the short face-search text, its details, and the corrected deletion text', () => {
+    expect(LATEST_CONSENT_POLICY_VERSION).toBe('2026-11-11b');
+    const search = th.consent.policies.face_search['2026-11-11b'];
+    expect(search.title).toBe('ค้นหารูปของคุณด้วยใบหน้า');
+    expect(Object.values(search.points)).toEqual([
+      'เราใช้ภาพหน้าของคุณเพื่อค้นหารูปที่มีคุณในลิงก์นี้เท่านั้น',
+      'ภาพหน้าของคุณไม่ถูกบันทึก ลบทิ้งทันทีหลังค้นหา',
+      'ผลการค้นหาเก็บไว้ให้ดาวน์โหลดได้ {ttl} หลังการค้นหาครั้งล่าสุด แล้วลบเอง',
+      'ประมวลผลบนเซิร์ฟเวอร์ที่เราเช่าใช้ในประเทศมาเลเซีย ไม่ส่งให้บริการวิเคราะห์ใบหน้าของบริษัทอื่น',
+    ]);
+    expect(search.checkbox).toBe('ยินยอมให้ใช้ภาพหน้าเพื่อค้นหารูป');
+    const details = search.details;
+    expect(details.sensitive).toContain('มาตรา 26');
+    expect(details.processor).toContain('กรุงกัวลาลัมเปอร์ ประเทศมาเลเซีย');
+    expect(details.processor).toContain('เช่าจากผู้ให้บริการเซิร์ฟเวอร์');
+    expect(details.transfer).toContain('มาตรา 28');
+    expect(details.transfer).toContain('นอกประเทศไทย');
+    expect(details.index).toContain('ดัชนีใบหน้า');
+    expect(details.index).toContain('หมดอายุตามกำหนดที่ช่างภาพตั้ง แล้วถูกลบอัตโนมัติ');
+    expect(details.index).not.toMatch(/\d/);
+    expect(details.backups).toBe(
+      'ข้อมูลสำรองที่เราทำเองไม่รวมข้อมูลใบหน้าและถูกเข้ารหัส ส่วนผู้ให้บริการเซิร์ฟเวอร์อาจเก็บสำเนาสำรองทั้งเครื่องตามรอบของผู้ให้บริการ',
+    );
+    expect(details.rights).toContain('ถอนความยินยอม');
+    expect(details.rights).toContain('ขอลบใบหน้าของฉัน');
+    expect(details.contact).toContain('ติดต่อช่างภาพหรือผู้จัดงาน');
+    // Corrections: no "only administrators" claim in the new texts.
+    for (const purpose of CONSENT_PURPOSES) {
+      const text = fullText(purpose, '2026-11-11b');
+      expect(text, purpose).not.toContain('ผู้ดูแลระบบ');
+      expect(text, purpose).toContain(
+        'ข้อมูลสำรองที่เราทำเองไม่รวมข้อมูลใบหน้าและถูกเข้ารหัส ส่วนผู้ให้บริการเซิร์ฟเวอร์อาจเก็บสำเนาสำรองทั้งเครื่องตามรอบของผู้ให้บริการ',
+      );
+      expect(text, purpose).toContain('มาตรา 28');
+      expect(text, purpose).not.toContain('สิงคโปร์');
+    }
+    // The 2026-11-11 texts stay as released.
+    expect(th.consent.policies.face_search['2026-11-11'].points.transfer).toContain(
+      'เฉพาะผู้ดูแลระบบ',
+    );
   });
 
   it('have the scan UI wording the spec requires', () => {
