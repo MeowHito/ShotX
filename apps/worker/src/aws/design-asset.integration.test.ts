@@ -119,7 +119,9 @@ describe.skipIf(!endpoint)('design images against LocalStack (ADR 0013)', () => 
     };
     await runDesignAssetPurge(ctx, 30); // marks it
     expect((await designAssetById(db, asset.id))?.orphanedAt).toBeInstanceOf(Date);
-    await runDesignAssetPurge({ ...ctx, now: () => Date.now() + 31 * 86_400_000 }, 30);
+    // 31 days later; the run's time budget moves with the clock.
+    const later = () => Date.now() + 31 * 86_400_000;
+    await runDesignAssetPurge({ ...ctx, now: later, deadline: later() + 3_600_000 }, 30);
     expect(await designAssetById(db, asset.id)).toBeUndefined();
     expect(await store.head(asset.originalKey)).toBeNull();
     expect(await store.head(asset.webKey)).toBeNull();

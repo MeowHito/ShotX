@@ -1307,7 +1307,11 @@ for (const backend of DATABASE_BACKENDS) {
         r.status === 200 ? 'ok' : (r.body as { code: string }).code,
       );
       expect(outcomes.filter((o) => o === 'ok')).toHaveLength(1);
-      expect(['LAST_ADMIN', 'ACCOUNT_DISABLED']).toContain(outcomes.find((o) => o !== 'ok'));
+      // The loser is refused: LAST_ADMIN (checked under the lock), ACCOUNT_DISABLED (its own row
+      // already disabled), or UNAUTHENTICATED (the winner revoked its session before the guard).
+      expect(['LAST_ADMIN', 'ACCOUNT_DISABLED', 'UNAUTHENTICATED']).toContain(
+        outcomes.find((o) => o !== 'ok'),
+      );
       expect(await activeAdmins()).toHaveLength(1);
     });
 

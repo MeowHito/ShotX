@@ -252,9 +252,10 @@ function DesignedCard({
       scanAvailable={meta.faceSearch.available}
       scanButtonsRef={scanButtonsRef}
       label={tDesign('label')}
-      // The first screen: the viewport below the top bar (h-14 plus the safe area). Phones scale
-      // the artboard to the width; wider screens also fit it to the height (whole card visible).
-      className="min-h-[calc(100svh-3.5rem-env(safe-area-inset-top))] sm:[--design-cap:min(480px,calc((100svh_-_3.5rem)_*_390_/_844))]"
+      // The first screen: the viewport below the top bar (h-14 plus the safe area). The artboard
+      // fits both the width and the height on every screen, so the whole card (its scan buttons
+      // included) is visible without scrolling, also between a phone browser's bars (svh).
+      className="min-h-[calc(100svh-3.5rem-env(safe-area-inset-top))] [--design-cap:min(480px,calc((100svh_-_3.5rem_-_env(safe-area-inset-top))_*_390_/_844))]"
     />
   );
 }
