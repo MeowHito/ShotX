@@ -57,23 +57,6 @@ describe('limits come from share meta, not web env', () => {
     expect(toJpeg).toHaveBeenCalledWith(0.7);
   });
 
-  it('selects past meta zip.maxFiles: the download is split into zips of at most that many', async () => {
-    const fake = new FakeApi({ zipMaxFiles: 2, zipPollsUntilDone: 1 });
-    const share = fake.addPublicShare({ itemCount: 3 });
-    const { startDownload } = renderSharePage(fake, share.token);
-    for (const name of ['IMG_0001.jpg', 'IMG_0002.jpg', 'IMG_0003.jpg']) {
-      await userEvent.click(await screen.findByRole('checkbox', { name: `เลือก ${name}` }));
-    }
-    expect(screen.getByText('เลือกแล้ว 3 รูป')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด 3 รูป' }));
-    await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(2));
-    const bodies = fake.callsTo(PUBLIC_SHARE_ROUTES.downloads).map((c) => c.body);
-    expect(bodies).toEqual([
-      { fileIds: [share.items[0]?.id, share.items[1]?.id] },
-      { fileIds: [share.items[2]?.id] },
-    ]);
-  });
-
   it('states the result TTL from meta in the consent text', async () => {
     const fake = new FakeApi({ faceSearch: true, resultTtlSeconds: 6 * 3600 });
     const share = scanShare(fake);

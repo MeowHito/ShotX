@@ -159,9 +159,27 @@ export function canShareFiles(nav: Navigator | undefined): boolean {
 }
 
 /**
- * Fetches each file's signed download into memory as a File, for navigator.share({ files }).
+ * Fetches one file's signed download into memory as a File, for navigator.share({ files }).
  * The photos are the photographer's (not biometrics) and are only held until shared.
  */
+export async function fetchFileForShare(
+  api: ApiClient,
+  token: string,
+  fileId: string,
+  fetchImpl: typeof fetch = (input, init) => fetch(input, init),
+  signal?: AbortSignal,
+): Promise<File> {
+  const download = await requestSingleDownload(api, token, fileId);
+  // Signed URLs may be cross-origin (R2 with MEDIA_URL_SIGNER=s3-presign): a plain CORS GET
+  // without cookies or custom headers, so no preflight; the bucket's CORS must allow GET from
+  // the site's origin. The signature is in the URL, never in a header.
+  const response = await fetchImpl(download.url, { credentials: 'omit', mode: 'cors', signal });
+  if (!response.ok) throw new ClientError('client.saveFailed');
+  const blob = await response.blob();
+  return new File([blob], download.fileName, { type: blob.type || 'image/jpeg' });
+}
+
+/** {@link fetchFileForShare} for several files, one after another. */
 export async function fetchFilesForShare(
   api: ApiClient,
   token: string,
@@ -171,14 +189,7 @@ export async function fetchFilesForShare(
 ): Promise<File[]> {
   const files: File[] = [];
   for (const id of fileIds) {
-    const download = await requestSingleDownload(api, token, id);
-    // Signed URLs may be cross-origin (R2 with MEDIA_URL_SIGNER=s3-presign): a plain CORS GET
-    // without cookies or custom headers, so no preflight; the bucket's CORS must allow GET from
-    // the site's origin. The signature is in the URL, never in a header.
-    const response = await fetchImpl(download.url, { credentials: 'omit', mode: 'cors' });
-    if (!response.ok) throw new ClientError('client.saveFailed');
-    const blob = await response.blob();
-    files.push(new File([blob], download.fileName, { type: blob.type || 'image/jpeg' }));
+    files.push(await fetchFileForShare(api, token, id, fetchImpl));
     onProgress(files.length);
   }
   return files;

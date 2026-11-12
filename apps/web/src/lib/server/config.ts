@@ -171,6 +171,11 @@ const webShareEnvSchema = z
     WEB_FACE_GATE_MIN_BRIGHTNESS: luma.default(60),
     WEB_FACE_GATE_MAX_BRIGHTNESS: luma.default(235),
     WEB_FACE_GATE_MAX_NOSE_OFFSET_RATIO: z.coerce.number().min(0).max(2).default(0.35),
+    /**
+     * Zoom of the live selfie camera. Phones give getUserMedia the front camera's full wide
+     * field of view, while their camera app crops it; 1.4 looks like the camera app. 1 = off.
+     */
+    WEB_FACE_CAMERA_ZOOM: z.coerce.number().min(1).max(3).default(1.4),
     WEB_ZIP_POLL_INTERVAL_MS: z.coerce.number().int().min(500).max(60_000).default(2000),
     WEB_ZIP_POLL_TIMEOUT_MS: z.coerce
       .number()
@@ -179,6 +184,10 @@ const webShareEnvSchema = z
       .max(60 * 60_000)
       .default(15 * 60_000),
     WEB_IOS_SHARE_MAX_FILES: z.coerce.number().int().min(1).max(100).default(20),
+    /** Photos fetched at once while a selection is prepared for "save to Photos". */
+    WEB_PHOTO_PREFETCH_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(3),
+    /** Pause between the separate downloads of a selection (browsers that can't share files). */
+    WEB_DOWNLOAD_GAP_MS: z.coerce.number().int().min(0).max(5000).default(400),
     /** How often the studio polls GET /billing/payments/:id while a payment is pending. */
     WEB_BILLING_POLL_INTERVAL_MS: z.coerce.number().int().min(500).max(60_000).default(3000),
     /**
@@ -211,6 +220,7 @@ export function clientFaceConfig(env: Env = process.env): ClientFaceConfig {
       wasmBasePath: e.FACE_DETECTOR_WASM_BASE_PATH.replace(/\/+$/, ''),
       modelPath: e.FACE_DETECTOR_MODEL_PATH,
     },
+    cameraZoom: e.WEB_FACE_CAMERA_ZOOM,
     captcha: loadCaptchaClientConfig(env),
   };
 }
@@ -222,6 +232,8 @@ export function clientShareConfig(env: Env = process.env): ClientShareConfig {
     zipPollIntervalMs: e.WEB_ZIP_POLL_INTERVAL_MS,
     zipPollTimeoutMs: e.WEB_ZIP_POLL_TIMEOUT_MS,
     iosShareMaxFiles: e.WEB_IOS_SHARE_MAX_FILES,
+    photoPrefetchConcurrency: e.WEB_PHOTO_PREFETCH_CONCURRENCY,
+    downloadGapMs: e.WEB_DOWNLOAD_GAP_MS,
   };
 }
 

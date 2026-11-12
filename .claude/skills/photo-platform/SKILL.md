@@ -178,7 +178,7 @@ tmp/index/{fileId}.jpg    tmp/zips/{jobId}.zip                                  
 
 Config defaults (the PoC decides the real values): `FACE_STRONG = 95`, `FACE_MAYBE = 85`, `FACE_MAX_SELFIES = 3`, `FACE_EXPANSION_SEEDS = 2`, `FACE_SEARCH_RATE = 10 per IP per 10 min`.
 
-The UI shows two groups, "ใช่คุณ" and "อาจจะเป็นคุณ", plus a "ไม่ใช่ฉัน" button that writes `face_feedback` (no biometrics) for threshold tuning.
+The UI shows two groups, "ใช่คุณ" and "อาจจะเป็นคุณ". ADR 0012: no "ไม่ใช่ฉัน" button on the share page (the `face_feedback` API stays, unused).
 
 ### Accuracy program
 
@@ -192,6 +192,7 @@ Build the evaluation harness before the product UI: one real event plus 20–30 
 - Single download: signed URL with `Content-Disposition: attachment` and the original filename.
 - Multiple files: a zip job in which the worker streams objects into a ZIP with **store (no compression)** — JPEG and MP4 don't compress further — and writes it to `tmp/zips/`; the client polls the job and receives a signed URL. Max files and bytes per zip come from config.
 - On iOS offer the Web Share API (`navigator.share({ files })`) so people can save several photos straight to Photos; ZIP files are awkward on iPhone.
+- ADR 0012: share pages have no zip. One button: on iOS "save to Photos" (selected photos are fetched ahead so one tap opens the share sheet); elsewhere each selected photo downloads as its own file. Zips remain for the studio.
 - Every issued view, download and zip URL writes an `activity_event`.
 
 ## Plans, quota and billing
@@ -295,3 +296,19 @@ Finish each phase with tests and a demo before starting the next.
 - Unit: account rules (only admins create accounts, forced password change, disabled account can't sign in and its sessions are revoked, last-admin guard), quota reservation and release, `ltree` scope checks (including moved folders and trash), the subscription state machine, webhook idempotency, threshold bucketing.
 - Integration: S3/SQS flows against LocalStack; Rekognition through a fake `FaceProvider` with deterministic matches.
 - E2E (Playwright, mobile viewport): upload → share → consent → scan → download.
+
+**Photographer Section:**
+
+When sharing a folder or file, photographers will have an option to control photo visibility with two settings:
+
+**1. Show All Photos in Drive**
+- Users can access the shared folder or file and view all photos immediately.
+- No face scanning is required to browse the photos.
+
+**2. Hide All Photos in Drive**
+- Users will not be able to browse all photos in the shared folder or file.
+- Users must scan their faces using the Face Search feature.
+- Only photos that match the user's face will be displayed.
+- If a photo does not match the user's face, they will not be able to view or access that photo.
+
+This feature allows photographers to choose whether to make all photos publicly visible or restrict access to photos based on facial recognition.

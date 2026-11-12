@@ -21,6 +21,7 @@ export const FACE_CONFIG: ClientFaceConfig = {
     maxNoseOffsetRatio: 0.35,
   },
   detector: { wasmBasePath: '/mediapipe/dist', modelPath: '/mediapipe/model.tflite' },
+  cameraZoom: 1.4,
   captcha: { provider: 'none' },
 };
 
@@ -38,6 +39,8 @@ export const SHARE_CONFIG: ClientShareConfig = {
   zipPollIntervalMs: 1000,
   zipPollTimeoutMs: 60_000,
   iosShareMaxFiles: 20,
+  photoPrefetchConcurrency: 3,
+  downloadGapMs: 0,
 };
 
 /** A frontal face filling a good part of the frame. */

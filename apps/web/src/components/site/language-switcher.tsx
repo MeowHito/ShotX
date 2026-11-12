@@ -9,11 +9,12 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@shotx/ui';
-import { LanguagesIcon } from 'lucide-react';
+import { ChevronDownIcon } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import { HTML_LANG } from '@/i18n/config';
 import { reloadPage } from '@/lib/browser/navigate';
 import { writeLocaleCookie } from '@/lib/i18n/locale-cookie';
+import { LocaleFlag } from './locale-flag';
 
 /**
  * The current UI language and a chooser that stores a new one in LOCALE_COOKIE and reloads (so
@@ -35,10 +36,10 @@ function isSupportedLocale(value: string): value is SupportedLocale {
 }
 
 /**
- * The language choice in the top bar (ADR 0011, owner feedback 2026-11-12): a compact button, the
- * languages icon plus the current language's short label (TH / EN / 中文), 44px tall, that opens
- * a menu of Thai / English / Chinese, each name in its own script with `lang` and the current one
- * checked. Choosing stores LOCALE_COOKIE and reloads, so the server renders every message (and
+ * The language choice in the top bar (ADR 0011, owner feedback 2026-11-12): a compact button
+ * showing the current language's flag (Thailand, United States, China; no short text), 44px
+ * tall, that opens a menu of Thai / English / Chinese, each with its flag and its name in its own
+ * script with `lang`, the current one checked. Choosing stores LOCALE_COOKIE and reloads, so the server renders every message (and
  * the consent text) in the new language. Radix gives the menu button semantics (aria-haspopup,
  * aria-expanded), arrow keys, and Escape back to the button.
  */
@@ -62,12 +63,15 @@ export function LanguageSwitcher({
             className,
           )}
         >
-          <LanguagesIcon className="size-5 text-muted-foreground" aria-hidden />
-          {/* Accessible name: "Language EN" (publicNav.language, then the visible label). */}
-          <span className="sr-only">{t('language')}</span>{' '}
-          {active !== null ? (
-            <span lang={HTML_LANG[active]}>{t(`localeShort.${active}`)}</span>
-          ) : null}
+          {/* Accessible name: "Language English" (publicNav.language, then the language). */}
+          <span className="sr-only">
+            {t('language')}{' '}
+            {active !== null ? (
+              <span lang={HTML_LANG[active]}>{t(`locales.${active}`)}</span>
+            ) : null}
+          </span>
+          {active !== null ? <LocaleFlag locale={active} className="h-5 w-[30px]" /> : null}
+          <ChevronDownIcon className="size-4 text-muted-foreground" aria-hidden />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" collisionPadding={12} className="min-w-44">
@@ -82,8 +86,9 @@ export function LanguageSwitcher({
               key={locale}
               value={locale}
               lang={HTML_LANG[locale]}
-              className="min-h-11 text-base"
+              className="min-h-11 gap-2.5 text-base"
             >
+              <LocaleFlag locale={locale} className="h-4 w-6" />
               {t(`locales.${locale}`)}
             </DropdownMenuRadioItem>
           ))}

@@ -9,7 +9,7 @@ import {
 } from '@shotx/shared';
 import { Alert, Button, cn } from '@shotx/ui';
 import { useQuery } from '@tanstack/react-query';
-import { CheckCheckIcon, DownloadIcon, RotateCcwIcon, ScanFaceIcon } from 'lucide-react';
+import { CheckCheckIcon, RotateCcwIcon, ScanFaceIcon } from 'lucide-react';
 import { useFormatter, useTranslations } from 'next-intl';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PublicTopBar } from '@/components/site/public-top-bar';
@@ -21,13 +21,12 @@ import { useErrorMessage } from '@/lib/errors/use-error-message';
 import {
   shareKeys,
   useInvalidateShare,
-  useNotMe,
   useShareItems,
   useShareMeta,
   useWithdrawConsent,
 } from '@/lib/share/queries';
 import { ShareApiProvider, useShareApi } from '@/lib/share/share-api';
-import { DownloadBar, DownloadStatus, useDownloader, useSingleDownload } from './download-bar';
+import { DownloadBar, useSingleDownload } from './download-bar';
 import { JustifiedGrid } from './justified-grid';
 import { FaceToolsProvider, type FaceTools } from './scan/face-tools';
 import { ScanFlow } from './scan/scan-flow';
@@ -193,7 +192,6 @@ type TileRenderer = (
   item: ShareItem,
   list: readonly ShareItem[],
   size: { width: number; height: number },
-  extra?: { notMe?: boolean },
 ) => ReactNode;
 
 function ShareContent({
@@ -215,7 +213,6 @@ function ShareContent({
   const [selected, setSelected] = useState<ReadonlyMap<string, ShareItem>>(new Map());
   const resultsRef = useRef<HTMLDivElement>(null);
   const withdraw = useWithdrawConsent(token);
-  const notMe = useNotMe(token);
   const single = useSingleDownload(token);
 
   const onLightboxDownload = useCallback(
@@ -236,7 +233,7 @@ function ShareContent({
   }, []);
   const selection = useMemo(() => [...selected.values()], [selected]);
 
-  const tile: TileRenderer = (item, list, size, extra) => (
+  const tile: TileRenderer = (item, list, size) => (
     <ShareTile
       item={item}
       size={size}
@@ -246,33 +243,8 @@ function ShareContent({
           ? { selected: selected.has(item.id), onToggle: () => toggle(item) }
           : undefined
       }
-      onNotMe={extra?.notMe ? () => void rejectMatch(item) : undefined}
-      notMeBusy={notMe.isPending}
     />
   );
-
-  async function rejectMatch(item: ShareItem) {
-    try {
-      await notMe.mutateAsync(item.id);
-      setResults((prev) =>
-        prev === null
-          ? prev
-          : {
-              ...prev,
-              strong: prev.strong.filter((i) => i.id !== item.id),
-              maybe: prev.maybe.filter((i) => i.id !== item.id),
-            },
-      );
-      setSelected((prev) => {
-        const next = new Map(prev);
-        next.delete(item.id);
-        return next;
-      });
-      setNotice({ kind: 'info', text: t('results.notMeDone') });
-    } catch (err) {
-      setNotice({ kind: 'error', text: describe(err) });
-    }
-  }
 
   async function withdrawConsent() {
     try {
@@ -290,7 +262,8 @@ function ShareContent({
 
   return (
     <div className="space-y-5">
-      <ShareHeader meta={meta} />
+      {/* After a scan the found photos come first: no event title or cover (owner, 2026-11-12). */}
+      {results === null ? <ShareHeader meta={meta} /> : null}
 
       {faceOnly ? (
         scanAvailable ? (
@@ -312,13 +285,10 @@ function ShareContent({
       {results !== null ? (
         <div ref={resultsRef}>
           <ScanResults
-            token={token}
             results={results}
             tile={tile}
             allowDownload={meta.allowDownload}
             selected={selected}
-            maxFiles={meta.zip.maxFiles}
-            shareConfig={shareConfig}
             onSelectAll={(items, all) =>
               setSelected((prev) => {
                 const next = new Map(prev);
@@ -411,7 +381,6 @@ function ShareContent({
           selection={selection}
           downloadSize={meta.downloadSize}
           config={shareConfig}
-          maxFiles={meta.zip.maxFiles}
           onClear={() => setSelected(new Map())}
         />
       ) : null}
@@ -421,8 +390,8 @@ function ShareContent({
 
 /**
  * The face search as a sheet over the page: full screen on phones (so the sticky button at the
- * bottom of a long gallery doesn't open something far above), a centered card on wide screens.
- * Escape closes it.
+ * bottom of a long gallery doesn't open something far above) with the card centered vertically,
+ * a centered card on wide screens. Escape closes it.
  */
 function ScanSheet({ children, onClose }: { children: ReactNode; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -440,7 +409,7 @@ function ScanSheet({ children, onClose }: { children: ReactNode; onClose: () => 
       tabIndex={-1}
       className="fixed inset-0 z-50 overflow-y-auto bg-black/50 outline-none sm:flex sm:items-center sm:justify-center sm:p-6"
     >
-      <div className="min-h-full w-full bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] sm:min-h-0 sm:max-w-lg sm:rounded-2xl">
+      <div className="flex min-h-full w-full flex-col justify-center bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] sm:block sm:min-h-0 sm:max-w-lg sm:rounded-2xl">
         {children}
       </div>
     </div>
@@ -448,34 +417,27 @@ function ScanSheet({ children, onClose }: { children: ReactNode; onClose: () => 
 }
 
 /**
- * The face-search result (ADR 0011): how many photos were found, "select all" (the found photos
- * only), "download all found", then the strong and maybe groups, each photo with "not me".
+ * The face-search result (ADR 0011, ADR 0012): how many photos were found, "select all" (the
+ * found photos only; saving goes through the selection bar), then the strong and maybe groups.
  * Nothing found: a friendly message and a retry button back to the camera.
  */
 function ScanResults({
-  token,
   results,
   tile,
   allowDownload,
   selected,
-  maxFiles,
-  shareConfig,
   onSelectAll,
   onRetry,
 }: {
-  token: string;
   results: FaceSearchResponse;
   tile: TileRenderer;
   allowDownload: boolean;
   selected: ReadonlyMap<string, ShareItem>;
-  maxFiles: number;
-  shareConfig: ClientShareConfig;
   onSelectAll: (items: readonly ShareItem[], selected: boolean) => void;
   onRetry: () => void;
 }) {
   const tr = useTranslations('results');
   const found = useMemo(() => [...results.strong, ...results.maybe], [results]);
-  const downloader = useDownloader(token, shareConfig, maxFiles);
   const allSelected = found.length > 0 && found.every((item) => selected.has(item.id));
   const groups = [
     { key: 'strong', items: results.strong },
@@ -510,29 +472,20 @@ function ScanResults({
           {tr('found', { count: found.length })}
         </h2>
         {allowDownload ? (
-          <div className="flex w-full max-w-md flex-col gap-2 sm:flex-row">
-            <Button
-              variant="outline"
-              size="lg"
-              className={cn('flex-1 rounded-full', allSelected && 'border-primary text-primary')}
-              aria-pressed={allSelected}
-              onClick={() => onSelectAll(found, !allSelected)}
-            >
-              <CheckCheckIcon aria-hidden />
-              {allSelected ? tr('deselectAll') : tr('selectAll')}
-            </Button>
-            <Button
-              size="lg"
-              className="flex-1 rounded-full"
-              onClick={() => void downloader.download(found)}
-              disabled={downloader.busy}
-            >
-              <DownloadIcon aria-hidden />
-              {tr('downloadAll', { count: found.length })}
-            </Button>
-          </div>
+          <Button
+            variant="outline"
+            size="lg"
+            className={cn(
+              'w-full max-w-md rounded-full',
+              allSelected && 'border-primary text-primary',
+            )}
+            aria-pressed={allSelected}
+            onClick={() => onSelectAll(found, !allSelected)}
+          >
+            <CheckCheckIcon aria-hidden />
+            {allSelected ? tr('deselectAll') : tr('selectAll')}
+          </Button>
         ) : null}
-        <DownloadStatus state={downloader} />
       </div>
       {groups.map((group) =>
         group.items.length > 0 ? (
@@ -546,8 +499,7 @@ function ScanResults({
             <JustifiedGrid
               items={group.items}
               label={tr(group.key)}
-              captionPx={36}
-              renderItem={(item, size) => tile(item, group.items, size, { notMe: true })}
+              renderItem={(item, size) => tile(item, group.items, size)}
             />
           </section>
         ) : null,

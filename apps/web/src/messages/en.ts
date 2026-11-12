@@ -15,7 +15,6 @@ export const en: PublicMessages = {
     home: 'Home',
     language: 'Language',
     locales: { th: 'ไทย', en: 'English', zh: '中文' },
-    localeShort: { th: 'TH', en: 'EN', zh: '中文' },
   },
   common: {
     appName: 'ShotX',
@@ -231,14 +230,10 @@ export const en: PublicMessages = {
     found: '{count, plural, one {Found # photo of you} other {Found # photos of you}}',
     selectAll: 'Select all',
     deselectAll: 'Unselect all',
-    downloadAll: 'Download all ({count, number})',
     retry: 'Try again',
     strong: 'This is you',
     maybe: 'Might be you',
     groupCount: '{count, plural, one {# photo} other {# photos}}',
-    notMe: 'Not me',
-    notMeLabel: 'Not me: {name}',
-    notMeDone: 'Photo hidden. Thanks for helping us improve the search.',
     none: 'No photos of you were found',
     noFace: 'No face found in the photo. Try again.',
   },
@@ -260,7 +255,7 @@ export const en: PublicMessages = {
     selected: '{count, plural, one {# photo selected} other {# photos selected}}',
     clear: 'Clear selection',
     size: '({size})',
-    part: 'Downloading zip {current, number} of {total, number}',
+    downloading: 'Downloading {done, number}/{total, number}…',
     sizes: {
       web: 'social media size',
       original: 'original files',
@@ -270,7 +265,7 @@ export const en: PublicMessages = {
     readyToSave:
       '{count, plural, one {Ready: tap to save # photo} other {Ready: tap to save # photos}}',
     tooManyToSave:
-      'You can save up to {max, number} photos to Photos at a time. Use the zip download instead.',
+      'You can save up to {max, number} photos to Photos at a time. Select fewer and save them in batches.',
     zipStatus: {
       queued: 'Waiting to prepare the zip file…',
       running: 'Packing photos into a zip file…',

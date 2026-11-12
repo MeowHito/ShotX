@@ -1,3 +1,4 @@
+import type { FrameRect } from './camera';
 import type { ClientFaceConfig, SelfieLimits } from './config';
 import type { DetectorLoader } from './detector';
 import { evaluateSelfie, meanLuma, type SelfieAngle, type SelfieIssue } from './quality-gate';
@@ -27,12 +28,20 @@ export interface RenderedImage {
 export interface CanvasOps {
   /** Decodes an image file with its EXIF orientation applied. */
   decode(blob: Blob): Promise<{ source: CanvasImageSource; width: number; height: number }>;
-  render(source: CanvasImageSource, width: number, height: number): RenderedImage;
+  /** Draws `source` (only its `from` part when given) at `width` × `height`. */
+  render(source: CanvasImageSource, width: number, height: number, from?: FrameRect): RenderedImage;
 }
 
 export type SelfieSource =
   | { kind: 'file'; blob: Blob }
-  | { kind: 'frame'; source: CanvasImageSource; width: number; height: number };
+  | {
+      kind: 'frame';
+      source: CanvasImageSource;
+      width: number;
+      height: number;
+      /** The part of the frame to keep (the live camera's digital zoom). */
+      crop?: FrameRect;
+    };
 
 export type ProcessedSelfie =
   { ok: true; blob: Blob; width: number; height: number } | { ok: false; issue: SelfieIssue };
@@ -58,16 +67,17 @@ export async function processSelfie(
   angle: SelfieAngle,
   deps: SelfieProcessorDeps,
 ): Promise<ProcessedSelfie> {
-  let decoded: { source: CanvasImageSource; width: number; height: number };
+  let decoded: { source: CanvasImageSource; width: number; height: number; crop?: FrameRect };
   try {
     decoded = input.kind === 'file' ? await deps.canvas.decode(input.blob) : input;
   } catch {
     return { ok: false, issue: 'unreadable' };
   }
-  if (decoded.width <= 0 || decoded.height <= 0) return { ok: false, issue: 'unreadable' };
+  const area = decoded.crop ?? { x: 0, y: 0, width: decoded.width, height: decoded.height };
+  if (area.width <= 0 || area.height <= 0) return { ok: false, issue: 'unreadable' };
 
-  const size = fitLongEdge(decoded.width, decoded.height, deps.config.selfie.longEdge);
-  const image = deps.canvas.render(decoded.source, size.width, size.height);
+  const size = fitLongEdge(area.width, area.height, deps.config.selfie.longEdge);
+  const image = deps.canvas.render(decoded.source, size.width, size.height, decoded.crop);
   const detector = await deps.loadDetector();
   const faces = detector === null ? null : detector.detect(image.surface);
   const face = faces?.length === 1 ? faces[0] : undefined;
@@ -103,13 +113,14 @@ export const browserCanvasOps: CanvasOps = {
       URL.revokeObjectURL(url);
     }
   },
-  render(source, width, height) {
+  render(source, width, height, from) {
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (ctx === null) throw new Error('Canvas 2D is unavailable');
-    ctx.drawImage(source, 0, 0, width, height);
+    if (from === undefined) ctx.drawImage(source, 0, 0, width, height);
+    else ctx.drawImage(source, from.x, from.y, from.width, from.height, 0, 0, width, height);
     return {
       surface: canvas,
       pixels: ctx.getImageData(0, 0, width, height),

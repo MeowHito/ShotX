@@ -199,13 +199,3 @@ export function useFaceDeletion(token: string) {
   });
 }
 
-/** "Not me" feedback: body is the file id only; the server reads the similarity it stored. */
-export function useNotMe(token: string) {
-  const { api } = useShareApi();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (fileId: string) =>
-      api.call(PUBLIC_SHARE_ROUTES.feedback, { params: { token }, body: { fileId } }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: shareKeys.items(token) }),
-  });
-}

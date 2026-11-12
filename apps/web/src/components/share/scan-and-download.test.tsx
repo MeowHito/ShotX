@@ -39,8 +39,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
 function scanShare(fake: FakeApi, extra: Partial<PublicShareFixture> = {}) {
   const share = fake.addPublicShare({ faceSearchAvailable: true, itemCount: 5, ...extra });
   const [a, b, c] = share.items;
@@ -168,8 +166,10 @@ describe('scan', () => {
 
     const strong = await screen.findByRole('region', { name: th.results.strong });
     const maybe = screen.getByRole('region', { name: th.results.maybe });
-    expect(within(strong).getAllByRole('button', { name: /^ไม่ใช่ฉัน:/ })).toHaveLength(2);
-    expect(within(maybe).getAllByRole('button', { name: /^ไม่ใช่ฉัน:/ })).toHaveLength(1);
+    expect(within(strong).getAllByRole('button', { name: /^เปิด/ })).toHaveLength(2);
+    expect(within(maybe).getAllByRole('button', { name: /^เปิด/ })).toHaveLength(1);
+    // ADR 0012: no "not me" button.
+    expect(screen.queryByRole('button', { name: /ไม่ใช่ฉัน/ })).not.toBeInTheDocument();
 
     const search = fake.callsTo(PUBLIC_SHARE_ROUTES.faceSearch);
     expect(search).toHaveLength(1);
@@ -266,20 +266,16 @@ describe('scan', () => {
     expect(await screen.findByText(/ไม่พบใบหน้าในรูปที่ส่ง \(1 รูป\)/)).toBeInTheDocument();
   });
 
-  it('"ไม่ใช่ฉัน" sends only the file id and removes the photo', async () => {
+  it('after a scan the event title and cover are gone; the found photos come first', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = scanShare(fake, { consented: true });
     renderSharePage(fake, share.token);
+    expect(await screen.findByTestId('share-cover')).toBeInTheDocument();
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     await takeLiveSelfie();
-    const maybe = await screen.findByRole('region', { name: th.results.maybe });
-    const target = share.items[2];
-    await userEvent.click(
-      within(maybe).getByRole('button', { name: `ไม่ใช่ฉัน: ${target?.name}` }),
-    );
-    expect(await screen.findByText(th.results.notMeDone)).toBeInTheDocument();
-    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.feedback)[0]?.body).toEqual({ fileId: target?.id });
-    expect(screen.queryByRole('region', { name: th.results.maybe })).not.toBeInTheDocument();
+    await screen.findByRole('region', { name: th.results.strong });
+    expect(screen.queryByTestId('share-cover')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
   });
 
   it('nothing found: a plain message, no selfie tips, and "ลองใหม่" back to the camera', async () => {
@@ -301,14 +297,16 @@ describe('scan', () => {
     await waitFor(() => expect(fake.callsTo(PUBLIC_SHARE_ROUTES.faceSearch)).toHaveLength(2));
   });
 
-  it('"เลือกทั้งหมด" selects only the found photos; download selected and all found', async () => {
-    const fake = new FakeApi({ faceSearch: true, zipPollsUntilDone: 1 });
+  it('"เลือกทั้งหมด" selects only the found photos; no "download all"; each downloads alone', async () => {
+    const fake = new FakeApi({ faceSearch: true });
     const share = scanShare(fake, { consented: true });
     const { startDownload } = renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     await takeLiveSelfie();
     await screen.findByRole('region', { name: th.results.strong });
 
+    // ADR 0012: "select all" only; saving goes through the selection bar.
+    expect(screen.queryByRole('button', { name: /ดาวน์โหลดทั้งหมด/ })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: th.results.selectAll }));
     const found = [...share.faceMatches.strong, ...share.faceMatches.maybe];
     expect(screen.getByText('เลือกแล้ว 3 รูป')).toBeInTheDocument();
@@ -328,30 +326,12 @@ describe('scan', () => {
     );
     expect(screen.getByText('เลือกแล้ว 2 รูป')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด 2 รูป' }));
-    await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(1));
-    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.downloads)[0]?.body).toEqual({
-      fileIds: share.faceMatches.strong,
-    });
-
-    await userEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลดทั้งหมด (3)' }));
     await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(2));
-    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.downloads)[1]?.body).toEqual({ fileIds: found });
-  });
-
-  it('"download all found" splits more photos than ZIP_MAX_FILES into several zips', async () => {
-    const fake = new FakeApi({ faceSearch: true, zipPollsUntilDone: 1, zipMaxFiles: 2 });
-    const share = fake.addPublicShare({ faceSearchAvailable: true, consented: true, itemCount: 5 });
-    share.faceMatches = { strong: share.items.map((i) => i.id), maybe: [] };
-    const { startDownload } = renderSharePage(fake, share.token);
-    await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    await takeLiveSelfie();
-    await userEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลดทั้งหมด (5)' }));
-    await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(3));
-    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.downloads).map((c) => c.body)).toEqual([
-      { fileIds: share.items.slice(0, 2).map((i) => i.id) },
-      { fileIds: share.items.slice(2, 4).map((i) => i.id) },
-      { fileIds: share.items.slice(4).map((i) => i.id) },
-    ]);
+    // One signed file each, never a zip.
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.downloads).map((c) => c.body)).toEqual(
+      share.faceMatches.strong.map((id) => ({ fileIds: [id] })),
+    );
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.zipJob)).toHaveLength(0);
   });
 });
 
@@ -376,59 +356,62 @@ describe('downloads', () => {
     ).toBeUndefined();
   });
 
-  it('zips several with a fresh Idempotency-Key per click and polls until ready', async () => {
-    const fake = new FakeApi({ zipPollsUntilDone: 3 });
+  it('several photos download one by one as separate files: no zip on share pages', async () => {
+    const fake = new FakeApi();
     const share = fake.addPublicShare();
     const { startDownload } = renderSharePage(fake, share.token);
-    await select(['IMG_0001.jpg', 'IMG_0002.jpg']);
-    const button = screen.getByRole('button', { name: 'ดาวน์โหลด 2 รูป' });
-    await userEvent.click(button);
-    await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(1));
-    expect(startDownload.mock.calls[0]?.[0]).toMatch(/\/tmp\/zips\/.+\.zip/);
-    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.zipJob)).toHaveLength(3);
-
-    await userEvent.click(button);
-    await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(2));
-    const keys = fake
-      .callsTo(PUBLIC_SHARE_ROUTES.downloads)
-      .map((c) => c.headers[IDEMPOTENCY_KEY_HEADER]);
-    expect(keys).toHaveLength(2);
-    for (const key of keys) expect(key).toMatch(UUID);
-    expect(keys[0]).not.toBe(keys[1]);
-  });
-
-  it('reports a failed zip in Thai', async () => {
-    const fake = new FakeApi({ zipOutcome: 'failed' });
-    const share = fake.addPublicShare();
-    const { startDownload } = renderSharePage(fake, share.token);
-    await select(['IMG_0001.jpg', 'IMG_0002.jpg']);
-    await userEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด 2 รูป' }));
-    expect(await screen.findByText(th.errors.client.zipFailed)).toBeInTheDocument();
-    expect(startDownload).not.toHaveBeenCalled();
-  });
-
-  it('shows ZIP_TOO_LARGE limits (over ZIP_MAX_BYTES)', async () => {
-    const fake = new FakeApi({ zipMaxBytes: 2500 });
-    const share = fake.addPublicShare();
-    renderSharePage(fake, share.token);
     await select(['IMG_0001.jpg', 'IMG_0002.jpg', 'IMG_0003.jpg']);
+    expect(screen.getAllByRole('button', { name: /ดาวน์โหลด|บันทึก/ })).toHaveLength(1);
     await userEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด 3 รูป' }));
-    expect(await screen.findByText(/ดาวน์โหลดพร้อมกันได้ไม่เกิน 500 รูป/)).toBeInTheDocument();
+    await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(3));
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.downloads).map((c) => c.body)).toEqual(
+      share.items.slice(0, 3).map((i) => ({ fileIds: [i.id] })),
+    );
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.zipJob)).toHaveLength(0);
   });
 
-  it('on iOS offers Save to Photos through navigator.share({ files })', async () => {
+  it('on iOS one tap saves to Photos: the selection is fetched ahead, no download button', async () => {
     const fake = new FakeApi();
     const share = fake.addPublicShare();
     const ios = fakeNavigator({ share: true });
     const { mediaFetch } = renderSharePage(fake, share.token, { nav: ios.nav });
     await select(['IMG_0001.jpg', 'IMG_0002.jpg']);
+    // Fetched as soon as they are selected, before any tap.
+    await waitFor(() => expect(mediaFetch).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('button', { name: /ดาวน์โหลด/ })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: th.downloads.saveToPhotos }));
-    const save = await screen.findByRole('button', { name: 'พร้อมแล้ว แตะเพื่อบันทึก 2 รูป' });
-    expect(mediaFetch).toHaveBeenCalledTimes(2);
-    await userEvent.click(save);
     expect(ios.share).toHaveBeenCalledTimes(1);
     const files = ios.share.mock.calls[0]?.[0].files ?? [];
     expect(files.map((f) => f.name)).toEqual(['IMG_0001.jpg', 'IMG_0002.jpg']);
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.zipJob)).toHaveLength(0);
+  });
+
+  it('on iOS a deselected photo is dropped from what gets saved', async () => {
+    const fake = new FakeApi();
+    const share = fake.addPublicShare();
+    const ios = fakeNavigator({ share: true });
+    renderSharePage(fake, share.token, { nav: ios.nav });
+    await select(['IMG_0001.jpg', 'IMG_0002.jpg', 'IMG_0003.jpg']);
+    await select(['IMG_0002.jpg']);
+    expect(screen.getByText('เลือกแล้ว 2 รูป')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: th.downloads.saveToPhotos }));
+    await waitFor(() => expect(ios.share).toHaveBeenCalledTimes(1));
+    const files = ios.share.mock.calls[0]?.[0].files ?? [];
+    expect(files.map((f) => f.name)).toEqual(['IMG_0001.jpg', 'IMG_0003.jpg']);
+  });
+
+  it('on iOS, if Safari lets a slow tap expire, the button asks for one more tap', async () => {
+    const fake = new FakeApi();
+    const share = fake.addPublicShare();
+    const ios = fakeNavigator({ share: true });
+    ios.share.mockRejectedValueOnce(
+      Object.assign(new Error('gesture'), { name: 'NotAllowedError' }),
+    );
+    renderSharePage(fake, share.token, { nav: ios.nav });
+    await select(['IMG_0001.jpg', 'IMG_0002.jpg']);
+    await userEvent.click(screen.getByRole('button', { name: th.downloads.saveToPhotos }));
+    const again = await screen.findByRole('button', { name: 'พร้อมแล้ว แตะเพื่อบันทึก 2 รูป' });
+    await userEvent.click(again);
+    expect(ios.share).toHaveBeenCalledTimes(2);
   });
 });

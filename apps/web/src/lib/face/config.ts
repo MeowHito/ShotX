@@ -15,6 +15,8 @@ export interface ClientFaceConfig {
    * `vision_wasm_internal.{js,wasm}` and the face detector model file.
    */
   detector: { wasmBasePath: string; modelPath: string };
+  /** WEB_FACE_CAMERA_ZOOM: the live camera's zoom (the camera's own where it can, else a crop). */
+  cameraZoom: number;
   /**
    * The challenge face search and face deletion may ask for after a rate-limit hit
    * (loadCaptchaClientConfig): with `turnstile`, the public site key and script URL.
@@ -30,12 +32,16 @@ export interface SelfieLimits {
   selfie: { longEdge: number; jpegQuality: number };
 }
 
-/** Web-only download tunables of the share page. ZIP_MAX_FILES comes from share meta. */
+/** Web-only download tunables of the share page. */
 export interface ClientShareConfig {
-  /** How often the client polls GET /s/:token/zip-jobs/:id. */
+  /** How often the client polls GET /s/:token/zip-jobs/:id (studio; share pages have no zip). */
   zipPollIntervalMs: number;
   /** Give up polling after this long. */
   zipPollTimeoutMs: number;
   /** Most photos fetched for one iOS "save to Photos" (navigator.share). */
   iosShareMaxFiles: number;
+  /** Photos fetched at once while a selection is prepared for "save to Photos". */
+  photoPrefetchConcurrency: number;
+  /** Pause between the separate downloads of a selection. */
+  downloadGapMs: number;
 }

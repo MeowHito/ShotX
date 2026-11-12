@@ -238,7 +238,8 @@ describe('Thai messages', () => {
   it('have the scan UI wording the spec requires', () => {
     expect(th.results.strong).toBe('ใช่คุณ');
     expect(th.results.maybe).toBe('อาจจะเป็นคุณ');
-    expect(th.results.notMe).toBe('ไม่ใช่ฉัน');
+    // ADR 0012: no "not me" button on the share page.
+    expect('notMe' in th.results).toBe(false);
     expect(th.faceDeletion.title).toBe('ขอลบใบหน้าของฉัน');
     expect(th.share.unavailable.title).toBe('ลิงก์นี้หมดอายุ');
     // ADR 0011: the sticky button, the results' select-all and retry.

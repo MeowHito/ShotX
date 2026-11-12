@@ -1,7 +1,7 @@
 'use client';
 
 import type { ShareItem } from '@shotx/shared';
-import { Button, cn } from '@shotx/ui';
+import { cn } from '@shotx/ui';
 import { CheckIcon, PlayIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 
@@ -12,16 +12,13 @@ export interface ShareTileProps {
   onOpen: () => void;
   /** Present when downloads are allowed: the round selection dot. */
   selection?: { selected: boolean; onToggle: () => void };
-  /** Present on face-search hits: the "not me" button. */
-  onNotMe?: () => void;
-  notMeBusy?: boolean;
 }
 
 /**
  * A photo of the share page in its original aspect ratio: tap to open the lightbox, tap the
  * round dot to select (tap again to unselect).
  */
-export function ShareTile({ item, size, onOpen, selection, onNotMe, notMeBusy }: ShareTileProps) {
+export function ShareTile({ item, size, onOpen, selection }: ShareTileProps) {
   const t = useTranslations();
   const selected = selection?.selected === true;
   return (
@@ -74,18 +71,6 @@ export function ShareTile({ item, size, onOpen, selection, onNotMe, notMeBusy }:
             <CheckIcon className="size-4" strokeWidth={3} aria-hidden />
           </span>
         </button>
-      ) : null}
-      {onNotMe !== undefined ? (
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8 w-full px-1 text-xs"
-          disabled={notMeBusy}
-          onClick={onNotMe}
-          aria-label={t('results.notMeLabel', { name: item.name })}
-        >
-          {t('results.notMe')}
-        </Button>
       ) : null}
     </div>
   );

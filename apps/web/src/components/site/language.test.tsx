@@ -53,33 +53,36 @@ function bar(locale: 'th' | 'en' | 'zh') {
 }
 
 describe('language switcher (ADR 0011)', () => {
-  it('is one compact menu button: the icon, the current short label, a 44px target', () => {
+  it('is one compact menu button: the current flag (no short text), a 44px target', () => {
     bar('th');
     const nav = screen.getByRole('navigation', { name: MESSAGES.th.publicNav.label });
     expect(within(nav).getByRole('link', { name: /หน้าแรก/ })).toHaveAttribute('href', '/');
-    const button = within(nav).getByRole('button', { name: 'ภาษา TH' });
+    const button = within(nav).getByRole('button', { name: 'ภาษา ไทย' });
     expect(button).toHaveAttribute('type', 'button');
     expect(button).toHaveAttribute('aria-haspopup', 'menu');
     expect(button).toHaveAttribute('aria-expanded', 'false');
     expect(button).toHaveClass('h-11', 'min-w-11', 'shrink-0');
-    expect(button.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    // Owner feedback 2026-11-12: a flag instead of "TH".
+    expect(within(button).getByTestId('flag-th')).toHaveAttribute('aria-hidden', 'true');
+    expect(button).not.toHaveTextContent(/TH/);
     // Nothing else in the bar: no row of language buttons any more.
     expect(within(nav).getAllByRole('button')).toHaveLength(1);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
   it.each([
-    ['en', 'Language EN'],
+    ['en', 'Language English'],
     ['zh', '语言 中文'],
   ] as const)('%s: the button is named from the messages (%s)', (locale, name) => {
     bar(locale);
     const button = screen.getByRole('button', { name });
     expect(button.querySelector('[lang]')).toHaveAttribute('lang', HTML_LANG[locale]);
+    expect(within(button).getByTestId(`flag-${locale}`)).toBeInTheDocument();
   });
 
   it('opens a menu of ไทย / English / 中文, each in its own script, the current one checked', async () => {
     bar('th');
-    const button = screen.getByRole('button', { name: 'ภาษา TH' });
+    const button = screen.getByRole('button', { name: 'ภาษา ไทย' });
     await userEvent.click(button);
     expect(button).toHaveAttribute('aria-expanded', 'true');
     const menu = await screen.findByRole('menu');
@@ -87,24 +90,27 @@ describe('language switcher (ADR 0011)', () => {
     expect(items.map((i) => i.textContent)).toEqual(['ไทย', 'English', '中文']);
     expect(items.map((i) => i.getAttribute('lang'))).toEqual(['th', 'en', 'zh-Hans']);
     expect(items.map((i) => i.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false']);
+    expect(
+      items.map((i) => i.querySelector<SVGElement>('[data-testid^="flag-"]')?.dataset.testid),
+    ).toEqual(['flag-th', 'flag-en', 'flag-zh']);
   });
 
   it('choosing a language writes LOCALE_COOKIE and reloads; the current one does nothing', async () => {
     bar('th');
-    await userEvent.click(screen.getByRole('button', { name: 'ภาษา TH' }));
+    await userEvent.click(screen.getByRole('button', { name: 'ภาษา ไทย' }));
     await userEvent.click(await screen.findByRole('menuitemradio', { name: 'English' }));
     expect(document.cookie).toContain(`${LOCALE_COOKIE}=en`);
     expect(reloadPage).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'ภาษา TH' }));
+    await userEvent.click(screen.getByRole('button', { name: 'ภาษา ไทย' }));
     await userEvent.click(await screen.findByRole('menuitemradio', { name: 'ไทย' }));
     expect(reloadPage).toHaveBeenCalledTimes(1);
   });
 
   it('works from the keyboard, and Escape closes the menu back to the button', async () => {
     bar('en');
-    const button = screen.getByRole('button', { name: 'Language EN' });
+    const button = screen.getByRole('button', { name: 'Language English' });
     button.focus();
     await userEvent.keyboard('{Enter}');
     const menu = await screen.findByRole('menu');
@@ -183,7 +189,7 @@ describe('language switcher (ADR 0011)', () => {
       await screen.findByRole('list', { name: m.share.galleryLabel });
       expect(
         screen.getByRole('button', {
-          name: `${m.publicNav.language} ${m.publicNav.localeShort[locale]}`,
+          name: `${m.publicNav.language} ${m.publicNav.locales[locale]}`,
         }),
       ).toBeInTheDocument();
       noThai();

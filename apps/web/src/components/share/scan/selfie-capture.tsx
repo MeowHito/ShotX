@@ -4,7 +4,14 @@ import { Alert, Button, buttonVariants, cn } from '@shotx/ui';
 import { CameraIcon, ImageIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
-import { canUseLiveCamera, isInAppBrowser, openFrontCamera, stopStream } from '@/lib/face/camera';
+import {
+  canUseLiveCamera,
+  centerCrop,
+  isInAppBrowser,
+  openFrontCamera,
+  stopStream,
+  zoomCamera,
+} from '@/lib/face/camera';
 import type { SelfieSource } from '@/lib/face/selfie';
 import { useFaceTools } from './face-tools';
 
@@ -54,6 +61,9 @@ function FaceGuide() {
  * browsers, a refused permission) it falls back to `<input type="file" accept="image/*"
  * capture="user">`, which opens the phone's camera app. "Choose from gallery" only when
  * `allowGallery` (gallery-mode shares). The image goes straight to `onCaptured`, in memory.
+ * The live camera is zoomed (WEB_FACE_CAMERA_ZOOM) so it looks like the phone's camera app, not
+ * the front camera's full wide-angle view: by the camera where the browser allows, else by
+ * scaling the preview and cropping the photo the same way.
  */
 export function SelfieCapture({
   onCaptured,
@@ -65,10 +75,12 @@ export function SelfieCapture({
   busy: boolean;
 }) {
   const t = useTranslations('capture');
-  const { navigator: nav } = useFaceTools();
+  const { navigator: nav, config } = useFaceTools();
   const [liveSupported] = useState(() => canUseLiveCamera(nav));
   const inApp = nav !== undefined && isInAppBrowser(nav.userAgent);
   const [camera, setCamera] = useState<CameraState>('idle');
+  // The zoom still done by the page (preview scale, frame crop) after the camera's own.
+  const [digitalZoom, setDigitalZoom] = useState(1);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const startedRef = useRef(false);
@@ -87,6 +99,7 @@ export function SelfieCapture({
       return;
     }
     streamRef.current = stream;
+    setDigitalZoom(await zoomCamera(stream, config.cameraZoom));
     setCamera('live');
     attach(videoRef.current, stream);
   }
@@ -107,11 +120,14 @@ export function SelfieCapture({
   function takePhoto() {
     const video = videoRef.current;
     if (video === null) return;
+    const width = video.videoWidth;
+    const height = video.videoHeight;
     onCaptured({
       kind: 'frame',
       source: video,
-      width: video.videoWidth,
-      height: video.videoHeight,
+      width,
+      height,
+      crop: digitalZoom > 1 ? centerCrop(width, height, digitalZoom) : undefined,
     });
     stopStream(streamRef.current);
     streamRef.current = null;
@@ -136,7 +152,9 @@ export function SelfieCapture({
             <video
               ref={videoRef}
               aria-label={t('preview')}
-              className="absolute inset-0 size-full -scale-x-100 object-cover"
+              className="absolute inset-0 size-full object-cover"
+              // Mirrored like a mirror; scaled by the digital zoom (the crop taken on capture).
+              style={{ transform: `scale(${-digitalZoom}, ${digitalZoom})` }}
               autoPlay
               muted
               playsInline

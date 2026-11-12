@@ -136,10 +136,14 @@ describe('client config', () => {
     });
     // FACE_MAX_SELFIES, FACE_SELFIE_* come from share meta.
     expect(Object.keys(clientFaceConfig({ FACE_SELFIE_LONG_EDGE: '1024' })).sort()).toEqual([
+      'cameraZoom',
       'captcha',
       'detector',
       'gate',
     ]);
+    expect(clientFaceConfig({}).cameraZoom).toBe(1.4);
+    expect(clientFaceConfig({ WEB_FACE_CAMERA_ZOOM: '1' }).cameraZoom).toBe(1);
+    expect(() => clientFaceConfig({ WEB_FACE_CAMERA_ZOOM: '0.5' })).toThrow();
   });
 
   it('passes only the public Turnstile settings to the share page', () => {
@@ -173,6 +177,8 @@ describe('client config', () => {
       zipPollIntervalMs: 1500,
       zipPollTimeoutMs: 900_000,
       iosShareMaxFiles: 20,
+      photoPrefetchConcurrency: 3,
+      downloadGapMs: 400,
     });
   });
 
