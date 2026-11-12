@@ -387,7 +387,7 @@ export class FaceService {
     ctx: PublicContext,
     req: Request,
   ): Promise<FaceDeletionResponse> {
-    const share = await this.access.byToken(token);
+    const share = await this.access.byToken(token, ctx);
     await this.requireConsent(share, ctx, 'face_deletion');
     await this.rateLimit(share, ctx, req, TURNSTILE_ACTIONS.faceDeletion);
 

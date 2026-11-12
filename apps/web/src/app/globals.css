@@ -3,3 +3,34 @@
 
 /* Generate the utilities used by the shared components. */
 @source '../../../../packages/ui/src';
+
+/*
+ * Share page lightbox (ADR 0011): previous/next arrows on touch screens too (PhotoSwipe hides
+ * them until a mouse is used), and a clear download button at the bottom, thumb-reachable and
+ * above the home indicator.
+ */
+.pswp--touch .pswp__button--arrow {
+  visibility: visible;
+}
+.pswp__download-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 3rem;
+  padding: 0 1.5rem;
+  border-radius: 9999px;
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
+  font-weight: 600;
+  font-size: 1rem;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+  cursor: pointer;
+}
+.pswp__download-bottom:focus-visible {
+  outline: 2px solid white;
+  outline-offset: 2px;
+}

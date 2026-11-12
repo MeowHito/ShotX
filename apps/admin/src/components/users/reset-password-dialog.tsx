@@ -13,6 +13,7 @@ import {
 } from '@shotx/ui';
 import { useTranslations } from 'next-intl';
 import { type FormEvent, useState } from 'react';
+import { useTotpEnabled } from '@/components/admin-settings';
 import { useApiClient, useSessionEndedHandler } from '@/components/providers';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { OneTimePassword } from './one-time-password';
@@ -77,6 +78,7 @@ function ResetPasswordForm({
   const sessionEnded = useSessionEndedHandler();
   const errorMessage = useErrorMessage();
   const email = user.email ?? '';
+  const totp = useTotpEnabled();
 
   const [password, setPassword] = useState('');
   const [passwordError, setPasswordError] = useState<string | null>(null);
@@ -138,7 +140,7 @@ function ResetPasswordForm({
         <DialogTitle>{t('title')}</DialogTitle>
         <DialogDescription>{t('description', { email })}</DialogDescription>
       </DialogHeader>
-      {user.role === 'admin' ? (
+      {user.role === 'admin' && totp ? (
         <p className="text-sm text-muted-foreground">{t('adminNote')}</p>
       ) : null}
       <PasswordField

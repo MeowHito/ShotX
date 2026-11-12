@@ -77,18 +77,12 @@ export async function createFolder(
   const id = randomUUID();
   const { parent, ...rest } = options;
   const path = folderPath(parent?.path ?? null, id);
-  // folders_face_index_needs_confirmation: an enabled index has a confirmation and an expiry.
-  const faceIndex =
-    rest.faceIndexEnabled === true
-      ? {
-          faceIndexInformedAt: rest.faceIndexInformedAt ?? new Date(),
-          faceIndexExpiresAt: rest.faceIndexExpiresAt ?? new Date(Date.now() + 90 * 86_400_000),
-        }
-      : {};
+  // ADR 0011 decision 1 (migration 0012): face indexing is on by default, expiring creation + 90
+  // days (the database defaults); pass `faceIndexEnabled: false` for a photographer's opt-out.
+  // face_index_informed_at is no longer written.
   await db.insert(folders).values({
     name: `folder-${id.slice(0, 8)}`,
     ...rest,
-    ...faceIndex,
     id,
     ownerId,
     parentId: parent?.id ?? null,

@@ -26,10 +26,10 @@ import {
 } from './session';
 
 /**
- * Route handlers of the admin sign-in (ADR 0010): email + password, then the steps the API asks
- * for (change a temporary password, enrol TOTP, enter the TOTP code). There is no other way in:
- * the API issues admins-pool tokens only after a valid TOTP code (`amr` pwd + otp), and nothing
- * here can skip or fake that step.
+ * Route handlers of the admin sign-in (ADR 0010, ADR 0011 decision 4): email + password, then the
+ * steps the API asks for. With ADMIN_MFA_MODE=off (default) that is at most a password change;
+ * with `totp` also TOTP enrolment and the code. The API alone decides which steps there are and
+ * when the sign-in is complete (`signed_in`); nothing here can skip or fake a step it asks for.
  *
  * Nothing secret is logged: request bodies (passwords, codes), challenge ids and tokens are never
  * passed to a logger or put in a URL.
@@ -106,11 +106,33 @@ function clearChallengeCookie(deps: AuthDeps): string {
   return expireCookie(cookieNames(deps.secureCookies).challenge, deps.secureCookies);
 }
 
-/** The browser's view of a step: everything but the challenge id. */
-export function stepView(response: AdminLoginResponse): SignInStepView {
+type ChallengeStep = Exclude<AdminLoginResponse, { step: 'signed_in' }>;
+
+/** The browser's view of a challenge step: everything but the challenge id. */
+export function stepView(response: ChallengeStep): SignInStepView {
   return response.step === 'enrol_totp'
     ? { step: 'enrol_totp', otpauthUri: response.otpauthUri }
     : { step: response.step };
+}
+
+/**
+ * The answer for what an API sign-in step returned:
+ * - `signed_in` (ADMIN_MFA_MODE=off after the password, or after the code with `totp`): store the
+ *   admins-pool tokens in the httpOnly session cookies and drop the challenge cookie. The body
+ *   is only `{ step: 'signed_in' }`; no token reaches the browser;
+ * - any other step: its one-time challenge in the challenge cookie, the step without it in the
+ *   body.
+ */
+function stepAnswer(
+  next: AdminLoginResponse | (AuthTokenResponse & { step: 'signed_in' }),
+  deps: AuthDeps,
+): Response {
+  if (next.step === 'signed_in') {
+    const session = sessionFromTokens(next, deps.now?.() ?? Date.now());
+    const view: SignInStepView = { step: 'signed_in' };
+    return json(200, view, [clearChallengeCookie(deps), ...sessionCookies(session, next, deps)]);
+  }
+  return json(200, stepView(next), [challengeCookie(next.challengeId, next.expiresIn, deps)]);
 }
 
 /** Reads and validates a small JSON body; null when it is too big, not JSON or invalid. */
@@ -149,15 +171,14 @@ function guard(request: Request, deps: AuthDeps): Response | null {
   return null;
 }
 
-/** POST /auth/login `{ email, password }` → the first step. */
+/** POST /auth/login `{ email, password }` → signed in, or the first step the API asks for. */
 export async function handleLoginStep(request: Request, deps: AuthDeps): Promise<Response> {
   const refused = guard(request, deps);
   if (refused !== null) return refused;
   const body = await readBody(request, adminLoginBodySchema);
   if (body === null) return errorJson(ErrorCode.VALIDATION_FAILED);
   try {
-    const next = await deps.api.login(body);
-    return json(200, stepView(next), [challengeCookie(next.challengeId, next.expiresIn, deps)]);
+    return stepAnswer(await deps.api.login(body), deps);
   } catch (error) {
     return failure(error, [clearChallengeCookie(deps)]);
   }
@@ -183,7 +204,10 @@ function stepFailure(error: unknown, deps: AuthDeps): Response {
   return failure(error, restart ? [clearChallengeCookie(deps)] : []);
 }
 
-/** POST /auth/password `{ newPassword }`: the `change_password` step → enrol TOTP or code. */
+/**
+ * POST /auth/password `{ newPassword }`: the `change_password` step → signed in
+ * (ADMIN_MFA_MODE=off), or enrol TOTP / the code (`totp`).
+ */
 export async function handlePasswordStep(request: Request, deps: AuthDeps): Promise<Response> {
   const refused = guard(request, deps);
   if (refused !== null) return refused;
@@ -192,8 +216,10 @@ export async function handlePasswordStep(request: Request, deps: AuthDeps): Prom
   const body = await readBody(request, passwordStepBodySchema);
   if (body === null) return errorJson(ErrorCode.VALIDATION_FAILED);
   try {
-    const next = await deps.api.changePassword({ challengeId, newPassword: body.newPassword });
-    return json(200, stepView(next), [challengeCookie(next.challengeId, next.expiresIn, deps)]);
+    return stepAnswer(
+      await deps.api.changePassword({ challengeId, newPassword: body.newPassword }),
+      deps,
+    );
   } catch (error) {
     return stepFailure(error, deps);
   }
@@ -209,9 +235,7 @@ export async function handleMfaStep(request: Request, deps: AuthDeps): Promise<R
   if (body === null) return errorJson(ErrorCode.VALIDATION_FAILED);
   try {
     const tokens = await deps.api.mfa({ challengeId, code: body.code });
-    const session = sessionFromTokens(tokens, deps.now?.() ?? Date.now());
-    const view: SignInStepView = { step: 'signed_in' };
-    return json(200, view, [clearChallengeCookie(deps), ...sessionCookies(session, tokens, deps)]);
+    return stepAnswer({ ...tokens, step: 'signed_in' }, deps);
   } catch (error) {
     return stepFailure(error, deps);
   }

@@ -1,6 +1,6 @@
 'use client';
 
-import type { OwnerShare } from '@shotx/shared';
+import { type OwnerShare, shareFaceDeletionPagePath, shareRefOf } from '@shotx/shared';
 import {
   Alert,
   Button,
@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@shotx/ui';
-import { BarChart3Icon, CopyIcon, FileIcon, FolderIcon, LinkIcon } from 'lucide-react';
+import { BarChart3Icon, CopyIcon, FileIcon, FolderIcon, LinkIcon, UserXIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useFormatter, useTranslations } from 'next-intl';
 import { useState } from 'react';
@@ -33,7 +33,19 @@ async function copyText(text: string): Promise<void> {
   }
 }
 
-/** One share as its owner sees it: link, flags, status, copy, revoke, stats. */
+/**
+ * The absolute link of a share's "delete my face" page (`/s/{slug or token}/delete-my-face`).
+ * ADR 0011 decision 2: the public pages never link to it; the photographer sends it to a person
+ * who asks for their face data to be deleted (the consent text tells people to ask them).
+ */
+export function faceDeletionUrl(share: Pick<OwnerShare, 'url' | 'slug' | 'token'>): string {
+  return `${new URL(share.url).origin}${shareFaceDeletionPagePath(shareRefOf(share))}`;
+}
+
+/**
+ * One share as its owner sees it: link, flags, status, copy, revoke, stats, and the "delete my
+ * face" link to send on request (studio only).
+ */
 export function ShareRow({
   share,
   showTarget = true,
@@ -53,6 +65,15 @@ export function ShareRow({
     try {
       await copyText(share.url);
       setMessage({ kind: 'info', text: t('shares.copied') });
+    } catch (err) {
+      setMessage({ kind: 'error', text: describe(err) });
+    }
+  }
+
+  async function copyDeletionLink() {
+    try {
+      await copyText(faceDeletionUrl(share));
+      setMessage({ kind: 'info', text: t('shares.deletionLinkCopied') });
     } catch (err) {
       setMessage({ kind: 'error', text: describe(err) });
     }
@@ -139,6 +160,18 @@ export function ShareRow({
             {t('shares.revoke')}
           </Button>
         ) : null}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 px-2 text-muted-foreground"
+          onClick={() => void copyDeletionLink()}
+        >
+          <UserXIcon aria-hidden />
+          {t('shares.copyDeletionLink')}
+        </Button>
+        <span className="text-xs text-muted-foreground">{t('shares.deletionLinkHint')}</span>
       </div>
       {message !== null ? (
         <p

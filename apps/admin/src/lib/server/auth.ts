@@ -1,5 +1,6 @@
 import 'server-only';
-import { cookies } from 'next/headers';
+import type { AdminMfaMode } from '@shotx/shared';
+import { cookies, headers } from 'next/headers';
 import { createAdminAuthApi } from '../auth/admin-auth-api';
 import type { AuthDeps } from '../auth/handlers';
 import { cookieNames, decodeSession, type SessionUser } from '../auth/session';
@@ -42,4 +43,28 @@ export async function adminViewerState(): Promise<AdminViewerState> {
   const session = decodeSession(store.get(names.session)?.value);
   const hasRefresh = Boolean(store.get(names.refresh)?.value);
   return { user: session?.user ?? null, signedIn: session !== null || hasRefresh };
+}
+
+/** How long the admin app reuses GET /auth/providers' answer (ADMIN_MFA_MODE is fixed config). */
+const PROVIDERS_CACHE_MS = 60_000;
+
+let cachedMfaMode: { mode: AdminMfaMode | null; at: number } | undefined;
+
+/**
+ * ADMIN_MFA_MODE as the API reports it (GET /auth/providers `adminMfaMode`), cached per process
+ * for a minute; null when admin sign-in is off or the API couldn't be asked (the UI then shows no
+ * TOTP-only flags; the flow itself always follows what the API answers).
+ */
+export async function adminMfaMode(now: number = Date.now()): Promise<AdminMfaMode | null> {
+  if (cachedMfaMode !== undefined && now - cachedMfaMode.at < PROVIDERS_CACHE_MS) {
+    return cachedMfaMode.mode;
+  }
+  try {
+    const providers = await authDeps(await headers()).api.providers();
+    cachedMfaMode = { mode: providers.adminMfaMode, at: now };
+    return providers.adminMfaMode;
+  } catch {
+    // Not cached: ask again on the next request.
+    return null;
+  }
 }

@@ -44,8 +44,10 @@ for (const backend of DATABASE_BACKENDS) {
         });
         expect(res.status).toBe(201);
         const share = ownerShareSchema.parse(res.body);
+        expect(share.slug).toMatch(/^event(-[0-9a-z]{6})?$/);
         expect(share).toMatchObject({
-          url: `http://localhost:3000/s/${share.token}`,
+          // ADR 0011: the readable link (the token link keeps working).
+          url: `http://localhost:3000${share.path}`,
           target: { type: 'folder', id: folder.id, name: 'Event', unavailable: false },
           mode: 'gallery',
           allowDownload: true,

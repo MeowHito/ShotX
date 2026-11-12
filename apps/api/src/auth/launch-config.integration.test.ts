@@ -52,7 +52,12 @@ describe('launch configuration loads', () => {
     expect(config.paymentGateway).toBeNull();
     const auth = config.shotxAuth;
     if (auth === null) throw new Error('expected shotx auth');
-    expect(authProvidersOf(auth)).toEqual({ oidc: [], devLogin: false, adminLogin: true });
+    expect(authProvidersOf(auth)).toEqual({
+      oidc: [],
+      devLogin: false,
+      adminLogin: true,
+      adminMfaMode: 'off',
+    });
     expect(viewerLoginAvailable(authProvidersOf(auth))).toBe(false);
   });
 
@@ -107,6 +112,7 @@ for (const backend of DATABASE_BACKENDS) {
         pool: 'users',
         now: api.clock.now(),
         ttlSeconds: 3600,
+        amr: ['fed'],
       });
       const { token } = await new ShotxTokenIssuer(
         api.config.app.stage,
@@ -119,7 +125,12 @@ for (const backend of DATABASE_BACKENDS) {
     it('lists no OIDC provider; start and callback answer AUTH_PROVIDER_UNAVAILABLE', async () => {
       const providers = await bff(launch, 'GET', apiPath(AR.providers));
       expect(providers.status).toBe(200);
-      expect(providers.body).toEqual({ oidc: [], devLogin: false, adminLogin: true });
+      expect(providers.body).toEqual({
+        oidc: [],
+        devLogin: false,
+        adminLogin: true,
+        adminMfaMode: 'off',
+      });
       for (const provider of ['line', 'google'] as const) {
         const start = await bff(launch, 'POST', apiPath(AR.oidcStart, { provider }), {
           redirectUri: 'http://localhost:3000/auth/callback',

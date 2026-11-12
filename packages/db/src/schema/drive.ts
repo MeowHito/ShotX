@@ -1,4 +1,8 @@
-import { S3_MULTIPART_MAX_PART_BYTES, S3_MULTIPART_MIN_PART_BYTES } from '@shotx/shared';
+import {
+  FACE_INDEX_EXPIRY_DAYS_DEFAULT,
+  S3_MULTIPART_MAX_PART_BYTES,
+  S3_MULTIPART_MIN_PART_BYTES,
+} from '@shotx/shared';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
@@ -9,6 +13,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  type PgTableExtraConfigValue,
   real,
   text,
   unique,
@@ -21,6 +26,7 @@ import { fileStatus } from './enums';
 
 const minPart = sql.raw(String(S3_MULTIPART_MIN_PART_BYTES));
 const maxPart = sql.raw(String(S3_MULTIPART_MAX_PART_BYTES));
+const faceIndexExpiryDays = sql.raw(String(FACE_INDEX_EXPIRY_DAYS_DEFAULT));
 
 /**
  * Drive folders. `path` is the ltree of folder ids from the root down to this folder, each label
@@ -51,14 +57,34 @@ export const folders = pgTable(
     /**
      * This folder's own switch; indexing covers the whole subtree while it is on and
      * `face_index_expires_at` is in the future (isCoveredByFaceIndex in @shotx/shared).
+     * ADR 0011 decision 1 (migration 0012): on by default, and every existing folder was switched
+     * on. Off only when the photographer turned it off (PATCH .../face-index `enabled: false`).
      */
-    faceIndexEnabled: boolean('face_index_enabled').notNull().default(false),
-    faceIndexExpiresAt: timestamptz('face_index_expires_at'),
+    faceIndexEnabled: boolean('face_index_enabled').notNull().default(true),
     /**
-     * When the photographer last confirmed that attendees were informed (PDPA checklist), which
-     * enabling face indexing requires. Kept when indexing is turned off, as a record.
+     * Required while enabled (`folders_face_index_has_expiry`). The api writes creation +
+     * FACE_INDEX_EXPIRY_DAYS on insert; the default (creation + FACE_INDEX_EXPIRY_DAYS_DEFAULT
+     * days, migration 0012) is the safety net for inserts that don't, e.g. the previous api
+     * release during a deploy.
+     */
+    faceIndexExpiresAt: timestamptz('face_index_expires_at').default(
+      sql`(now() + make_interval(days => ${faceIndexExpiryDays}))`,
+    ),
+    /**
+     * When the photographer last confirmed that attendees were informed (PDPA checklist). No
+     * longer required or written since ADR 0011 decision 1 (migration 0012 dropped the CHECK that
+     * needed it); kept as the record of earlier confirmations. Deprecated.
      */
     faceIndexInformedAt: timestamptz('face_index_informed_at'),
+    /**
+     * The share page cover chosen by the photographer (ADR 0011, migration 0012); null: the first
+     * ready image. The foreign key on (cover_file_id, owner_id) keeps it the owner's file and is
+     * cleared when the file row is purged (ON DELETE SET NULL of cover_file_id only, hand-written
+     * in the migration because drizzle can't express the column list). That the file is a live,
+     * ready image inside this folder's subtree can't be a constraint: the api checks it on PATCH
+     * and share meta re-checks it on read (see updateFolderBodySchema in @shotx/shared).
+     */
+    coverFileId: uuid('cover_file_id'),
     /**
      * Outbox mark of `index.folder` (migration 0006, ADR 0008 "Lost jobs"): set by the API in the
      * transaction that enables indexing (when it sends `index.folder`), cleared by the worker when
@@ -73,7 +99,8 @@ export const folders = pgTable(
     purgeRequestedAt: timestamptz('purge_requested_at'),
     createdAt: createdAt(),
   },
-  (t) => [
+  // Annotated: the cover foreign key refers to `files`, which refers back to `folders`.
+  (t): PgTableExtraConfigValue[] => [
     unique('folders_id_owner_unique').on(t.id, t.ownerId),
     uniqueIndex('folders_live_name_unique')
       .on(t.ownerId, parentKeySql(t.parentId), driveNameKeySql(t.name))
@@ -122,10 +149,21 @@ export const folders = pgTable(
     index('folders_face_index_owner_idx')
       .on(t.ownerId)
       .where(sql`${t.faceIndexEnabled}`),
+    // Migration 0012 (ADR 0011): replaces folders_face_index_needs_confirmation, which also
+    // required face_index_informed_at.
     check(
-      'folders_face_index_needs_confirmation',
-      sql`NOT ${t.faceIndexEnabled} OR (${t.faceIndexInformedAt} IS NOT NULL AND ${t.faceIndexExpiresAt} IS NOT NULL)`,
+      'folders_face_index_has_expiry',
+      sql`NOT ${t.faceIndexEnabled} OR ${t.faceIndexExpiresAt} IS NOT NULL`,
     ),
+    foreignKey({
+      name: 'folders_cover_file_same_owner_fk',
+      columns: [t.coverFileId, t.ownerId],
+      foreignColumns: [files.id, files.ownerId],
+    }).onDelete('set null'),
+    // The FK's ON DELETE when files are purged.
+    index('folders_cover_file_idx')
+      .on(t.coverFileId, t.ownerId)
+      .where(sql`${t.coverFileId} IS NOT NULL`),
     check(
       'folders_name_valid',
       sql`length(${t.name}) BETWEEN 1 AND 255 AND strpos(${t.name}, '/') = 0`,

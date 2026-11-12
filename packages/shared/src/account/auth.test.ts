@@ -18,6 +18,9 @@ import {
   AUTH_TOKEN_AUDIENCES,
   authTokenIssuer,
   hasRequiredAmr,
+  adminRequiredAmr,
+  adminSessionSatisfiesMfaMode,
+  adminSignInAmr,
   opaqueTokenSchema,
   PASSWORD_CHANGE_CLAIM,
   REFRESH_TOKEN_HASH_PATTERN,
@@ -129,6 +132,42 @@ describe('access token claims', () => {
     const schema = accessTokenClaimsSchemaFor('prod', 'admins');
     expect(schema.safeParse({ ...admins, amr: ['pwd'] }).success).toBe(false);
     expect(schema.safeParse({ ...admins, amr: ['pwd', 'mfa'] }).success).toBe(false);
+  });
+
+  describe('ADMIN_MFA_MODE (ADR 0011 decision 4)', () => {
+    it('requires pwd only with off, pwd and otp with totp, and fails closed by default', () => {
+      expect(adminRequiredAmr('off')).toEqual(['pwd']);
+      expect(adminRequiredAmr('totp')).toEqual(['pwd', 'otp']);
+      expect(hasRequiredAmr('admins', ['pwd'], 'off')).toBe(true);
+      expect(hasRequiredAmr('admins', ['pwd'], 'totp')).toBe(false);
+      expect(hasRequiredAmr('admins', ['pwd'])).toBe(false);
+      expect(hasRequiredAmr('admins', ['pwd', 'otp', 'mfa'], 'off')).toBe(true);
+      expect(hasRequiredAmr('admins', ['fed'], 'off')).toBe(false);
+      expect(hasRequiredAmr('users', ['dev'], 'totp')).toBe(true);
+    });
+
+    it('issues pwd-only admin tokens with off and checks them by the configured mode', () => {
+      expect(adminSignInAmr('off')).toEqual(['pwd']);
+      expect(adminSignInAmr('totp')).toEqual(['pwd', 'otp', 'mfa']);
+      const pwdOnly = { ...admins, amr: ['pwd'] };
+      expect(
+        accessTokenClaimsSchemaFor('prod', 'admins', { adminMfaMode: 'off' }).safeParse(pwdOnly)
+          .success,
+      ).toBe(true);
+      expect(
+        accessTokenClaimsSchemaFor('prod', 'admins', { adminMfaMode: 'totp' }).safeParse(pwdOnly)
+          .success,
+      ).toBe(false);
+      expect(accessTokenClaimsSchemaFor('prod', 'admins').safeParse(pwdOnly).success).toBe(false);
+    });
+
+    it('refreshes a pwd-only session only while the mode is off; legacy sessions had TOTP', () => {
+      expect(adminSessionSatisfiesMfaMode(['pwd'], 'off')).toBe(true);
+      expect(adminSessionSatisfiesMfaMode(['pwd'], 'totp')).toBe(false);
+      expect(adminSessionSatisfiesMfaMode(['pwd', 'otp', 'mfa'], 'totp')).toBe(true);
+      expect(adminSessionSatisfiesMfaMode(null, 'totp')).toBe(true);
+      expect(adminSessionSatisfiesMfaMode(null, 'off')).toBe(true);
+    });
   });
 
   it('carries pwd_change only on photographer password sessions (ADR 0010)', () => {

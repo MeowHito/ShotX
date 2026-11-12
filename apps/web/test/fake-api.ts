@@ -126,6 +126,8 @@ export class FakeApi {
   viewerSession = false;
   ownerShares = new Map<string, { share: OwnerShare; password: string | null }>();
   publicShares = new Map<string, PublicShareFixture>();
+  /** How each public share route call named its share (ADR 0011: slug once, then the token). */
+  refKinds: ('token' | 'slug')[] = [];
   feedback: { token: string; fileId: string }[] = [];
   /** Selfie parts received per face request (sizes and types only). */
   selfieUploads: { route: 'search' | 'deletion'; sizes: number[]; types: string[] }[] = [];
@@ -198,6 +200,7 @@ export class FakeApi {
       deletedAt,
       faceIndexEnabled: false,
       faceIndexExpiresAt: null,
+      coverFileId: null,
     };
     this.folders.set(folder.id, folder);
     return folder;
@@ -234,12 +237,18 @@ export class FakeApi {
 
   // --- fetch ------------------------------------------------------------------------------
 
-  fetch: typeof fetch = (input, init) => {
-    try {
-      return Promise.resolve(this.respond(input, init));
-    } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+  /** When set, requests whose path ends with this wait for `release` (e.g. a slow face search). */
+  hold: { pathSuffix: string; release: Promise<void> } | null = null;
+
+  fetch: typeof fetch = async (input, init) => {
+    const href = input instanceof Request ? input.url : input.toString();
+    if (
+      this.hold !== null &&
+      new URL(href, 'http://localhost').pathname.endsWith(this.hold.pathSuffix)
+    ) {
+      await this.hold.release;
     }
+    return this.respond(input, init);
   };
 
   private respond(input: RequestInfo | URL, init?: RequestInit): Response {
@@ -508,7 +517,25 @@ export class FakeApi {
       case DRIVE_ROUTES.updateFolder: {
         const folder = this.folderOrFail(params.id ?? null);
         if (folder === null) throw new Fail('NOT_FOUND');
-        const b = body as { name?: string; parentId?: string | null };
+        const b = body as { name?: string; parentId?: string | null; coverFileId?: string | null };
+        if (b.coverFileId !== undefined && b.coverFileId !== null) {
+          const cover = this.files.get(b.coverFileId);
+          if (cover === undefined) throw new Fail('NOT_FOUND');
+          const reason =
+            cover.deletedAt !== null
+              ? 'not_live'
+              : cover.status !== 'ready'
+                ? 'not_ready'
+                : cover.mediaKind !== 'image'
+                  ? 'not_image'
+                  : cover.folderId === null ||
+                      (cover.folderId !== folder.id &&
+                        !this.isDescendant(cover.folderId, folder.id))
+                    ? 'outside_folder'
+                    : null;
+          if (reason !== null) throw new Fail('COVER_FILE_INVALID', { reason });
+        }
+        if (b.coverFileId !== undefined) folder.coverFileId = b.coverFileId;
         const parentId = b.parentId === undefined ? folder.parentId : b.parentId;
         if (parentId !== null) {
           this.folderOrFail(parentId);

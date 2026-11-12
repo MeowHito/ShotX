@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AUTH_POOLS, type AuthPool } from '../domain';
+import { type AdminMfaMode, AUTH_POOLS, type AuthPool } from '../domain';
 import { AUTH_SUBJECT_PROVIDERS, isAuthSubjectInPool } from './auth-subject';
 
 // Tokens the API issues itself (AUTH_PROVIDER=shotx or local; ADR 0008 section 4). Pure shapes
@@ -33,18 +33,64 @@ export function authTokenIssuer(stage: string, pool: AuthPool): string {
  * Authentication methods (`amr` claim). `pwd`, `otp` and `mfa` are RFC 8176 values; `fed`
  * (signed in at LINE or Google) and `dev` (development login, APP_STAGE=local) are ShotX's.
  * - users pool: `["fed"]`, `["dev"]`, or `["pwd"]` (photographer email + password, ADR 0010);
- * - admins pool: `["pwd", "otp", "mfa"]` after password + TOTP.
+ * - admins pool: `["pwd"]` with ADMIN_MFA_MODE=off (ADR 0011 decision 4), `["pwd", "otp", "mfa"]`
+ *   after password + TOTP (ADMIN_MFA_MODE=totp).
+ * A session keeps the methods of its sign-in (`auth_sessions.amr`, migration 0012): refresh
+ * re-issues them, never more (see adminSessionSatisfiesMfaMode).
  */
 export const AUTH_METHODS = ['fed', 'dev', 'pwd', 'otp', 'mfa'] as const;
 export type AuthMethod = (typeof AUTH_METHODS)[number];
 
-/** Methods every admins-pool token must carry; without them admin routes answer MFA_REQUIRED. */
+/**
+ * Methods an admins-pool token must carry with ADMIN_MFA_MODE=totp; without them admin routes
+ * answer MFA_REQUIRED. Kept for existing callers; use adminRequiredAmr(mode).
+ */
 export const ADMIN_REQUIRED_AMR = ['pwd', 'otp'] as const satisfies readonly AuthMethod[];
 
-/** True when `amr` satisfies the pool's requirement (admins: ADMIN_REQUIRED_AMR). */
-export function hasRequiredAmr(pool: AuthPool, amr: readonly string[]): boolean {
+/** Methods an admins-pool token must carry, per ADMIN_MFA_MODE (ADR 0011 decision 4). */
+export const ADMIN_REQUIRED_AMR_BY_MODE = {
+  off: ['pwd'],
+  totp: ADMIN_REQUIRED_AMR,
+} as const satisfies Record<AdminMfaMode, readonly AuthMethod[]>;
+
+export function adminRequiredAmr(mode: AdminMfaMode): readonly AuthMethod[] {
+  return ADMIN_REQUIRED_AMR_BY_MODE[mode];
+}
+
+/** The `amr` the api puts on admins-pool tokens of a new sign-in in `mode`. */
+export function adminSignInAmr(mode: AdminMfaMode): AuthMethod[] {
+  return mode === 'off' ? ['pwd'] : ['pwd', 'otp', 'mfa'];
+}
+
+/**
+ * True when `amr` satisfies the pool's requirement (admins: adminRequiredAmr(adminMfaMode)).
+ *
+ * How the guard knows the mode (ADR 0011 decision 4): from the api's configuration
+ * (`ShotxAuthConfig.admin.mfaMode`), never from the token. A token can't lower the requirement,
+ * and switching ADMIN_MFA_MODE to `totp` makes every pwd-only admin token MFA_REQUIRED at once.
+ * `adminMfaMode` defaults to `totp`, the stricter rule, so a caller that doesn't pass the mode
+ * fails closed (pwd-only tokens are refused).
+ */
+export function hasRequiredAmr(
+  pool: AuthPool,
+  amr: readonly string[],
+  adminMfaMode: AdminMfaMode = 'totp',
+): boolean {
   if (pool === 'users') return true;
-  return ADMIN_REQUIRED_AMR.every((method) => amr.includes(method));
+  return adminRequiredAmr(adminMfaMode).every((method) => amr.includes(method));
+}
+
+/**
+ * Whether an admins-pool session (its `auth_sessions.amr`) may still be refreshed under the
+ * current ADMIN_MFA_MODE. False: refresh answers REFRESH_TOKEN_INVALID and revokes the family
+ * (a session signed in with a password only must not outlive a switch to `totp`). A null `amr`
+ * is a session from before migration 0012, which always had TOTP: `["pwd", "otp", "mfa"]`.
+ */
+export function adminSessionSatisfiesMfaMode(
+  sessionAmr: readonly string[] | null,
+  mode: AdminMfaMode,
+): boolean {
+  return hasRequiredAmr('admins', sessionAmr ?? adminSignInAmr('totp'), mode);
 }
 
 /** `token_use` of access tokens (refresh tokens are opaque, never JWTs). */
@@ -88,10 +134,14 @@ export type AccessTokenClaims = z.output<typeof accessTokenClaimsSchema>;
 /**
  * accessTokenClaimsSchema plus the rules of one pool on one stage: `iss` and `aud` of the pool,
  * a subject valid in the pool whose prefix matches `idp`, `exp` after `iat`, and the pool's
- * required `amr` (admins: `pwd` and `otp`). The API verifies the signature with the pool's key
- * first, then parses the payload with this.
+ * required `amr` (admins: adminRequiredAmr(adminMfaMode); default `totp`, see hasRequiredAmr). The
+ * API verifies the signature with the pool's key first, then parses the payload with this.
  */
-export function accessTokenClaimsSchemaFor(stage: string, pool: AuthPool) {
+export function accessTokenClaimsSchemaFor(
+  stage: string,
+  pool: AuthPool,
+  options: { adminMfaMode?: AdminMfaMode } = {},
+) {
   const issuer = authTokenIssuer(stage, pool);
   return accessTokenClaimsSchema
     .refine((c) => c.iss === issuer, { error: 'wrong issuer', path: ['iss'] })
@@ -101,7 +151,7 @@ export function accessTokenClaimsSchemaFor(stage: string, pool: AuthPool) {
       error: 'subject does not belong to this pool or identity provider',
       path: ['sub'],
     })
-    .refine((c) => hasRequiredAmr(pool, c.amr), {
+    .refine((c) => hasRequiredAmr(pool, c.amr, options.adminMfaMode), {
       error: 'missing required authentication methods',
       path: ['amr'],
     })

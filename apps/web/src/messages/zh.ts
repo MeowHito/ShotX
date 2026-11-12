@@ -1,0 +1,373 @@
+import type { PublicMessages } from './public';
+
+/**
+ * Simplified Chinese for the public pages (ADR 0011; see messages/public). The consent texts are
+ * translations for the DPO to approve: the Thai text is the legal reference.
+ */
+export const zh: PublicMessages = {
+  metadata: {
+    title: 'ShotX',
+    description: '活动照片分享：发送一个链接，来宾即可通过人脸找到自己的照片。',
+    shareDescription: '查看活动照片，并通过人脸找到你的照片。',
+  },
+  publicNav: {
+    label: '主菜单',
+    home: '首页',
+    language: '语言',
+    locales: { th: 'ไทย', en: 'English', zh: '中文' },
+  },
+  common: {
+    appName: 'ShotX',
+    cancel: '取消',
+    save: '保存',
+    close: '关闭',
+    loading: '加载中…',
+    retry: '重试',
+    duration: {
+      hours: '{count, number} 小时',
+      minutes: '{count, number} 分钟',
+    },
+  },
+  share: {
+    expiresAt: '链接有效期至 {date}',
+    galleryLabel: '此链接中的照片',
+    empty: '此链接中还没有照片',
+    loadingMore: '正在加载更多…',
+    loadError: '照片加载失败',
+    open: '打开 {name}',
+    select: '选择 {name}',
+    video: '视频',
+    yourPhotos: '你的照片',
+    allPhotos: '全部照片',
+    unavailable: {
+      title: '此链接已过期',
+      body: '如需新链接，请联系摄影师。',
+      reasons: {
+        revoked: '摄影师已关闭此链接。',
+        expired: '此链接已超过有效期。',
+        unavailable: '此链接中的照片已不再开放查看。',
+      },
+    },
+    login: {
+      title: '登录后查看照片',
+      body: '摄影师要求登录后才能查看此链接。',
+      line: '使用 LINE 登录',
+      google: '使用 Google 登录',
+      connecting: '正在连接你的账号…',
+      unavailableTitle: '此链接暂时无法登录',
+      unavailableBody: '此链接需要登录后查看，但目前未开放登录。请联系把链接发给你的摄影师。',
+      devLogin: '登录（测试模式）',
+    },
+    password: {
+      title: '此链接设有密码',
+      body: '请输入摄影师或主办方提供的密码。',
+      label: '密码',
+      submit: '查看照片',
+    },
+    faceOnly: {
+      title: '找到你的照片',
+      body: '此链接只显示有你的照片。用人脸搜索即可查看。',
+      unavailable: '此链接目前无法使用人脸搜索，请稍后再试。',
+    },
+    scan: '用人脸找照片',
+    scanAgain: '再次用人脸搜索',
+    withdraw: '撤回使用我的人脸数据的同意',
+    withdrawn: '已撤回同意，并已删除你的搜索结果。',
+  },
+  consent: {
+    version: '版本 {version}',
+    accept: '同意并开始',
+    acceptDeletion: '同意并自拍',
+    decline: '不同意',
+    mustCheck: '开始前请先勾选同意。',
+    details: '查看详情',
+    translationNote: '本文为译文，具有法律效力的是泰文版本。',
+    policies: {
+      face_search: {
+        '2026-11-11b': {
+          title: '用人脸找到你的照片',
+          points: {
+            purpose: '我们只用你的人脸照片来查找此链接中有你的照片。',
+            noStorage: '你的人脸照片不会被保存，搜索后立即删除。',
+            results: '搜索结果在你最近一次搜索后保留 {ttl} 供下载，之后自动删除。',
+            processor: '处理在我们于马来西亚租用的服务器上进行，不会发送给其他公司的人脸分析服务。',
+          },
+          details: {
+            sensitive:
+              '人脸图像属于生物特征数据，是泰国《2019年个人数据保护法》（佛历2562年）第26条规定的敏感个人数据，因此我们会先征得你的同意。',
+            selfie:
+              '你的自拍照仅在内存中处理，用于与此链接照片中的人脸比对，随后立即删除。你的自拍照不会保存在你的设备或我们的系统中，也不会用于任何其他目的。',
+            index:
+              '为了能够搜索，摄影师让系统为此链接照片中的人建立人脸索引。该人脸索引按摄影师设定的期限到期，随后自动删除。',
+            processor:
+              '人脸比对在我们自己的服务器上进行，服务器向服务器提供商租用，位于马来西亚吉隆坡。不会把人脸图像发送给外部的人脸分析服务。',
+            transfer:
+              '因此人脸数据会被传送并存储在泰国境外，即马来西亚。这属于泰国《2019年个人数据保护法》（佛历2562年）第28条规定的向境外传输个人数据。',
+            backups:
+              '我们自己制作的备份不包含人脸数据，并且已加密。服务器提供商可能按其自身周期保留整台服务器的备份副本。',
+            rights:
+              '你可以随时在此链接页面撤回同意，也可以在“删除我的人脸”页面要求从摄影师的搜索系统中删除你的人脸数据。',
+            contact: '如对此链接中的照片或数据有疑问，请联系摄影师或活动主办方。',
+          },
+          checkbox: '我同意使用我的人脸照片来查找我的照片',
+        },
+        // 2026-11-11b without the pointer to the unlinked deletion page (ADR 0011): ask the
+        // photographer or organiser instead. DPO review pending.
+        '2026-11-12': {
+          title: '用人脸找到你的照片',
+          points: {
+            purpose: '我们只用你的人脸照片来查找此链接中有你的照片。',
+            noStorage: '你的人脸照片不会被保存，搜索后立即删除。',
+            results: '搜索结果在你最近一次搜索后保留 {ttl} 供下载，之后自动删除。',
+            processor: '处理在我们于马来西亚租用的服务器上进行，不会发送给其他公司的人脸分析服务。',
+          },
+          details: {
+            sensitive:
+              '人脸图像属于生物特征数据，是泰国《2019年个人数据保护法》（佛历2562年）第26条规定的敏感个人数据，因此我们会先征得你的同意。',
+            selfie:
+              '你的自拍照仅在内存中处理，用于与此链接照片中的人脸比对，随后立即删除。你的自拍照不会保存在你的设备或我们的系统中，也不会用于任何其他目的。',
+            index:
+              '为了能够搜索，摄影师上传照片时，系统会自动为此链接照片中的人建立人脸索引。当此活动在系统设定的期限内没有新上传的照片时，该人脸索引到期并自动删除。',
+            processor:
+              '人脸比对在我们自己的服务器上进行，服务器向服务器提供商租用，位于马来西亚吉隆坡。不会把人脸图像发送给外部的人脸分析服务。',
+            transfer:
+              '因此人脸数据会被传送并存储在泰国境外，即马来西亚。这属于泰国《2019年个人数据保护法》（佛历2562年）第28条规定的向境外传输个人数据。',
+            backups:
+              '我们自己制作的备份不包含人脸数据，并且已加密。服务器提供商可能按其自身周期保留整台服务器的备份副本。',
+            rights:
+              '你可以随时在此链接页面撤回同意，也可以联系摄影师或活动主办方要求删除你的人脸数据。',
+            contact: '如对此链接中的照片或数据有疑问，请联系摄影师或活动主办方。',
+          },
+          checkbox: '我同意使用我的人脸照片来查找我的照片',
+        },
+      },
+      face_deletion: {
+        '2026-11-11b': {
+          title: '同意使用你的人脸数据以删除你的人脸',
+          intro:
+            '要从搜索系统中删除你的人脸，我们需要一张你的人脸照片来查找匹配的人脸。人脸图像属于生物特征数据，是泰国《2019年个人数据保护法》（佛历2562年）第26条规定的敏感个人数据，因此我们会先征得你的同意。',
+          points: {
+            purpose:
+              '我们只用你的自拍照在该摄影师的所有照片中查找你的人脸，并将找到的人脸从搜索系统中删除，不用于任何其他目的。',
+            noStorage: '你的自拍照仅在内存中处理并立即删除，不会保存在你的设备或我们的系统中。',
+            results:
+              '系统只告诉你找到了多少张人脸，不显示任何照片。照片本身保持不变，但已删除的人脸将无法再通过人脸搜索找到，且无法恢复。',
+            processor:
+              '人脸比对在我们自己的服务器上进行，服务器向服务器提供商租用，位于马来西亚吉隆坡。不会把人脸图像发送给外部的人脸分析服务。',
+            transfer:
+              '这意味着人脸数据会被传送并存储在泰国境外，即马来西亚，属于泰国《2019年个人数据保护法》（佛历2562年）第28条规定的向境外传输个人数据。你的自拍照被发送用于比对后立即删除；该摄影师照片的人脸索引存储在那里，直到被删除或到期。我们自己制作的备份不包含人脸数据，并且已加密。服务器提供商可能按其自身周期保留整台服务器的备份副本。',
+            withdraw: '你可以随时撤回同意。撤回同意不会让已删除的人脸重新回到搜索系统中。',
+          },
+          checkbox: '我已阅读以上内容，同意使用我的人脸照片来查找并删除我的人脸',
+        },
+        // 2026-11-11b without the pointer to the unlinked deletion page (ADR 0011): ask the
+        // photographer or organiser instead. DPO review pending.
+        '2026-11-12': {
+          title: '同意使用你的人脸数据以删除你的人脸',
+          intro:
+            '要从搜索系统中删除你的人脸，我们需要一张你的人脸照片来查找匹配的人脸。人脸图像属于生物特征数据，是泰国《2019年个人数据保护法》（佛历2562年）第26条规定的敏感个人数据，因此我们会先征得你的同意。',
+          points: {
+            purpose:
+              '我们只用你的自拍照在该摄影师的所有照片中查找你的人脸，并将找到的人脸从搜索系统中删除，不用于任何其他目的。',
+            noStorage: '你的自拍照仅在内存中处理并立即删除，不会保存在你的设备或我们的系统中。',
+            results:
+              '系统只告诉你找到了多少张人脸，不显示任何照片。照片本身保持不变，但已删除的人脸将无法再通过人脸搜索找到，且无法恢复。',
+            processor:
+              '人脸比对在我们自己的服务器上进行，服务器向服务器提供商租用，位于马来西亚吉隆坡。不会把人脸图像发送给外部的人脸分析服务。',
+            transfer:
+              '这意味着人脸数据会被传送并存储在泰国境外，即马来西亚，属于泰国《2019年个人数据保护法》（佛历2562年）第28条规定的向境外传输个人数据。你的自拍照被发送用于比对后立即删除；该摄影师照片的人脸索引存储在那里，直到被删除或到期。我们自己制作的备份不包含人脸数据，并且已加密。服务器提供商可能按其自身周期保留整台服务器的备份副本。',
+            withdraw: '你可以随时撤回同意。撤回同意不会让已删除的人脸重新回到搜索系统中。',
+          },
+          checkbox: '我已阅读以上内容，同意使用我的人脸照片来查找并删除我的人脸',
+        },
+      },
+    },
+  },
+  capture: {
+    title: '自拍',
+    captchaLabel: '请确认你不是机器人',
+    captchaRetry: '重新验证',
+    captchaVerifying: '验证成功，正在重新发送照片…',
+    notStored: '你的自拍照只用于这次搜索，不会保存在你的设备或我们的系统中。',
+    openCamera: '打开相机',
+    takePhoto: '拍照',
+    useCameraApp: '用相机拍照',
+    chooseFromGallery: '从相册选择',
+    cameraBlocked: '此页面无法打开相机。请点击下方按钮，改用手机相机拍照。',
+    inAppHint:
+      '如果从 LINE 或 Facebook 打开后无法拍照，请在浏览器（Safari 或 Chrome）中打开此链接。',
+    preview: '前置相机画面',
+    checking: '正在检查照片…',
+    retake: '重拍',
+    issues: {
+      unreadable: '无法读取这张照片，请重拍。',
+      noFace: '未检测到人脸。请正对镜头，摘下墨镜或口罩，并在光线充足的地方拍摄。',
+      multipleFaces: '检测到不止一张人脸。请确保照片中只有你一个人。',
+      tooSmall: '人脸太小，请把相机拿近一些。',
+      notFrontal: '请正对镜头。',
+      tooDark: '照片太暗，请到光线更充足的地方。',
+      tooBright: '照片太亮，请避开直射面部的强光。',
+    },
+    searching: '正在查找你的照片…',
+  },
+  results: {
+    title: '人脸搜索结果',
+    found: '{count, plural, other {找到你的照片 # 张}}',
+    selectAll: '全选',
+    deselectAll: '取消全选',
+    downloadAll: '全部下载（{count, number}）',
+    retry: '重试',
+    strong: '是你',
+    maybe: '可能是你',
+    groupCount: '{count, number} 张',
+    notMe: '不是我',
+    notMeLabel: '不是我：{name}',
+    notMeDone: '已隐藏这张照片，感谢你帮助我们提高搜索准确度。',
+    none: '暂未在此链接中找到你的照片',
+    noneHint: '请在光线充足的地方正对镜头重拍。',
+    noFace: '照片中未检测到人脸。请在光线充足的地方正对镜头重拍。',
+  },
+  faceDeletion: {
+    title: '删除我的人脸',
+    intro:
+      '自拍一张，用于查找并从该摄影师的搜索系统中删除你的人脸。照片会保留，但之后任何人都无法在该摄影师的照片中通过人脸找到你。',
+    submit: '查找并删除我的人脸',
+    submitting: '正在查找你的人脸…',
+    done: '{count, plural, =0 {未在该摄影师的照片中找到你的人脸} other {找到你的人脸 # 处，正在从搜索系统中删除}}',
+    doneNote: '找到的人脸会立即从搜索中隐藏，并在几分钟内永久删除。',
+    close: '返回链接',
+    loadError: '无法打开删除人脸页面',
+  },
+  downloads: {
+    download: '下载',
+    downloadOne: '下载 {name}',
+    downloadSelected: '下载 {count, number} 张',
+    selected: '已选 {count, number} 张',
+    clear: '取消选择',
+    size: '（{size}）',
+    part: '正在下载第 {current, number} 个 zip，共 {total, number} 个',
+    sizes: {
+      web: '社交媒体尺寸',
+      original: '原图',
+    },
+    saveToPhotos: '存储到“照片”',
+    preparing: '正在准备照片 {done, number}/{total, number}…',
+    readyToSave: '已准备好，点击保存 {count, number} 张',
+    tooManyToSave: '每次最多可存储 {max, number} 张到“照片”，请改用 zip 下载。',
+    zipStatus: {
+      queued: '正在排队准备 zip 文件…',
+      running: '正在打包照片为 zip 文件…',
+      ready: 'zip 文件已就绪，开始下载',
+      failed: 'zip 文件准备失败，请重试',
+      expired: 'zip 文件已过期，请重新下载',
+    },
+  },
+  lightbox: {
+    close: '关闭',
+    next: '下一张',
+    prev: '上一张',
+    zoom: '缩放',
+    download: '下载这张照片',
+    downloadShort: '下载',
+  },
+  errors: {
+    codes: {
+      QUOTA_EXCEEDED: '存储空间不足。',
+      SHARE_EXPIRED: '此链接已过期',
+      CONSENT_REQUIRED: '搜索前请先同意人脸数据使用条款。',
+      NO_FACE_DETECTED: '照片中未检测到人脸。请正对镜头，摘下墨镜或口罩，并在光线充足的地方拍摄。',
+      RATE_LIMITED: '请求过于频繁，请稍候再试。',
+      PAYLOAD_TOO_LARGE: '发送的内容太大。',
+      UNSUPPORTED_FILE_TYPE: '不支持此文件类型。',
+      FILE_TOO_LARGE: '文件太大。',
+      VALIDATION_FAILED: '信息有误，请检查后重试。',
+      UNAUTHENTICATED: '会话已过期，请重新登录。',
+      FORBIDDEN: '此账号无权执行此操作。',
+      NOT_FOUND: '未找到，可能已被删除或移动。',
+      CONFLICT: '内容已变化，请刷新后重试。',
+      INTERNAL_ERROR: '系统出错，请稍后再试。',
+      NAME_TAKEN: '此名称已被使用。',
+      INVALID_MOVE: '文件夹不能移动到自身内部。',
+      FOLDER_DEPTH_EXCEEDED: '文件夹嵌套层级过深。',
+      SUBSCRIPTION_INACTIVE: '摄影师的套餐未生效。',
+      UPLOAD_NOT_FOUND: '未找到此上传，请重新上传。',
+      UPLOAD_EXPIRED: '上传已超时，请重新上传。',
+      UPLOAD_PARTS_INVALID: '上传不完整或已损坏，请重新上传。',
+      IDEMPOTENCY_KEY_REUSED: '此请求与之前的请求不一致，请重试。',
+      LOGIN_REQUIRED: '需要登录才能查看此链接中的照片。',
+      PASSWORD_REQUIRED: '需要密码才能查看此链接中的照片。',
+      PASSWORD_INCORRECT: '密码错误',
+      CONSENT_VERSION_MISMATCH: '人脸数据同意书已更新，请重新阅读并同意。',
+      DOWNLOAD_NOT_ALLOWED: '摄影师不允许从此链接下载照片。',
+      ZIP_TOO_LARGE: '一次下载的文件太多，请少选一些。',
+      FEATURE_DISABLED: '此功能尚未开放。',
+      FACE_SEARCH_UNAVAILABLE: '此链接暂不支持人脸搜索。',
+      PLAN_NOT_FOUND: '此套餐不可用。',
+      PLAN_CHANGE_INVALID: '目前无法这样更改套餐。',
+      CHECKOUT_PENDING: '还有一笔待支付的款项。',
+      CHECKOUT_EXPIRED: '此笔支付已超时。',
+      WEBHOOK_SIGNATURE_INVALID: '无法验证支付信息。',
+      PAYMENT_GATEWAY_ERROR: '支付系统暂时不可用。',
+      AUTH_PROVIDER_UNAVAILABLE: '此登录方式暂不可用，请选择其他方式。',
+      LOGIN_STATE_INVALID: '登录已超时或已被使用，请重新开始。',
+      IDENTITY_PROVIDER_ERROR: '无法连接 LINE 或 Google，请重试。',
+      INVALID_CREDENTIALS: '邮箱或密码错误',
+      MFA_INVALID: '验证码错误或已过期。',
+      MFA_REQUIRED: '需要通过身份验证器应用进行验证。',
+      REFRESH_TOKEN_INVALID: '会话已过期，请重新登录。',
+      REFRESH_TOKEN_REUSED: '为了安全已将你登出，请重新登录。',
+      PASSWORD_CHANGE_REQUIRED: '请先设置新密码再继续。',
+      ACCOUNT_DISABLED: '此账号已被停用，请联系管理员。',
+      EMAIL_TAKEN: '此邮箱已有账号。',
+      LAST_ADMIN: '至少需要一位有效的管理员。',
+      CANNOT_MODIFY_SELF: '不能对自己的账号执行此操作。',
+      PASSWORD_TOO_WEAK: '新密码太容易被猜到。',
+      LOGIN_PROVIDER_UNAVAILABLE: '观众的 LINE 或 Google 登录已关闭。',
+      COVER_FILE_INVALID: '这张照片不能作为封面。',
+    },
+    details: {
+      quotaExceeded: '空间不足：此文件需要 {requested}，但只剩 {available}。',
+      fileTooLarge: '文件太大（最大 {max}）。',
+      unsupportedExtension: '不支持 .{extension} 文件。',
+      folderNameTaken: '这里已有名为“{name}”的文件夹。',
+      fileNameTaken: '这里已有名为“{name}”的文件。',
+      folderDepthExceeded: '文件夹最多只能嵌套 {max, number} 层。',
+      subscriptionNone: '还没有套餐。',
+      subscriptionStatus: '套餐状态为“{status}”。',
+      shareRevoked: '此链接已过期，摄影师已关闭此链接。',
+      shareExpired: '此链接已过期',
+      shareUnavailable: '此链接已过期，其中的照片已不再开放查看。',
+      zipTooLarge:
+        '一次最多下载 {maxFiles, number} 张、总计 {maxBytes}（你选择了 {files, number} 张，{bytes}）。',
+      noFaceDetected:
+        '你的照片中未检测到人脸（{count, number} 张）。请正对镜头，摘下墨镜或口罩，并在光线充足的地方拍摄。',
+      faceSearchNotFolder: '只有分享整个文件夹的链接才能使用人脸搜索。',
+      faceSearchNotIndexed: '此链接中的照片还不能使用人脸搜索。',
+      checkoutPending: '还有一笔待支付的款项（截至 {time}）。',
+      captchaRequired: '此网络的搜索次数过多，请确认你不是机器人后继续。',
+      captchaExpired: '验证已过期，请重新验证。',
+      captchaInvalid: '验证失败，请重试。',
+      rateLimitedWait: '请求过于频繁，请等待 {minutes, number} 分钟后再试。',
+    },
+    hints: {
+      heic: '暂不支持 HEIC 文件，请先转换为 JPEG。',
+      raw: '不支持 RAW 文件，请先导出为 JPEG。',
+    },
+    client: {
+      network: '无法连接，请检查网络后重试。',
+      contract: '服务器返回了异常结果，请重试。',
+      unknown: '出错了，请重试。',
+      emptyFile: '此文件为空。',
+      invalidRelativePath: '路径“{path}”中的文件夹名称无效。',
+      uploadPlanMismatch: '上传设置已变化，请刷新后重试。',
+      storageUpload: '文件发送到存储失败，请重试。',
+      zipFailed: 'zip 文件准备失败，请重试。',
+      zipExpired: 'zip 文件已过期，请重新下载。',
+      zipTimeout: 'zip 文件准备时间过长，请重试或少选一些照片。',
+      saveFailed: '照片保存失败，请重试。',
+      copyFailed: '复制失败，请长按链接手动复制。',
+      consentVersionUnknown: '同意书有新版本，请刷新此页面阅读最新版本后再同意。',
+      captchaUnavailable: '验证服务暂时不可用，请稍候再试。',
+    },
+  },
+};

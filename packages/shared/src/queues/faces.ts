@@ -2,7 +2,12 @@ import { z } from 'zod';
 
 /**
  * Index one photo. Sent by the worker after media processing when the file's folder has face
- * indexing enabled. The worker loads the file row and takes the photographer from `owner_id`, so
+ * indexing enabled. ADR 0011 decision 1: that is every folder (on by default; only a photographer's
+ * explicit opt-out turns one off), so every image uploaded into a folder gets this job. Before it
+ * decides, the worker renews the expiry of the file's enabled covering folders (folder and
+ * ancestors) to at least upload + FACE_INDEX_EXPIRY_DAYS, also when it had passed, so an upload
+ * into an old event folder is indexed instead of skipped as "not covered". Files at the drive root
+ * have no folder and are never indexed (face search needs a folder share anyway). The worker loads the file row and takes the photographer from `owner_id`, so
  * the message carries no owner. It skips files that are no longer ready, are trashed, are videos,
  * or that no active face index covers any more (isCoveredByFaceIndex: the file's folder or an
  * ancestor with face indexing enabled and not expired), and every index job while
@@ -26,6 +31,13 @@ export const indexFileJobSchema = z.object({
  * index; the worker fans out one `index.file` job per photo the subtree's index covers
  * (isCoveredByFaceIndex). Extending an active index sends nothing: it only moves
  * `face_index_expires_at`.
+ *
+ * One-time backfill of ADR 0011 (no new message): migration 0012 switched every folder on and set
+ * `face_index_queued_at = now()` on every live top-level folder, the outbox mark of this job, so
+ * faces.sweep sends `index.folder` for each of them once the mark is older than
+ * FACES_SWEEP_INDEX_AGE_SECONDS (FACE_SEARCH_ENABLED must be true; with it off the marks wait).
+ * The fan-out covers the whole subtree, so subfolders were not marked. faces.sweep's coverage
+ * scan catches anything a fan-out misses, FACES_SWEEP_BATCH_SIZE photos per run.
  */
 export const indexFolderJobSchema = z.object({
   type: z.literal('index.folder'),

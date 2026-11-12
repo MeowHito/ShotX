@@ -195,13 +195,28 @@ describe('ShotX access tokens', () => {
     await expect(verifier.verify(admin.token)).resolves.toMatchObject({ pool: 'admins' });
   });
 
-  it('never issues an admins token without pwd + otp, or for a subject of another pool', async () => {
+  it('never issues an admins token without the methods of the MFA mode, or for another pool', async () => {
     const subject = 'admin:0199b2a0-0000-7000-8000-000000000001';
-    for (const amr of [['pwd'], ['otp'], ['fed'], ['dev']] as const) {
+    // ADMIN_MFA_MODE=off (the default, ADR 0011 decision 4): `pwd` is enough, nothing else is.
+    for (const amr of [['otp'], ['fed'], ['dev']] as const) {
       await expect(issuer.accessToken('admins', { subject, sessionId: sid, amr })).rejects.toThrow(
         /required amr/,
       );
     }
+    const pwdOnly = await issuer.accessToken('admins', { subject, sessionId: sid, amr: ['pwd'] });
+    await expect(verifier.verify(pwdOnly.token)).resolves.toMatchObject({ amr: ['pwd'] });
+    // ADMIN_MFA_MODE=totp: `pwd` alone is refused, and a pwd-only token issued under `off` no
+    // longer verifies as complete (the guard answers MFA_REQUIRED).
+    const totpAuth = testConfig(shotxEnv({ ADMIN_MFA_MODE: 'totp' })).shotxAuth;
+    if (totpAuth === null) throw new Error('shotxAuth missing');
+    const totpIssuer = new ShotxTokenIssuer('test', totpAuth, clock);
+    for (const amr of [['pwd'], ['otp'], ['fed'], ['dev']] as const) {
+      await expect(
+        totpIssuer.accessToken('admins', { subject, sessionId: sid, amr }),
+      ).rejects.toThrow(/required amr/);
+    }
+    const totpVerifier = new ShotxTokenVerifier('test', totpAuth, clock);
+    await expect(totpVerifier.verify(pwdOnly.token)).resolves.toMatchObject({ amr: ['pwd'] });
     await expect(
       issuer.accessToken('admins', { subject: 'line:U1', sessionId: sid, amr: ['pwd', 'otp'] }),
     ).rejects.toThrow(/another pool/);

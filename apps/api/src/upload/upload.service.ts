@@ -432,7 +432,15 @@ export class UploadService {
       });
     }
     try {
-      const folder = await tx.transaction((sp) => insertFolder(sp, { ownerId, parent, name }));
+      const folder = await tx.transaction((sp) =>
+        insertFolder(sp, {
+          ownerId,
+          parent,
+          name,
+          now: this.clock.now(),
+          faceIndexExpiryDays: this.config.retention.faceIndexExpiryDays,
+        }),
+      );
       return { folder, created: true };
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;

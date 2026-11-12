@@ -4,6 +4,7 @@ import {
   type ExecutionContext,
   Inject,
   Injectable,
+  Optional,
 } from '@nestjs/common';
 import { adminCredentials, authSessions, users } from '@shotx/db';
 import { hasRequiredAmr } from '@shotx/shared';
@@ -11,7 +12,9 @@ import { and, eq, gt, isNull } from 'drizzle-orm';
 import type { Request } from 'express';
 import type { Db } from '../db/db';
 import { ApiError } from '../http/api-error';
+import type { ApiConfig } from '../config';
 import {
+  API_CONFIG,
   CLOCK,
   type Clock,
   DATABASE,
@@ -72,7 +75,7 @@ async function adminSessionLive(
 /**
  * The guard of every `/admin/*` route (Phase 5): an admins-pool token only (a users-pool token is
  * UNAUTHENTICATED: it can never become an admin, ADR 0002). ShotX-issued admins tokens must carry
- * ADMIN_REQUIRED_AMR (`pwd` and `otp`), else MFA_REQUIRED, and a live session (adminSessionLive)
+ * adminRequiredAmr(ADMIN_MFA_MODE) (`pwd`, plus `otp` with `totp`), else MFA_REQUIRED, and a live session (adminSessionLive)
  * else UNAUTHENTICATED; Cognito enforces MFA in the admins pool itself. A disabled admin is
  * ACCOUNT_DISABLED (checked before the session, which disabling revoked).
  */
@@ -82,6 +85,7 @@ export class AdminGuard implements CanActivate {
     @Inject(TOKEN_VERIFIER) private readonly verifier: TokenVerifier,
     @Inject(DATABASE) private readonly db: Db,
     @Inject(CLOCK) private readonly clock: Clock,
+    @Optional() @Inject(API_CONFIG) private readonly config?: ApiConfig,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -92,7 +96,10 @@ export class AdminGuard implements CanActivate {
     if (identity.pool !== 'admins') {
       throw new ApiError('UNAUTHENTICATED', 'This route needs an admins-pool token');
     }
-    if (identity.issuer === 'shotx' && !hasRequiredAmr('admins', identity.amr ?? [])) {
+    // ADR 0011 decision 4: what the token must carry follows the api's ADMIN_MFA_MODE, never the
+    // token; without the config (tests that build the guard by hand) the stricter `totp`.
+    const mfaMode = this.config?.shotxAuth?.admin?.mfaMode ?? 'totp';
+    if (identity.issuer === 'shotx' && !hasRequiredAmr('admins', identity.amr ?? [], mfaMode)) {
       throw new ApiError('MFA_REQUIRED', 'Sign in with your authenticator code');
     }
     const user = await adminUser(this.db, identity);

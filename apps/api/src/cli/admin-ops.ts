@@ -56,6 +56,7 @@ const nameSchema = z.string().trim().min(1).max(200);
 
 /** What the operator hands to the new admin's authenticator app (shown once). */
 export interface TotpEnrolment {
+  mfa: 'totp';
   userId: string;
   subject: string;
   otpauthUri: string;
@@ -98,22 +99,43 @@ async function audit(
 
 function enrolment(
   ctx: AdminOpsContext,
+  totp: { digits: 6 | 8; periodSeconds: number },
   userId: string,
   email: string,
   secret: Buffer,
 ): TotpEnrolment {
   return {
+    mfa: 'totp',
     userId,
     subject: authSubject('admin', userId),
     otpauthUri: otpauthUri({
       issuer: adminTotpIssuer(ctx.stage),
       account: email,
       secret,
-      digits: ctx.admin.totp.digits,
-      periodSeconds: ctx.admin.totp.periodSeconds,
+      digits: totp.digits,
+      periodSeconds: totp.periodSeconds,
     }),
     secretBase32: base32Encode(secret),
   };
+}
+
+/** `create` with ADMIN_MFA_MODE=off (ADR 0011 decision 4): no TOTP secret, nothing to show. */
+export interface PasswordOnlyAdmin {
+  mfa: 'off';
+  userId: string;
+  subject: string;
+}
+
+export type CreatedAdmin = TotpEnrolment | PasswordOnlyAdmin;
+
+/** The TOTP settings, or an operator error naming what is missing. */
+function totpSettings(ctx: AdminOpsContext, command: string) {
+  if (ctx.admin.mfaMode !== 'totp' || ctx.admin.totp === null) {
+    throw new AdminOpsError(
+      `${command} needs ADMIN_MFA_MODE=totp and ADMIN_TOTP_ENCRYPTION_KEY (admin MFA is off)`,
+    );
+  }
+  return ctx.admin.totp;
 }
 
 async function requireAdmin(ctx: AdminOpsContext, email: string) {
@@ -127,12 +149,14 @@ async function requireAdmin(ctx: AdminOpsContext, email: string) {
  * its credentials, in one transaction. TOTP stays unconfirmed (`totp_confirmed_at` null) until
  * the first valid code at sign-in. The operator typed the password, so it is not temporary
  * (`must_change_password = false`, ADR 0010). The email must not belong to any password account
- * (admin or photographer, users_password_account_email_unique).
+ * (admin or photographer, users_password_account_email_unique). ADMIN_MFA_MODE=off (ADR 0011
+ * decision 4): no TOTP secret is created and nothing is shown; should the mode go back to `totp`,
+ * the admin enrols at the first sign-in (`enrol_totp`).
  */
 export async function createAdmin(
   ctx: AdminOpsContext,
   input: { email: string; name: string; password: string },
-): Promise<TotpEnrolment> {
+): Promise<CreatedAdmin> {
   const email = emailSchema.safeParse(input.email.trim());
   if (!email.success) throw new AdminOpsError('Invalid email');
   const name = nameSchema.safeParse(input.name);
@@ -142,7 +166,7 @@ export async function createAdmin(
     throw new AdminOpsError('An admin with this email already exists');
   }
   const passwordHash = await hashPassword(input.password, ctx.argon2id);
-  const secret = generateTotpSecret();
+  const secret = ctx.admin.mfaMode === 'totp' ? generateTotpSecret() : null;
   const now = ctx.now();
   try {
     return await insertAdmin(ctx, {
@@ -162,8 +186,8 @@ export async function createAdmin(
 
 function insertAdmin(
   ctx: AdminOpsContext,
-  input: { email: string; name: string; passwordHash: string; secret: Buffer; now: Date },
-): Promise<TotpEnrolment> {
+  input: { email: string; name: string; passwordHash: string; secret: Buffer | null; now: Date },
+): Promise<CreatedAdmin> {
   const { email, name, passwordHash, secret, now } = input;
   return ctx.db.transaction(async (tx) => {
     const id = await newId(tx);
@@ -178,18 +202,23 @@ function insertAdmin(
       name,
       createdAt: now,
     });
-    const encrypted = encryptTotpSecret(ctx.admin.totp.encryptionKey, id, secret);
+    const totp = secret === null ? null : totpSettings(ctx, 'create');
+    const encrypted =
+      secret === null || totp === null ? null : encryptTotpSecret(totp.encryptionKey, id, secret);
     await tx.insert(adminCredentials).values({
       userId: id,
       passwordHash,
-      totpSecretEncrypted: encrypted.ciphertext,
-      totpSecretNonce: encrypted.nonce,
+      totpSecretEncrypted: encrypted?.ciphertext ?? null,
+      totpSecretNonce: encrypted?.nonce ?? null,
       mustChangePassword: false,
       createdAt: now,
       updatedAt: now,
     });
     await audit(tx, ctx, 'auth.admin.created', id);
-    return enrolment(ctx, id, email, secret);
+    if (secret === null || totp === null) {
+      return { mfa: 'off', userId: id, subject: authSubject('admin', id) } as const;
+    }
+    return enrolment(ctx, totp, id, email, secret);
   });
 }
 
@@ -199,9 +228,10 @@ function insertAdmin(
  * the admin revoked.
  */
 export async function resetAdminTotp(ctx: AdminOpsContext, email: string): Promise<TotpEnrolment> {
+  const totp = totpSettings(ctx, 'reset-totp');
   const row = await requireAdmin(ctx, email);
   const secret = generateTotpSecret();
-  const encrypted = encryptTotpSecret(ctx.admin.totp.encryptionKey, row.id, secret);
+  const encrypted = encryptTotpSecret(totp.encryptionKey, row.id, secret);
   const now = ctx.now();
   await ctx.db.transaction(async (tx) => {
     // A fresh credentials row (same password): its created_at is the enrolment time that
@@ -227,7 +257,7 @@ export async function resetAdminTotp(ctx: AdminOpsContext, email: string): Promi
     await revokeUserSessions(tx, row.id, now);
     await audit(tx, ctx, 'auth.admin.totp_reset', row.id);
   });
-  return enrolment(ctx, row.id, normalizeAdminEmail(email), secret);
+  return enrolment(ctx, totp, row.id, normalizeAdminEmail(email), secret);
 }
 
 /** A new password; every session of the admin is revoked. */

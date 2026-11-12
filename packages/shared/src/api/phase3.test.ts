@@ -111,7 +111,9 @@ describe('Phase 3 routes', () => {
       `/api/s/${token}/zip-jobs/${id}`,
     );
     expect(apiPath(SHARE_ROUTES.stats, { id }, { prefix: false })).toBe(`/shares/${id}/stats`);
-    expect(shareTokenParamsSchema.safeParse({ token: 'short' }).success).toBe(false);
+    // Refs are parsed by the service (NOT_FOUND), never rejected by the params schema (ADR 0011).
+    expect(shareTokenParamsSchema.safeParse({ token: 'bangkok-run' }).success).toBe(true);
+    expect(shareTokenParamsSchema.safeParse({ token: '' }).success).toBe(false);
   });
 
   it('has one route per method and path', () => {
@@ -176,17 +178,22 @@ describe('owner share schemas', () => {
 });
 
 describe('drive and upload additions', () => {
-  it('requires the PDPA confirmation to enable face indexing', () => {
+  it('enables face indexing without a confirmation (ADR 0011), still accepting the old field', () => {
+    expect(updateFaceIndexBodySchema.safeParse({ enabled: true }).success).toBe(true);
     expect(
       updateFaceIndexBodySchema.safeParse({ enabled: true, attendeesInformedConfirmed: true })
         .success,
     ).toBe(true);
-    expect(updateFaceIndexBodySchema.safeParse({ enabled: true }).success).toBe(false);
+    // An old client never sent false; anything but the literal true stays invalid.
     expect(
       updateFaceIndexBodySchema.safeParse({ enabled: true, attendeesInformedConfirmed: false })
         .success,
     ).toBe(false);
     expect(updateFaceIndexBodySchema.safeParse({ enabled: false }).success).toBe(true);
+    expect(
+      updateFaceIndexBodySchema.safeParse({ enabled: false, attendeesInformedConfirmed: true })
+        .success,
+    ).toBe(false);
   });
 
   it('defaults owner downloads to the original', () => {
@@ -217,6 +224,8 @@ describe('public share schemas', () => {
   it('returns share meta with gates as flags', () => {
     const meta = {
       token,
+      slug: 'bangkok-run-2026',
+      path: '/s/bangkok-run-2026',
       targetType: 'folder',
       mode: 'gallery',
       allowDownload: true,
@@ -259,6 +268,7 @@ describe('public share schemas', () => {
     ).toEqual({
       purpose: 'face_search',
       policyVersion: LATEST_CONSENT_POLICY_VERSION,
+      locale: 'th',
       accepted: true,
     });
     expect(

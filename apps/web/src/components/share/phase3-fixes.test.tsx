@@ -32,9 +32,11 @@ function scanShare(fake: FakeApi, extra: Partial<PublicShareFixture> = {}) {
   return share;
 }
 
+/** The camera starts by itself in the round frame (ADR 0011); one tap takes the photo. */
 async function takeLiveSelfie() {
-  await userEvent.click(await screen.findByRole('button', { name: th.capture.openCamera }));
-  await userEvent.click(await screen.findByRole('button', { name: th.capture.takePhoto }));
+  const button = await screen.findByRole('button', { name: th.capture.takePhoto });
+  await waitFor(() => expect(button).toBeEnabled());
+  await userEvent.click(button);
 }
 
 describe('limits come from share meta, not web env', () => {
@@ -48,25 +50,28 @@ describe('limits come from share meta, not web env', () => {
     const share = scanShare(fake, { consented: true });
     const { rendered, toJpeg } = renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    // One angle only: no "angle 1 of 3" step and no "add another angle".
-    expect(screen.queryByText(/^มุมที่ 1 จาก/)).not.toBeInTheDocument();
     await takeLiveSelfie();
-    await screen.findByRole('button', { name: th.capture.search });
-    expect(screen.queryByRole('button', { name: /^เพิ่มอีกมุม/ })).not.toBeInTheDocument();
+    await screen.findByRole('region', { name: th.results.strong });
     // A 1280x960 camera frame, fitted to a 640 px long edge, encoded at quality 70.
     expect(rendered).toEqual([{ width: 640, height: 480 }]);
     expect(toJpeg).toHaveBeenCalledWith(0.7);
   });
 
-  it('caps the selection at meta zip.maxFiles', async () => {
-    const fake = new FakeApi({ zipMaxFiles: 2 });
+  it('selects past meta zip.maxFiles: the download is split into zips of at most that many', async () => {
+    const fake = new FakeApi({ zipMaxFiles: 2, zipPollsUntilDone: 1 });
     const share = fake.addPublicShare({ itemCount: 3 });
-    renderSharePage(fake, share.token);
+    const { startDownload } = renderSharePage(fake, share.token);
     for (const name of ['IMG_0001.jpg', 'IMG_0002.jpg', 'IMG_0003.jpg']) {
       await userEvent.click(await screen.findByRole('checkbox', { name: `เลือก ${name}` }));
     }
-    expect(screen.getByText('เลือกแล้ว 2 รูป')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'เลือก IMG_0003.jpg' })).not.toBeChecked();
+    expect(screen.getByText('เลือกแล้ว 3 รูป')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด 3 รูป' }));
+    await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(2));
+    const bodies = fake.callsTo(PUBLIC_SHARE_ROUTES.downloads).map((c) => c.body);
+    expect(bodies).toEqual([
+      { fileIds: [share.items[0]?.id, share.items[1]?.id] },
+      { fileIds: [share.items[2]?.id] },
+    ]);
   });
 
   it('states the result TTL from meta in the consent text', async () => {
@@ -105,7 +110,7 @@ describe('ขอลบใบหน้าของฉัน', () => {
     expect(screen.queryByText(searchPolicy.title)).not.toBeInTheDocument();
     expect(screen.getByText(deletionPolicy.points.processor)).toBeInTheDocument();
     expect(
-      screen.getByText(th.consent.policies.face_deletion['2026-11-11b'].points.transfer),
+      screen.getByText(th.consent.policies.face_deletion['2026-11-12'].points.transfer),
     ).toBeInTheDocument();
     await userEvent.click(screen.getByRole('checkbox', { name: deletionPolicy.checkbox }));
     await userEvent.click(screen.getByRole('button', { name: th.consent.acceptDeletion }));
@@ -144,9 +149,10 @@ describe('ขอลบใบหน้าของฉัน', () => {
     });
     renderFaceDeletionPage(fake, share.token);
     expect(await screen.findByText(th.faceDeletion.intro)).toBeInTheDocument();
-    expect(screen.getByText('มุมที่ 1 จาก 2: หน้าตรง')).toBeInTheDocument();
     await takeLiveSelfie();
+    // Deletion can't be undone: it waits for the confirm button (one selfie, no angles).
     await userEvent.click(await screen.findByRole('button', { name: th.faceDeletion.submit }));
+    expect(fake.selfieUploads[0]?.types).toEqual(['image/jpeg']);
     expect(await screen.findByText('ไม่พบใบหน้าของคุณในรูปของช่างภาพรายนี้')).toBeInTheDocument();
   });
 
@@ -182,12 +188,13 @@ describe('CONSENT_VERSION_MISMATCH', () => {
 
     await userEvent.click(screen.getByRole('checkbox', { name: searchPolicy.checkbox }));
     await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
-    expect(await screen.findByText(th.capture.guidance)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: th.capture.takePhoto })).toBeInTheDocument();
     const posts = fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent);
     expect(posts).toHaveLength(2);
     expect(posts[1]?.body).toEqual({
       purpose: 'face_search',
       policyVersion: LATEST_CONSENT_POLICY_VERSION,
+      locale: 'th',
       accepted: true,
     });
     expect(share.consented).toBe(true);
@@ -211,7 +218,6 @@ describe('CONSENT_VERSION_MISMATCH', () => {
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     await takeLiveSelfie();
-    await userEvent.click(await screen.findByRole('button', { name: th.capture.search }));
     expect(
       await screen.findByRole('checkbox', { name: searchPolicy.checkbox }),
     ).toBeInTheDocument();
@@ -220,6 +226,6 @@ describe('CONSENT_VERSION_MISMATCH', () => {
     await userEvent.click(screen.getByRole('checkbox', { name: searchPolicy.checkbox }));
     await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
     await waitFor(() => expect(share.consented).toBe(true));
-    expect(await screen.findByRole('button', { name: th.capture.openCamera })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: th.capture.takePhoto })).toBeInTheDocument();
   });
 });

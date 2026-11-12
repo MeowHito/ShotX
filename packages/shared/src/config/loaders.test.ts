@@ -164,8 +164,22 @@ describe('loadShareConfig', () => {
         downloadPerViewer: { limit: 300, windowSeconds: 600 },
         zipCreatePerViewer: { limit: 10, windowSeconds: 3600 },
         feedbackPerViewer: { limit: 100, windowSeconds: 600 },
+        slugResolvePerIp: { limit: 300, windowSeconds: 300 },
+        notFoundPerIp: { limit: 30, windowSeconds: 600 },
       },
     });
+  });
+
+  it('reads the slug resolution and 404 limits per IP (ADR 0011 risk 3)', () => {
+    const config = loadShareConfig({
+      SHARE_SLUG_RESOLVE_RATE_PER_IP: '50',
+      SHARE_SLUG_RESOLVE_RATE_PER_IP_WINDOW_SECONDS: '60',
+      SHARE_NOT_FOUND_RATE_PER_IP: '5',
+      SHARE_NOT_FOUND_RATE_PER_IP_WINDOW_SECONDS: '3600',
+    });
+    expect(config.rateLimits.slugResolvePerIp).toEqual({ limit: 50, windowSeconds: 60 });
+    expect(config.rateLimits.notFoundPerIp).toEqual({ limit: 5, windowSeconds: 3600 });
+    expect(() => loadShareConfig({ SHARE_NOT_FOUND_RATE_PER_IP: '0' })).toThrow();
   });
 
   it('reads overrides', () => {

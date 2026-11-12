@@ -1,6 +1,12 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { auditLog, authSessions, users } from '@shotx/db';
-import { type AuthAuditAction, type AuthPool, OPAQUE_TOKEN_BYTES } from '@shotx/shared';
+import {
+  AUTH_METHODS,
+  type AuthAuditAction,
+  type AuthMethod,
+  type AuthPool,
+  OPAQUE_TOKEN_BYTES,
+} from '@shotx/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { Db, Queryable } from '../db/db';
 import { newId } from '../drive/folders';
@@ -23,12 +29,26 @@ export interface IssuedRefreshToken {
   familyId: string;
   /** End of the family (never extended by rotation). */
   expiresAt: Date;
+  /**
+   * auth_sessions.amr (migration 0012): the sign-in's methods, which refresh re-issues (never
+   * more). Null for a family from before 0012 (then derived from the subject, as before).
+   */
+  amr: AuthMethod[] | null;
 }
 
-/** Starts a refresh family for a sign-in: one row whose id is the family id. */
+/**
+ * Starts a refresh family for a sign-in: one row whose id is the family id, with the sign-in's
+ * `amr` (copied to every successor).
+ */
 export async function startSession(
   q: Queryable,
-  input: { userId: string; pool: AuthPool; now: Date; ttlSeconds: number },
+  input: {
+    userId: string;
+    pool: AuthPool;
+    now: Date;
+    ttlSeconds: number;
+    amr: readonly AuthMethod[];
+  },
 ): Promise<IssuedRefreshToken> {
   const id = await newId(q);
   const refreshToken = newOpaqueToken();
@@ -42,8 +62,9 @@ export async function startSession(
     expiresAt,
     createdAt: input.now,
     lastUsedAt: input.now,
+    amr: [...input.amr],
   });
-  return { refreshToken, familyId: id, expiresAt };
+  return { refreshToken, familyId: id, expiresAt, amr: [...input.amr] };
 }
 
 /** The user a session belongs to, as the token response needs it. */
@@ -155,12 +176,21 @@ export async function rotateSession(
         refreshToken: await insertSuccessor(tx, row, input),
         familyId: row.familyId,
         expiresAt: row.expiresAt,
+        amr: sessionAmr(row.amr),
       },
     } as const;
   });
 }
 
 type SessionRow = typeof authSessions.$inferSelect;
+
+const AUTH_METHOD_SET: ReadonlySet<string> = new Set(AUTH_METHODS);
+
+/** A stored `amr` (text[], checked by auth_sessions_amr_valid) as methods; null stays null. */
+function sessionAmr(amr: string[] | null): AuthMethod[] | null {
+  if (amr === null) return null;
+  return amr.filter((m): m is AuthMethod => AUTH_METHOD_SET.has(m));
+}
 
 /** Inserts the successor of `row`, revokes and links `row`, records the grace entry. */
 async function insertSuccessor(
@@ -179,6 +209,8 @@ async function insertSuccessor(
     expiresAt: row.expiresAt,
     createdAt: input.now,
     lastUsedAt: input.now,
+    // The family keeps its sign-in's methods (migration 0012).
+    amr: row.amr,
   });
   await tx
     .update(authSessions)
@@ -225,7 +257,12 @@ async function graceSuccessor(
   return {
     kind: 'rotated',
     user,
-    issued: { refreshToken: token, familyId: row.familyId, expiresAt: row.expiresAt },
+    issued: {
+      refreshToken: token,
+      familyId: row.familyId,
+      expiresAt: row.expiresAt,
+      amr: sessionAmr(successor.amr),
+    },
   };
 }
 

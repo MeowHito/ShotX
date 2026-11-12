@@ -37,6 +37,11 @@ export interface MediaDeps {
   media: MediaConfig;
   video: VideoTools;
   exifDefaultUtcOffset: string;
+  /**
+   * FACE_INDEX_EXPIRY_DAYS: markReady renews the covering face indexes to upload + this (ADR 0011
+   * decision 1).
+   */
+  faceIndexExpiryDays: number;
   tmpDir?: string | undefined;
   now?: () => number;
 }
@@ -170,7 +175,7 @@ export async function processOriginal(
     }
 
     const now = new Date((deps.now ?? Date.now)());
-    const ready = await markReady(db, row.id, rendered.fields, now);
+    const ready = await markReady(db, row.id, rendered.fields, now, deps.faceIndexExpiryDays);
     if (ready === null) {
       return settleSuperseded(
         row,

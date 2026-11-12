@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { userPasswordCredentials, users } from '@shotx/db';
 import {
+  adminSessionSatisfiesMfaMode,
   authProvidersOf,
   type AuthPool,
   type AuthProvidersResponse,
@@ -248,6 +249,7 @@ export class AuthService {
       pool: 'users',
       now,
       ttlSeconds: auth.config.pools.users.refreshTokenTtlSeconds,
+      amr: amrForSubject(subject),
     });
     return tokenResponse(
       auth,
@@ -283,9 +285,20 @@ export class AuthService {
       await revokeFamily(this.db, result.issued.familyId, now);
       throw new ApiError('REFRESH_TOKEN_INVALID', 'Sign in again');
     }
+    // ADR 0011 decision 4: an admins-pool session keeps its sign-in's methods; one that no longer
+    // satisfies ADMIN_MFA_MODE (a password-only sign-in after a switch to `totp`) ends here.
+    if (
+      pool === 'admins' &&
+      !adminSessionSatisfiesMfaMode(result.issued.amr, auth.config.admin?.mfaMode ?? 'totp')
+    ) {
+      await revokeFamily(this.db, result.issued.familyId, now);
+      throw new ApiError('REFRESH_TOKEN_INVALID', 'Sign in again');
+    }
     let amr: AuthMethod[];
     try {
-      amr = amrForSubject(result.user.authSubject);
+      // The family's stored methods, never more; families from before migration 0012 derive
+      // them from the subject as before.
+      amr = result.issued.amr ?? amrForSubject(result.user.authSubject);
       return await tokenResponse(auth, pool, result.user, result.issued, amr, now, {
         passwordChange: pool === 'users' && state.mustChangePassword === true,
       });

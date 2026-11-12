@@ -11,13 +11,25 @@ import {
 } from '../domain';
 import { ERROR_CODES, type ErrorCode } from '../errors';
 import { MEDIA_KINDS } from '../media-types';
+import { SUPPORTED_LOCALES } from '../locale';
+import { shareRefSchema, shareSlugSchema } from '../share/slug';
 import { shareTokenSchema } from '../share/token';
 import { byteCountSchema, idSchema, isoDateTimeSchema, signedUrlSchema } from './common';
 import { signedDownloadSchema } from './drive';
 
 /**
  * Public share routes (`/api/s/:token/...`, all under the share's path so its unlock cookie,
- * `Path=/api/s/{token}`, reaches every one). The browser calls them directly through CloudFront,
+ * `Path=/api/s/{token}`, reaches every one).
+ *
+ * Refs (ADR 0011): the `:token` path parameter carries a ref, the share's slug or its token
+ * (parseShareRef; the parameter keeps its name so existing callers and controllers don't change).
+ * The page URL is `/s/{slug}` (old `/s/{token}` links keep working). The unlock cookie stays
+ * scoped to `/api/s/{token}`, so web resolves the page's ref once with `GET /s/:ref` and makes
+ * every other call with `meta.token`: a password share unlocked through a slug page then works,
+ * and cookie paths never contain percent-encoded Thai. Resolution by slug is rate-limited per IP
+ * (SHARE_SLUG_RESOLVE_RATE_PER_IP), and an IP over SHARE_NOT_FOUND_RATE_PER_IP NOT_FOUND answers
+ * gets RATE_LIMITED for every slug lookup until the window passes (ADR 0011 risk 3: slugs are
+ * guessable). Token lookups are not throttled by these two limits. The browser calls them directly through CloudFront,
  * where WAF rate rules and CAPTCHA protect them; see share/viewer for how the viewer is identified
  * (bearer token, viewer-session cookie, anon cookie) and which cookies the API sets. Every route
  * checks, in order: token (unknown or malformed: NOT_FOUND), availability (SHARE_EXPIRED with a
@@ -33,7 +45,8 @@ import { signedDownloadSchema } from './drive';
  * `GET /s/:token` writes none, although it issues the cover URL.
  */
 
-export const shareTokenParamsSchema = z.object({ token: shareTokenSchema });
+/** `:token` is a ref (slug or token), see parseShareRef. */
+export const shareTokenParamsSchema = z.object({ token: shareRefSchema });
 
 /** One photo or video as the share page shows it. */
 export const shareItemSchema = z.object({
@@ -62,7 +75,22 @@ export type ShareItem = z.output<typeof shareItemSchema>;
  * NOT_FOUND / SHARE_EXPIRED); what is withheld until the gates pass is null.
  */
 export const shareMetaResponseSchema = z.object({
+  /**
+   * The share's token, whatever ref the request used: web makes every further public call with
+   * it (the unlock cookie's path is `/api/s/{token}`). Revealing it to someone who came by slug
+   * grants nothing more than the slug does.
+   */
   token: shareTokenSchema,
+  /**
+   * The share's slug (ADR 0011). Null only for a share created by the previous api release
+   * during the deploy of migration 0012 (until the follow-up backfill).
+   */
+  slug: shareSlugSchema.nullable(),
+  /**
+   * The canonical page path, percent-encoded: sharePublicPath (`/s/{slug}`, or `/s/{token}`
+   * without a slug). Web may `replace` a token URL with it and uses it as the canonical URL.
+   */
+  path: z.string().startsWith('/s/'),
   targetType: z.enum(SHARE_TARGET_TYPES),
   mode: z.enum(SHARE_MODES),
   allowDownload: z.boolean(),
@@ -92,8 +120,12 @@ export const shareMetaResponseSchema = z.object({
       /** Ready files in scope; null in face_only mode (it would describe other people's photos). */
       itemCount: z.number().int().nonnegative().nullable(),
       /**
-       * OG image and header: the preview of the first ready image in scope (items order). Always
-       * null in face_only mode, which shows nobody's photo to everyone.
+       * OG image and the page's cover (ADR 0011: shown as a 16:3 crop; the crop is display only,
+       * the URL is the plain preview.webp). Folder shares: the folder's `cover_file_id` when it
+       * is still a live, ready image inside the share scope (the API re-checks on every request;
+       * the file may have been moved out, trashed or purged since), else the first ready image
+       * in scope (items order). File shares: the file itself when it is an image. Always null in
+       * face_only mode, which shows nobody's photo to everyone. width/height are the original's.
        */
       cover: z
         .object({
@@ -111,8 +143,8 @@ export const shareMetaResponseSchema = z.object({
   faceSearch: z.object({
     /**
      * FACE_SEARCH_ENABLED and the share supports it (faceSearchUnavailableReason is null). When
-     * false the page hides scanning. "ขอลบใบหน้าของฉัน" does not depend on it: the page always
-     * offers it (see GET /s/:token/face-deletion).
+     * false the page hides scanning. "ขอลบใบหน้าของฉัน" does not depend on it and is not linked
+     * from the page (ADR 0011 decision 2; see GET /s/:token/face-deletion).
      */
     available: z.boolean(),
     /** The `face_search` consent text version to show (web i18n key); null when not available. */
@@ -203,6 +235,12 @@ export type UnlockShareBody = z.input<typeof unlockShareBodySchema>;
 export const giveConsentBodySchema = z.strictObject({
   purpose: z.enum(CONSENT_PURPOSES).default('face_search'),
   policyVersion: consentPolicyVersionSchema,
+  /**
+   * The language the consent text was shown in (ADR 0011), stored in `consents.locale`. Default
+   * `th` (clients from before ADR 0011 only showed Thai). The Thai text is the legal reference;
+   * the version is the same in every language.
+   */
+  locale: z.enum(SUPPORTED_LOCALES).default('th'),
   accepted: z.literal(true),
 });
 export type GiveConsentBody = z.input<typeof giveConsentBodySchema>;
@@ -210,6 +248,11 @@ export type GiveConsentBody = z.input<typeof giveConsentBodySchema>;
 export const consentResponseSchema = z.object({
   purpose: z.enum(CONSENT_PURPOSES),
   policyVersion: z.enum(CONSENT_POLICY_VERSIONS),
+  /**
+   * The language recorded with the consent. An existing current consent is returned as is, so
+   * this is the language of the first acceptance of this version, not necessarily this request's.
+   */
+  locale: z.enum(SUPPORTED_LOCALES),
   acceptedAt: isoDateTimeSchema,
 });
 export type ConsentResponse = z.output<typeof consentResponseSchema>;
@@ -288,9 +331,11 @@ export type FaceDeletionResponse = z.output<typeof faceDeletionResponseSchema>;
 // --- GET /s/:token/face-deletion ----------------------------------------------------------------
 
 /**
- * What the "ขอลบใบหน้าของฉัน" page needs, gated on the token only, so it works where
- * `GET /s/:token` answers SHARE_EXPIRED or the gates aren't passed. The page is reachable from
- * every share page, including the "ลิงก์นี้หมดอายุ" page.
+ * What the "ขอลบใบหน้าของฉัน" page needs, gated on the ref lookup only, so it works where
+ * `GET /s/:token` answers SHARE_EXPIRED or the gates aren't passed. ADR 0011 decision 2: the page
+ * (`/s/{ref}/delete-my-face`, shareFaceDeletionPagePath) stays working but is linked from
+ * nowhere: not the share page, the consent text, the footer or the "ลิงก์นี้หมดอายุ" page. The
+ * company sends the link to a person who asks.
  */
 export const faceDeletionInfoResponseSchema = z.object({
   /** The `face_deletion` consent text version to show (CONSENT_POLICY_VERSION). */
@@ -339,6 +384,12 @@ export const downloadsHeadersSchema = z.object({
  * ZIP_MAX_FILES and ZIP_MAX_BYTES: ZIP_TOO_LARGE). DOWNLOAD_NOT_ALLOWED when the share disallows
  * downloads. Every id must be in scope (and, in face_only mode, in the grant): otherwise
  * NOT_FOUND for the whole request. The size is the share's `download_size` (downloadObject).
+ *
+ * ADR 0011 results page: "download selected" sends the selected ids, "download all found" the ids
+ * of the viewer's face-search result (strong and maybe), the lightbox button one id. The server
+ * never trusts that the ids came from a result: in face_only mode they must be in the grant, in
+ * gallery mode in scope, as above. More found photos than `meta.zip.maxFiles`: the client splits
+ * the selection into several requests (one Idempotency-Key each).
  */
 export const createDownloadBodySchema = z.strictObject({
   fileIds: z
@@ -391,7 +442,7 @@ export type CreateDownloadResponse = z.output<typeof createDownloadResponseSchem
  * Params of `GET /s/:token/zip-jobs/:id`. The route lives under the share's path (it used to be
  * `/zip-jobs/:id`) so the share's unlock cookie reaches it and the normal share gates apply.
  */
-export const shareZipJobParamsSchema = z.object({ token: shareTokenSchema, id: idSchema });
+export const shareZipJobParamsSchema = z.object({ token: shareRefSchema, id: idSchema });
 
 /**
  * A zip job of this share and this viewer or session (another share's or anyone else's job:

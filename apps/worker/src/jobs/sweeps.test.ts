@@ -325,7 +325,10 @@ describe('sweeps (ADR 0008 lost jobs)', () => {
         faceIndexQueuedAt: ago(HOUR),
       });
       // The API turned indexing off while a sweep raced it: never sent, the mark is dropped.
-      const turnedOff = await createFolder(db, ownerId, { faceIndexQueuedAt: ago(7 * HOUR) });
+      const turnedOff = await createFolder(db, ownerId, {
+        faceIndexEnabled: false,
+        faceIndexQueuedAt: ago(7 * HOUR),
+      });
       const ready = { status: 'ready' as const, verifiedAt: ago(DAY), folderId: folder.id };
       const stale = await createFileRow(db, ownerId, {
         ...ready,
@@ -414,7 +417,7 @@ describe('sweeps (ADR 0008 lost jobs)', () => {
         faceIndexEnabled: true,
         faceIndexExpiresAt: ago(HOUR),
       });
-      const plain = await createFolder(db, ownerId);
+      const plain = await createFolder(db, ownerId, { faceIndexEnabled: false }); // opted out
       let n = 0;
       const photo = (overrides: Parameters<typeof createFileRow>[2]) =>
         createFileRow(db, ownerId, {

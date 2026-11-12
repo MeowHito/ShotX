@@ -12,6 +12,8 @@ import {
   type ShareItemsResponse,
   shareItemsCursorSchema,
   type ShareMetaResponse,
+  sharePublicPath,
+  type SupportedLocale,
   shareUnlockKey,
   type Viewer,
   viewerColumns,
@@ -142,7 +144,7 @@ export class SharePageService {
   // --- GET /s/:token -------------------------------------------------------------------------------
 
   async meta(token: string, ctx: PublicContext): Promise<ShareMetaResponse> {
-    const share = await this.access.byToken(token);
+    const share = await this.access.byToken(token, ctx);
     this.access.assertAvailable(share);
     const loginRequired = share.requireLogin && ctx.viewer.kind !== 'user';
     const locked = !(await this.access.isUnlocked(share, ctx));
@@ -159,12 +161,32 @@ export class SharePageService {
           .from(files)
           .where(shareItemsScope(share));
         itemCount = count?.n ?? 0;
-        const [first] = await this.db
-          .select({ previewKey: files.previewKey, width: files.width, height: files.height })
-          .from(files)
-          .where(and(shareItemsScope(share), like(files.mime, 'image/%')))
-          .orderBy(asc(ITEM_KEY), asc(files.id))
-          .limit(1);
+        // ADR 0011: the folder's chosen cover while it is still a live, ready image in scope
+        // (re-checked on every request: it may have been moved out, trashed or purged since),
+        // else the first ready image in scope (items order).
+        const coverColumns = {
+          previewKey: files.previewKey,
+          width: files.width,
+          height: files.height,
+        };
+        const imageInScope = and(shareItemsScope(share), like(files.mime, 'image/%'));
+        const [chosen] =
+          share.coverFileId === null
+            ? []
+            : await this.db
+                .select(coverColumns)
+                .from(files)
+                .where(and(imageInScope, eq(files.id, share.coverFileId)))
+                .limit(1);
+        const [first] =
+          chosen?.previewKey != null
+            ? [chosen]
+            : await this.db
+                .select(coverColumns)
+                .from(files)
+                .where(imageInScope)
+                .orderBy(asc(ITEM_KEY), asc(files.id))
+                .limit(1);
         if (first?.previewKey != null) {
           // No `view` event (PUBLIC_SHARE_ROUTE_ACTIVITY.meta is empty): SSR and link unfurlers
           // call this route, so views come only from items pages and face-search results.
@@ -181,6 +203,8 @@ export class SharePageService {
     const available = await this.faceSearchAvailable(share);
     return {
       token: share.token,
+      slug: share.slug,
+      path: sharePublicPath(share),
       targetType: share.targetType,
       mode: share.mode,
       allowDownload: share.allowDownload,
@@ -279,11 +303,16 @@ export class SharePageService {
   /**
    * Checks the password (argon2id) and sets the share's unlock cookie: an opaque token whose
    * SHA-256 maps, in Redis, to the password fingerprint (TTL SHARE_UNLOCK_TTL_SECONDS). Rate-limited
-   * per IP and share before the password is checked. Returns the cookie value, or null on a share
-   * without a password (no-op).
+   * per IP and share before the password is checked. Returns the cookie value and the share's
+   * token (the cookie's path is always `/api/s/{token}`, also when the request used the slug,
+   * ADR 0011), or null on a share without a password (no-op).
    */
-  async unlock(token: string, ctx: PublicContext, password: string): Promise<string | null> {
-    const share = await this.access.byToken(token);
+  async unlock(
+    token: string,
+    ctx: PublicContext,
+    password: string,
+  ): Promise<{ cookie: string; shareToken: string } | null> {
+    const share = await this.access.byToken(token, ctx);
     this.access.assertAvailable(share);
     if (share.requireLogin && ctx.viewer.kind !== 'user') {
       throw new ApiError('LOGIN_REQUIRED', 'Sign in to open this share');
@@ -303,7 +332,7 @@ export class SharePageService {
       passwordFingerprint(share.passwordHash),
       this.config.share.unlockTtlSeconds,
     );
-    return cookie;
+    return { cookie, shareToken: share.token };
   }
 
   // --- POST /s/:token/consent ----------------------------------------------------------------------
@@ -320,10 +349,10 @@ export class SharePageService {
   async giveConsent(
     token: string,
     ctx: PublicContext,
-    body: { purpose: ConsentPurpose; policyVersion: string },
+    body: { purpose: ConsentPurpose; policyVersion: string; locale: SupportedLocale },
   ): Promise<ConsentResponse> {
     const gates = consentGates(body.purpose);
-    const share = await this.access.byToken(token);
+    const share = await this.access.byToken(token, ctx);
     if (gates.availability) this.access.assertAvailable(share);
     if (gates.access) await this.access.assertAccess(share, ctx);
     if (gates.featureFlag && !this.config.features.faceSearch) throw faceSearchDisabled();
@@ -340,12 +369,14 @@ export class SharePageService {
         ...viewerColumns(ctx.viewer),
         purpose: body.purpose,
         policyVersion: current,
+        // ADR 0011: the language the text was shown in; the first acceptance's stays.
+        locale: body.locale,
         ipHash: ctx.ipHash,
         acceptedAt: this.clock.now(),
       })
       .onConflictDoNothing();
     const [row] = await this.db
-      .select({ acceptedAt: consents.acceptedAt })
+      .select({ acceptedAt: consents.acceptedAt, locale: consents.locale })
       .from(consents)
       .where(
         and(
@@ -360,6 +391,7 @@ export class SharePageService {
     return {
       purpose: body.purpose,
       policyVersion: current,
+      locale: row.locale,
       acceptedAt: row.acceptedAt.toISOString(),
     };
   }
@@ -372,7 +404,7 @@ export class SharePageService {
    * FACE_SEARCH_ENABLED=false. Writes no activity event.
    */
   async faceDeletionInfo(token: string, ctx: PublicContext): Promise<FaceDeletionInfoResponse> {
-    const share = await this.access.byToken(token);
+    const share = await this.access.byToken(token, ctx);
     return {
       policyVersion: this.config.consent.policyVersion,
       consented: await this.hasConsent(share, ctx.viewer, 'face_deletion'),
@@ -388,7 +420,7 @@ export class SharePageService {
    * revoked or expired shares and while face search is disabled; only the token must exist.
    */
   async withdrawConsent(token: string, ctx: PublicContext): Promise<void> {
-    const share = await this.access.byToken(token);
+    const share = await this.access.byToken(token, ctx);
     const viewers = browserViewers(ctx);
     const now = this.clock.now();
     for (const viewer of viewers) {

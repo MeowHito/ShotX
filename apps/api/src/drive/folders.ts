@@ -26,10 +26,21 @@ export async function newId(q: Queryable): Promise<string> {
   return row.id;
 }
 
-/** Inserts a live folder under `parent` (null: the root). Unique violations propagate. */
+/**
+ * Inserts a live folder under `parent` (null: the root). Unique violations propagate. ADR 0011
+ * decision 1: face indexing is on from the start, expiring `faceIndexExpiryDays`
+ * (FACE_INDEX_EXPIRY_DAYS) after `now`; uploads renew it (worker). No index.folder is needed: the
+ * folder is empty, and each upload sends its own index job.
+ */
 export async function insertFolder(
   q: Queryable,
-  input: { ownerId: string; parent: Pick<Folder, 'id' | 'path'> | null; name: string },
+  input: {
+    ownerId: string;
+    parent: Pick<Folder, 'id' | 'path'> | null;
+    name: string;
+    now: Date;
+    faceIndexExpiryDays: number;
+  },
 ): Promise<Folder> {
   const id = await newId(q);
   const [row] = await q
@@ -40,6 +51,8 @@ export async function insertFolder(
       parentId: input.parent?.id ?? null,
       name: input.name,
       path: folderPath(input.parent?.path ?? null, id),
+      faceIndexEnabled: true,
+      faceIndexExpiresAt: new Date(input.now.getTime() + input.faceIndexExpiryDays * 86_400_000),
     })
     .returning();
   if (row === undefined) throw new Error('Folder insert returned no row');

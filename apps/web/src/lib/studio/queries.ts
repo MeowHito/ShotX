@@ -7,12 +7,10 @@ import {
   ME_ROUTES,
   SHARE_ROUTES,
   type ShareStatsQuery,
-  type UpdateFaceIndexBody,
   type UpdateShareBody,
 } from '@shotx/shared';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApiClient } from '@/components/providers';
-import { driveKeys } from '@/lib/drive/queries';
 
 export const studioKeys = {
   me: ['me'] as const,
@@ -103,17 +101,6 @@ export function useRevokeShare() {
   return useMutation({
     mutationFn: (id: string) => api.call(SHARE_ROUTES.revoke, { params: { id } }),
     onSuccess: invalidate,
-  });
-}
-
-/** PATCH /drive/folders/:id/face-index. */
-export function useUpdateFaceIndex() {
-  const api = useApiClient();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: UpdateFaceIndexBody }) =>
-      api.call(DRIVE_ROUTES.updateFaceIndex, { params: { id }, body }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: driveKeys.all }),
   });
 }
 

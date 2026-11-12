@@ -4,7 +4,7 @@ import {
   type AccountStatus,
   faceScanResultKey,
   isOpaqueCookieToken,
-  isShareToken,
+  parseShareRef,
   SHARE_UNLOCK_COOKIE,
   shareAccessGate,
   shareAvailability,
@@ -26,6 +26,9 @@ import {
   DATABASE,
   KEY_VALUE_STORE,
   type KeyValueStore,
+  RATE_LIMITER,
+  type RateLimiter,
+  type RateLimitResult,
 } from '../tokens';
 
 type ShareRow = typeof shares.$inferSelect;
@@ -47,6 +50,20 @@ export interface LoadedShare extends ShareRow {
   subscriptionStatus: SubscriptionStatus | null;
   /** The owner's account status (ADR 0010): a disabled photographer's shares don't serve. */
   ownerStatus: AccountStatus;
+  /**
+   * Folder shares: the target folder's chosen cover (ADR 0011), not re-checked here (share meta
+   * does); null for file shares or the default cover.
+   */
+  coverFileId: string | null;
+}
+
+/** RATE_LIMITED with Retry-After unless the window allows the request. */
+function refuseUnless(result: RateLimitResult): void {
+  if (!result.allowed) {
+    throw new ApiError('RATE_LIMITED', 'Too many requests; try again later', undefined, {
+      'Retry-After': String(Math.max(1, result.retryAfterSeconds)),
+    });
+  }
 }
 
 /** First 16 hex characters of SHA-256 of the password hash: what an unlock proof stores. */
@@ -70,6 +87,7 @@ async function loadShare(
       fileLive: sql<boolean>`(${files.id} IS NOT NULL AND ${files.deletedAt} IS NULL AND ${files.purgeRequestedAt} IS NULL)`,
       folderName: folders.name,
       folderPath: folders.path,
+      folderCoverFileId: folders.coverFileId,
       folderLive: sql<boolean>`(${folders.id} IS NOT NULL AND ${folders.deletedAt} IS NULL AND ${folders.purgeRequestedAt} IS NULL)`,
       ownerName: users.name,
       ownerStatus: users.status,
@@ -94,6 +112,7 @@ async function loadShare(
     ownerName: row.ownerName,
     subscriptionStatus: subscription?.status ?? null,
     ownerStatus: row.ownerStatus,
+    coverFileId: isFile ? null : row.folderCoverFileId,
   };
 }
 
@@ -110,13 +129,50 @@ export class ShareAccess {
     @Inject(KEY_VALUE_STORE) private readonly store: KeyValueStore,
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(API_CONFIG) private readonly config: ApiConfig,
+    @Inject(RATE_LIMITER) private readonly limiter: RateLimiter,
   ) {}
 
-  /** The share of a token; unknown or malformed tokens are NOT_FOUND (never VALIDATION_FAILED). */
-  async byToken(token: string): Promise<LoadedShare> {
-    if (!isShareToken(token)) throw notFound('Share');
-    const share = await loadShare(this.db, eq(shares.token, token), billingOnline(this.config));
-    if (share === null) throw notFound('Share');
+  /**
+   * The share of a ref, the `:token` path parameter of every public share route (ADR 0011):
+   * parseShareRef reads it as a token (`shares.token`) or a slug (`shares.slug`); anything else is
+   * NOT_FOUND, like an unknown ref (never VALIDATION_FAILED). Slugs are guessable, so per client
+   * IP (ADR 0011 risk 3):
+   * - a slug lookup is refused (RATE_LIMITED, Retry-After) while the IP is over
+   *   SHARE_NOT_FOUND_RATE_PER_IP NOT_FOUND answers, found or not, and counts towards
+   *   SHARE_SLUG_RESOLVE_RATE_PER_IP;
+   * - every NOT_FOUND (slug, token or malformed ref) counts towards SHARE_NOT_FOUND_RATE_PER_IP.
+   * Token lookups are never refused by these limits. A refused or unknown slug answers exactly
+   * what an unknown one would otherwise (no hint that a slug exists).
+   */
+  async byToken(ref: string, ctx: { ipHash: string }): Promise<LoadedShare> {
+    const { slugResolvePerIp, notFoundPerIp } = this.config.share.rateLimits;
+    const notFoundKey = `share-ref:not-found:ip:${ctx.ipHash}`;
+    const parsed = parseShareRef(ref);
+    if (parsed?.kind === 'slug') {
+      refuseUnless(
+        await this.limiter.peek(notFoundKey, notFoundPerIp.limit, notFoundPerIp.windowSeconds),
+      );
+      refuseUnless(
+        await this.limiter.hit(
+          `share-ref:slug:ip:${ctx.ipHash}`,
+          slugResolvePerIp.limit,
+          slugResolvePerIp.windowSeconds,
+        ),
+      );
+    }
+    const share =
+      parsed === null
+        ? null
+        : await loadShare(
+            this.db,
+            parsed.kind === 'token' ? eq(shares.token, parsed.token) : eq(shares.slug, parsed.slug),
+            billingOnline(this.config),
+          );
+    if (share === null) {
+      // Counted, never refused here: the refusal applies to the next slug lookups.
+      await this.limiter.hit(notFoundKey, notFoundPerIp.limit, notFoundPerIp.windowSeconds);
+      throw notFound('Share');
+    }
     return share;
   }
 
@@ -181,7 +237,7 @@ export class ShareAccess {
 
   /** Token lookup, availability, login and password: the full gate of most public routes. */
   async open(token: string, ctx: PublicContext): Promise<LoadedShare> {
-    const share = await this.byToken(token);
+    const share = await this.byToken(token, ctx);
     this.assertAvailable(share);
     await this.assertAccess(share, ctx);
     return share;

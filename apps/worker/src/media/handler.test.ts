@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { files } from '@shotx/db';
+import { files, folders } from '@shotx/db';
 import {
   derivedKey,
   loadMediaConfig,
@@ -28,6 +28,7 @@ import { cameraJpeg, ffmpegAvailable, pngBytes, sampleVideo } from '../testing/f
 import { MemoryObjectStore, MemoryQueueClient } from '../testing/memory-aws';
 import { createMediaHandler } from './handler';
 
+const DAY = 86_400_000;
 const BUCKET = 'shotx-test-media';
 const FACES_URL = 'http://sqs.local/queue/faces';
 
@@ -94,6 +95,7 @@ describe('media consumer', () => {
         audioBitrateKbps: 96,
       },
       exifDefaultUtcOffset: '+07:00',
+      faceIndexExpiryDays: 90,
       maxProcessingMs: 60_000,
       originalsStorageClass: 'INTELLIGENT_TIERING',
       partBytes: 16 * 1024 * 1024,
@@ -281,20 +283,47 @@ describe('media consumer', () => {
     ]);
   });
 
-  it("does not queue face indexing when the folder's index expired", async () => {
+  it('renews an expired-but-enabled index on upload and queues indexing (ADR 0011)', async () => {
     const ownerId = await createPhotographer(db, { reservedBytes: jpeg.length });
-    const folder = await createFolder(db, ownerId, {
+    const expiredAt = new Date(Date.now() - DAY);
+    const event = await createFolder(db, ownerId, {
       faceIndexEnabled: true,
-      faceIndexExpiresAt: new Date(Date.now() - 1000),
+      faceIndexExpiresAt: expiredAt,
     });
-    const { body } = await upload(jpeg, { ownerId, folderId: folder.id });
+    const day = await createFolder(db, ownerId, {
+      parent: event,
+      faceIndexEnabled: true,
+      faceIndexExpiresAt: expiredAt,
+    });
+    // An opted-out folder in the chain is left as it is.
+    const optedOut = await createFolder(db, ownerId, { parent: day, faceIndexEnabled: false });
+    const { id, body } = await upload(jpeg, { ownerId, folderId: optedOut.id });
     await handle(body, context());
-    expect(queues.sent).toEqual([]);
+
+    const row = await fileById(db, id);
+    expect(row?.status).toBe('ready');
+    expect(row?.facesQueuedAt).toBeInstanceOf(Date);
+    expect(queues.sent).toEqual([
+      { queueUrl: FACES_URL, body: JSON.stringify({ type: 'index.file', fileId: id }) },
+    ]);
+    const expiry = async (folderId: string) =>
+      (await db.select().from(folders).where(eq(folders.id, folderId)))[0]?.faceIndexExpiresAt;
+    const renewed = row!.createdAt.getTime() + 90 * DAY;
+    expect((await expiry(event.id))?.getTime()).toBe(renewed);
+    expect((await expiry(day.id))?.getTime()).toBe(renewed);
+    const [off] = await db.select().from(folders).where(eq(folders.id, optedOut.id));
+    expect(off?.faceIndexEnabled).toBe(false);
+
+    // A redelivery changes nothing: same expiry, no second job.
+    await handle(body, context());
+    expect((await expiry(event.id))?.getTime()).toBe(renewed);
+    expect(queues.sent).toHaveLength(1);
   });
 
   it('does not queue face indexing when the folder has it off', async () => {
     const ownerId = await createPhotographer(db, { reservedBytes: jpeg.length });
-    const folder = await createFolder(db, ownerId);
+    // ADR 0011: on by default; off only by the photographer's explicit opt-out.
+    const folder = await createFolder(db, ownerId, { faceIndexEnabled: false });
     const { body } = await upload(jpeg, { ownerId, folderId: folder.id });
     await handle(body, context());
     expect(queues.sent).toEqual([]);

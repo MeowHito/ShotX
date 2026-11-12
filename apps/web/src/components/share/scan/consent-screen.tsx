@@ -9,13 +9,12 @@ import {
 } from '@shotx/shared';
 import { Alert, Button, Checkbox, Label } from '@shotx/ui';
 import { ChevronDownIcon, ShieldCheckIcon } from 'lucide-react';
-import Link from 'next/link';
-import { useMessages, useTranslations } from 'next-intl';
+import { isSupportedLocale } from '@shotx/shared';
+import { useLocale, useMessages, useTranslations } from 'next-intl';
 import { useId, useState } from 'react';
 import { isApiError } from '@/lib/api/errors';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useGiveConsent } from '@/lib/share/queries';
-import { faceDeletionHref } from '../share-gates';
 
 /** Display order of a policy's points; a version shows those it has (`transfer` from 2026-11-11). */
 const POINTS = ['purpose', 'noStorage', 'results', 'processor', 'transfer', 'withdraw'] as const;
@@ -85,7 +84,10 @@ export function ConsentScreen({
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blocked, setBlocked] = useState(false);
-  const giveConsent = useGiveConsent(token, purpose);
+  const locale = useLocale();
+  /** English and Chinese texts are translations; the Thai text is the legal reference. */
+  const translated = locale !== 'th';
+  const giveConsent = useGiveConsent(token, purpose, isSupportedLocale(locale) ? locale : 'th');
 
   async function accept() {
     if (!checked) {
@@ -158,23 +160,15 @@ export function ConsentScreen({
           </summary>
           <ul className="mt-3 list-disc space-y-2 pl-5 text-muted-foreground">
             {DETAILS.map((point) => (
-              <li key={point}>
-                {text(`details.${point}`)}
-                {point === 'rights' && purpose === 'face_search' ? (
-                  <>
-                    {' '}
-                    <Link
-                      href={faceDeletionHref(token)}
-                      className="text-primary underline underline-offset-4"
-                    >
-                      {t('deleteMyFace')}
-                    </Link>
-                  </>
-                ) : null}
-              </li>
+              <li key={point}>{text(`details.${point}`)}</li>
             ))}
           </ul>
+          {translated ? (
+            <p className="mt-3 text-xs text-muted-foreground">{t('translationNote')}</p>
+          ) : null}
         </details>
+      ) : translated ? (
+        <p className="text-xs text-muted-foreground">{t('translationNote')}</p>
       ) : null}
       <div className="flex items-start gap-3 rounded-xl border bg-sidebar p-4">
         <Checkbox

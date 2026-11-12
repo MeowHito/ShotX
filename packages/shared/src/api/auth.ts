@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { newPasswordSchema } from '../account/password-accounts';
 import { opaqueTokenSchema } from '../account/tokens';
-import { AUTH_POOLS, OIDC_PROVIDERS } from '../domain';
+import { ADMIN_MFA_MODES, type AdminMfaMode, AUTH_POOLS, OIDC_PROVIDERS } from '../domain';
 
 // Sign-in routes of the API's own token issuer (AUTH_PROVIDER=shotx or local; ADR 0008 section 4).
 // With AUTH_PROVIDER=cognito every route here answers NOT_FOUND. All of them are RouteAuth `bff`:
@@ -69,8 +69,14 @@ export const authProvidersResponseSchema = z.object({
     .refine((list) => new Set(list).size === list.length, { error: 'must not repeat a provider' }),
   /** POST /auth/dev/login is available (AUTH_PROVIDER=local). */
   devLogin: z.boolean(),
-  /** Admin sign-in (password + TOTP) is available. */
+  /** Admin sign-in is available. */
   adminLogin: z.boolean(),
+  /**
+   * ADMIN_MFA_MODE when admin sign-in is available, else null (ADR 0011 decision 4). The admin
+   * app uses it to word the sign-in page and to hide TOTP-only UI (e.g. the "pending enrolment"
+   * flag of AdminUser.totpEnrolled) with `off`. Not a secret.
+   */
+  adminMfaMode: z.enum(ADMIN_MFA_MODES).nullable(),
 });
 export type AuthProvidersResponse = z.output<typeof authProvidersResponseSchema>;
 
@@ -172,7 +178,23 @@ export const adminLoginBodySchema = z.strictObject({
 export type AdminLoginBody = z.input<typeof adminLoginBodySchema>;
 
 /**
- * What an admin sign-in asks for next (ADR 0010). Every step answers with a fresh one-time
+ * What an admin sign-in asks for next (ADR 0010; ADMIN_MFA_MODE since ADR 0011 decision 4).
+ *
+ * ADMIN_MFA_MODE=off (default): no second factor.
+ *
+ *   POST /auth/admin/login ─┬─ must_change_password ──> change_password ── POST /auth/admin/password ──> signed_in
+ *                           └─ otherwise ─────────────> signed_in
+ *
+ * - `signed_in`: admins-pool tokens (access token `amr` ["pwd"], `idp` `admin`), stored by the
+ *   admin BFF. The session's `auth_sessions.amr` is ["pwd"].
+ * - `change_password`: as below; POST /auth/admin/password stores the new hash, clears
+ *   `must_change_password`, sets `password_changed_at` where kept, and answers `signed_in`.
+ * - `enrol_totp` and `totp` are never answered, a TOTP secret on the account is left as it is
+ *   (unused), and POST /auth/admin/mfa answers LOGIN_STATE_INVALID (no challenge can be for it).
+ * Password policy, lockout, rate limits, session revocation and the admin BFF key are the same in
+ * both modes.
+ *
+ * ADMIN_MFA_MODE=totp (the ADR 0010 flow). Every step answers with a fresh one-time
  * `challengeId` for the next step (the previous one is used up), valid for
  * ADMIN_MFA_CHALLENGE_TTL_SECONDS; a challenge sent to another step's route is
  * LOGIN_STATE_INVALID. The order is fixed, and `totp` is always last:
@@ -204,6 +226,12 @@ export type AdminLoginBody = z.input<typeof adminLoginBodySchema>;
 export const ADMIN_SIGN_IN_STEPS = ['change_password', 'enrol_totp', 'totp'] as const;
 export type AdminSignInStep = (typeof ADMIN_SIGN_IN_STEPS)[number];
 
+/** The challenge steps each ADMIN_MFA_MODE may answer (the rest is `signed_in`). */
+export const ADMIN_SIGN_IN_STEPS_BY_MODE = {
+  off: ['change_password'],
+  totp: ADMIN_SIGN_IN_STEPS,
+} as const satisfies Record<AdminMfaMode, readonly AdminSignInStep[]>;
+
 const adminChallenge = {
   /** One-time, valid for ADMIN_MFA_CHALLENGE_TTL_SECONDS. */
   challengeId: opaqueTokenSchema,
@@ -227,14 +255,21 @@ export const adminEnrolTotpStepSchema = z.object({
 
 export const adminTotpStepSchema = z.object({ step: z.literal('totp'), ...adminChallenge });
 
+/** ADMIN_MFA_MODE=off only: the sign-in is complete; admins-pool tokens with `amr` ["pwd"]. */
+export const adminSignedInStepSchema = authTokenResponseSchema.extend({
+  step: z.literal('signed_in'),
+});
+
 /**
  * POST /auth/admin/login answers with the first step. Changed in ADR 0010: it now always has
- * `step` (before, it was `{ challengeId, expiresIn }`, which is the `totp` step).
+ * `step` (before, it was `{ challengeId, expiresIn }`, which is the `totp` step). ADR 0011: with
+ * ADMIN_MFA_MODE=off it answers `signed_in` or `change_password` only.
  */
 export const adminLoginResponseSchema = z.discriminatedUnion('step', [
   adminChangePasswordStepSchema,
   adminEnrolTotpStepSchema,
   adminTotpStepSchema,
+  adminSignedInStepSchema,
 ]);
 export type AdminLoginResponse = z.output<typeof adminLoginResponseSchema>;
 
@@ -249,10 +284,15 @@ export const adminChangePasswordBodySchema = z.strictObject({
 });
 export type AdminChangePasswordBody = z.input<typeof adminChangePasswordBodySchema>;
 
-/** After the password step: enrol TOTP (no secret yet) or enter the code (secret set). */
+/**
+ * After the password step. ADMIN_MFA_MODE=totp: enrol TOTP (no secret yet) or enter the code
+ * (secret set); nothing is stored until the code step. ADMIN_MFA_MODE=off: `signed_in`, after
+ * storing the new password in the same transaction that starts the session.
+ */
 export const adminChangePasswordResponseSchema = z.discriminatedUnion('step', [
   adminEnrolTotpStepSchema,
   adminTotpStepSchema,
+  adminSignedInStepSchema,
 ]);
 export type AdminChangePasswordResponse = z.output<typeof adminChangePasswordResponseSchema>;
 

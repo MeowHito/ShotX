@@ -22,6 +22,10 @@ import {
   driveNameKey,
   isCoveredByFaceIndex,
   isFileInShareScope,
+  isShareSlug,
+  parseShareRef,
+  slugifyEventName,
+  withShareSlugSuffix,
   zipKey,
   driveSearchPattern,
 } from '@shotx/shared';
@@ -1280,24 +1284,24 @@ for (const backend of backends) {
         });
       });
 
-      it('enables face indexing only with the attendees-informed confirmation', async () => {
+      it('indexes every new folder and needs an expiry, not a confirmation (migration 0012)', async () => {
         const owner = await newUser();
         const folder = await newFolder(owner.id, null);
+        // ADR 0011 decision 1: on by default, with creation + 90 days as the safety-net expiry.
+        expect(folder.faceIndexEnabled).toBe(true);
+        expect(folder.faceIndexInformedAt).toBeNull();
+        const days = ((folder.faceIndexExpiresAt?.getTime() ?? 0) - Date.now()) / 86_400_000;
+        expect(days).toBeGreaterThan(89.9);
+        expect(days).toBeLessThan(90.1);
         const set = (values: Partial<typeof schema.folders.$inferInsert>) =>
           db().update(schema.folders).set(values).where(eq(schema.folders.id, folder.id));
-        expect(
-          await pgError(set({ faceIndexEnabled: true, faceIndexExpiresAt: inDays(90) })),
-        ).toEqual({ code: CHECK, constraint: 'folders_face_index_needs_confirmation' });
-        expect(await pgError(set({ faceIndexEnabled: true, faceIndexInformedAt: now }))).toEqual({
+        expect(await pgError(set({ faceIndexExpiresAt: null }))).toEqual({
           code: CHECK,
-          constraint: 'folders_face_index_needs_confirmation',
+          constraint: 'folders_face_index_has_expiry',
         });
-        await set({
-          faceIndexEnabled: true,
-          faceIndexInformedAt: now,
-          faceIndexExpiresAt: inDays(90),
-        });
+        await set({ faceIndexEnabled: true, faceIndexExpiresAt: inDays(30) });
         await set({ faceIndexEnabled: false, faceIndexExpiresAt: null });
+        await set({ faceIndexEnabled: true, faceIndexExpiresAt: inDays(90) });
       });
 
       it('keeps one current consent per share, viewer or session and version', async () => {
@@ -1558,6 +1562,11 @@ for (const backend of backends) {
           const event = await newFolder(owner.id, null);
           const day1 = await newFolder(owner.id, event);
           const other = await newFolder(owner.id, null);
+          // New folders are indexed by default (migration 0012); start from all off.
+          await db()
+            .update(schema.folders)
+            .set({ faceIndexEnabled: false, faceIndexExpiresAt: null })
+            .where(eq(schema.folders.ownerId, owner.id));
           const enable = (id: string, expiresAt: Date) =>
             db()
               .update(schema.folders)
@@ -1904,7 +1913,10 @@ describe('migration 0003 on a database with 0002 and existing rows (PGlite)', ()
       await consent(anon, null, '2026-10-02T00:00:00Z');
       await consent(randomUUID(), viewer, '2026-10-03T00:00:00Z');
 
-      await migratePglite(db, { migrationsFolder: MIGRATIONS_FOLDER });
+      // Up to 0003 only: 0012 switches every folder on again (ADR 0011), checked at the end.
+      const upTo0003 = migrationsUpTo(4);
+      await migratePglite(db, { migrationsFolder: upTo0003 });
+      rmSync(upTo0003, { recursive: true });
 
       const parts = await rows<{ id: string; part: number | null }>(
         db,
@@ -1931,6 +1943,15 @@ describe('migration 0003 on a database with 0002 and existing rows (PGlite)', ()
         { anon, viewer: null, current: true },
         { anon: null, viewer, current: true },
       ]);
+
+      // The rest of the chain: 0012 switches the folder back on (ADR 0011 decision 1).
+      await migratePglite(db, { migrationsFolder: MIGRATIONS_FOLDER });
+      expect(
+        await rows<{ enabled: boolean }>(
+          db,
+          sql`SELECT face_index_enabled AS enabled FROM folders WHERE id = ${folderId}`,
+        ),
+      ).toEqual([{ enabled: true }]);
     } finally {
       await client.close();
     }
@@ -2612,4 +2633,330 @@ describe('migration 0011 on a database with 0010 and existing accounts (PGlite)'
       await client.close();
     }
   }, 120_000);
+});
+
+describe('migration 0012 on a database with 0011 and existing rows (PGlite)', () => {
+  it('backfills slugs, switches every folder on, marks top-level folders and keeps consents Thai', async () => {
+    const client = await PGlite.create({ extensions: { ltree, pg_trgm, vector } });
+    try {
+      const db = drizzlePglite({ client, schema });
+      const dir = mkdtempSync(join(tmpdir(), 'shotx-migrations-'));
+      mkdirSync(join(dir, 'meta'));
+      const journal = JSON.parse(
+        readFileSync(join(MIGRATIONS_FOLDER, 'meta', '_journal.json'), 'utf8'),
+      ) as { entries: { tag: string }[] };
+      const entries = journal.entries.slice(0, 12);
+      expect(entries.at(-1)?.tag).toBe('0011_admin_accounts');
+      writeFileSync(join(dir, 'meta', '_journal.json'), JSON.stringify({ ...journal, entries }));
+      for (const { tag } of entries) {
+        copyFileSync(join(MIGRATIONS_FOLDER, `${tag}.sql`), join(dir, `${tag}.sql`));
+      }
+      await migratePglite(db, { migrationsFolder: dir });
+      rmSync(dir, { recursive: true });
+      const exec = (query: SQL) => db.execute(query);
+
+      const owner = randomUUID();
+      await exec(
+        sql`INSERT INTO users (id, auth_pool, auth_subject, role) VALUES (${owner}, 'users', ${`line:${owner}`}, 'photographer')`,
+      );
+      const folder = async (
+        name: string,
+        parent: { id: string; path: string } | null,
+        extra: SQL = sql`false, NULL, NULL, NULL`,
+      ) => {
+        const id = randomUUID();
+        const path = folderPath(parent?.path ?? null, id);
+        await exec(
+          sql`INSERT INTO folders (id, owner_id, parent_id, name, path, face_index_enabled, face_index_expires_at, face_index_informed_at, deleted_at)
+              VALUES (${id}, ${owner}, ${parent?.id ?? null}, ${name}, ${path}::ltree, ${extra})`,
+        );
+        return { id, path };
+      };
+      const thai = await folder('งานวิ่ง กรุงเทพ 2026', null);
+      const day1 = await folder('Day 1', thai);
+      const english = await folder('Bangkok Run 2026!', null);
+      const later = await folder('bangkok   run 2026', null);
+      const chinese = await folder('曼谷马拉松，2026年', null);
+      const emoji = await folder('🎉🎉', null);
+      const tokenShaped = await folder('ABCDEFGHIJKLMNOPQRSTUV', null);
+      // Indexed until far in the future: keeps the longer expiry.
+      const active = await folder(
+        'Active',
+        null,
+        sql`true, now() + interval '200 days', now(), NULL`,
+      );
+      const trashed = await folder('Trashed', null, sql`false, NULL, NULL, now()`);
+      const fileId = randomUUID();
+      await exec(
+        sql`INSERT INTO files (id, owner_id, folder_id, name, mime, size_bytes, s3_key, status)
+            VALUES (${fileId}, ${owner}, ${english.id}, 'IMG_1234.JPG', 'image/jpeg', 1, ${`originals/${owner}/${fileId}/IMG_1234.JPG`}, 'ready')`,
+      );
+      const share = async (target: { folder?: string; file?: string }, createdAt: string) => {
+        const id = randomUUID();
+        await exec(
+          sql`INSERT INTO shares (id, owner_id, target_type, target_folder_id, target_file_id, token, created_at)
+              VALUES (${id}, ${owner}, ${target.file !== undefined ? 'file' : 'folder'},
+                      ${target.folder ?? null}, ${target.file ?? null}, ${newToken()}, ${createdAt}::timestamptz)`,
+        );
+        return id;
+      };
+      const shares = {
+        thai: await share({ folder: thai.id }, '2026-11-01T00:00:00Z'),
+        english: await share({ folder: english.id }, '2026-11-01T00:00:00Z'),
+        englishAgain: await share({ folder: english.id }, '2026-11-02T00:00:00Z'),
+        later: await share({ folder: later.id }, '2026-11-03T00:00:00Z'),
+        chinese: await share({ folder: chinese.id }, '2026-11-01T00:00:00Z'),
+        emoji: await share({ folder: emoji.id }, '2026-11-01T00:00:00Z'),
+        tokenShaped: await share({ folder: tokenShaped.id }, '2026-11-01T00:00:00Z'),
+        file: await share({ file: fileId }, '2026-11-01T00:00:00Z'),
+      };
+      const shareId = shares.thai;
+      await exec(
+        sql`INSERT INTO consents (share_id, anon_id, policy_version, ip_hash) VALUES (${shareId}, ${randomUUID()}, '2026-11-11b', 'h')`,
+      );
+      const adminId = randomUUID();
+      await exec(
+        sql`INSERT INTO users (id, auth_pool, auth_subject, role) VALUES (${adminId}, 'admins', ${`admin:${adminId}`}, 'admin')`,
+      );
+      const sessionId = randomUUID();
+      await exec(
+        sql`INSERT INTO auth_sessions (id, user_id, pool, refresh_token_hash, family_id, expires_at)
+            VALUES (${sessionId}, ${adminId}, 'admins', ${'a'.repeat(64)}, ${sessionId}, now() + interval '1 hour')`,
+      );
+
+      await migratePglite(db, { migrationsFolder: MIGRATIONS_FOLDER });
+
+      const slugs = Object.fromEntries(
+        await Promise.all(
+          Object.entries(shares).map(async ([key, id]) => [
+            key,
+            one(await rows<{ slug: string }>(db, sql`SELECT slug FROM shares WHERE id = ${id}`))
+              .slug,
+          ]),
+        ),
+      ) as Record<keyof typeof shares, string>;
+      expect(slugs.thai).toBe('งานวิ่ง-กรุงเทพ-2026');
+      expect(slugs.english).toBe('bangkok-run-2026');
+      // Same base: the older share keeps it, later ones get a suffix.
+      expect(slugs.englishAgain).toMatch(/^bangkok-run-2026-[0-9a-z]{6}$/);
+      expect(slugs.later).toMatch(/^bangkok-run-2026-[0-9a-z]{6}$/);
+      expect(slugs.later).not.toBe(slugs.englishAgain);
+      expect(slugs.chinese).toBe('曼谷马拉松-2026年');
+      expect(slugs.emoji).toBe('event');
+      expect(slugs.tokenShaped).toMatch(/^abcdefghijklmnopqrstuv-[0-9a-z]{6}$/);
+      expect(slugs.file).toBe('img-1234');
+      // Every backfilled slug is one the api accepts, and matches slugifyEventName where SQL can.
+      for (const [key, slug] of Object.entries(slugs)) {
+        expect(isShareSlug(slug), key).toBe(true);
+        expect(parseShareRef(slug), key).toEqual({ kind: 'slug', slug });
+      }
+      for (const name of [
+        'งานวิ่ง กรุงเทพ 2026',
+        'Bangkok Run 2026!',
+        '曼谷马拉松，2026年',
+        '🎉🎉',
+      ]) {
+        expect(Object.values(slugs)).toContain(slugifyEventName(name));
+      }
+
+      const folders = await rows<{
+        id: string;
+        enabled: boolean;
+        days: number | null;
+        queued: boolean;
+      }>(
+        db,
+        sql`SELECT id, face_index_enabled AS enabled, queued_mark AS queued,
+              extract(epoch FROM face_index_expires_at - now())::float8 / 86400 AS days
+            FROM (SELECT *, face_index_queued_at IS NOT NULL AS queued_mark FROM folders) AS f`,
+      );
+      const byId = (id: string) => folders.find((f) => f.id === id);
+      for (const f of folders) expect(f.enabled, f.id).toBe(true);
+      expect(byId(thai.id)).toMatchObject({ queued: true });
+      expect(byId(day1.id)).toMatchObject({ queued: false });
+      expect(byId(trashed.id)).toMatchObject({ queued: false });
+      expect(byId(thai.id)?.days).toBeCloseTo(90, 1);
+      expect(byId(active.id)?.days).toBeCloseTo(200, 1);
+
+      expect(await rows(db, sql`SELECT locale::text AS locale FROM consents`)).toEqual([
+        { locale: 'th' },
+      ]);
+      expect(await rows(db, sql`SELECT amr FROM auth_sessions`)).toEqual([{ amr: null }]);
+    } finally {
+      await client.close();
+    }
+  }, 120_000);
+});
+
+describe('event gallery and admin sessions constraints (migration 0012, PGlite)', () => {
+  let client: PGlite;
+  let db: ReturnType<typeof drizzlePglite<typeof schema>>;
+  beforeAll(async () => {
+    client = await PGlite.create({ extensions: { ltree, pg_trgm, vector } });
+    db = drizzlePglite({ client, schema });
+    await migratePglite(db, { migrationsFolder: MIGRATIONS_FOLDER });
+  }, 120_000);
+  afterAll(async () => {
+    await client.close();
+  });
+
+  const newOwner = async () =>
+    one(
+      await db
+        .insert(schema.users)
+        .values({ authPool: 'users', authSubject: randomUUID(), role: 'photographer' })
+        .returning(),
+    );
+  const newFolderOf = async (ownerId: string) => {
+    const id = randomUUID();
+    return one(
+      await db
+        .insert(schema.folders)
+        .values({ id, ownerId, name: `f ${id}`, path: folderPath(null, id) })
+        .returning(),
+    );
+  };
+  const newFileOf = async (ownerId: string, folderId: string) =>
+    one(
+      await db
+        .insert(schema.files)
+        .values({
+          ownerId,
+          folderId,
+          name: `IMG_${randomUUID()}.JPG`,
+          mime: 'image/jpeg',
+          sizeBytes: 1,
+          s3Key: `originals/${ownerId}/${randomUUID()}/a.jpg`,
+        })
+        .returning(),
+    );
+
+  it('keeps slugs unique and well-formed; a slug is never token-shaped', async () => {
+    const owner = await newOwner();
+    const folder = await newFolderOf(owner.id);
+    const insert = (slug: string | null) =>
+      db.insert(schema.shares).values({
+        ownerId: owner.id,
+        targetType: 'folder',
+        targetFolderId: folder.id,
+        token: newToken(),
+        slug,
+      });
+    await insert('งานวิ่ง-2026');
+    await insert(null);
+    await insert(null);
+    expect(await pgError(insert('งานวิ่ง-2026'))).toEqual({
+      code: UNIQUE,
+      constraint: 'shares_slug_unique',
+    });
+    for (const bad of [
+      'Bangkok',
+      'run day',
+      'run/day',
+      'run.day',
+      '-run',
+      'run-',
+      'run--day',
+      'abcdefghijklmnopqrstuv',
+      'a'.repeat(68),
+    ]) {
+      expect(await pgError(insert(bad)), bad).toEqual({
+        code: CHECK,
+        constraint: 'shares_slug_valid',
+      });
+    }
+    // The longest slug the api makes fits.
+    await insert(withShareSlugSuffix(slugifyEventName('ก'.repeat(100)), 'abc123'));
+  });
+
+  it("keeps a folder's cover the owner's file and clears it when the file row goes", async () => {
+    const owner = await newOwner();
+    const other = await newOwner();
+    const folder = await newFolderOf(owner.id);
+    const file = await newFileOf(owner.id, folder.id);
+    const otherFolder = await newFolderOf(other.id);
+    const othersFile = await newFileOf(other.id, otherFolder.id);
+    const setCover = (fileId: string | null) =>
+      db
+        .update(schema.folders)
+        .set({ coverFileId: fileId })
+        .where(eq(schema.folders.id, folder.id));
+    expect(await pgError(setCover(othersFile.id))).toEqual({
+      code: FOREIGN_KEY,
+      constraint: 'folders_cover_file_same_owner_fk',
+    });
+    await setCover(file.id);
+    await db.delete(schema.files).where(eq(schema.files.id, file.id));
+    const after = one(
+      await db.select().from(schema.folders).where(eq(schema.folders.id, folder.id)),
+    );
+    expect(after.coverFileId).toBeNull();
+    expect(after.ownerId).toBe(owner.id);
+  });
+
+  it('records the consent language, th by default', async () => {
+    const owner = await newOwner();
+    const folder = await newFolderOf(owner.id);
+    const share = one(
+      await db
+        .insert(schema.shares)
+        .values({
+          ownerId: owner.id,
+          targetType: 'folder',
+          targetFolderId: folder.id,
+          token: newToken(),
+        })
+        .returning(),
+    );
+    const consent = (locale?: 'th' | 'en' | 'zh') =>
+      db
+        .insert(schema.consents)
+        .values({
+          shareId: share.id,
+          anonId: randomUUID(),
+          policyVersion: '2026-11-11b',
+          ipHash: 'h',
+          ...(locale !== undefined ? { locale } : {}),
+        })
+        .returning();
+    expect(one(await consent()).locale).toBe('th');
+    expect(one(await consent('zh')).locale).toBe('zh');
+    expect(
+      await pgError(
+        db.execute(
+          sql`INSERT INTO consents (share_id, anon_id, policy_version, ip_hash, locale) VALUES (${share.id}, ${randomUUID()}, 'v', 'h', 'ja')`,
+        ),
+      ),
+    ).toMatchObject({ code: '22P02' });
+  });
+
+  it("stores a session's sign-in methods, known methods only", async () => {
+    const user = one(
+      await db
+        .insert(schema.users)
+        .values({ authPool: 'admins', authSubject: `admin:${randomUUID()}`, role: 'admin' })
+        .returning(),
+    );
+    const session = (amr: string[] | null) => {
+      const id = randomUUID();
+      return db.insert(schema.authSessions).values({
+        id,
+        userId: user.id,
+        pool: 'admins',
+        refreshTokenHash: randomBytes(32).toString('hex'),
+        familyId: id,
+        expiresAt: new Date(Date.now() + 3_600_000),
+        amr,
+      });
+    };
+    await session(['pwd']);
+    await session(['pwd', 'otp', 'mfa']);
+    await session(null);
+    for (const bad of [[], ['password'], ['pwd', 'sms']]) {
+      expect(await pgError(session(bad)), bad.join(',')).toEqual({
+        code: CHECK,
+        constraint: 'auth_sessions_amr_valid',
+      });
+    }
+  });
 });

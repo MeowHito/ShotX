@@ -28,7 +28,7 @@ describe('UserDetail', () => {
     const api = new FakeAdminApi();
     renderWithProviders(
       <UserDetail userId={SELF_ID} currentAdminId={SELF_ID} passwords={TEST_PASSWORDS} />,
-      { fetch: api.fetch },
+      { fetch: api.fetch, mfaMode: 'totp' },
     );
     expect(await screen.findByRole('heading', { name: 'owner@example.test' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'การรับเงินสด' })).not.toBeInTheDocument();
@@ -49,12 +49,30 @@ describe('UserDetail', () => {
     const api = new FakeAdminApi([admin]);
     renderWithProviders(
       <UserDetail userId={admin.id} currentAdminId={SELF_ID} passwords={TEST_PASSWORDS} />,
-      { fetch: api.fetch },
+      { fetch: api.fetch, mfaMode: 'totp' },
     );
     expect(await screen.findByTestId('password-state')).toHaveTextContent(
       /ยังเป็นรหัสชั่วคราว.*ในการเข้าสู่ระบบครั้งถัดไป/,
     );
     expect(screen.getByTestId('totp-state')).toHaveTextContent(/ยังไม่ได้ตั้งค่า/);
     expect(screen.getByTestId('totp-state')).toHaveTextContent(/รีเซ็ตรหัสผ่านหรือปิดใช้งาน/);
+  });
+
+  it('shows no authenticator row when admins sign in without TOTP (mode off)', async () => {
+    const admin = makeUser({
+      email: 'new.admin@example.test',
+      role: 'admin',
+      usedBytes: null,
+      mustChangePassword: true,
+      totpEnrolled: false,
+    });
+    const api = new FakeAdminApi([admin]);
+    renderWithProviders(
+      <UserDetail userId={admin.id} currentAdminId={SELF_ID} passwords={TEST_PASSWORDS} />,
+      { fetch: api.fetch, mfaMode: 'off' },
+    );
+    expect(await screen.findByTestId('password-state')).toHaveTextContent(/ยังเป็นรหัสชั่วคราว/);
+    expect(screen.queryByTestId('totp-state')).not.toBeInTheDocument();
+    expect(screen.queryByText('แอปยืนยันตัวตน')).not.toBeInTheDocument();
   });
 });

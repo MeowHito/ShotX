@@ -61,6 +61,7 @@ describe('media consumer: file.copy', () => {
         audioBitrateKbps: 96,
       },
       exifDefaultUtcOffset: '+07:00',
+      faceIndexExpiryDays: 90,
       maxProcessingMs: 60_000,
       originalsStorageClass: 'INTELLIGENT_TIERING',
       partBytes: 16 * 1024 * 1024,

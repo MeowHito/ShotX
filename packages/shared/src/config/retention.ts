@@ -2,6 +2,14 @@ import { z } from 'zod';
 import { type Env, parseEnv } from './env';
 import { int, intList } from './fields';
 
+/**
+ * Default of FACE_INDEX_EXPIRY_DAYS. Also the database default of `folders.face_index_expires_at`
+ * (creation + this, migration 0012), the safety net for folders inserted without an expiry (the
+ * api writes creation + FACE_INDEX_EXPIRY_DAYS itself), and the rule migration 0012 used to switch
+ * existing folders on. Changing it needs a migration of that default.
+ */
+export const FACE_INDEX_EXPIRY_DAYS_DEFAULT = 90;
+
 // Timings for the daily scheduled jobs (trash.purge.daily, faces.expire.daily,
 // subscriptions.transition.daily, auth.sessions.purge.daily). The DPO or legal team reviews these before launch.
 const retentionEnvSchema = z
@@ -9,7 +17,7 @@ const retentionEnvSchema = z
     /** Trashed files are purged this many days after `deleted_at`. */
     TRASH_RETENTION_DAYS: int(1, 365).default(30),
     /** A folder's face index expires this many days after its last upload (extendable). */
-    FACE_INDEX_EXPIRY_DAYS: int(1, 3650).default(90),
+    FACE_INDEX_EXPIRY_DAYS: int(1, 3650).default(FACE_INDEX_EXPIRY_DAYS_DEFAULT),
     /** `grace` lasts this many days after `period_end`; uploads are blocked. */
     SUBSCRIPTION_GRACE_DAYS: int(0, 60).default(14),
     /** An `expired` account is `purged` this many days after it expired (spec: 30–60). */

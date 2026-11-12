@@ -19,6 +19,7 @@ import {
   SUBSCRIPTION_EVENT_TYPES,
   SUBSCRIPTION_NOTICE_KINDS,
   SUBSCRIPTION_STATUSES,
+  SUPPORTED_LOCALES,
   USER_ROLES,
   ZIP_JOB_STATUSES,
 } from '@shotx/shared';
@@ -48,5 +49,7 @@ export const paymentEventType = pgEnum('payment_event_type', PAYMENT_EVENT_TYPES
 export const subscriptionEventType = pgEnum('subscription_event_type', SUBSCRIPTION_EVENT_TYPES);
 export const subscriptionNoticeKind = pgEnum('subscription_notice_kind', SUBSCRIPTION_NOTICE_KINDS);
 export const billingActor = pgEnum('billing_actor', BILLING_ACTORS);
+// Migration 0012 (ADR 0011).
+export const uiLocale = pgEnum('ui_locale', SUPPORTED_LOCALES);
 // Migration 0011 (ADR 0010).
 export const accountStatus = pgEnum('account_status', ACCOUNT_STATUSES);

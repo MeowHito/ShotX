@@ -132,6 +132,23 @@ export function useRenameItem() {
   });
 }
 
+/**
+ * The folder's share-page cover (ADR 0011): a photo of the folder, or null for the default (the
+ * first photo). COVER_FILE_INVALID when the photo can't be one (videos, not ready, trashed).
+ */
+export function useSetFolderCover() {
+  const api = useApiClient();
+  const invalidate = useInvalidateDrive();
+  return useMutation({
+    mutationFn: ({ folderId, fileId }: { folderId: string; fileId: string | null }) =>
+      api.call(DRIVE_ROUTES.updateFolder, {
+        params: { id: folderId },
+        body: { coverFileId: fileId },
+      }),
+    onSuccess: invalidate,
+  });
+}
+
 export interface MoveResult {
   moved: number;
   failures: { item: DriveItemRef; error: unknown }[];

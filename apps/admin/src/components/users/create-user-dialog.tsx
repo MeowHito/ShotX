@@ -22,6 +22,7 @@ import {
 } from '@shotx/ui';
 import { useTranslations } from 'next-intl';
 import { type FormEvent, useId, useState } from 'react';
+import { useTotpEnabled } from '@/components/admin-settings';
 import { useApiClient, useSessionEndedHandler } from '@/components/providers';
 import { NativeSelect } from '@/components/ui/select';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
@@ -90,6 +91,7 @@ function CreateUserForm({
   const sessionEnded = useSessionEndedHandler();
   const errorMessage = useErrorMessage();
   const id = useId();
+  const totp = useTotpEnabled();
 
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -226,7 +228,8 @@ function CreateUserForm({
           ))}
         </NativeSelect>
         <p id={`${id}-role-hint`} className="text-xs text-muted-foreground">
-          {t(`roleHints.${role}`)} {t('roleFixed')}
+          {t(role === 'admin' && totp ? 'roleHints.adminTotp' : `roleHints.${role}`)}{' '}
+          {t('roleFixed')}
         </p>
       </div>
       <PasswordField

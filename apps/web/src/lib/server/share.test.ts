@@ -61,6 +61,33 @@ describe('SSR share meta', () => {
     expect((fetch.mock.calls[0]?.[1]?.headers as Record<string, string>).cookie).toBeUndefined();
   });
 
+  it('resolves a slug URL (ADR 0011), decoded once and canonical, and returns the token and path', async () => {
+    const fake = new FakeApi();
+    const share = fake.addPublicShare({ title: 'งานวิ่ง กรุงเทพ 2026' });
+    expect(share.slug).toBe('งานวิ่ง-กรุงเทพ-2026');
+    const fetch = serverFetch(fake);
+    // Next may hand the param over still percent-encoded, or decoded.
+    for (const raw of [encodeURIComponent(share.slug ?? ''), share.slug ?? '']) {
+      const result = await fetchShareMeta(raw, { apiInternalUrl: API, fetch });
+      expect(result).toMatchObject({
+        kind: 'ok',
+        meta: {
+          token: share.token,
+          slug: share.slug,
+          path: `/s/${encodeURIComponent(share.slug ?? '')}`,
+        },
+      });
+    }
+    // Encoded exactly once on the way to the API.
+    expect(fetch.mock.calls[0]?.[0]).toBe(`${API}/api/s/${encodeURIComponent(share.slug ?? '')}`);
+    const upper = await fetchShareMeta('Bangkok-Marathon-2026', { apiInternalUrl: API, fetch });
+    expect(upper.kind).toBe('not_found');
+    const en = fake.addPublicShare({ title: 'Bangkok Run' });
+    await expect(
+      fetchShareMeta('Bangkok-Run', { apiInternalUrl: API, fetch }),
+    ).resolves.toMatchObject({ kind: 'ok', meta: { token: en.token } });
+  });
+
   it('maps NOT_FOUND, malformed tokens and SHARE_EXPIRED reasons', async () => {
     const fake = new FakeApi();
     const fetch = serverFetch(fake);

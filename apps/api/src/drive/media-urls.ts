@@ -21,6 +21,7 @@ export function toDriveFolder(row: Folder): DriveFolder {
     deletedAt: isoOrNull(row.deletedAt),
     faceIndexEnabled: row.faceIndexEnabled,
     faceIndexExpiresAt: isoOrNull(row.faceIndexExpiresAt),
+    coverFileId: row.coverFileId,
   };
 }
 

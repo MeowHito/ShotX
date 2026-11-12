@@ -163,8 +163,10 @@ export const ErrorCode = {
    */
   MFA_INVALID: 'MFA_INVALID',
   /**
-   * An admins-pool token without `otp` in its `amr` claim (see ADMIN_REQUIRED_AMR). Every admin
-   * route answers this instead of serving the request.
+   * An admins-pool token without the methods ADMIN_MFA_MODE requires in its `amr` claim
+   * (adminRequiredAmr: `pwd` with `off`, the default since ADR 0011; `pwd` and `otp` with `totp`).
+   * Every admin route answers this instead of serving the request; with `off` it only happens to
+   * tokens without `pwd`, which the api never issues to admins.
    */
   MFA_REQUIRED: 'MFA_REQUIRED',
   /** The refresh token is unknown, expired, revoked, or of another pool than the request named. */
@@ -217,6 +219,14 @@ export const ErrorCode = {
    * leaves `requireLogin` out (an existing `require_login` share stays editable). Details: none.
    */
   LOGIN_PROVIDER_UNAVAILABLE: 'LOGIN_PROVIDER_UNAVAILABLE',
+
+  // Event gallery redesign (ADR 0011).
+  /**
+   * PATCH /drive/folders/:id with a `coverFileId` of the caller's that can't be the folder's cover:
+   * not live, not `ready`, not an image, or outside the folder's subtree. Nothing is changed. An
+   * unknown or another owner's file id is NOT_FOUND. Details: CoverFileInvalidDetails.
+   */
+  COVER_FILE_INVALID: 'COVER_FILE_INVALID',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -278,6 +288,7 @@ export const ERROR_HTTP_STATUS = {
   CANNOT_MODIFY_SELF: 403,
   PASSWORD_TOO_WEAK: 422,
   LOGIN_PROVIDER_UNAVAILABLE: 409,
+  COVER_FILE_INVALID: 422,
 } as const satisfies Record<ErrorCode, number>;
 
 /** Body of every API error response. */
@@ -486,6 +497,24 @@ export const billingNoticeSchema = z.object({
 });
 export type BillingNotice = z.output<typeof billingNoticeSchema>;
 
+/** Why a file can't be a folder's cover (COVER_FILE_INVALID). */
+export const COVER_FILE_INVALID_REASONS = [
+  /** Trashed or being purged. */
+  'not_live',
+  /** Still uploading or processing, or failed. */
+  'not_ready',
+  /** A video: covers are images (preview.webp). */
+  'not_image',
+  /** Not inside the folder's subtree. */
+  'outside_folder',
+] as const;
+export type CoverFileInvalidReason = (typeof COVER_FILE_INVALID_REASONS)[number];
+
+export const coverFileInvalidDetailsSchema = z.object({
+  reason: z.enum(COVER_FILE_INVALID_REASONS),
+});
+export type CoverFileInvalidDetails = z.output<typeof coverFileInvalidDetailsSchema>;
+
 /** Schema of `details` for the codes that have them. */
 export const ERROR_DETAILS_SCHEMAS = {
   VALIDATION_FAILED: validationFailedDetailsSchema,
@@ -507,6 +536,7 @@ export const ERROR_DETAILS_SCHEMAS = {
   AUTH_PROVIDER_UNAVAILABLE: authProviderUnavailableDetailsSchema,
   IDENTITY_PROVIDER_ERROR: identityProviderErrorDetailsSchema,
   PASSWORD_TOO_WEAK: passwordTooWeakDetailsSchema,
+  COVER_FILE_INVALID: coverFileInvalidDetailsSchema,
 } as const satisfies Partial<Record<ErrorCode, z.ZodType>>;
 
 /**

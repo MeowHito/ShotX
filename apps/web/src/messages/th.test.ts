@@ -20,7 +20,7 @@ import {
   SUBSCRIPTION_STATUSES,
   ZIP_JOB_VIEW_STATUSES,
 } from '@shotx/shared';
-import { SELFIE_ANGLES, SELFIE_ISSUES } from '../lib/face/quality-gate';
+import { SELFIE_ISSUES } from '../lib/face/quality-gate';
 import { createTranslator } from 'next-intl';
 import { describe, expect, it } from 'vitest';
 import { th } from './th';
@@ -88,7 +88,6 @@ describe('Thai messages', () => {
     same(th.downloads.zipStatus, ZIP_JOB_VIEW_STATUSES);
     same(th.share.unavailable.reasons, SHARE_UNAVAILABLE_REASONS);
     same(th.capture.issues, SELFIE_ISSUES);
-    same(th.capture.angles, SELFIE_ANGLES);
     same(th.billing.checkout.changeTypes, CHECKOUT_CHANGE_TYPES);
     same(th.billing.checkout.explain, CHECKOUT_CHANGE_TYPES);
     same(th.billing.payment.status, PAYMENT_STATUSES);
@@ -168,7 +167,6 @@ describe('Thai messages', () => {
   });
 
   it('2026-11-11b: the short face-search text, its details, and the corrected deletion text', () => {
-    expect(LATEST_CONSENT_POLICY_VERSION).toBe('2026-11-11b');
     const search = th.consent.policies.face_search['2026-11-11b'];
     expect(search.title).toBe('ค้นหารูปของคุณด้วยใบหน้า');
     expect(Object.values(search.points)).toEqual([
@@ -209,13 +207,44 @@ describe('Thai messages', () => {
     );
   });
 
+  it('2026-11-12 (latest): 2026-11-11b without the deletion-page pointer, with always-on indexing', () => {
+    expect(LATEST_CONSENT_POLICY_VERSION).toBe('2026-11-12');
+    const current = th.consent.policies.face_search['2026-11-12'];
+    const previous = th.consent.policies.face_search['2026-11-11b'];
+    expect(current.details.rights).toBe(
+      'คุณถอนความยินยอมได้ทุกเมื่อจากหน้าลิงก์นี้ และขอให้ลบข้อมูลใบหน้าของคุณได้โดยติดต่อช่างภาพหรือผู้จัดงาน',
+    );
+    // ADR 0011 decision 1: indexing is automatic on upload; nobody "turns it on" or sets the expiry.
+    expect(current.details.index).toBe(
+      'เพื่อให้ค้นหาได้ ระบบจัดทำดัชนีใบหน้าของผู้ที่อยู่ในรูปของลิงก์นี้โดยอัตโนมัติเมื่อช่างภาพอัปโหลดรูป ดัชนีใบหน้านี้หมดอายุเมื่อไม่มีการอัปโหลดรูปใหม่ในงานนี้ครบระยะเวลาที่ระบบกำหนด แล้วถูกลบอัตโนมัติ',
+    );
+    expect({ ...current, details: { ...current.details, rights: '', index: '' } }).toEqual({
+      ...previous,
+      details: { ...previous.details, rights: '', index: '' },
+    });
+    for (const purpose of CONSENT_PURPOSES) {
+      expect(fullText(purpose, '2026-11-12'), purpose).not.toMatch(/ช่างภาพเปิดให้|ช่างภาพตั้ง/);
+    }
+    expect(th.consent.policies.face_deletion['2026-11-12']).toEqual(
+      th.consent.policies.face_deletion['2026-11-11b'],
+    );
+    for (const purpose of CONSENT_PURPOSES) {
+      expect(fullText(purpose, '2026-11-12'), purpose).not.toContain('ขอลบใบหน้าของฉัน');
+    }
+    // Released versions keep their text.
+    expect(previous.details.rights).toContain('ขอลบใบหน้าของฉัน');
+  });
+
   it('have the scan UI wording the spec requires', () => {
     expect(th.results.strong).toBe('ใช่คุณ');
     expect(th.results.maybe).toBe('อาจจะเป็นคุณ');
     expect(th.results.notMe).toBe('ไม่ใช่ฉัน');
-    expect(th.share.deleteMyFace).toBe('ขอลบใบหน้าของฉัน');
+    expect(th.faceDeletion.title).toBe('ขอลบใบหน้าของฉัน');
     expect(th.share.unavailable.title).toBe('ลิงก์นี้หมดอายุ');
-    expect(th.capture.guidance).toBe('หันหน้าตรง ถอดแว่นดำ/แมสก์ อยู่ในที่สว่าง');
+    // ADR 0011: the sticky button, the results' select-all and retry.
+    expect(th.share.scan).toBe('ค้นหาด้วยใบหน้า');
+    expect(th.results.selectAll).toBe('เลือกทั้งหมด');
+    expect(th.results.retry).toBe('ลองใหม่');
   });
 
   it('every literal t() key in components and pages exists', () => {

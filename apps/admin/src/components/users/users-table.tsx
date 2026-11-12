@@ -14,6 +14,7 @@ import { EllipsisIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { useState } from 'react';
+import { useTotpEnabled } from '@/components/admin-settings';
 import { formatDateTime, formatGigabytes } from '@/lib/format';
 
 export type UserAction = 'rename' | 'resetPassword' | 'toggleStatus';
@@ -72,6 +73,7 @@ export function UsersTable({
   const ts = useTranslations('statuses');
   const tc = useTranslations('common');
   const [mountedAt] = useState(() => Date.now());
+  const totp = useTotpEnabled();
   const now = nowProp ?? mountedAt;
 
   return (
@@ -141,7 +143,7 @@ export function UsersTable({
                     {user.mustChangePassword ? (
                       <Badge tone="warning">{t('mustChange')}</Badge>
                     ) : null}
-                    {user.totpEnrolled === false ? (
+                    {totp && user.totpEnrolled === false ? (
                       <Badge tone="warning">{t('totpPending')}</Badge>
                     ) : null}
                     {locked ? <Badge tone="warning">{t('locked')}</Badge> : null}

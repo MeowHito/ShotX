@@ -44,6 +44,28 @@ describe('admin sign-in API calls', () => {
   });
 });
 
+describe('providers', () => {
+  it('reads the admin MFA mode with the admin BFF key', async () => {
+    const answer = { oidc: [], devLogin: false, adminLogin: true, adminMfaMode: 'off' };
+    const calls: string[] = [];
+    const fetchImpl = vi.fn((input: RequestInfo | URL) => {
+      calls.push(urlOf(input));
+      return Promise.resolve(
+        new Response(JSON.stringify(answer), { headers: { 'content-type': 'application/json' } }),
+      );
+    }) as unknown as typeof fetch;
+    const api = createAdminAuthApi({
+      apiInternalUrl: 'http://api:4000',
+      client: { callTimeoutMs: 5000, refreshReuseGraceSeconds: 10 },
+      context: { bffKey: KEY, clientIp: null },
+      fetch: fetchImpl,
+      refreshCache: new RefreshCache(0),
+    });
+    expect((await api.providers()).adminMfaMode).toBe('off');
+    expect(calls).toEqual(['http://api:4000/api/auth/providers']);
+  });
+});
+
 describe('RefreshCache', () => {
   it('shares one rotation between concurrent callers', async () => {
     const cache = new RefreshCache(9000);

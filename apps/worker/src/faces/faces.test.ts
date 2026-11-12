@@ -1,14 +1,21 @@
 import { testJobQueues } from '../testing/jobs';
 import { randomUUID } from 'node:crypto';
-import { faceDeletions, faces, files, folders, users } from '@shotx/db';
+import { faceDeletions, faces, faceVectors, files, folders, users } from '@shotx/db';
 import { faceCollectionId, IndexPhotoError } from '@shotx/face';
 import { FakeFaceProvider, renderScene, type Scene, SyntheticWorld } from '@shotx/face/testing';
-import { type Env, loadFaceConfig, serializeQueueMessage } from '@shotx/shared';
+import {
+  type Env,
+  loadFaceConfig,
+  loadWorkerSettings,
+  parseQueueMessage,
+  serializeQueueMessage,
+} from '@shotx/shared';
 import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from '../db';
 import { runFacesExpire } from '../jobs/faces-expire';
-import { runFacesReconcile } from '../jobs/faces-reconcile';
+import { photographersWithCollections, runFacesReconcile } from '../jobs/faces-reconcile';
+import { runFacesSweep } from '../jobs/faces-sweep';
 import type { JobContext } from '../jobs/context';
 import { RECONCILE_SCAN_PREFIX, S3OrphanScanStore } from '../jobs/orphan-scans';
 import { memoryLogger, silentLogger } from '../logger';
@@ -169,7 +176,7 @@ describe('faces consumer', () => {
       expect(log.entries.at(-1)).toMatchObject({ fields: { outcome: 'already-indexed' } });
       expect(await faceRows(file.id)).toHaveLength(3);
 
-      const plain = await createFolder(db, ownerId);
+      const plain = await createFolder(db, ownerId, { faceIndexEnabled: false }); // opted out
       const uncovered = await readyPhoto(ownerId, plain.id);
       const atRoot = await readyPhoto(ownerId, null);
       const trashed = await readyPhoto(ownerId, plain.id);
@@ -329,6 +336,133 @@ describe('faces consumer', () => {
       expect(log.entries.at(-1)).toMatchObject({ fields: { outcome: 'superseded' } });
       expect(await faceRows(file.id)).toEqual([]);
       expect(provider.storedFaces(faceCollectionId(ownerId))).toEqual([]);
+    });
+  });
+
+  describe('index.file with face indexing always on (ADR 0011)', () => {
+    it('indexes a new photo in an expired-but-enabled folder and renews folder and ancestors', async () => {
+      const ownerId = await createPhotographer(db);
+      const expiredAt = new Date(clock.t - DAY);
+      const event = await createFolder(db, ownerId, {
+        faceIndexEnabled: true,
+        faceIndexExpiresAt: expiredAt,
+      });
+      const day = await createFolder(db, ownerId, {
+        parent: event,
+        faceIndexEnabled: true,
+        faceIndexExpiresAt: expiredAt,
+      });
+      const file = await readyPhoto(ownerId, day.id);
+      const log = memoryLogger();
+      await createFacesHandler(deps())(indexJob(file.id), context(log));
+
+      expect(log.entries.at(-1)).toMatchObject({ fields: { outcome: 'indexed' } });
+      expect((await fileById(db, file.id))?.faceCount).toBe(3);
+      const created = (await fileById(db, file.id))!.createdAt.getTime();
+      for (const id of [event.id, day.id]) {
+        const [row] = await db.select().from(folders).where(eq(folders.id, id));
+        expect(row!.faceIndexExpiresAt!.getTime()).toBe(created + 90 * DAY);
+      }
+      // A redelivery ends as already-indexed and moves nothing.
+      await createFacesHandler(deps())(indexJob(file.id), context(log));
+      expect(log.entries.at(-1)).toMatchObject({ fields: { outcome: 'already-indexed' } });
+      expect(await faceRows(file.id)).toHaveLength(3);
+    });
+
+    it('never revives an expired index for an old photo, nor an opted-out folder', async () => {
+      const ownerId = await createPhotographer(db);
+      const expiredAt = new Date(clock.t - 10 * DAY);
+      const old = await createFolder(db, ownerId, {
+        faceIndexEnabled: true,
+        faceIndexExpiresAt: expiredAt,
+      });
+      const oldPhoto = await createFileRow(db, ownerId, {
+        originalName: `old-${randomUUID()}.jpg`,
+        sizeBytes: photo.length,
+        status: 'ready',
+        verifiedAt: new Date(clock.t - 200 * DAY),
+        createdAt: new Date(clock.t - 200 * DAY),
+        folderId: old.id,
+      });
+      store.seed(oldPhoto.s3Key, photo, 'image/jpeg');
+      const optedOut = await createFolder(db, ownerId, { faceIndexEnabled: false });
+      const offPhoto = await readyPhoto(ownerId, optedOut.id);
+      for (const [id, outcome] of [
+        [oldPhoto.id, 'not-covered'],
+        [offPhoto.id, 'not-covered'],
+      ] as const) {
+        const log = memoryLogger();
+        await createFacesHandler(deps())(indexJob(id), context(log));
+        expect(log.entries.at(-1)).toMatchObject({ fields: { outcome } });
+      }
+      // Upload + 90 days of a 200-day-old photo is still in the past: GREATEST keeps it expired.
+      const [row] = await db.select().from(folders).where(eq(folders.id, old.id));
+      expect(row!.faceIndexExpiresAt!.getTime()).toBeLessThan(clock.t);
+      const [off] = await db.select().from(folders).where(eq(folders.id, optedOut.id));
+      expect(off!.faceIndexEnabled).toBe(false);
+      expect(provider.calls.indexFaces).toBe(0);
+    });
+  });
+
+  describe('backfill of migration 0012 (faces.sweep -> index.folder)', () => {
+    it('sends index.folder once per marked top-level folder and indexes its subtree once', async () => {
+      const ownerId = await createPhotographer(db);
+      // As migration 0012 leaves it: switched on, the top-level folder marked, subfolders not.
+      const event = await createFolder(db, ownerId, {
+        faceIndexQueuedAt: new Date(Date.now() - 7 * 3_600_000),
+      });
+      const day = await createFolder(db, ownerId, { parent: event });
+      const top = await readyPhoto(ownerId, event.id);
+      const nested = await readyPhoto(ownerId, day.id);
+      const video = await readyPhoto(ownerId, day.id, 'video/mp4');
+      const atRoot = await readyPhoto(ownerId, null); // no folder: never indexed
+      const sweepSettings = loadWorkerSettings({}).sweeps.faces;
+      const sweepCtx = (): JobContext => ({
+        db,
+        store,
+        faces: provider,
+        ...testJobQueues(queues),
+        log: silentLogger,
+        now: Date.now,
+        batchSize: 50,
+        deadline: Date.now() + 3_600_000,
+        signal: new AbortController().signal,
+      });
+      const folderJobs = () =>
+        queues.sent
+          .map((m) => parseQueueMessage('faces', m.body))
+          .filter((m) => m.type === 'index.folder' && m.folderId === event.id);
+      const fileJobs = () =>
+        queues.sent
+          .map((m) => parseQueueMessage('faces', m.body))
+          .flatMap((m) => (m.type === 'index.file' ? [m.fileId] : []));
+
+      await runFacesSweep(sweepCtx(), sweepSettings, { faceSearch: true });
+      expect(folderJobs()).toHaveLength(1);
+      expect(folderJobs().some((m) => m.type === 'index.folder' && m.folderId === day.id)).toBe(
+        false,
+      );
+
+      const handler = createFacesHandler(deps({}, { batchSize: 50 }));
+      const body = serializeQueueMessage('faces', { type: 'index.folder', folderId: event.id });
+      await handler(body, context());
+      expect(new Set(fileJobs())).toEqual(new Set([top.id, nested.id]));
+      const [marked] = await db.select().from(folders).where(eq(folders.id, event.id));
+      expect(marked!.faceIndexQueuedAt).toBeNull();
+
+      // The mark is processed: later sweeps don't send index.folder again.
+      await runFacesSweep(sweepCtx(), sweepSettings, { faceSearch: true });
+      expect(folderJobs()).toHaveLength(1);
+
+      // A redelivered index.folder only re-sends index.file; every delivery is indexed once.
+      await handler(body, context());
+      for (const fileId of fileJobs()) await handler(indexJob(fileId), context());
+      expect(await faceRows(top.id)).toHaveLength(3);
+      expect(await faceRows(nested.id)).toHaveLength(3);
+      expect(provider.calls.indexFaces).toBe(2);
+      expect((await fileById(db, video.id))?.faceCount).toBeNull();
+      expect((await fileById(db, atRoot.id))?.faceCount).toBeNull();
+      expect(fileJobs()).not.toContain(atRoot.id);
     });
   });
 
@@ -609,9 +743,9 @@ describe('faces consumer', () => {
       expect((await fileById(db, file.id))?.facesWithheldAt).toBeInstanceOf(Date);
       expect((await fileById(db, other.id))?.facesWithheldAt).toBeNull();
       // The log names the withheld files (ids only), so a restore can withhold them again.
-      expect(
-        deletionLog.entries.find((e) => e.msg === 'face deletion done')?.fields,
-      ).toMatchObject({ withheldFileIds: file.id });
+      expect(deletionLog.entries.find((e) => e.msg === 'face deletion done')?.fields).toMatchObject(
+        { withheldFileIds: file.id },
+      );
 
       // The index expires: the rest of its faces go and face_count is null again.
       await db
@@ -701,6 +835,54 @@ describe('faces consumer', () => {
       expect(await faceRows(file.id)).toEqual([]);
       expect((await fileById(db, file.id))?.faceCount).toBe(0);
     });
+  });
+
+  it('selects reconcile candidates without face_index_informed_at (ADR 0011)', async () => {
+    const enabled = await createPhotographer(db);
+    await createFolder(db, enabled); // on by default
+    // Opted out with no expiry and no faces: nothing was ever indexed.
+    const optOut = (ownerId: string, extra: Partial<typeof folders.$inferInsert> = {}) =>
+      createFolder(db, ownerId, { faceIndexEnabled: false, faceIndexExpiresAt: null, ...extra });
+    const neverIndexed = await createPhotographer(db);
+    await optOut(neverIndexed);
+    const withVectors = await createPhotographer(db);
+    await optOut(withVectors);
+    await db.insert(faceVectors).values({
+      faceId: randomUUID(),
+      collectionId: faceCollectionId(withVectors),
+      externalImageId: randomUUID(),
+      model: 'sface-2021dec',
+      embedding: `[${Array.from({ length: 128 }, () => '0.088').join(',')}]`,
+    });
+    const withFaces = await createPhotographer(db);
+    const folder = await optOut(withFaces);
+    const file = await readyPhoto(withFaces, folder.id);
+    await db.insert(faces).values({
+      fileId: file.id,
+      ownerId: withFaces,
+      rekognitionFaceId: randomUUID(),
+      bbox: { left: 0, top: 0, width: 0.1, height: 0.1 },
+      confidence: 99,
+    });
+    const legacy = await createPhotographer(db);
+    await optOut(legacy, { faceIndexInformedAt: new Date() });
+    const [viewer] = await db
+      .insert(users)
+      .values({ role: 'user', authPool: 'users', authSubject: `line:${randomUUID()}` })
+      .returning({ id: users.id });
+
+    const selected: string[] = [];
+    let cursor = '00000000-0000-0000-0000-000000000000';
+    for (;;) {
+      // Small pages: the cursor advances past unselected users too.
+      const page = await photographersWithCollections(db, cursor, 2);
+      if (page.last === null) break;
+      selected.push(...page.ids);
+      cursor = page.last;
+    }
+    expect(selected).toEqual(expect.arrayContaining([enabled, withVectors, withFaces, legacy]));
+    expect(selected).not.toContain(neverIndexed);
+    expect(selected).not.toContain(viewer!.id);
   });
 
   it('rejects messages that are not faces jobs', async () => {

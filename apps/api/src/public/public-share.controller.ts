@@ -65,14 +65,15 @@ export class PublicShareController {
     @Body(new ZodPipe(R.unlock.body, 'body')) body: Out<typeof R.unlock.body>,
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
-    const cookie = await this.page.unlock(token, ctx, body.password);
-    if (cookie === null) return;
+    const unlocked = await this.page.unlock(token, ctx, body.password);
+    if (unlocked === null) return;
+    // The share's token, whatever ref the request used (ADR 0011).
     const spec = shareUnlockCookie(
-      token,
+      unlocked.shareToken,
       this.config.share.unlockTtlSeconds,
       secureCookies(this.config),
     );
-    setCookie(res, spec, cookie);
+    setCookie(res, spec, unlocked.cookie);
   }
 
   @Post(R.giveConsent.path)

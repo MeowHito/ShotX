@@ -41,6 +41,8 @@ import {
   isFaceIndexActive,
   type SignedDownload,
   subscriptionAllowsSharing,
+  type CoverFileInvalidDetails,
+  type CoverFileInvalidReason,
 } from '@shotx/shared';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, type SQL, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
@@ -219,7 +221,15 @@ export class DriveService {
       const max = this.config.drive.maxFolderDepth;
       if (childFolderDepth(parent?.path ?? null) > max) throw depthExceeded(max);
       try {
-        return toDriveFolder(await insertFolder(tx, { ownerId, parent, name: body.name }));
+        return toDriveFolder(
+          await insertFolder(tx, {
+            ownerId,
+            parent,
+            name: body.name,
+            now: this.clock.now(),
+            faceIndexExpiryDays: this.config.retention.faceIndexExpiryDays,
+          }),
+        );
       } catch (error) {
         if (isUniqueViolation(error)) throw nameTaken('folder', body.name);
         throw error;
@@ -279,10 +289,62 @@ export class DriveService {
         if (isUniqueViolation(error)) throw nameTaken('folder', name);
         throw error;
       }
-      const updated = await liveFolder(tx, ownerId, id);
-      if (updated === null) throw new Error('Folder vanished inside its transaction');
-      return toDriveFolder(updated);
+      const moved = await liveFolder(tx, ownerId, id);
+      if (moved === null) throw new Error('Folder vanished inside its transaction');
+      if (body.coverFileId === undefined) return toDriveFolder(moved);
+      // ADR 0011: the share page cover, checked against the folder as it is after this request's
+      // move (same transaction).
+      if (body.coverFileId !== null)
+        await this.assertCoverFile(tx, ownerId, moved, body.coverFileId);
+      const [covered] = await tx
+        .update(folders)
+        .set({ coverFileId: body.coverFileId })
+        .where(and(eq(folders.id, id), eq(folders.ownerId, ownerId)))
+        .returning();
+      if (covered === undefined) throw new Error('Folder vanished inside its transaction');
+      return toDriveFolder(covered);
     });
+  }
+
+  /**
+   * A folder's cover must be the owner's file (else NOT_FOUND) that is live (not trashed or being
+   * purged, nor in a trashed folder), `ready`, an image, and inside the folder's subtree; else
+   * COVER_FILE_INVALID with the first failing reason, in that order. The file row is locked FOR
+   * SHARE so a concurrent trash or move waits for this transaction.
+   */
+  private async assertCoverFile(
+    tx: Tx,
+    ownerId: string,
+    folder: Pick<Folder, 'path'>,
+    fileId: string,
+  ): Promise<void> {
+    const [file] = await tx
+      .select({
+        status: files.status,
+        mime: files.mime,
+        live: sql<boolean>`(${files.deletedAt} IS NULL AND ${files.purgeRequestedAt} IS NULL AND ${folders.deletedAt} IS NULL)`,
+        inside: sql<boolean>`coalesce(${folders.path} <@ ${folder.path}::ltree, false)`,
+      })
+      .from(files)
+      .leftJoin(folders, and(eq(folders.id, files.folderId), eq(folders.ownerId, files.ownerId)))
+      .where(and(eq(files.id, fileId), eq(files.ownerId, ownerId)))
+      .for('share', { of: files })
+      .limit(1);
+    if (file === undefined) throw notFound('File');
+    const reason: CoverFileInvalidReason | null = !file.live
+      ? 'not_live'
+      : file.status !== 'ready'
+        ? 'not_ready'
+        : mediaKindOf(file.mime) !== 'image'
+          ? 'not_image'
+          : !file.inside
+            ? 'outside_folder'
+            : null;
+    if (reason !== null) {
+      throw new ApiError('COVER_FILE_INVALID', 'This file cannot be the folder cover', {
+        reason,
+      } satisfies CoverFileInvalidDetails);
+    }
   }
 
   // --- PATCH /drive/files/:id ----------------------------------------------------------------
@@ -701,7 +763,7 @@ export class DriveService {
   async updateFaceIndex(
     ownerId: string,
     id: string,
-    body: { enabled: true; attendeesInformedConfirmed: true } | { enabled: false },
+    body: { enabled: true; attendeesInformedConfirmed?: true | undefined } | { enabled: false },
   ): Promise<DriveFolder> {
     const now = this.clock.now();
     if (!body.enabled) {
@@ -750,9 +812,10 @@ export class DriveService {
       const sendsIndex = !isFaceIndexActive(current, now);
       const [updated] = await tx
         .update(folders)
+        // ADR 0011 decision 1: no attendee confirmation any more; face_index_informed_at keeps
+        // the record of earlier confirmations and is no longer written.
         .set({
           faceIndexEnabled: true,
-          faceIndexInformedAt: now,
           faceIndexExpiresAt: expiresAt,
           ...(sendsIndex ? { faceIndexQueuedAt: now } : {}),
         })
@@ -770,15 +833,15 @@ export class DriveService {
           .update(folders)
           .set({
             faceIndexEnabled: before.faceIndexEnabled,
-            faceIndexInformedAt: before.faceIndexInformedAt,
             faceIndexExpiresAt: before.faceIndexExpiresAt,
             faceIndexQueuedAt: before.faceIndexQueuedAt,
           })
+          // This request's own outbox mark: undone only while nothing else changed it since.
           .where(
             and(
               eq(folders.id, id),
               eq(folders.ownerId, ownerId),
-              eq(folders.faceIndexInformedAt, now),
+              eq(folders.faceIndexQueuedAt, now),
             ),
           );
         throw error;

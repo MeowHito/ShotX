@@ -85,6 +85,13 @@
       "when": 1794312940776,
       "tag": "0011_admin_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794449341708,
+      "tag": "0012_event_gallery_admin_mfa",
+      "breakpoints": true
     }
   ]
 }

@@ -6,3 +6,8 @@
 export function navigateTo(href: string): void {
   window.location.assign(href);
 }
+
+/** Reloads the page (after the language cookie changed, so the server renders the new language). */
+export function reloadPage(): void {
+  window.location.reload();
+}

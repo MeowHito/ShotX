@@ -714,18 +714,13 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
   describe('PATCH /drive/folders/:id/face-index', () => {
     const path = (id: string) => apiPath(DRIVE_ROUTES.updateFaceIndex, { id });
 
-    it('needs the attendees-informed confirmation, sets the expiry and sends index.folder once', async () => {
+    it('turns back on without a confirmation (ADR 0011), sets the expiry and sends index.folder once', async () => {
       const owner = await api.photographer();
       const folder = await api.folder(owner.id);
-      const missing = await api.request('PATCH', path(folder.id), {
-        token: owner.token,
-        body: { enabled: true },
-      });
-      expect(missing).toMatchObject({ status: 400, body: { code: 'VALIDATION_FAILED' } });
       const sent = api.queue.sent.length;
       const on = await api.request('PATCH', path(folder.id), {
         token: owner.token,
-        body: { enabled: true, attendeesInformedConfirmed: true },
+        body: { enabled: true },
       });
       const days = api.config.retention.faceIndexExpiryDays;
       expect(on).toMatchObject({
@@ -736,7 +731,8 @@ describe('face search with FACE_SEARCH_ENABLED=true', () => {
         },
       });
       const [row] = await api.db.select().from(folders).where(eq(folders.id, folder.id));
-      expect(row?.faceIndexInformedAt).not.toBeNull();
+      // No longer written (ADR 0011 decision 1).
+      expect(row?.faceIndexInformedAt).toBeNull();
       // Outbox mark for faces.sweep, set with the enabling transaction.
       const queuedAt = api.clock.now();
       expect(row?.faceIndexQueuedAt).toEqual(queuedAt);

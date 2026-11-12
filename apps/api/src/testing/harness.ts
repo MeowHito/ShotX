@@ -356,7 +356,10 @@ export class TestApi {
     return row ?? { photographerId, usedBytes: 0, reservedBytes: 0 };
   }
 
-  /** A live folder of `ownerId` (direct insert), optionally with an active face index. */
+  /**
+   * A live folder of `ownerId` (direct insert), with an active face index only with
+   * `faceIndex: true` (else switched off, like a photographer's opt-out).
+   */
   async folder(
     ownerId: string,
     options: {
@@ -375,13 +378,14 @@ export class TestApi {
         parentId: options.parent?.id ?? null,
         name: options.name ?? `folder-${id.slice(-6)}`,
         path: folderPath(options.parent?.path ?? null, id),
+        // Explicit either way: the column default is on since ADR 0011 (migration 0012), and the
+        // older suites rely on folders without an index unless they ask for one.
         ...(options.faceIndex === true
           ? {
               faceIndexEnabled: true,
-              faceIndexInformedAt: now,
               faceIndexExpiresAt: new Date(now.getTime() + 30 * 24 * 3600 * 1000),
             }
-          : {}),
+          : { faceIndexEnabled: false, faceIndexExpiresAt: null }),
       })
       .returning({ id: folders.id, path: folders.path });
     if (row === undefined) throw new Error('no folder');

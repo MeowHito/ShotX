@@ -51,6 +51,14 @@ function fakeApi(overrides: Partial<AdminAuthApi> = {}): AdminAuthApi {
     mfa: vi.fn((_: AdminMfaBody) => Promise.resolve(tokens())),
     refresh: vi.fn(() => Promise.resolve(tokens())),
     logout: vi.fn(() => Promise.resolve()),
+    providers: vi.fn(() =>
+      Promise.resolve({
+        oidc: [],
+        devLogin: false,
+        adminLogin: true,
+        adminMfaMode: 'off' as const,
+      }),
+    ),
     ...overrides,
   };
 }
@@ -229,6 +237,61 @@ describe('sign-in step handlers', () => {
     expect(cookie).toMatch(/^shotx_admin_challenge=/);
     expect(cookie).not.toContain('Secure');
     expect(cookie).toContain('SameSite=Strict');
+  });
+});
+
+describe('sign-in without TOTP (ADMIN_MFA_MODE=off)', () => {
+  function expectSession(response: Response) {
+    const cookies = response.headers.getSetCookie();
+    expect(cookies[0]).toContain(`${names.challenge}=; Path=/; Max-Age=0`);
+    const session = cookies.find((c) => c.startsWith(`${names.session}=`));
+    const refresh = cookies.find((c) => c.startsWith(`${names.refresh}=`));
+    for (const c of [session, refresh]) {
+      expect(c).toContain('HttpOnly');
+      expect(c).toContain('Secure');
+      expect(c).toContain('SameSite=Strict');
+      expect(c).toContain('Max-Age=43200');
+    }
+    expect(refresh).toContain(`=${REFRESH};`);
+    const value = decodeURIComponent(session!.split(';')[0]!.split('=')[1]!);
+    expect(decodeSession(value)).toMatchObject({ user: { id: ADMIN_ID } });
+  }
+
+  it('stores the tokens from the password step and never sends them to the browser', async () => {
+    const api = fakeApi({
+      login: vi.fn(() =>
+        Promise.resolve({
+          ...tokens({ accessToken: jwt({ sub: `admin:${ADMIN_ID}`, amr: ['pwd'] }) }),
+          step: 'signed_in' as const,
+        }),
+      ),
+    });
+    const response = await handleLoginStep(
+      post('/auth/login', { email: 'owner@example.test', password: 'pw' }),
+      deps(api),
+    );
+    const text = await response.text();
+    expect(JSON.parse(text)).toEqual({ step: 'signed_in' });
+    expect(text).not.toContain(REFRESH);
+    expect(text).not.toContain('accessToken');
+    expectSession(response);
+  });
+
+  it('signs in right after a forced password change', async () => {
+    const api = fakeApi({
+      changePassword: vi.fn(() => Promise.resolve({ ...tokens(), step: 'signed_in' as const })),
+    });
+    const response = await handlePasswordStep(
+      post(
+        '/auth/password',
+        { newPassword: 'a-new-long-password' },
+        { cookie: `${names.challenge}=${CHALLENGE_1}` },
+      ),
+      deps(api),
+    );
+    expect(await response.json()).toEqual({ step: 'signed_in' });
+    expectSession(response);
+    expect(api.mfa).not.toHaveBeenCalled();
   });
 });
 

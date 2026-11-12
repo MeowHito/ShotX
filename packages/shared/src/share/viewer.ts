@@ -35,7 +35,8 @@ export const VIEWER_SESSION_COOKIE = 'shotx_vs';
 /**
  * Share-scoped unlock cookie set by `POST /s/:token/unlock`: an opaque token (22 base62) with
  * `Path=/api/s/{token}`, so each share has its own and no other route receives it. Max-Age
- * SHARE_UNLOCK_TTL_SECONDS.
+ * SHARE_UNLOCK_TTL_SECONDS. Always the share's token, also when the unlock request used the slug
+ * (ADR 0011): web calls public routes with `meta.token` after resolving the page's ref.
  */
 export const SHARE_UNLOCK_COOKIE = 'shotx_unlock';
 

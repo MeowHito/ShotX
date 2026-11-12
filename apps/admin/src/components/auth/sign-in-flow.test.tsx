@@ -36,6 +36,7 @@ const err = (status: number, code: string, details?: unknown): Answer => ({
 });
 
 describe('SignInFlow', () => {
+  // The first tests are ADMIN_MFA_MODE=totp: the API answers with TOTP steps.
   it('walks a new admin through password change, TOTP enrolment and the code', async () => {
     const user = userEvent.setup();
     const onSignedIn = vi.fn();
@@ -172,5 +173,48 @@ describe('SignInFlow', () => {
     expect(screen.queryByTestId('totp-secret')).not.toBeInTheDocument();
     expect(document.body.innerHTML).not.toContain('JBSWY3DPEHPK3PXP');
     expect(screen.getByLabelText('อีเมล')).toHaveValue('');
+  });
+
+  describe('ADMIN_MFA_MODE=off', () => {
+    it('signs in with email and password only, no TOTP screens', async () => {
+      const user = userEvent.setup();
+      const onSignedIn = vi.fn();
+      const { calls, fetchImpl } = fakeSignIn({
+        '/auth/login': [{ status: 200, body: { step: 'signed_in' } }],
+      });
+      renderWithProviders(
+        <SignInFlow next="/users" fetchImpl={fetchImpl} onSignedIn={onSignedIn} />,
+        { fetch: fetchImpl },
+      );
+      await user.type(screen.getByLabelText('อีเมล'), 'owner@example.test');
+      await user.type(screen.getByLabelText('รหัสผ่าน'), 'pw');
+      await user.click(screen.getByRole('button', { name: 'ถัดไป' }));
+      await waitFor(() => expect(onSignedIn).toHaveBeenCalledWith('/users'));
+      expect(calls.map((c) => c.path)).toEqual(['/auth/login']);
+      expect(screen.queryByLabelText('รหัสยืนยันตัวตน')).not.toBeInTheDocument();
+      expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    });
+
+    it('signs in right after a forced password change', async () => {
+      const user = userEvent.setup();
+      const onSignedIn = vi.fn();
+      const { calls, fetchImpl } = fakeSignIn({
+        '/auth/login': [{ status: 200, body: { step: 'change_password' } }],
+        '/auth/password': [{ status: 200, body: { step: 'signed_in' } }],
+      });
+      renderWithProviders(
+        <SignInFlow next="/users" fetchImpl={fetchImpl} onSignedIn={onSignedIn} />,
+        { fetch: fetchImpl },
+      );
+      await user.type(screen.getByLabelText('อีเมล'), 'new.admin@example.test');
+      await user.type(screen.getByLabelText('รหัสผ่าน'), 'temporary-password-1');
+      await user.click(screen.getByRole('button', { name: 'ถัดไป' }));
+      await user.type(await screen.findByLabelText('รหัสผ่านใหม่'), 'a-much-longer-passphrase');
+      await user.type(screen.getByLabelText('ยืนยันรหัสผ่านใหม่'), 'a-much-longer-passphrase');
+      await user.click(screen.getByRole('button', { name: 'ตั้งรหัสผ่านใหม่' }));
+      await waitFor(() => expect(onSignedIn).toHaveBeenCalledWith('/users'));
+      expect(calls.map((c) => c.path)).toEqual(['/auth/login', '/auth/password']);
+      expect(screen.queryByLabelText('รหัสยืนยันตัวตน')).not.toBeInTheDocument();
+    });
   });
 });

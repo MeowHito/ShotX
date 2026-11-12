@@ -1,3 +1,4 @@
+import { AUTH_METHODS } from '@shotx/shared';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
@@ -16,6 +17,8 @@ import { users } from './accounts';
 import { bytea, createdAt, id, timestamptz } from './columns';
 import { authPool } from './enums';
 
+const authMethods = sql.raw(`ARRAY[${AUTH_METHODS.map((m) => `'${m}'`).join(', ')}]::text[]`);
+
 /**
  * Refresh sessions of ShotX-issued tokens (ADR 0008 section 4; migration 0005). One row per
  * refresh token. A sign-in starts a family (`family_id` = the first row's id); every refresh
@@ -30,6 +33,10 @@ import { authPool } from './enums';
  * - `refresh_token_hash` is the lowercase hex SHA-256 of the token; the token itself is never
  *   stored.
  * - (user_id, pool) references users (id, auth_pool), so the session's pool is its user's.
+ * - `amr` (migration 0012, ADR 0011 decision 4): the methods of the family's sign-in, copied to
+ *   every successor; refresh re-issues exactly these (never more) and refuses an admins-pool
+ *   family that no longer satisfies ADMIN_MFA_MODE (adminSessionSatisfiesMfaMode). Null: a row
+ *   from before 0012, whose methods follow from the subject as before (admins: pwd, otp, mfa).
  */
 export const authSessions = pgTable(
   'auth_sessions',
@@ -50,6 +57,7 @@ export const authSessions = pgTable(
     }),
     createdAt: createdAt(),
     lastUsedAt: timestamptz('last_used_at').notNull().defaultNow(),
+    amr: text('amr').array(),
   },
   (t) => [
     unique('auth_sessions_refresh_token_hash_unique').on(t.refreshTokenHash),
@@ -63,6 +71,10 @@ export const authSessions = pgTable(
     index('auth_sessions_expires_idx').on(t.expiresAt),
     check('auth_sessions_hash_format', sql`${t.refreshTokenHash} ~ '^[0-9a-f]{64}$'`),
     check('auth_sessions_expiry_order', sql`${t.expiresAt} > ${t.createdAt}`),
+    check(
+      'auth_sessions_amr_valid',
+      sql`${t.amr} IS NULL OR (cardinality(${t.amr}) >= 1 AND ${t.amr} <@ ${authMethods})`,
+    ),
     check(
       'auth_sessions_replaced_is_revoked',
       sql`${t.replacedById} IS NULL OR (${t.revokedAt} IS NOT NULL AND ${t.replacedById} <> ${t.id})`,

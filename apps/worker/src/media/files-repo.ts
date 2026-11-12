@@ -3,6 +3,7 @@ import { UPLOAD_FILE_TYPES } from '@shotx/shared';
 import { and, eq, isNotNull, isNull, ne, type SQL, sql } from 'drizzle-orm';
 import type { Db } from '../db';
 import type { Logger } from '../logger';
+import { renewCoveringFaceIndexes } from '../faces/renew-index';
 import { applyQuotaMove } from '../quota';
 
 export interface FileRow {
@@ -139,30 +140,51 @@ function needsFaceIndexSql(now: Date): SQL {
  * purge-requested file changes; returns null otherwise. In the same UPDATE it sets the
  * `index.file` outbox mark (`faces_queued_at`, migration 0006) when a face index covers the photo,
  * so a crash before the send is caught by faces.sweep; `facesQueued` says to send the job.
+ *
+ * ADR 0011 decision 1: first, in the same transaction, the enabled folders covering the file
+ * (folder and ancestors) are renewed to upload + FACE_INDEX_EXPIRY_DAYS, also when their expiry
+ * has passed (renewCoveringFaceIndexes), so every upload into a folder is covered and indexed.
+ * Files at the drive root are never covered. Idempotent: a redelivery renews nothing more.
  */
 export async function markReady(
   db: Db,
   id: string,
   fields: ReadyFields,
   now: Date,
+  faceIndexExpiryDays: number,
 ): Promise<{ facesQueued: boolean } | null> {
-  const [updated] = await db
-    .update(files)
-    .set({
-      ...fields,
-      status: 'ready',
-      facesQueuedAt: sql`CASE WHEN ${needsFaceIndexSql(now)} THEN now() ELSE ${files.facesQueuedAt} END`,
-    })
-    .where(
-      and(
-        eq(files.id, id),
-        isNotNull(files.verifiedAt),
-        ne(files.status, 'failed'),
-        isNull(files.purgeRequestedAt),
-      ),
-    )
-    .returning({ facesQueuedAt: files.facesQueuedAt });
-  return updated === undefined ? null : { facesQueued: updated.facesQueuedAt !== null };
+  try {
+    return await db.transaction(async (tx) => {
+      await renewCoveringFaceIndexes(tx, id, faceIndexExpiryDays);
+      const [updated] = await tx
+        .update(files)
+        .set({
+          ...fields,
+          status: 'ready',
+          facesQueuedAt: sql`CASE WHEN ${needsFaceIndexSql(now)} THEN now() ELSE ${files.facesQueuedAt} END`,
+        })
+        .where(
+          and(
+            eq(files.id, id),
+            isNotNull(files.verifiedAt),
+            ne(files.status, 'failed'),
+            isNull(files.purgeRequestedAt),
+          ),
+        )
+        .returning({ facesQueuedAt: files.facesQueuedAt });
+      // Not ready after all: roll the renewal back too (it is only for files that become ready).
+      if (updated === undefined) throw new NotReadyRollback();
+      return { facesQueued: updated.facesQueuedAt !== null };
+    });
+  } catch (error) {
+    if (error instanceof NotReadyRollback) return null;
+    throw error;
+  }
+}
+
+/** Rolls markReady's transaction back when the file can't be marked ready. */
+class NotReadyRollback extends Error {
+  override readonly name = 'NotReadyRollback';
 }
 
 /**

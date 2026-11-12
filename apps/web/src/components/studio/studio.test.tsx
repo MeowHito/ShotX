@@ -134,11 +134,23 @@ describe('share management', () => {
 
     // The new link is listed with its flags; copy puts the URL on the clipboard.
     const share = [...fake.ownerShares.values()][0]?.share;
+    // ADR 0011: the readable slug link (the folder's name), not the token.
+    expect(share?.slug).toBe('งานวิ่ง-2569');
+    expect(share?.url).toBe(`https://photos.example.com/s/${encodeURIComponent('งานวิ่ง-2569')}`);
+    expect(share?.url).not.toContain(share?.token ?? '-');
     expect(await within(dialog).findByText(share?.url ?? '')).toBeInTheDocument();
     expect(within(dialog).getByText(/มีรหัสผ่าน/)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: th.shares.copy }));
     expect(writeText).toHaveBeenCalledWith(share?.url);
     expect(await within(dialog).findByText(th.shares.copied)).toBeInTheDocument();
+
+    // The "delete my face" link to send on request (studio only; ADR 0011 decision 2).
+    expect(within(dialog).getByText(th.shares.deletionLinkHint)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: th.shares.copyDeletionLink }));
+    expect(writeText).toHaveBeenLastCalledWith(
+      `https://photos.example.com/s/${encodeURIComponent('งานวิ่ง-2569')}/delete-my-face`,
+    );
+    expect(await within(dialog).findByText(th.shares.deletionLinkCopied)).toBeInTheDocument();
 
     await userEvent.click(within(dialog).getByRole('button', { name: th.shares.revoke }));
     const confirm = await screen.findByRole('dialog', { name: th.shares.revokeTitle });
@@ -203,42 +215,61 @@ describe('share management', () => {
   });
 });
 
-describe('face index and owner download', () => {
-  it('requires the attendees-informed confirmation before enabling', async () => {
+describe('face index (always on, ADR 0011), folder cover and owner download', () => {
+  it('has no face-index setting: no menu entry, no informed checkbox', async () => {
     const fake = new FakeApi({ faceSearch: true });
-    const folder = fake.addFolder('Event');
-    renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} />, { api: apiClientFor(fake.fetch) });
-    await choose(folder.name, th.itemMenu.organize, th.itemMenu.faceIndex);
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(th.faceIndex.statusOff)).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole('button', { name: th.faceIndex.enable }));
-    expect(within(dialog).getByText(th.faceIndex.informedRequired)).toBeInTheDocument();
-    expect(fake.callsTo(DRIVE_ROUTES.updateFaceIndex)).toHaveLength(0);
-
-    await userEvent.click(within(dialog).getByRole('checkbox', { name: th.faceIndex.informed }));
-    await userEvent.click(within(dialog).getByRole('button', { name: th.faceIndex.enable }));
-    expect(await screen.findByText(th.faceIndex.enabled)).toBeInTheDocument();
-    expect(fake.callsTo(DRIVE_ROUTES.updateFaceIndex)[0]?.body).toEqual({
-      enabled: true,
-      attendeesInformedConfirmed: true,
-    });
-    expect(await screen.findByText(th.faceIndex.badge)).toBeInTheDocument();
-
-    await choose(folder.name, th.itemMenu.organize, th.itemMenu.faceIndex);
-    await userEvent.click(
-      within(await screen.findByRole('dialog')).getByRole('button', { name: th.faceIndex.disable }),
-    );
-    expect(await screen.findByText(th.faceIndex.disabled)).toBeInTheDocument();
-    expect(fake.callsTo(DRIVE_ROUTES.updateFaceIndex)[1]?.body).toEqual({ enabled: false });
-  });
-
-  it('flag off: no face-index entry in the studio', async () => {
-    const fake = new FakeApi({ faceSearch: false });
     const folder = fake.addFolder('Event');
     renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} />, { api: apiClientFor(fake.fetch) });
     await choose(folder.name, th.itemMenu.organize);
     expect(await screen.findByRole('menuitem', { name: th.itemMenu.moveTo })).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: th.itemMenu.faceIndex })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /ใบหน้า/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(fake.callsTo(DRIVE_ROUTES.updateFaceIndex)).toHaveLength(0);
+  });
+
+  it('sets a photo as the folder cover, and goes back to the first photo', async () => {
+    const fake = new FakeApi();
+    const folder = fake.addFolder('Event');
+    const photo = fake.addFile('cover.jpg', folder.id);
+    fake.addFile('clip.mp4', folder.id, { mediaKind: 'video', mime: 'video/mp4' });
+    renderWithProviders(<DriveBrowser folderRef={folder.id} />, { api: apiClientFor(fake.fetch) });
+
+    await choose('cover.jpg', th.itemMenu.organize, th.itemMenu.coverSet);
+    expect(await screen.findByText(th.itemMenu.coverSetDone)).toBeInTheDocument();
+    expect(fake.callsTo(DRIVE_ROUTES.updateFolder)[0]?.body).toEqual({ coverFileId: photo.id });
+    expect(fake.folders.get(folder.id)?.coverFileId).toBe(photo.id);
+    expect(await screen.findByText(th.itemMenu.coverBadge)).toBeInTheDocument();
+
+    // Videos can't be covers: no entry.
+    await choose('clip.mp4', th.itemMenu.organize);
+    expect(await screen.findByRole('menuitem', { name: th.itemMenu.moveTo })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: th.itemMenu.coverSet })).toBeNull();
+    await userEvent.keyboard('{Escape}{Escape}');
+
+    await choose('cover.jpg', th.itemMenu.organize, th.itemMenu.coverReset);
+    expect(await screen.findByText(th.itemMenu.coverResetDone)).toBeInTheDocument();
+    expect(fake.callsTo(DRIVE_ROUTES.updateFolder)[1]?.body).toEqual({ coverFileId: null });
+    expect(fake.folders.get(folder.id)?.coverFileId).toBeNull();
+  });
+
+  it('resets a folder\u2019s cover from the folder\u2019s own menu, and shows COVER_FILE_INVALID', async () => {
+    const fake = new FakeApi();
+    const folder = fake.addFolder('Event');
+    const photo = fake.addFile('a.jpg', folder.id);
+    fake.folders.set(folder.id, { ...folder, coverFileId: photo.id });
+    renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} />, { api: apiClientFor(fake.fetch) });
+    await choose('Event', th.itemMenu.organize, th.itemMenu.coverReset);
+    expect(await screen.findByText(th.itemMenu.coverResetDone)).toBeInTheDocument();
+    expect(fake.callsTo(DRIVE_ROUTES.updateFolder)[0]?.body).toEqual({ coverFileId: null });
+
+    const processing = fake.addFile('new.jpg', folder.id, { status: 'processing' });
+    const api = apiClientFor(fake.fetch);
+    await expect(
+      api.call(DRIVE_ROUTES.updateFolder, {
+        params: { id: folder.id },
+        body: { coverFileId: processing.id },
+      }),
+    ).rejects.toMatchObject({ code: 'COVER_FILE_INVALID', details: { reason: 'not_ready' } });
   });
 
   it('downloads the owner original through GET /drive/files/:id/download', async () => {

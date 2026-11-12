@@ -15,7 +15,9 @@ function seedShare(fake: FakeApi, requireLogin: boolean): OwnerShare {
   const share: OwnerShare = {
     id: crypto.randomUUID(),
     token: 'aB3dE5fG7hJ9kL1mN3pQ5r',
-    url: 'https://photos.example.com/s/aB3dE5fG7hJ9kL1mN3pQ5r',
+    slug: 'event',
+    path: '/s/event',
+    url: 'https://photos.example.com/s/event',
     target: { type: 'folder', id: folder.id, name: folder.name, unavailable: false },
     mode: 'gallery',
     allowDownload: true,
@@ -115,9 +117,7 @@ describe('share form: require login without a viewer sign-in (LINE/Google off)',
     renderEdit(fake, share, DEFAULT_STUDIO_CONFIG);
     await userEvent.click(screen.getByRole('checkbox', { name: th.shareForm.requireLogin }));
     await userEvent.click(screen.getByRole('button', { name: th.shareForm.save }));
-    expect(
-      await screen.findByText(th.errors.codes.LOGIN_PROVIDER_UNAVAILABLE),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(th.errors.codes.LOGIN_PROVIDER_UNAVAILABLE)).toBeInTheDocument();
     expect(fake.ownerShares.get(share.id)?.share.requireLogin).toBe(false);
   });
 

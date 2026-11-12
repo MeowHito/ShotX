@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { coveredByFaceIndexSql, faces, files, folders } from '@shotx/db';
+import { coveredByFaceIndexSql, faces, files } from '@shotx/db';
 import {
   faceCollectionId,
   indexPhoto,
@@ -14,6 +14,7 @@ import { UPLOAD_FILE_TYPES } from '@shotx/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { rows } from '../db';
 import { deleteFacesInBatches } from '../faces';
+import { renewCoveringFaceIndexes } from './renew-index';
 import { errorFields, type Logger } from '../logger';
 import type { FacesDeps } from './deps';
 
@@ -125,6 +126,9 @@ export async function indexFile(
     return 'not-indexable';
   }
   if (file.faceCount !== null) return 'already-indexed';
+  // ADR 0011: renew the covering indexes (also expired ones) to upload + FACE_INDEX_EXPIRY_DAYS
+  // before deciding, so a photo uploaded into an old event folder is indexed.
+  await renewCoveringFaceIndexes(db, file.id, deps.retention.faceIndexExpiryDays);
   if (!(await isCovered(db, file, new Date(deps.now())))) return 'not-covered';
 
   const existing = await db
@@ -209,7 +213,7 @@ async function downloadOriginal(
  * Replaces the file's faces rows with the attempt's faces and sets face_count, in one transaction:
  * the file is locked and checked again (still ready, live, covered, and its rows still the ones
  * this attempt replaced), the covering folders' expiry moves to last upload +
- * FACE_INDEX_EXPIRY_DAYS, and the record-faces deadline is checked last, right before the commit.
+ * FACE_INDEX_EXPIRY_DAYS (renewCoveringFaceIndexes), and the record-faces deadline is checked last, right before the commit.
  */
 async function recordFaces(
   deps: FacesDeps,
@@ -267,35 +271,11 @@ async function recordFaces(
       );
     }
     await tx.update(files).set({ faceCount: result.faceCount }).where(eq(files.id, file.id));
-    await extendCoveringFolders(tx, current, deps.retention.faceIndexExpiryDays, now);
+    await renewCoveringFaceIndexes(tx, current.id, deps.retention.faceIndexExpiryDays);
     if (deps.now() > recordFacesDeadline(startedAt, deps.face.index.orphanGraceMs)) {
       throw new RecordFacesDeadlineError(); // rolls the transaction back
     }
   });
-}
-
-/**
- * Moves `face_index_expires_at` of the active indexes covering the file to at least its upload
- * time + FACE_INDEX_EXPIRY_DAYS (spec: last upload + 90 days). Never shortens an expiry and never
- * revives an expired or disabled index.
- */
-async function extendCoveringFolders(
-  tx: FacesDeps['db'],
-  file: FileForIndexing,
-  expiryDays: number,
-  now: Date,
-): Promise<void> {
-  if (file.folderId === null) return;
-  await tx.execute(sql`
-    UPDATE ${folders} SET "face_index_expires_at" = GREATEST(
-      "face_index_expires_at",
-      ${file.createdAt.toISOString()}::timestamptz + make_interval(days => ${expiryDays})
-    )
-    WHERE "owner_id" = ${file.ownerId}
-      AND "face_index_enabled"
-      AND "deleted_at" IS NULL
-      AND "face_index_expires_at" > ${now.toISOString()}::timestamptz
-      AND "path" @> (SELECT "path" FROM ${folders} WHERE "id" = ${file.folderId})`);
 }
 
 /**

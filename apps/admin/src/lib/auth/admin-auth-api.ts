@@ -7,6 +7,7 @@ import {
   type AdminMfaBody,
   AUTH_ROUTES,
   type AuthClientConfig,
+  type AuthProvidersResponse,
   type AuthTokenResponse,
 } from '@shotx/shared';
 import { createApiClient } from '../api/client';
@@ -28,6 +29,8 @@ export interface AdminAuthApi {
   refresh: (refreshToken: string) => Promise<AuthTokenResponse>;
   /** Revokes the refresh token's family. */
   logout: (refreshToken: string) => Promise<void>;
+  /** GET /auth/providers: what sign-in offers, including ADMIN_MFA_MODE (`adminMfaMode`). */
+  providers: () => Promise<AuthProvidersResponse>;
 }
 
 export interface AdminAuthApiOptions {
@@ -62,6 +65,7 @@ export function createAdminAuthApi(options: AdminAuthApiOptions): AdminAuthApi {
       ),
     logout: (refreshToken) =>
       api.call(AUTH_ROUTES.logout, { body: { refreshToken }, signal: signal() }),
+    providers: () => api.call(AUTH_ROUTES.providers, { signal: signal() }),
   };
 }
 

@@ -34,6 +34,13 @@ export type AuthPool = (typeof AUTH_POOLS)[number];
  * `:provider` of `/auth/oidc/:provider/start`).
  */
 export const OIDC_PROVIDERS = ['line', 'google'] as const;
+
+/**
+ * Second factor of admin sign-in (ADMIN_MFA_MODE, ADR 0011 decision 4): `off` (default) signs
+ * admins in with email + password only; `totp` restores the ADR 0008/0010 TOTP step and enrolment.
+ */
+export const ADMIN_MFA_MODES = ['off', 'totp'] as const;
+export type AdminMfaMode = (typeof ADMIN_MFA_MODES)[number];
 export type OidcProvider = (typeof OIDC_PROVIDERS)[number];
 
 export const SUBSCRIPTION_STATUSES = ['trial', 'active', 'grace', 'expired', 'purged'] as const;

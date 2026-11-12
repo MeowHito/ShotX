@@ -106,6 +106,23 @@ const shareEnvSchema = z
     /** "ไม่ใช่ฉัน" feedback per share and viewer. */
     SHARE_FEEDBACK_RATE_PER_VIEWER: requests.default(100),
     SHARE_FEEDBACK_RATE_PER_VIEWER_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
+    // ADR 0011 risk 3: slugs are guessable, so resolving them is throttled per client IP (the
+    // address CloudFront or the BFF reports, as for every other per-IP limit). Thai mobile
+    // carriers put many people behind one address (CGNAT): keep these generous and size them
+    // from the post-event load test. Assumptions.
+    /**
+     * Requests per IP whose ref is a slug (any public share route; found or not). A page view
+     * costs about two (web's SSR meta and the browser's meta); later calls use the token.
+     */
+    SHARE_SLUG_RESOLVE_RATE_PER_IP: requests.default(300),
+    SHARE_SLUG_RESOLVE_RATE_PER_IP_WINDOW_SECONDS: windowSeconds.default(5 * SECONDS_PER_MINUTE),
+    /**
+     * NOT_FOUND answers of public share routes per IP (unknown slug or token, malformed ref).
+     * Over the limit, every slug lookup from that IP is RATE_LIMITED (with Retry-After) until the
+     * window passes, found or not, so guessing event names stalls; token lookups still work.
+     */
+    SHARE_NOT_FOUND_RATE_PER_IP: requests.default(30),
+    SHARE_NOT_FOUND_RATE_PER_IP_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
   })
   .refine((e) => e.SIGNED_URL_DOWNLOAD_TTL_SECONDS <= e.SIGNED_URL_VIEW_TTL_SECONDS, {
     error:
@@ -146,6 +163,10 @@ export interface ShareConfig {
     downloadPerViewer: RateLimitRule;
     zipCreatePerViewer: RateLimitRule;
     feedbackPerViewer: RateLimitRule;
+    /** Keyed by IP: requests whose ref is a slug (ADR 0011). */
+    slugResolvePerIp: RateLimitRule;
+    /** Keyed by IP: NOT_FOUND answers of public share routes; over it, slug lookups are refused. */
+    notFoundPerIp: RateLimitRule;
   };
 }
 
@@ -183,6 +204,14 @@ export function loadShareConfig(env: Env): ShareConfig {
       feedbackPerViewer: {
         limit: e.SHARE_FEEDBACK_RATE_PER_VIEWER,
         windowSeconds: e.SHARE_FEEDBACK_RATE_PER_VIEWER_WINDOW_SECONDS,
+      },
+      slugResolvePerIp: {
+        limit: e.SHARE_SLUG_RESOLVE_RATE_PER_IP,
+        windowSeconds: e.SHARE_SLUG_RESOLVE_RATE_PER_IP_WINDOW_SECONDS,
+      },
+      notFoundPerIp: {
+        limit: e.SHARE_NOT_FOUND_RATE_PER_IP,
+        windowSeconds: e.SHARE_NOT_FOUND_RATE_PER_IP_WINDOW_SECONDS,
       },
     },
   };

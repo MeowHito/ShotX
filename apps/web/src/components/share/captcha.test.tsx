@@ -41,11 +41,12 @@ function limitedShare(fake: FakeApi, rateLimit: PublicShareFixture['rateLimit'])
   return share;
 }
 
+/** Opens the scan and takes the photo; the search starts by itself (ADR 0011). */
 async function scanOnce() {
   await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-  await userEvent.click(await screen.findByRole('button', { name: th.capture.openCamera }));
-  await userEvent.click(await screen.findByRole('button', { name: th.capture.takePhoto }));
-  await userEvent.click(await screen.findByRole('button', { name: th.capture.search }));
+  const take = await screen.findByRole('button', { name: th.capture.takePhoto });
+  await waitFor(() => expect(take).toBeEnabled());
+  await userEvent.click(take);
 }
 
 const searches = (fake: FakeApi) => fake.callsTo(PUBLIC_SHARE_ROUTES.faceSearch);
@@ -147,8 +148,8 @@ describe('Turnstile after a rate-limit hit', () => {
       await screen.findByText('ส่งคำขอบ่อยเกินไป กรุณารออีก 5 นาทีแล้วลองใหม่'),
     ).toBeInTheDocument();
     expect(turnstile.loads).toBe(0);
-    // The selfie is dropped: the camera is offered again for a later try.
-    expect(screen.getByRole('button', { name: th.capture.openCamera })).toBeInTheDocument();
+    // The selfie is dropped: the camera comes back for a later try.
+    expect(await screen.findByRole('button', { name: th.capture.takePhoto })).toBeInTheDocument();
   });
 
   it('treats a Cloudflare outage at the API (rejected: unavailable) as wait', async () => {

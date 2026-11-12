@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import { AUTH_TOKEN_ALGORITHM, AUTH_TOKEN_AUDIENCES, authTokenIssuer } from '../account/tokens';
 import type { AuthProvidersResponse } from '../api/auth';
-import { type AuthPool, OIDC_PROVIDERS, type OidcProvider } from '../domain';
+import {
+  ADMIN_MFA_MODES,
+  type AdminMfaMode,
+  type AuthPool,
+  OIDC_PROVIDERS,
+  type OidcProvider,
+} from '../domain';
 import { type Env, parseEnv } from './env';
 import type { RateLimitRule } from './face';
 import {
@@ -361,7 +367,17 @@ const shotxAuthEnvSchema = z
       })
       .optional(),
     GOOGLE_OAUTH_CLIENT_SECRET: secret().optional(),
-    /** AES-256-GCM key of admin_credentials.totp_secret_encrypted. */
+    /**
+     * Second factor of admin sign-in (ADR 0011 decision 4): `off` (default, the owner's decision
+     * of 2026-11-12) signs admins in with email + password only; `totp` restores the TOTP step and
+     * enrolment without code changes. See ADMIN_SIGN_IN_STEPS and adminRequiredAmr.
+     */
+    ADMIN_MFA_MODE: z.enum(ADMIN_MFA_MODES).default('off'),
+    /**
+     * AES-256-GCM key of admin_credentials.totp_secret_encrypted. Required with
+     * ADMIN_MFA_MODE=totp; optional with `off` (when set, the operator CLI can still enrol and reset
+     * TOTP, so switching back to `totp` needs no re-enrolment).
+     */
     ADMIN_TOTP_ENCRYPTION_KEY: aes256Key().optional(),
     ADMIN_TOTP_PERIOD_SECONDS: int(15, 120).default(30),
     ADMIN_TOTP_DIGITS: z.coerce
@@ -506,13 +522,23 @@ export interface OidcClientConfig {
 }
 
 export interface AdminSignInConfig {
+  /**
+   * ADMIN_MFA_MODE (ADR 0011 decision 4). `off`: POST /auth/admin/login answers `signed_in`
+   * (tokens, `amr` ["pwd"]) or `change_password`; never `enrol_totp` or `totp`. The admin guard
+   * and refresh check `amr` against adminRequiredAmr(mfaMode).
+   */
+  mfaMode: AdminMfaMode;
+  /**
+   * TOTP settings; always set with `totp`. With `off`, set only when ADMIN_TOTP_ENCRYPTION_KEY
+   * is (the operator CLI's enrol/reset-totp need it), else null.
+   */
   totp: {
     /** AES-256-GCM key. Secret: never log it. */
     encryptionKey: Uint8Array;
     periodSeconds: number;
     digits: 6 | 8;
     window: number;
-  };
+  } | null;
   challengeTtlSeconds: number;
   /** ADMIN_TOTP_ENROLMENT_TTL_SECONDS. */
   totpEnrolmentTtlSeconds: number;
@@ -559,11 +585,12 @@ export interface ShotxAuthConfig {
 /**
  * The API's token issuer settings (AUTH_PROVIDER=shotx or local; throws with `cognito`).
  *
- * - `shotx`: AUTH_USERS_SIGNING_KEY, AUTH_ADMINS_SIGNING_KEY (different keys) and
- *   ADMIN_TOTP_ENCRYPTION_KEY are required.
+ * - `shotx`: AUTH_USERS_SIGNING_KEY and AUTH_ADMINS_SIGNING_KEY (different keys) are required;
+ *   ADMIN_TOTP_ENCRYPTION_KEY too when ADMIN_MFA_MODE=totp (ADR 0011 decision 4).
  * - `local` (APP_STAGE=local only): AUTH_USERS_SIGNING_KEY is required; the admins pool is on only
- *   when AUTH_ADMINS_SIGNING_KEY and ADMIN_TOTP_ENCRYPTION_KEY are both set. The dev login is on
- *   and issues users-pool tokens only.
+ *   when AUTH_ADMINS_SIGNING_KEY is set (and then ADMIN_TOTP_ENCRYPTION_KEY with
+ *   ADMIN_MFA_MODE=totp; setting only the TOTP key still means the admins pool is wanted and
+ *   AUTH_ADMINS_SIGNING_KEY is required). The dev login is on and issues users-pool tokens only.
  *
  * LINE and Google are optional with both, on every stage including prod (the owner's launch
  * decision of 2026-11-11: since ADR 0010 OIDC serves only viewers of `require_login` shares). Each
@@ -597,7 +624,9 @@ export function loadShotxAuthConfig(env: Env): ShotxAuthConfig {
     e.AUTH_ADMINS_SIGNING_KEY !== undefined || e.ADMIN_TOTP_ENCRYPTION_KEY !== undefined;
   if (!local || adminsOn) {
     if (e.AUTH_ADMINS_SIGNING_KEY === undefined) fail('AUTH_ADMINS_SIGNING_KEY is required');
-    if (e.ADMIN_TOTP_ENCRYPTION_KEY === undefined) fail('ADMIN_TOTP_ENCRYPTION_KEY is required');
+    if (e.ADMIN_MFA_MODE === 'totp' && e.ADMIN_TOTP_ENCRYPTION_KEY === undefined) {
+      fail('ADMIN_TOTP_ENCRYPTION_KEY is required with ADMIN_MFA_MODE=totp');
+    }
   }
   // LINE and Google are optional on every stage; `together` above pairs each id with its secret.
 
@@ -719,15 +748,19 @@ export function loadShotxAuthConfig(env: Env): ShotxAuthConfig {
     },
     devLogin: local ? { pool: 'users' } : null,
     admin:
-      totpKey === undefined
+      adminsKey === undefined
         ? null
         : {
-            totp: {
-              encryptionKey: totpKey,
-              periodSeconds: e.ADMIN_TOTP_PERIOD_SECONDS,
-              digits: e.ADMIN_TOTP_DIGITS,
-              window: e.ADMIN_TOTP_WINDOW,
-            },
+            mfaMode: e.ADMIN_MFA_MODE,
+            totp:
+              totpKey === undefined
+                ? null
+                : {
+                    encryptionKey: totpKey,
+                    periodSeconds: e.ADMIN_TOTP_PERIOD_SECONDS,
+                    digits: e.ADMIN_TOTP_DIGITS,
+                    window: e.ADMIN_TOTP_WINDOW,
+                  },
             challengeTtlSeconds: e.ADMIN_MFA_CHALLENGE_TTL_SECONDS,
             totpEnrolmentTtlSeconds: e.ADMIN_TOTP_ENROLMENT_TTL_SECONDS,
             passwordMinLength: adminPasswordPolicy.minLength,
@@ -785,6 +818,7 @@ export function authProvidersOf(config: ShotxAuthConfig): AuthProvidersResponse 
     oidc: enabledOidcProviders(config),
     devLogin: config.devLogin !== null,
     adminLogin: config.admin !== null,
+    adminMfaMode: config.admin?.mfaMode ?? null,
   };
 }
 

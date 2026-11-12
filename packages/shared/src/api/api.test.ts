@@ -94,6 +94,7 @@ describe('drive schemas', () => {
           deletedAt: null,
           faceIndexEnabled: true,
           faceIndexExpiresAt: now,
+          coverFileId: null,
         },
         file,
         { ...file, id: folderId, status: 'processing', thumbUrl: undefined },

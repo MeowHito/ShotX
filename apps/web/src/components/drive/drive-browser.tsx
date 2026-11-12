@@ -14,12 +14,13 @@ import {
   DownloadIcon,
   FolderInputIcon,
   FolderKanbanIcon,
+  ImageIcon,
+  ImageOffIcon,
   InfoIcon,
   LayoutGridIcon,
   LinkIcon,
   ListIcon,
   PencilIcon,
-  ScanFaceIcon,
   Share2Icon,
   SquareArrowOutUpRightIcon,
   Trash2Icon,
@@ -49,13 +50,14 @@ import {
   useFolderChildren,
   useMoveItems,
   useRenameItem,
+  useSetFolderCover,
   useRestoreItems,
   useTrashItems,
 } from '@/lib/drive/queries';
 import { pollOwnerZipJob, startBrowserDownload } from '@/lib/downloads/downloads';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { copyToClipboard } from '@/lib/studio/clipboard';
-import { useMe, useOwnerDownload } from '@/lib/studio/queries';
+import { useOwnerDownload } from '@/lib/studio/queries';
 import {
   arrowStep,
   clickModifier,
@@ -68,7 +70,6 @@ import { filesFromDataTransfer } from '@/lib/upload/dropped-files';
 import { Breadcrumbs } from './breadcrumbs';
 import { DetailsPanel } from './details-panel';
 import { DriveGrid } from './drive-grid';
-import { FaceIndexDialog } from './face-index-dialog';
 import { ItemCard } from './item-card';
 import { type BuildItemMenu, ItemMenuProvider, ItemMenus, type MenuEntry } from './item-menu';
 import { MoveDialog } from './move-dialog';
@@ -113,16 +114,14 @@ export function DriveBrowser({
   const usage = useDriveUsage();
   const uploads = useUploads();
   const renameItem = useRenameItem();
+  const setCover = useSetFolderCover();
   const moveItems = useMoveItems();
   const trashItems = useTrashItems();
   const restoreItems = useRestoreItems();
-  const me = useMe();
   const ownerDownload = useOwnerDownload();
-  const faceSearch = me.data?.features.faceSearch ?? false;
   const [layout, setLayout] = useLayoutPreference();
 
   const [sharing, setSharing] = useState<ShareTargetRef | null>(null);
-  const [faceIndexing, setFaceIndexing] = useState<DriveFolder | null>(null);
   const [selected, setSelected] = useState<ReadonlyMap<string, DriveItem>>(new Map());
   const [anchorId, setAnchorId] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<DriveItem | null>(null);
@@ -291,6 +290,18 @@ export function DriveBrowser({
     );
   }
 
+  async function changeCover(coverFolderId: string, fileId: string | null) {
+    try {
+      await setCover.mutateAsync({ folderId: coverFolderId, fileId });
+      setNotice({
+        kind: 'info',
+        text: fileId === null ? t('itemMenu.coverResetDone') : t('itemMenu.coverSetDone'),
+      });
+    } catch (err) {
+      setNotice({ kind: 'error', text: describe(err) });
+    }
+  }
+
   /** The menu of `targets` (one item, or the selection the item belongs to). */
   const buildMenu: BuildItemMenu = (targets, shares) => {
     const single = targets.length === 1 ? targets[0] : undefined;
@@ -408,13 +419,36 @@ export function DriveBrowser({
         onSelect: () => setMoving(targets),
       },
     ];
-    if (single?.kind === 'folder' && faceSearch) {
+    // The share page's cover (ADR 0011): a photo of this folder, or back to the first photo.
+    // Face indexing is always on (ADR 0011 decision 1), so there is no face setting here.
+    const currentFolder = listing.folder;
+    if (single?.kind === 'file' && currentFolder !== null && single.folderId === currentFolder.id) {
+      if (currentFolder.coverFileId === single.id) {
+        organize.push({
+          type: 'item',
+          id: 'cover-reset',
+          label: t('itemMenu.coverReset'),
+          icon: ImageOffIcon,
+          onSelect: () => void changeCover(currentFolder.id, null),
+        });
+      } else if (single.mediaKind === 'image') {
+        organize.push({
+          type: 'item',
+          id: 'cover-set',
+          label: t('itemMenu.coverSet'),
+          icon: ImageIcon,
+          disabled: single.status !== 'ready',
+          onSelect: () => void changeCover(currentFolder.id, single.id),
+        });
+      }
+    }
+    if (single?.kind === 'folder' && single.coverFileId !== null) {
       organize.push({
         type: 'item',
-        id: 'face-index',
-        label: t('itemMenu.faceIndex'),
-        icon: ScanFaceIcon,
-        onSelect: () => setFaceIndexing(single),
+        id: 'cover-reset',
+        label: t('itemMenu.coverReset'),
+        icon: ImageOffIcon,
+        onSelect: () => void changeCover(single.id, null),
       });
     }
     entries.push({
@@ -752,8 +786,8 @@ export function DriveBrowser({
                         focusRequest={focusTarget?.id === item.id ? focusTarget.token : undefined}
                         href={item.kind === 'folder' ? folderHref(item.id) : null}
                         subtitle={
-                          item.kind === 'folder' && item.faceIndexEnabled && faceSearch
-                            ? t('faceIndex.badge')
+                          item.kind === 'file' && listing.folder?.coverFileId === item.id
+                            ? t('itemMenu.coverBadge')
                             : undefined
                         }
                         actions={kebab}
@@ -790,16 +824,6 @@ export function DriveBrowser({
           }}
         />
         <ShareDialog target={sharing} onOpenChange={(open) => !open && setSharing(null)} />
-        {faceSearch ? (
-          <FaceIndexDialog
-            folder={faceIndexing}
-            onOpenChange={(open) => !open && setFaceIndexing(null)}
-            onDone={(text) => {
-              setFaceIndexing(null);
-              setNotice({ kind: 'info', text });
-            }}
-          />
-        ) : null}
         <MoveDialog
           open={moving !== null}
           onOpenChange={(open) => !open && setMoving(null)}

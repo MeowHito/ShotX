@@ -7,6 +7,10 @@ import {
   DRIVE_ROUTES,
   generateShareToken,
   ME_ROUTES,
+  parseShareRef,
+  sharePublicPath,
+  shareSlugCandidate,
+  slugifyEventName,
   type OwnerShare,
   PUBLIC_SHARE_ROUTES,
   type RouteContract,
@@ -34,6 +38,12 @@ export const NOT_HANDLED = Symbol('not handled');
 /** A share as the public routes see it, with the state of this (single) test browser. */
 export interface PublicShareFixture {
   token: string;
+  /** The readable ref (ADR 0011); default: slugified title. */
+  slug: string | null;
+  /** The folder's chosen cover (an item id); default: the first image. */
+  coverItemId: string | null;
+  /** Locales sent with consents (giveConsent body `locale`). */
+  consentLocales: string[];
   targetType: 'file' | 'folder';
   mode: ShareMode;
   allowDownload: boolean;
@@ -105,8 +115,12 @@ export function createPublicShare(
     Array.from({ length: itemCount }, (_, i) =>
       shareItem(`IMG_${String(i + 1).padStart(4, '0')}.jpg`),
     );
+  const title = rest.title ?? 'Bangkok Marathon 2026';
   return {
     token: generateShareToken(),
+    slug: shareSlugCandidate(slugifyEventName(title), 0),
+    coverItemId: null,
+    consentLocales: [],
     targetType: 'folder',
     mode: 'gallery',
     allowDownload: true,
@@ -164,9 +178,17 @@ export function statsFor(shareId: string): ShareStatsResponse {
   };
 }
 
-function publicShareOrFail(api: FakeApi, token: string | undefined) {
-  const share = api.publicShares.get(token ?? '');
+/** Resolves a ref (token or slug, parseShareRef) like the API; records which kind was used. */
+function publicShareOrFail(api: FakeApi, ref: string | undefined) {
+  const parsed = parseShareRef(ref ?? '');
+  const share =
+    parsed === null
+      ? undefined
+      : parsed.kind === 'token'
+        ? api.publicShares.get(parsed.token)
+        : [...api.publicShares.values()].find((s) => s.slug === parsed.slug);
   if (share === undefined) throw new Fail('NOT_FOUND');
+  api.refKinds.push(parsed?.kind ?? 'token');
   return share;
 }
 
@@ -312,10 +334,14 @@ export function handlePhase3(
         throw new Fail('LOGIN_PROVIDER_UNAVAILABLE');
       }
       const token = generateShareToken();
+      const slug = shareSlugCandidate(slugifyEventName(target.name), 0);
+      const path = sharePublicPath({ slug, token });
       const share: OwnerShare = {
         id: crypto.randomUUID(),
         token,
-        url: `https://photos.example.com/s/${token}`,
+        slug,
+        path,
+        url: `https://photos.example.com${path}`,
         target: { type: b.target.type, id: target.id, name: target.name, unavailable: false },
         mode: b.mode,
         allowDownload: b.allowDownload,
@@ -379,9 +405,13 @@ export function handlePhase3(
       }
       const loginRequired = share.requireLogin && !api.viewerSession;
       const locked = share.password !== null && !share.unlocked;
-      const cover = share.items.find((i) => i.mediaKind === 'image');
+      const cover =
+        share.items.find((i) => i.id === share.coverItemId && i.mediaKind === 'image') ??
+        share.items.find((i) => i.mediaKind === 'image');
       return {
         token: share.token,
+        slug: share.slug,
+        path: sharePublicPath(share),
         targetType: share.targetType,
         mode: share.mode,
         allowDownload: share.allowDownload,
@@ -443,7 +473,12 @@ export function handlePhase3(
     }
     case PUBLIC_SHARE_ROUTES.giveConsent: {
       const share = publicShareOrFail(api, params.token);
-      const b = body as { purpose: 'face_search' | 'face_deletion'; policyVersion: string };
+      const b = body as {
+        purpose: 'face_search' | 'face_deletion';
+        policyVersion: string;
+        locale: 'th' | 'en' | 'zh';
+      };
+      share.consentLocales.push(b.locale);
       // CONSENT_PURPOSE_GATES: face_deletion checks the token only.
       if (b.purpose === 'face_search') {
         gate(api, share);
@@ -455,7 +490,12 @@ export function handlePhase3(
       }
       if (b.purpose === 'face_search') share.consented = true;
       else share.deletionConsented = true;
-      return { purpose: b.purpose, policyVersion: b.policyVersion, acceptedAt: NOW };
+      return {
+        purpose: b.purpose,
+        policyVersion: b.policyVersion,
+        locale: b.locale,
+        acceptedAt: NOW,
+      };
     }
     case PUBLIC_SHARE_ROUTES.withdrawConsent: {
       // Token lookup only: withdrawal always works, for every purpose.

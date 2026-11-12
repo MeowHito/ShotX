@@ -2,12 +2,17 @@ import { z } from 'zod';
 import { CURSOR_MAX_LENGTH } from '../cursor-codec';
 import { DOWNLOAD_SIZES, SHARE_MODES, SHARE_STATUSES, SHARE_TARGET_TYPES } from '../domain';
 import { shareModeAllowedForTarget } from '../share/scope';
+import { shareSlugSchema } from '../share/slug';
 import { shareTokenSchema } from '../share/token';
 import { byteCountSchema, idSchema, isoDateTimeSchema } from './common';
 
 /**
  * Owner share routes (photographer). Shares of other owners are NOT_FOUND. The token is generated
- * by the API (generateShareToken); clients never choose it. Passwords are sent in plain text over
+ * by the API (generateShareToken); clients never choose it. So is the slug (ADR 0011): on create
+ * the API takes slugifyEventName(shareSlugSourceName(target type, target name)) and inserts
+ * shareSlugCandidate(base, attempt) for attempt 0, 1, ... until no unique violation on
+ * `shares_slug_unique` (at most SHARE_SLUG_MAX_ATTEMPTS, then INTERNAL_ERROR). The slug never
+ * changes afterwards (renaming the target keeps the link) and is never reused. Passwords are sent in plain text over
  * TLS and stored as argon2id hashes; they are never returned.
  */
 
@@ -67,7 +72,17 @@ export type CreateShareBody = z.input<typeof createShareBodySchema>;
 export const ownerShareSchema = z.object({
   id: idSchema,
   token: shareTokenSchema,
-  /** Absolute link: PUBLIC_BASE_URL + `/s/{token}` (shareUrl). */
+  /**
+   * The readable ref (ADR 0011). Null only for a share created by the previous api release
+   * during the deploy of migration 0012 (until the follow-up backfill).
+   */
+  slug: shareSlugSchema.nullable(),
+  /** sharePublicPath: `/s/{slug}` percent-encoded, or `/s/{token}` without a slug. */
+  path: z.string().startsWith('/s/'),
+  /**
+   * Absolute link to copy and share: PUBLIC_BASE_URL + `path` (sharePublicUrl). Changed in ADR
+   * 0011: it was the token link (shareUrl), which keeps working.
+   */
   url: z.url(),
   target: z.object({
     type: z.enum(SHARE_TARGET_TYPES),
@@ -122,8 +137,8 @@ export type ListSharesResponse = z.output<typeof listSharesResponseSchema>;
 // --- PATCH /shares/:id ----------------------------------------------------------------------------
 
 /**
- * Change settings of a share that isn't revoked (revoked: CONFLICT). The token and target never
- * change. `password: null` removes the password; a new or removed password locks out everyone who
+ * Change settings of a share that isn't revoked (revoked: CONFLICT). The token, slug and target
+ * never change. `password: null` removes the password; a new or removed password locks out everyone who
  * unlocked the old one. Switching to `face_only` follows the create rules. `requireLogin: true`
  * follows the create rule (LOGIN_PROVIDER_UNAVAILABLE without a viewer sign-in), also when the
  * share already requires login; leaving `requireLogin` out or sending `false` is always allowed,

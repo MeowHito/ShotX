@@ -10,12 +10,19 @@ import {
   type ShareItem,
   type ShareItemsResponse,
   type ShareMetaResponse,
+  type SupportedLocale,
 } from '@shotx/shared';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useShareApi } from './share-api';
 
+/**
+ * Query keys. A page shows one share: its meta is keyed by the ref of the URL (a slug or an old
+ * token, ADR 0011), everything else by `meta.token`, with which every further call is made.
+ */
 export const shareKeys = {
+  /** Every query of the page's share, whatever ref it is keyed by. */
+  page: ['share'] as const,
   all: (token: string) => ['share', token] as const,
   meta: (token: string) => ['share', token, 'meta'] as const,
   items: (token: string) => ['share', token, 'items'] as const,
@@ -23,14 +30,15 @@ export const shareKeys = {
 };
 
 /**
- * Share meta as this browser sees it. The SSR copy (fetched without the viewer's /api cookies)
- * is only a placeholder: access flags and consent come from the client fetch.
+ * Share meta as this browser sees it, by the page's ref (slug or token). The SSR copy (fetched
+ * without the viewer's /api cookies) is only a placeholder: access flags and consent come from the
+ * client fetch.
  */
-export function useShareMeta(token: string, initial: ShareMetaResponse | null) {
+export function useShareMeta(ref: string, initial: ShareMetaResponse | null) {
   const { api } = useShareApi();
   return useQuery({
-    queryKey: shareKeys.meta(token),
-    queryFn: ({ signal }) => api.call(PUBLIC_SHARE_ROUTES.meta, { params: { token }, signal }),
+    queryKey: shareKeys.meta(ref),
+    queryFn: ({ signal }) => api.call(PUBLIC_SHARE_ROUTES.meta, { params: { token: ref }, signal }),
     placeholderData: initial ?? undefined,
     staleTime: 60_000,
   });
@@ -71,9 +79,10 @@ export function useShareItems(token: string, enabled: boolean) {
   return { ...query, items };
 }
 
-export function useInvalidateShare(token: string) {
+/** Refetches the page's share (meta by its ref, items by token); `token` is kept for callers. */
+export function useInvalidateShare(_token?: string) {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: shareKeys.all(token) });
+  return () => queryClient.invalidateQueries({ queryKey: shareKeys.page });
 }
 
 export function useUnlockShare(token: string) {
@@ -101,14 +110,15 @@ export function useFaceDeletionInfo(token: string) {
 }
 
 /** Accepts the consent text of `purpose` in `policyVersion` for this share. */
-export function useGiveConsent(token: string, purpose: ConsentPurpose) {
+/** Consent, recording the language the text was shown in (ADR 0011). */
+export function useGiveConsent(token: string, purpose: ConsentPurpose, locale: SupportedLocale) {
   const { api } = useShareApi();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (policyVersion: ConsentPolicyVersion) =>
       api.call(PUBLIC_SHARE_ROUTES.giveConsent, {
         params: { token },
-        body: { purpose, policyVersion, accepted: true },
+        body: { purpose, policyVersion, locale, accepted: true },
       }),
     onSuccess: () => {
       if (purpose === 'face_deletion') {
@@ -117,12 +127,16 @@ export function useGiveConsent(token: string, purpose: ConsentPurpose) {
         );
         return queryClient.invalidateQueries({ queryKey: shareKeys.faceDeletion(token) });
       }
-      queryClient.setQueryData<ShareMetaResponse>(shareKeys.meta(token), (meta) =>
+      // The meta is keyed by the page's ref, which may be the slug.
+      const isMeta = {
+        predicate: (q: { queryKey: readonly unknown[] }) => q.queryKey[2] === 'meta',
+      };
+      queryClient.setQueriesData<ShareMetaResponse>(isMeta, (meta) =>
         meta === undefined
           ? meta
           : { ...meta, faceSearch: { ...meta.faceSearch, consented: true } },
       );
-      return queryClient.invalidateQueries({ queryKey: shareKeys.meta(token) });
+      return queryClient.invalidateQueries(isMeta);
     },
   });
 }

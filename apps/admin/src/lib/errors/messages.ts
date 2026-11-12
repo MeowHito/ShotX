@@ -6,7 +6,8 @@ import { ApiError, ContractError, NetworkError } from '../api/errors';
  * The one place that turns errors into Thai copy (keys under the `errors` namespace). Every API
  * ErrorCode has a message in `errors.codes`; codes with typed details get a more specific one:
  * PASSWORD_TOO_WEAK says why and the minimum length, RATE_LIMITED how long to wait when known.
- * EMAIL_TAKEN, LAST_ADMIN and CANNOT_MODIFY_SELF are explained in `errors.codes`.
+ * EMAIL_TAKEN, LAST_ADMIN, CANNOT_MODIFY_SELF and COVER_FILE_INVALID are explained in
+ * `errors.codes`.
  */
 
 type Errors = Messages['errors'];

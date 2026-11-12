@@ -235,7 +235,13 @@ export async function processFileCopy(
     log.info('source is withheld from face search or has a deletion pending; copy withheld');
   }
   // A withheld copy gets no outbox mark (needsFaceIndexSql), so no index.file is sent.
-  const ready = await markReady(db, copy.id, fields, new Date((deps.now ?? Date.now)()));
+  const ready = await markReady(
+    db,
+    copy.id,
+    fields,
+    new Date((deps.now ?? Date.now)()),
+    deps.faceIndexExpiryDays,
+  );
   if (ready === null) {
     const current = await loadRow(db, copy.id);
     if (current === null || current.purgeRequestedAt !== null) {

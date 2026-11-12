@@ -3,6 +3,8 @@ import { render } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import type { ReactElement, ReactNode } from 'react';
 import { vi } from 'vitest';
+import type { AdminMfaMode } from '@shotx/shared';
+import { AdminSettingsProvider } from '@/components/admin-settings';
 import { createQueryClient, Providers } from '@/components/providers';
 import { DEFAULT_LOCALE, MESSAGES, TIME_ZONE } from '@/i18n/config';
 import { createApiClient } from '@/lib/api/client';
@@ -17,7 +19,7 @@ export const TEST_PASSWORDS: PasswordUiConfig = {
 /** Renders `ui` with i18n, TanStack Query and an API client on `fetchImpl` (base `/bff`). */
 export function renderWithProviders(
   ui: ReactElement,
-  options: { fetch: typeof fetch; onSessionEnded?: () => void },
+  options: { fetch: typeof fetch; onSessionEnded?: () => void; mfaMode?: AdminMfaMode | null },
 ) {
   const onSessionEnded = options.onSessionEnded ?? vi.fn();
   // The app's client (with the session-ended handlers), without retries.
@@ -32,7 +34,9 @@ export function renderWithProviders(
         timeZone={TIME_ZONE}
       >
         <Providers apiClient={api} queryClient={queryClient} onSessionEnded={onSessionEnded}>
-          {children}
+          <AdminSettingsProvider mfaMode={options.mfaMode ?? 'off'}>
+            {children}
+          </AdminSettingsProvider>
         </Providers>
       </NextIntlClientProvider>
     );

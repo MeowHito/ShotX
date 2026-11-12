@@ -1,6 +1,5 @@
 import { adminCredentials, auditLog, authSessions, users } from '@shotx/db';
 import {
-  adminLoginResponseSchema,
   AUTH_ROUTES as R,
   apiPath,
   authProvidersResponseSchema,
@@ -14,11 +13,11 @@ import type { ExecutionContext } from '@nestjs/common';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   type AdminOpsContext,
-  createAdmin,
   resetAdminPassword,
   resetAdminTotp,
   unlockAdmin,
 } from '../cli/admin-ops';
+import { challengeStep, createTotpAdmin } from '../testing/admins';
 import { DATABASE_BACKENDS, type TestDatabase } from '../testing/database';
 import { TestApi, type TestResponse } from '../testing/harness';
 import {
@@ -51,6 +50,8 @@ for (const backend of DATABASE_BACKENDS) {
       providers = await FakeOidcProviders.create(() => clockNow());
       api = await TestApi.start(database.db, {
         env: shotxEnv({
+          // The ADR 0010 TOTP flow (ADMIN_MFA_MODE=off has its own suite).
+          ADMIN_MFA_MODE: 'totp',
           AUTH_LOGIN_RATE_PER_IP: '5',
           ADMIN_LOGIN_RATE_PER_ACCOUNT: '4',
           ADMIN_LOGIN_RATE_PER_IP: '6',
@@ -120,6 +121,7 @@ for (const backend of DATABASE_BACKENDS) {
           oidc: ['line', 'google'],
           devLogin: false,
           adminLogin: true,
+          adminMfaMode: 'totp',
         });
       });
     });
@@ -445,7 +447,7 @@ for (const backend of DATABASE_BACKENDS) {
         api.db.select().from(auditLog).where(eq(auditLog.action, action));
 
       it('creates an admin (CLI), confirms TOTP with the first code, issues pwd+otp tokens', async () => {
-        const enrolment = await createAdmin(ops(), {
+        const enrolment = await createTotpAdmin(ops(), {
           email: 'Ops@Example.com',
           name: 'Ops',
           password,
@@ -466,7 +468,7 @@ for (const backend of DATABASE_BACKENDS) {
 
         const step1 = await login('ops@example.com', password);
         expect(step1.status).toBe(200);
-        const { challengeId } = adminLoginResponseSchema.parse(step1.body);
+        const { challengeId } = challengeStep(step1.body);
         // No token of any kind before the TOTP step.
         expect(JSON.stringify(step1.body)).not.toMatch(/accessToken|refreshToken/);
 
@@ -513,9 +515,7 @@ for (const backend of DATABASE_BACKENDS) {
         expect(decodeJwt(refreshed.body.accessToken).amr).toEqual(['pwd', 'otp', 'mfa']);
 
         // Replay: the same code (same step) on a new challenge is refused.
-        const again = adminLoginResponseSchema.parse(
-          (await login('ops@example.com', password)).body,
-        );
+        const again = challengeStep((await login('ops@example.com', password)).body);
         const replay = await mfa(again.challengeId, code(enrolment.secretBase32));
         expect(replay.body).toMatchObject({ code: 'MFA_INVALID' });
         expect(
@@ -524,7 +524,7 @@ for (const backend of DATABASE_BACKENDS) {
       });
 
       it('answers unknown emails and wrong passwords alike, and audits both', async () => {
-        await createAdmin(ops(), { email: 'known@example.com', name: 'Known', password });
+        await createTotpAdmin(ops(), { email: 'known@example.com', name: 'Known', password });
         const unknown = await login('nobody@example.com', password);
         const wrong = await login('known@example.com', 'not the password at all');
         for (const res of [unknown, wrong]) {
@@ -544,7 +544,7 @@ for (const backend of DATABASE_BACKENDS) {
       });
 
       it('locks known and unknown accounts alike after the threshold, until the CLI unlocks', async () => {
-        await createAdmin(ops(), { email: 'lock@example.com', name: 'Lock', password });
+        await createTotpAdmin(ops(), { email: 'lock@example.com', name: 'Lock', password });
         for (const email of ['lock@example.com', 'nobody-lock@example.com']) {
           for (let i = 0; i < 3; i++) {
             expect((await login(email, 'wrong password!!')).body).toMatchObject({
@@ -577,7 +577,7 @@ for (const backend of DATABASE_BACKENDS) {
       });
 
       it('counts every attempt per account and per IP before evaluating it', async () => {
-        await createAdmin(ops(), { email: 'window@example.com', name: 'W', password });
+        await createTotpAdmin(ops(), { email: 'window@example.com', name: 'W', password });
         const ip = nextIp();
         // Successes count too: 4 attempts per account window.
         for (let i = 0; i < 4; i++) {
@@ -593,7 +593,7 @@ for (const backend of DATABASE_BACKENDS) {
       });
 
       it('evaluates at most the limit of a burst of parallel wrong passwords', async () => {
-        const { userId } = await createAdmin(ops(), {
+        const { userId } = await createTotpAdmin(ops(), {
           email: 'burst-pw@example.com',
           name: 'B',
           password,
@@ -612,12 +612,12 @@ for (const backend of DATABASE_BACKENDS) {
       });
 
       it('evaluates at most the limit of a burst of parallel wrong codes', async () => {
-        const enrolment = await createAdmin(ops(), {
+        const enrolment = await createTotpAdmin(ops(), {
           email: 'burst-otp@example.com',
           name: 'B',
           password,
         });
-        const { challengeId } = adminLoginResponseSchema.parse(
+        const { challengeId } = challengeStep(
           (await login('burst-otp@example.com', password)).body,
         );
         const right = code(enrolment.secretBase32);
@@ -639,7 +639,7 @@ for (const backend of DATABASE_BACKENDS) {
       });
 
       it('never leaves a refusal without an expiring lock (double-submit race)', async () => {
-        const { userId } = await createAdmin(ops(), {
+        const { userId } = await createTotpAdmin(ops(), {
           email: 'race@example.com',
           name: 'R',
           password,
@@ -691,14 +691,12 @@ for (const backend of DATABASE_BACKENDS) {
       });
 
       it('admin guard: needs a live session, refused after a reset or lockout', async () => {
-        const enrolment = await createAdmin(ops(), {
+        const enrolment = await createTotpAdmin(ops(), {
           email: 'guard@example.com',
           name: 'G',
           password,
         });
-        const { challengeId } = adminLoginResponseSchema.parse(
-          (await login('guard@example.com', password)).body,
-        );
+        const { challengeId } = challengeStep((await login('guard@example.com', password)).body);
         const tokens = authTokenResponseSchema.parse(
           (await mfa(challengeId, code(enrolment.secretBase32))).body,
         );
@@ -726,9 +724,13 @@ for (const backend of DATABASE_BACKENDS) {
       });
 
       it('refuses a first sign-in after ADMIN_TOTP_ENROLMENT_TTL_SECONDS until reset-totp', async () => {
-        const first = await createAdmin(ops(), { email: 'late@example.com', name: 'L', password });
+        const first = await createTotpAdmin(ops(), {
+          email: 'late@example.com',
+          name: 'L',
+          password,
+        });
         api.clock.advance(7 * 86_400_000 + 1000);
-        const c1 = adminLoginResponseSchema.parse((await login('late@example.com', password)).body);
+        const c1 = challengeStep((await login('late@example.com', password)).body);
         const refused = await mfa(c1.challengeId, code(first.secretBase32));
         expect(refused.status).toBe(401);
         expect(refused.body).toMatchObject({ code: 'MFA_INVALID' });
@@ -744,19 +746,21 @@ for (const backend of DATABASE_BACKENDS) {
         expect(cred?.totpConfirmedAt).toBeNull();
 
         const second = await resetAdminTotp(ops(), 'late@example.com');
-        const c2 = adminLoginResponseSchema.parse((await login('late@example.com', password)).body);
+        const c2 = challengeStep((await login('late@example.com', password)).body);
         expect((await mfa(c2.challengeId, code(second.secretBase32))).status).toBe(200);
         // Once confirmed, the enrolment age no longer matters.
         api.clock.advance(8 * 86_400_000);
-        const c3 = adminLoginResponseSchema.parse((await login('late@example.com', password)).body);
+        const c3 = challengeStep((await login('late@example.com', password)).body);
         expect((await mfa(c3.challengeId, code(second.secretBase32))).status).toBe(200);
       });
 
       it('resets TOTP (new secret, unconfirmed, sessions revoked) and passwords via the CLI', async () => {
-        const first = await createAdmin(ops(), { email: 'reset@example.com', name: 'R', password });
-        const { challengeId } = adminLoginResponseSchema.parse(
-          (await login('reset@example.com', password)).body,
-        );
+        const first = await createTotpAdmin(ops(), {
+          email: 'reset@example.com',
+          name: 'R',
+          password,
+        });
+        const { challengeId } = challengeStep((await login('reset@example.com', password)).body);
         const tokens = authTokenResponseSchema.parse(
           (await mfa(challengeId, code(first.secretBase32))).body,
         );
@@ -771,9 +775,7 @@ for (const backend of DATABASE_BACKENDS) {
           ).body,
         ).toMatchObject({ code: 'REFRESH_TOKEN_INVALID' });
         api.clock.advance(31_000);
-        const c2 = adminLoginResponseSchema.parse(
-          (await login('reset@example.com', password)).body,
-        );
+        const c2 = challengeStep((await login('reset@example.com', password)).body);
         expect((await mfa(c2.challengeId, code(first.secretBase32))).body).toMatchObject({
           code: 'MFA_INVALID',
         });
@@ -793,10 +795,14 @@ for (const backend of DATABASE_BACKENDS) {
           resetAdminPassword(ops(), 'reset@example.com', 'xx reset@example.com xx'),
         ).rejects.toThrow(/must not contain the email/);
         await expect(
-          createAdmin(ops(), { email: 'policy@example.com', name: 'P', password: 'qwertyuiop' }),
+          createTotpAdmin(ops(), {
+            email: 'policy@example.com',
+            name: 'P',
+            password: 'qwertyuiop',
+          }),
         ).rejects.toThrow(/at least/); // every common-list entry is shorter than the admin minimum;
         await expect(
-          createAdmin(ops(), { email: 'RESET@example.com', name: 'dup', password }),
+          createTotpAdmin(ops(), { email: 'RESET@example.com', name: 'dup', password }),
         ).rejects.toThrow(/already exists/);
         const ops2 = await api.db
           .select()
@@ -860,7 +866,12 @@ describe('/auth in other modes', () => {
     try {
       const headers = { 'x-shotx-bff-key': TEST_BFF_KEY };
       const providers = await api.request('GET', apiPath(R.providers), { headers });
-      expect(providers.body).toEqual({ oidc: ['google'], devLogin: true, adminLogin: true });
+      expect(providers.body).toEqual({
+        oidc: ['google'],
+        devLogin: true,
+        adminLogin: true,
+        adminMfaMode: 'off',
+      });
       const unavailable = await api.request('POST', apiPath(R.oidcStart, { provider: 'line' }), {
         headers,
         body: { redirectUri: 'http://localhost:3000/auth/callback' },

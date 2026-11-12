@@ -105,7 +105,7 @@ describe('UsersTable', () => {
         currentAdminId={SELF_ID}
         onAction={vi.fn()}
       />,
-      { fetch: vi.fn() },
+      { fetch: vi.fn(), mfaMode: 'totp' },
     );
     expect(
       within(rowOf('pending.admin@example.test')).getByText('ยังไม่ได้ตั้งแอปยืนยันตัวตน'),
@@ -114,6 +114,18 @@ describe('UsersTable', () => {
     expect(
       within(rowOf('photo@example.com')).queryByText('ยังไม่ได้ตั้งแอปยืนยันตัวตน'),
     ).toBeNull();
+  });
+
+  it('hides the authenticator flag when admins sign in without TOTP (mode off)', () => {
+    renderWithProviders(
+      <UsersTable users={[pendingAdmin]} currentAdminId={SELF_ID} onAction={vi.fn()} />,
+      { fetch: vi.fn(), mfaMode: 'off' },
+    );
+    expect(screen.queryByText('ยังไม่ได้ตั้งแอปยืนยันตัวตน')).not.toBeInTheDocument();
+    // The temporary-password flag still shows.
+    expect(
+      within(rowOf('pending.admin@example.test')).getByText('รหัสชั่วคราว'),
+    ).toBeInTheDocument();
   });
 
   it('offers enable for a disabled account and no reset without a password', () => {

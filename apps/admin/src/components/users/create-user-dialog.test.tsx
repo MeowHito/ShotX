@@ -189,11 +189,22 @@ describe('CreateUserDialog', () => {
     await user.click(screen.getByRole('button', { name: 'open' }));
     await fill(user, 'second.admin@example.com', 'Second');
     await user.selectOptions(screen.getByLabelText('บทบาท'), 'admin');
-    expect(screen.getByText(/ต้องตั้งแอปยืนยันตัวตนเมื่อเข้าสู่ระบบครั้งแรก/)).toBeInTheDocument();
+    // ADMIN_MFA_MODE=off (the default): no authenticator wording.
+    expect(screen.getByText(/^จัดการผู้ใช้และดูข้อมูลทั้งระบบ เปลี่ยนบทบาท/)).toBeInTheDocument();
+    expect(screen.queryByText(/แอปยืนยันตัวตน/)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'สุ่มรหัสผ่าน' }));
     await user.click(screen.getByRole('button', { name: 'สร้างผู้ใช้' }));
     await screen.findByTestId('one-time-password');
     expect(api.callsOf(ADMIN_ROUTES.createUser)[0]!.body).toMatchObject({ role: 'admin' });
     expect(api.users[0]).toMatchObject({ role: 'admin', totpEnrolled: false });
+  });
+
+  it('tells that a new admin enrols TOTP at first sign-in when mode is totp', async () => {
+    const user = userEvent.setup();
+    const api = new FakeAdminApi();
+    renderWithProviders(<Harness />, { fetch: api.fetch, mfaMode: 'totp' });
+    await user.click(screen.getByRole('button', { name: 'open' }));
+    await user.selectOptions(screen.getByLabelText('บทบาท'), 'admin');
+    expect(screen.getByText(/ต้องตั้งแอปยืนยันตัวตนเมื่อเข้าสู่ระบบครั้งแรก/)).toBeInTheDocument();
   });
 });

@@ -1,6 +1,7 @@
 import { getTranslations } from 'next-intl/server';
 import { SignInFlow } from '@/components/auth/sign-in-flow';
 import { safeNextPath } from '@/lib/auth/session';
+import { adminMfaMode } from '@/lib/server/auth';
 
 export default async function LoginPage({
   searchParams,
@@ -12,6 +13,7 @@ export default async function LoginPage({
   const params = await searchParams;
   const next = safeNextPath(typeof params.next === 'string' ? params.next : null);
   const notice = params.error === 'session' ? 'session' : null;
+  const mfaMode = await adminMfaMode();
 
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center bg-sidebar px-4 py-12">
@@ -25,7 +27,9 @@ export default async function LoginPage({
         <div className="space-y-1.5">
           <p className="eyebrow">{t('eyebrow')}</p>
           <h1 className="text-2xl">{t('title')}</h1>
-          <p className="text-sm text-muted-foreground">{t('subtitle')}</p>
+          <p className="text-sm text-muted-foreground">
+            {mfaMode === 'totp' ? t('subtitleTotp') : t('subtitle')}
+          </p>
         </div>
         <SignInFlow next={next} initialNotice={notice} />
       </div>

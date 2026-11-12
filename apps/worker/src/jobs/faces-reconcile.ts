@@ -1,4 +1,4 @@
-import { faces } from '@shotx/db';
+import { faces, faceVectors } from '@shotx/db';
 import {
   type Clock,
   deleteOrphans,
@@ -54,24 +54,53 @@ export function knownFaceIdsFrom(db: Db): KnownFaceIds {
 }
 
 /**
- * Photographers who may have a collection: ever confirmed a face index (the confirmation is kept
- * when indexing is turned off) or have faces rows. Ordered by id for paging.
+ * One page of photographers who may have a collection, by user id (`last`: the cursor for the
+ * next page, null when there are no more). Candidates are drive owners (a folder or a faces row;
+ * no one else can index). ADR 0011 decision 1: face_index_informed_at is no longer written, so a
+ * collection is assumed when the owner has
+ * - a folder whose face index is or was on (`face_index_enabled`, or an expiry: migration 0012
+ *   gave every folder one; `face_index_informed_at` still counts as the record of older
+ *   confirmations), or
+ * - faces rows, or
+ * - face_vectors rows in their collection (self-hosted provider, ADR 0009): orphans can outlive
+ *   every row above. The collection id comes from faceCollectionId (ADR 0001), never written by
+ *   hand; with Rekognition the table is empty and this adds nobody.
  */
-async function photographersWithCollections(
+export async function photographersWithCollections(
   db: Db,
   after: string,
   limit: number,
-): Promise<string[]> {
-  const found = await rows<{ id: string }>(
+): Promise<{ ids: string[]; last: string | null }> {
+  const page = await rows<{ id: string; indexed: boolean }>(
     db,
-    sql`SELECT "u"."id" FROM "users" AS "u"
+    sql`SELECT "u"."id",
+        (EXISTS (SELECT 1 FROM "folders" AS "fo" WHERE "fo"."owner_id" = "u"."id"
+            AND ("fo"."face_index_enabled" OR "fo"."face_index_expires_at" IS NOT NULL
+              OR "fo"."face_index_informed_at" IS NOT NULL))
+          OR EXISTS (SELECT 1 FROM "faces" AS "fa" WHERE "fa"."owner_id" = "u"."id")) AS "indexed"
+      FROM "users" AS "u"
       WHERE "u"."id" > ${after}
-        AND (EXISTS (SELECT 1 FROM "folders" AS "fo" WHERE "fo"."owner_id" = "u"."id" AND "fo"."face_index_informed_at" IS NOT NULL)
+        AND (EXISTS (SELECT 1 FROM "folders" AS "fo" WHERE "fo"."owner_id" = "u"."id")
           OR EXISTS (SELECT 1 FROM "faces" AS "fa" WHERE "fa"."owner_id" = "u"."id"))
       ORDER BY "u"."id"
       LIMIT ${limit}`,
   );
-  return found.map((r) => r.id);
+  const last = page.at(-1)?.id ?? null;
+  const unsure = new Map(
+    page.filter((r) => !r.indexed).map((r) => [faceCollectionId(r.id), r.id] as const),
+  );
+  const withVectors = new Set<string>();
+  if (unsure.size > 0) {
+    const found = await db
+      .selectDistinct({ collectionId: faceVectors.collectionId })
+      .from(faceVectors)
+      .where(inArray(faceVectors.collectionId, [...unsure.keys()]));
+    for (const { collectionId } of found) {
+      const id = unsure.get(collectionId);
+      if (id !== undefined) withVectors.add(id);
+    }
+  }
+  return { ids: page.filter((r) => r.indexed || withVectors.has(r.id)).map((r) => r.id), last };
 }
 
 /**
@@ -113,10 +142,10 @@ export async function runFacesReconcile(
       result.complete = false;
       break;
     }
-    const batch = await photographersWithCollections(ctx.db, cursor, ctx.batchSize);
-    if (batch.length === 0) break;
-    cursor = batch.at(-1)!;
-    for (const photographerId of batch) {
+    const page = await photographersWithCollections(ctx.db, cursor, ctx.batchSize);
+    if (page.last === null) break;
+    cursor = page.last;
+    for (const photographerId of page.ids) {
       if (!mayContinue(ctx)) {
         result.complete = false;
         return result;

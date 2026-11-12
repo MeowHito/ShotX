@@ -139,11 +139,13 @@ export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
  *   proxy must refuse them like `public` and `webhook`), no cookies, no Origin check.
  * Every server-side call from web or admin (any RouteAuth) sends BFF_KEY_HEADER and the end
  * user's IP in BFF_CLIENT_IP_HEADER; the API trusts that IP only with a valid key.
- * - `admin` (ADR 0010): an admins-pool token (role `admin`) with `pwd` and `otp` in `amr`, sent by
- *   the admin app's BFF with AUTH_ADMIN_BFF_KEY (`bffKey: 'admins'`; any other key or none:
- *   UNAUTHENTICATED). Without the methods: MFA_REQUIRED. Every `/admin/*` route.
+ * - `admin` (ADR 0010): an admins-pool token (role `admin`) whose `amr` has the methods
+ *   ADMIN_MFA_MODE requires (adminRequiredAmr: `pwd` with `off`, the default since ADR 0011
+ *   decision 4; `pwd` and `otp` with `totp`), sent by the admin app's BFF with AUTH_ADMIN_BFF_KEY
+ *   (`bffKey: 'admins'`; any other key or none: UNAUTHENTICATED). Without the methods:
+ *   MFA_REQUIRED. Every `/admin/*` route. The guard reads the mode from the api's config
+ *   (hasRequiredAmr(pool, amr, config.admin.mfaMode)), never from the token.
  * Admins (admins-pool tokens) use only `/admin/*` routes; anywhere else they are UNAUTHENTICATED.
- * Admins-pool tokens without `otp` in `amr` are MFA_REQUIRED on admin routes (ADMIN_REQUIRED_AMR).
  * Every `photographer`, `user` and `admin` route answers ACCOUNT_DISABLED for a disabled account,
  * and every `photographer` and `user` route except PASSWORD_CHANGE_ALLOWED_ROUTES answers
  * PASSWORD_CHANGE_REQUIRED for a restricted session (PASSWORD_CHANGE_CLAIM).
@@ -289,6 +291,7 @@ export const DRIVE_ROUTES = {
       ErrorCode.NAME_TAKEN,
       ErrorCode.INVALID_MOVE,
       ErrorCode.FOLDER_DEPTH_EXCEEDED,
+      ErrorCode.COVER_FILE_INVALID,
     ),
   },
   /** Rename and/or move a file. */
@@ -339,8 +342,8 @@ export const DRIVE_ROUTES = {
     errors: signedIn(),
   },
   /**
-   * Added (Phase 3): turn face indexing of a folder subtree on (PDPA confirmation required),
-   * extend it, or turn it off. See updateFaceIndexBodySchema.
+   * Added (Phase 3): extend face indexing of a folder subtree (on by default since ADR 0011, no
+   * confirmation), or turn it off. See updateFaceIndexBodySchema.
    */
   updateFaceIndex: {
     method: 'PATCH',
@@ -1017,7 +1020,10 @@ export const AUTH_ROUTES = {
     body: logoutBodySchema,
     errors: errors(ErrorCode.NOT_FOUND),
   },
-  /** Answers the first step (ADMIN_SIGN_IN_STEPS); tokens come only from adminMfa. */
+  /**
+   * Answers the first step (ADMIN_SIGN_IN_STEPS). ADMIN_MFA_MODE=totp: tokens come only from
+   * adminMfa. ADMIN_MFA_MODE=off (ADR 0011): `signed_in` with tokens, or `change_password`.
+   */
   adminLogin: {
     method: 'POST',
     path: '/auth/admin/login',
@@ -1028,7 +1034,10 @@ export const AUTH_ROUTES = {
     response: adminLoginResponseSchema,
     errors: errors(ErrorCode.NOT_FOUND, ErrorCode.INVALID_CREDENTIALS, ErrorCode.ACCOUNT_DISABLED),
   },
-  /** Added (ADR 0010): the `change_password` step of a temporary admin password. */
+  /**
+   * Added (ADR 0010): the `change_password` step of a temporary admin password. With
+   * ADMIN_MFA_MODE=off it answers `signed_in` (ADR 0011).
+   */
   adminChangePassword: {
     method: 'POST',
     path: '/auth/admin/password',
@@ -1046,7 +1055,8 @@ export const AUTH_ROUTES = {
   },
   /**
    * The `totp` or `enrol_totp` step. Answers admins-pool tokens with `amr` ["pwd", "otp", "mfa"],
-   * after storing what earlier steps changed (ADMIN_SIGN_IN_STEPS).
+   * after storing what earlier steps changed (ADMIN_SIGN_IN_STEPS). Unused with
+   * ADMIN_MFA_MODE=off: no challenge is ever for it, so it answers LOGIN_STATE_INVALID.
    */
   adminMfa: {
     method: 'POST',

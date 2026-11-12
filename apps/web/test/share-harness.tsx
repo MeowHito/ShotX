@@ -1,3 +1,4 @@
+import type { Locale } from '@/i18n/config';
 import type { ViewerLoginOptions } from '@/lib/auth/viewer-login';
 import { TURNSTILE_SCRIPT_URL } from '@shotx/shared';
 import { vi } from 'vitest';
@@ -165,6 +166,7 @@ export function renderSharePage(
     faceConfig?: ClientFaceConfig;
     loadTurnstile?: TurnstileLoader;
     viewerLogin?: ViewerLoginOptions;
+    locale?: Locale;
   } = {},
 ) {
   const { scenario, canvas, detect, loadDetector, rendered, toJpeg } = faceHarness(
@@ -176,7 +178,7 @@ export function renderSharePage(
   );
   const view = renderWithProviders(
     <SharePage
-      token={token}
+      shareRef={token}
       initialMeta={null}
       signedIn={options.signedIn ?? false}
       viewerLogin={options.viewerLogin}
@@ -198,7 +200,7 @@ export function renderSharePage(
         },
       }}
     />,
-    { api: apiClientFor(fake.fetch) },
+    { api: apiClientFor(fake.fetch), locale: options.locale },
   );
   return { ...view, scenario, detect, loadDetector, startDownload, mediaFetch, rendered, toJpeg };
 }

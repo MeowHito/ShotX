@@ -5,6 +5,7 @@ import {
   accessTokenClaimsSchema,
   accessTokenClaimsSchemaFor,
   type AuthMethod,
+  type AdminMfaMode,
   type AuthPool,
   hasRequiredAmr,
   PASSWORD_CHANGE_CLAIM,
@@ -24,6 +25,14 @@ import { type Clock, systemClock, type TokenVerifier, type VerifiedIdentity } fr
 export const ACCESS_TOKEN_TYPE = 'at+jwt';
 
 const unauthenticated = () => new ApiError('UNAUTHENTICATED', 'Invalid or expired token');
+
+/**
+ * ADMIN_MFA_MODE of the config (ADR 0011 decision 4); `totp`, the stricter rule, when admin
+ * sign-in is off (no admins-pool token is issued or accepted then anyway).
+ */
+function mfaModeOf(config: ShotxAuthConfig): AdminMfaMode {
+  return config.admin?.mfaMode ?? 'totp';
+}
 
 /** The pools a config issues tokens for (admins only when the admins pool is on). */
 function poolEntries(config: ShotxAuthConfig): [AuthPool, PoolTokenConfig][] {
@@ -118,7 +127,9 @@ export class ShotxTokenVerifier implements TokenVerifier {
       throw unauthenticated();
     }
 
-    const strict = accessTokenClaimsSchemaFor(this.stage, pool).safeParse(payload);
+    const strict = accessTokenClaimsSchemaFor(this.stage, pool, {
+      adminMfaMode: mfaModeOf(this.config),
+    }).safeParse(payload);
     let claims;
     if (strict.success) {
       claims = strict.data;
@@ -193,7 +204,7 @@ export class ShotxTokenIssuer {
     if (signing === undefined || poolConfig === null || !this.poolEnabled(pool)) {
       throw new Error(`The ${pool} pool does not issue tokens here`);
     }
-    if (!hasRequiredAmr(pool, input.amr)) {
+    if (!hasRequiredAmr(pool, input.amr, mfaModeOf(this.config))) {
       throw new Error(`Refusing to issue a ${pool} token without the required amr`);
     }
     if (!isAuthSubjectInPool(input.subject, pool)) {
@@ -228,7 +239,7 @@ export class ShotxTokenIssuer {
       .setJti(randomUUID())
       .sign(signing.key);
     // The issuer checks its own output against the contract the verifier applies.
-    accessTokenClaimsSchemaFor(this.stage, pool).parse({
+    accessTokenClaimsSchemaFor(this.stage, pool, { adminMfaMode: mfaModeOf(this.config) }).parse({
       ...claims,
       iss: poolConfig.issuer,
       aud: poolConfig.audience,

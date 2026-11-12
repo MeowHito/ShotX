@@ -464,6 +464,20 @@ describe.skipIf(!hasCompose)('docker compose config', () => {
     expect(() => loadShotxAuthConfig(withSamples(env('api')))).not.toThrow();
   });
 
+  it('signs admins in without TOTP at launch, and needs the TOTP key only with totp', () => {
+    const api = withSamples(env('api'));
+    expect(api.ADMIN_MFA_MODE).toBe('off');
+    expect(api).not.toHaveProperty('ADMIN_TOTP_ENCRYPTION_KEY');
+    expect(() => loadShotxAuthConfig(api)).not.toThrow();
+    expect(() => loadShotxAuthConfig({ ...api, ADMIN_MFA_MODE: 'totp' })).toThrow(
+      /ADMIN_TOTP_ENCRYPTION_KEY/,
+    );
+    const key = secretSamples().ADMIN_TOTP_ENCRYPTION_KEY ?? '';
+    expect(() =>
+      loadShotxAuthConfig({ ...api, ADMIN_MFA_MODE: 'totp', ADMIN_TOTP_ENCRYPTION_KEY: key }),
+    ).not.toThrow();
+  });
+
   it('accepts SES and LINE/Google once switched on, and refuses a leftover REPLACE_ME', () => {
     const samples = secretSamples();
     const on = (s: string) => ({

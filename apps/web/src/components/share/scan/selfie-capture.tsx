@@ -22,9 +22,37 @@ function attach(video: HTMLVideoElement | null, stream: MediaStream | null) {
 }
 
 /**
- * Takes one selfie: a live front-camera preview via getUserMedia where it works, otherwise
- * `<input type="file" accept="image/*" capture="user">` (LINE and Facebook in-app browsers, or a
- * refused permission), which opens the phone's camera app. "Choose from gallery" only when
+ * The face outline inside the round frame: the size a face should have for the quality gate
+ * (about half the frame's width), so nobody needs written tips.
+ */
+function FaceGuide() {
+  return (
+    <svg
+      viewBox="0 0 100 100"
+      className="pointer-events-none absolute inset-0 size-full"
+      aria-hidden
+      data-testid="face-guide"
+    >
+      <ellipse
+        cx="50"
+        cy="47"
+        rx="25"
+        ry="33"
+        fill="none"
+        stroke="white"
+        strokeOpacity="0.9"
+        strokeWidth="1.2"
+        strokeDasharray="3 2.5"
+      />
+    </svg>
+  );
+}
+
+/**
+ * Takes one selfie (ADR 0011): the front camera starts by itself in a round frame with a face
+ * outline, one tap takes the photo. Where getUserMedia doesn't work (LINE and Facebook in-app
+ * browsers, a refused permission) it falls back to `<input type="file" accept="image/*"
+ * capture="user">`, which opens the phone's camera app. "Choose from gallery" only when
  * `allowGallery` (gallery-mode shares). The image goes straight to `onCaptured`, in memory.
  */
 export function SelfieCapture({
@@ -43,6 +71,7 @@ export function SelfieCapture({
   const [camera, setCamera] = useState<CameraState>('idle');
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const startedRef = useRef(false);
 
   useEffect(() => () => stopStream(streamRef.current), []);
 
@@ -61,6 +90,14 @@ export function SelfieCapture({
     setCamera('live');
     attach(videoRef.current, stream);
   }
+
+  // Start the camera right away (consent was just given); once per mount, also in Strict Mode.
+  useEffect(() => {
+    if (!liveSupported || startedRef.current) return;
+    startedRef.current = true;
+    void start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveSupported]);
 
   useEffect(() => {
     // The <video> may mount after the stream arrives; attach it then.
@@ -89,24 +126,34 @@ export function SelfieCapture({
   }
 
   const showFallback = !liveSupported || camera === 'blocked';
+  const showFrame = camera === 'live' || camera === 'starting';
 
   return (
-    <div className="space-y-3">
-      <p className="text-sm font-medium">{t('guidance')}</p>
-      {camera === 'live' || camera === 'starting' ? (
-        <div className="space-y-3">
-          <video
-            ref={videoRef}
-            aria-label={t('preview')}
-            className="aspect-[3/4] w-full -scale-x-100 rounded-xl bg-black object-cover"
-            autoPlay
-            muted
-            playsInline
-          />
-          <Button size="lg" className="w-full" onClick={takePhoto} disabled={camera !== 'live'}>
-            <CameraIcon aria-hidden />
-            {t('takePhoto')}
-          </Button>
+    <div className="space-y-4">
+      {showFrame ? (
+        <div className="space-y-5">
+          <div className="relative mx-auto aspect-square w-full max-w-[17rem] overflow-hidden rounded-full bg-black shadow-float ring-4 ring-primary/40">
+            <video
+              ref={videoRef}
+              aria-label={t('preview')}
+              className="absolute inset-0 size-full -scale-x-100 object-cover"
+              autoPlay
+              muted
+              playsInline
+            />
+            <FaceGuide />
+          </div>
+          <div className="flex justify-center">
+            <Button
+              size="lg"
+              className="h-16 w-16 rounded-full p-0"
+              onClick={takePhoto}
+              disabled={camera !== 'live' || busy}
+              aria-label={t('takePhoto')}
+            >
+              <CameraIcon className="size-7" aria-hidden />
+            </Button>
+          </div>
         </div>
       ) : null}
       {liveSupported && camera === 'idle' ? (

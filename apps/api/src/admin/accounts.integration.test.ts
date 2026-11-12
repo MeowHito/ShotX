@@ -11,8 +11,6 @@ import {
 } from '@shotx/db';
 import {
   ADMIN_ROUTES as A,
-  adminChangePasswordResponseSchema,
-  adminLoginResponseSchema,
   adminUserSchema,
   apiPath,
   AUTH_ROUTES as AR,
@@ -38,7 +36,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { base32Decode, hotp, totpStep } from '../auth/totp';
 import { startSession } from '../auth/sessions';
 import { ShotxTokenIssuer } from '../auth/shotx-tokens';
-import { type AdminOpsContext, createAdmin } from '../cli/admin-ops';
+import type { AdminOpsContext } from '../cli/admin-ops';
+import { challengeStep, changePasswordChallenge, createTotpAdmin } from '../testing/admins';
 import { DATABASE_BACKENDS, type TestDatabase } from '../testing/database';
 import { OFFLINE_ACCOUNTS_ENV } from '../testing/fakes';
 import { TestApi, type TestResponse } from '../testing/harness';
@@ -62,6 +61,8 @@ const email = (label: string) => `${label}-${emailCounter++}@example.test`;
 
 const ENV = shotxEnv({
   ...OFFLINE_ACCOUNTS_ENV,
+  // These suites use the TOTP flow; ADMIN_MFA_MODE=off has its own tests.
+  ADMIN_MFA_MODE: 'totp',
   PHOTOGRAPHER_LOGIN_LOCKOUT_THRESHOLD: '3',
   PHOTOGRAPHER_LOGIN_RATE_PER_ACCOUNT: '20',
   PHOTOGRAPHER_LOGIN_RATE_PER_IP: '6',
@@ -97,7 +98,7 @@ function helpers(get: () => TestApi) {
     api().clock.advance(31_000);
     const login = await bff(apiPath(AR.adminLogin), { email: address, password });
     expect(login.status).toBe(200);
-    const step = adminLoginResponseSchema.parse(login.body);
+    const step = challengeStep(login.body);
     expect(step.step).toBe('totp');
     const mfa = await bff(apiPath(AR.adminMfa), {
       challengeId: step.challengeId,
@@ -110,7 +111,11 @@ function helpers(get: () => TestApi) {
   /** An admin made by the operator CLI (must_change_password false), signed in. */
   async function cliAdmin(label = 'ops') {
     const address = email(label);
-    const enrolment = await createAdmin(ops(), { email: address, name: label, password: ADMIN_PW });
+    const enrolment = await createTotpAdmin(ops(), {
+      email: address,
+      name: label,
+      password: ADMIN_PW,
+    });
     const tokens = await adminSignIn(address, ADMIN_PW, enrolment.secretBase32);
     return {
       id: enrolment.userId,
@@ -337,7 +342,11 @@ for (const backend of DATABASE_BACKENDS) {
         }
         // The CLI too.
         await expect(
-          createAdmin(h.ops(), { email: address.toUpperCase(), name: 'Cli', password: ADMIN_PW }),
+          createTotpAdmin(h.ops(), {
+            email: address.toUpperCase(),
+            name: 'Cli',
+            password: ADMIN_PW,
+          }),
         ).rejects.toThrow(/already exists/);
       });
 
@@ -639,6 +648,7 @@ for (const backend of DATABASE_BACKENDS) {
           pool: 'users',
           now: api.clock.now(),
           ttlSeconds: 3600,
+          amr: ['fed'],
         });
         const { token } = await issuer.accessToken('users', {
           subject: 'google:legacy-1',
@@ -894,7 +904,7 @@ for (const backend of DATABASE_BACKENDS) {
         const adminAuth = await h.admin(other.token, 'GET', apiPath(A.listUsers));
         expect(adminAuth.status).toBe(401);
         api.clock.advance(31_000);
-        const step1 = adminLoginResponseSchema.parse(
+        const step1 = challengeStep(
           (
             await h.bff(apiPath(AR.adminLogin), {
               email: other.email,
@@ -903,7 +913,7 @@ for (const backend of DATABASE_BACKENDS) {
           ).body,
         );
         expect(step1.step).toBe('change_password');
-        const step2 = adminChangePasswordResponseSchema.parse(
+        const step2 = changePasswordChallenge(
           (
             await h.bff(apiPath(AR.adminChangePassword), {
               challengeId: step1.challengeId,
@@ -949,7 +959,7 @@ for (const backend of DATABASE_BACKENDS) {
 
         const login = await h.bff(apiPath(AR.adminLogin), { email: address, password: ADMIN_PW });
         expect(login.status).toBe(200);
-        const step1 = adminLoginResponseSchema.parse(login.body);
+        const step1 = challengeStep(login.body);
         expect(step1.step).toBe('change_password');
         expect(JSON.stringify(login.body)).not.toMatch(/otpauth|accessToken/);
 
@@ -974,7 +984,7 @@ for (const backend of DATABASE_BACKENDS) {
           newPassword: 'fake-Admin-new-pw-7720',
         });
         expect(changed.status).toBe(200);
-        const step2 = adminChangePasswordResponseSchema.parse(changed.body);
+        const step2 = changePasswordChallenge(changed.body);
         if (step2.step !== 'enrol_totp') throw new Error('expected enrol_totp');
         expect(step2.otpauthUri).toContain(encodeURIComponent(address));
         // Used up.
@@ -1041,10 +1051,10 @@ for (const backend of DATABASE_BACKENDS) {
           ).body,
         );
         const walk = async () => {
-          const s1 = adminLoginResponseSchema.parse(
+          const s1 = challengeStep(
             (await h.bff(apiPath(AR.adminLogin), { email: address, password: ADMIN_PW })).body,
           );
-          const s2 = adminChangePasswordResponseSchema.parse(
+          const s2 = changePasswordChallenge(
             (
               await h.bff(apiPath(AR.adminChangePassword), {
                 challengeId: s1.challengeId,

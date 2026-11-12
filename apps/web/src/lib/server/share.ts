@@ -2,7 +2,6 @@ import 'server-only';
 import {
   ANON_ID_COOKIE,
   ErrorCode,
-  isShareToken,
   isValidAnonId,
   PUBLIC_SHARE_ROUTES,
   shareExpiredDetailsSchema,
@@ -12,6 +11,7 @@ import {
 import { createApiClient } from '../api/client';
 import { isApiError } from '../api/errors';
 import { type ServerCallContext, serverCallHeaders } from '../bff/client-ip';
+import { shareRefFromPath } from '../share/ref';
 
 export type ServerShareMeta =
   | { kind: 'ok'; meta: ShareMetaResponse }
@@ -27,7 +27,8 @@ export type ServerShareMeta =
  * and the client fetches its own. No bearer token: link unfurlers and viewers see the same meta.
  */
 export async function fetchShareMeta(
-  token: string,
+  /** The page's ref as it came in the URL: a slug or a token (ADR 0011). */
+  rawRef: string,
   options: {
     apiInternalUrl: string;
     anonId?: string;
@@ -36,7 +37,8 @@ export async function fetchShareMeta(
     fetch?: typeof fetch;
   },
 ): Promise<ServerShareMeta> {
-  if (!isShareToken(token)) return { kind: 'not_found' };
+  const token = shareRefFromPath(rawRef);
+  if (token === null) return { kind: 'not_found' };
   const headers: Record<string, string> = {
     ...(options.context !== undefined ? serverCallHeaders(options.context) : {}),
   };

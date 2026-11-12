@@ -58,9 +58,11 @@ async function acceptConsent() {
   await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
 }
 
+/** The camera starts by itself in the round frame (ADR 0011); one tap takes the photo. */
 async function takeLiveSelfie() {
-  await userEvent.click(await screen.findByRole('button', { name: th.capture.openCamera }));
-  await userEvent.click(await screen.findByRole('button', { name: th.capture.takePhoto }));
+  const button = await screen.findByRole('button', { name: th.capture.takePhoto });
+  await waitFor(() => expect(button).toBeEnabled());
+  await userEvent.click(button);
 }
 
 describe('consent', () => {
@@ -69,8 +71,8 @@ describe('consent', () => {
     const share = scanShare(fake);
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    const policy = th.consent.policies.face_search['2026-11-11b'];
-    expect(LATEST_CONSENT_POLICY_VERSION).toBe('2026-11-11b');
+    const policy = th.consent.policies.face_search['2026-11-12'];
+    expect(LATEST_CONSENT_POLICY_VERSION).toBe('2026-11-12');
     expect(screen.getByRole('heading', { name: policy.title })).toBeInTheDocument();
     // The short text: exactly the four bullets, visible.
     const consent = screen.getByRole('region', { name: policy.title });
@@ -97,10 +99,8 @@ describe('consent', () => {
     expect(details.open).toBe(true);
     expect(transfer).toBeVisible();
     expect(within(details).getByText(policy.details.backups)).toBeVisible();
-    expect(within(details).getByRole('link', { name: th.consent.deleteMyFace })).toHaveAttribute(
-      'href',
-      `/s/${share.token}/delete-my-face`,
-    );
+    // ADR 0011 decision 2: the details mention the right but don't link to the deletion page.
+    expect(within(details).queryByRole('link')).toBeNull();
     expect(screen.getByText(`ฉบับวันที่ ${LATEST_CONSENT_POLICY_VERSION}`)).toBeInTheDocument();
 
     // No consent, no scan: the camera isn't offered and nothing is posted.
@@ -111,11 +111,14 @@ describe('consent', () => {
 
     await userEvent.click(screen.getByRole('checkbox', { name: policy.checkbox }));
     await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
-    expect(await screen.findByText(th.capture.guidance)).toBeInTheDocument();
+    // Then straight to the camera, in its round frame with the face outline, without tips.
+    expect(await screen.findByRole('button', { name: th.capture.takePhoto })).toBeInTheDocument();
+    expect(screen.getByTestId('face-guide')).toBeInTheDocument();
+    expect(screen.getByLabelText(th.capture.preview).parentElement).toHaveClass('rounded-full');
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)[0]).toMatchObject({
       prefix: '/api',
       credentials: 'include',
-      body: { policyVersion: LATEST_CONSENT_POLICY_VERSION, accepted: true },
+      body: { policyVersion: LATEST_CONSENT_POLICY_VERSION, locale: 'th', accepted: true },
     });
   });
 
@@ -125,7 +128,6 @@ describe('consent', () => {
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     await takeLiveSelfie();
-    await userEvent.click(await screen.findByRole('button', { name: th.capture.search }));
     expect(await screen.findByRole('region', { name: th.results.strong })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: th.share.withdraw }));
@@ -163,9 +165,7 @@ describe('scan', () => {
     expect(camera.stop).toHaveBeenCalled();
     expect(loadDetector).toHaveBeenCalled();
     expect(detect).toHaveBeenCalledTimes(1);
-    expect(await screen.findByRole('img', { name: 'เซลฟีมุมที่ 1' })).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: th.capture.search }));
     const strong = await screen.findByRole('region', { name: th.results.strong });
     const maybe = screen.getByRole('region', { name: th.results.maybe });
     expect(within(strong).getAllByRole('button', { name: /^ไม่ใช่ฉัน:/ })).toHaveLength(2);
@@ -175,8 +175,9 @@ describe('scan', () => {
     expect(search).toHaveLength(1);
     expect(search[0]).toMatchObject({ prefix: '/api', credentials: 'include' });
     expect(fake.selfieUploads).toEqual([{ route: 'search', sizes: [10], types: ['image/jpeg'] }]);
-    // The selfie is gone from the page and was never persisted or logged.
-    expect(screen.queryByRole('img', { name: 'เซลฟีมุมที่ 1' })).not.toBeInTheDocument();
+    // The results say how many photos were found. The selfie was never shown, persisted or logged.
+    expect(screen.getByRole('heading', { name: 'พบรูปของคุณ 3 รูป' })).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /เซลฟี/ })).not.toBeInTheDocument();
     expect(objectUrls.revoked).toEqual(expect.arrayContaining(objectUrls.created));
     expect(setItem).not.toHaveBeenCalled();
     expect(log).not.toHaveBeenCalled();
@@ -204,31 +205,25 @@ describe('scan', () => {
     expect(fake.selfieUploads).toHaveLength(0);
   });
 
-  it('collects up to three angles and sends them in one request', async () => {
+  it('starts the search as soon as the photo passes, with a progress bar and one selfie', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = scanShare(fake, { consented: true });
-    const { scenario } = renderSharePage(fake, share.token);
+    let release = () => undefined as void;
+    fake.hold = { pathSuffix: '/face-search', release: new Promise<void>((r) => (release = r)) };
+    renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
+    // No tips before the photo, no "add another angle", no second search button.
+    expect(screen.queryByText(/หันหน้าตรง/)).not.toBeInTheDocument();
     await takeLiveSelfie();
-    // Side shots are allowed to be turned.
-    scenario.faces = [
-      {
-        ...goodFace(),
-        keypoints: [
-          { x: 0.4, y: 0.4 },
-          { x: 0.6, y: 0.4 },
-          { x: 0.68, y: 0.5 },
-        ],
-      },
-    ];
-    await userEvent.click(screen.getByRole('button', { name: 'เพิ่มอีกมุม (หันซ้ายเล็กน้อย)' }));
-    await takeLiveSelfie();
-    await userEvent.click(screen.getByRole('button', { name: 'เพิ่มอีกมุม (หันขวาเล็กน้อย)' }));
-    await takeLiveSelfie();
-    expect(screen.queryByRole('button', { name: /^เพิ่มอีกมุม/ })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: th.capture.search }));
+    expect(
+      await screen.findByRole('progressbar', { name: th.capture.searching }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /มุม/ })).not.toBeInTheDocument();
+    release();
     await screen.findByRole('region', { name: th.results.strong });
-    expect(fake.selfieUploads[0]?.types).toEqual(['image/jpeg', 'image/jpeg', 'image/jpeg']);
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.faceSearch)).toHaveLength(1);
+    expect(fake.selfieUploads[0]?.types).toEqual(['image/jpeg']);
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
   });
 
   it('falls back to <input capture="user"> in the LINE in-app browser; gallery pick only in gallery mode', async () => {
@@ -245,7 +240,6 @@ describe('scan', () => {
     expect(screen.getByText(th.capture.inAppHint)).toBeInTheDocument();
 
     await userEvent.upload(cameraInput, new File(['raw'], 'selfie.heic', { type: 'image/heic' }));
-    await userEvent.click(await screen.findByRole('button', { name: th.capture.search }));
     await screen.findByRole('region', { name: th.results.strong });
     // The upload is the re-encoded JPEG, never the picked file.
     expect(fake.selfieUploads[0]?.types).toEqual(['image/jpeg']);
@@ -258,7 +252,7 @@ describe('scan', () => {
     renderSharePage(fake, share.token, { nav: fakeNavigator({ camera: 'denied' }).nav });
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     expect(screen.queryByLabelText(th.capture.chooseFromGallery)).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: th.capture.openCamera }));
+    // The camera tries to start by itself; refused, the camera-app input takes over.
     expect(await screen.findByText(th.capture.cameraBlocked)).toBeInTheDocument();
     expect(screen.getByLabelText(th.capture.useCameraApp)).toHaveAttribute('capture', 'user');
   });
@@ -269,7 +263,6 @@ describe('scan', () => {
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     await takeLiveSelfie();
-    await userEvent.click(await screen.findByRole('button', { name: th.capture.search }));
     expect(await screen.findByText(/ไม่พบใบหน้าในรูปที่ส่ง \(1 รูป\)/)).toBeInTheDocument();
   });
 
@@ -279,7 +272,6 @@ describe('scan', () => {
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     await takeLiveSelfie();
-    await userEvent.click(await screen.findByRole('button', { name: th.capture.search }));
     const maybe = await screen.findByRole('region', { name: th.results.maybe });
     const target = share.items[2];
     await userEvent.click(
@@ -290,14 +282,72 @@ describe('scan', () => {
     expect(screen.queryByRole('region', { name: th.results.maybe })).not.toBeInTheDocument();
   });
 
-  it('shows "no match" guidance for an empty result', async () => {
+  it('nothing found: a friendly message and "ลองใหม่" back to the camera', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = fake.addPublicShare({ faceSearchAvailable: true, consented: true });
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     await takeLiveSelfie();
-    await userEvent.click(await screen.findByRole('button', { name: th.capture.search }));
     expect(await screen.findByText(th.results.none)).toBeInTheDocument();
+    expect(screen.getByText(th.results.noneHint)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: th.results.retry }));
+    // Consent is already given: straight back to the camera.
+    expect(await screen.findByRole('button', { name: th.capture.takePhoto })).toBeInTheDocument();
+    await takeLiveSelfie();
+    await waitFor(() => expect(fake.callsTo(PUBLIC_SHARE_ROUTES.faceSearch)).toHaveLength(2));
+  });
+
+  it('"เลือกทั้งหมด" selects only the found photos; download selected and all found', async () => {
+    const fake = new FakeApi({ faceSearch: true, zipPollsUntilDone: 1 });
+    const share = scanShare(fake, { consented: true });
+    const { startDownload } = renderSharePage(fake, share.token);
+    await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
+    await takeLiveSelfie();
+    await screen.findByRole('region', { name: th.results.strong });
+
+    await userEvent.click(screen.getByRole('button', { name: th.results.selectAll }));
+    const found = [...share.faceMatches.strong, ...share.faceMatches.maybe];
+    expect(screen.getByText('เลือกแล้ว 3 รูป')).toBeInTheDocument();
+    // Round dots: only the found photos are checked, in the results and in the gallery.
+    for (const item of share.items) {
+      const dots = screen.getAllByRole('checkbox', { name: `เลือก ${item.name}` });
+      for (const dot of dots) {
+        if (found.includes(item.id)) expect(dot).toBeChecked();
+        else expect(dot).not.toBeChecked();
+      }
+    }
+    // Tapping a dot again unselects it.
+    await userEvent.click(
+      within(screen.getByRole('region', { name: th.results.maybe })).getByRole('checkbox', {
+        name: `เลือก ${share.items[2]?.name}`,
+      }),
+    );
+    expect(screen.getByText('เลือกแล้ว 2 รูป')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด 2 รูป' }));
+    await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(1));
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.downloads)[0]?.body).toEqual({
+      fileIds: share.faceMatches.strong,
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลดทั้งหมด (3)' }));
+    await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(2));
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.downloads)[1]?.body).toEqual({ fileIds: found });
+  });
+
+  it('"download all found" splits more photos than ZIP_MAX_FILES into several zips', async () => {
+    const fake = new FakeApi({ faceSearch: true, zipPollsUntilDone: 1, zipMaxFiles: 2 });
+    const share = fake.addPublicShare({ faceSearchAvailable: true, consented: true, itemCount: 5 });
+    share.faceMatches = { strong: share.items.map((i) => i.id), maybe: [] };
+    const { startDownload } = renderSharePage(fake, share.token);
+    await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
+    await takeLiveSelfie();
+    await userEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลดทั้งหมด (5)' }));
+    await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(3));
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.downloads).map((c) => c.body)).toEqual([
+      { fileIds: share.items.slice(0, 2).map((i) => i.id) },
+      { fileIds: share.items.slice(2, 4).map((i) => i.id) },
+      { fileIds: share.items.slice(4).map((i) => i.id) },
+    ]);
   });
 });
 

@@ -185,14 +185,15 @@ describe('loadConsentConfig', () => {
     expect(CONSENT_POLICY_FACE_PROVIDER['2026-10-29']).toBe('self-hosted');
     expect(CONSENT_POLICY_FACE_PROVIDER['2026-11-11']).toBe('self-hosted');
     expect(CONSENT_POLICY_FACE_PROVIDER['2026-11-11b']).toBe('self-hosted');
-    expect(CONSENT_POLICY_VERSIONS.at(-1)).toBe('2026-11-11b');
-    expect(latestConsentPolicyVersion('self-hosted')).toBe('2026-11-11b');
+    expect(CONSENT_POLICY_FACE_PROVIDER['2026-11-12']).toBe('self-hosted');
+    expect(CONSENT_POLICY_VERSIONS.at(-1)).toBe('2026-11-12');
+    expect(latestConsentPolicyVersion('self-hosted')).toBe('2026-11-12');
     expect(latestConsentPolicyVersion('rekognition')).toBe('2026-10-25');
-    expect(loadConsentConfig({ IP_HASH_SECRET: secret }).policyVersion).toBe('2026-11-11b');
+    expect(loadConsentConfig({ IP_HASH_SECRET: secret }).policyVersion).toBe('2026-11-12');
     expect(
-      loadConsentConfig({ IP_HASH_SECRET: secret, CONSENT_POLICY_VERSION: '2026-11-11b' })
+      loadConsentConfig({ IP_HASH_SECRET: secret, CONSENT_POLICY_VERSION: '2026-11-12' })
         .policyVersion,
-    ).toBe('2026-11-11b');
+    ).toBe('2026-11-12');
     expect(
       loadConsentConfig({ IP_HASH_SECRET: secret, FACE_PROVIDER: 'rekognition' }).policyVersion,
     ).toBe('2026-10-25');
@@ -203,13 +204,13 @@ describe('loadConsentConfig', () => {
 
   it('refuses a retired version outside APP_STAGE=local, which may still pin one for tests', () => {
     // Retired versions stay in the list (existing consents rows reference them and keep their texts).
-    for (const retired of ['2026-10-29', '2026-11-11'] as const) {
+    for (const retired of ['2026-10-29', '2026-11-11', '2026-11-11b'] as const) {
       expect(CONSENT_POLICY_VERSIONS).toContain(retired);
       for (const stage of [{}, { APP_STAGE: 'prod' }, { APP_STAGE: 'staging' }]) {
         expect(() =>
           loadConsentConfig({ ...stage, IP_HASH_SECRET: secret, CONSENT_POLICY_VERSION: retired }),
         ).toThrow(
-          new RegExp(`CONSENT_POLICY_VERSION ${retired} is retired; .* is 2026-11-11b`),
+          new RegExp(`CONSENT_POLICY_VERSION ${retired} is retired; .* is 2026-11-12`),
         );
       }
       expect(

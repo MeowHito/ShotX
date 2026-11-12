@@ -209,6 +209,37 @@ describe('migrations', () => {
     );
   });
 
+  it('0012 is event_gallery_admin_mfa: additive, backfills before the constraints that need them', () => {
+    expect(journal.entries[12]?.tag).toBe('0012_event_gallery_admin_mfa');
+    const list = statements(sqlOf('0012_event_gallery_admin_mfa'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    // Only the confirmation CHECK is dropped (ADR 0011 decision 1); nothing is renamed.
+    expect(list.filter((s) => /\bDROP\b/.test(s))).toEqual([
+      'ALTER TABLE "folders" DROP CONSTRAINT "folders_face_index_needs_confirmation";',
+    ]);
+    expect(list.some((s) => /RENAME/.test(s))).toBe(false);
+    // New columns: nullable, or with a constant default (no table rewrite, old api inserts work).
+    for (const column of ['slug', 'cover_file_id', 'amr']) {
+      expect(list[at(`ADD COLUMN "${column}"`)], column).not.toContain('NOT NULL');
+    }
+    expect(list[at('ADD COLUMN "locale"')]).toContain(`DEFAULT 'th' NOT NULL`);
+    expect(at('CREATE TYPE "public"."ui_locale"')).toBeLessThan(at('ADD COLUMN "locale"'));
+    // Folders are switched on before the new CHECK, with the expiry the CHECK needs.
+    const enable = at('UPDATE "folders" SET');
+    expect(enable).toBeGreaterThan(at('DROP CONSTRAINT "folders_face_index_needs_confirmation"'));
+    expect(enable).toBeLessThan(at('ADD CONSTRAINT "folders_face_index_has_expiry"'));
+    expect(list[enable]).toContain('"face_index_queued_at"');
+    // Slugs are backfilled after the column and before the unique and format constraints.
+    const backfill = at('UPDATE "shares" AS "s" SET "slug"');
+    expect(backfill).toBeGreaterThan(at('ADD COLUMN "slug"'));
+    expect(backfill).toBeLessThan(at('"shares_slug_unique"'));
+    expect(backfill).toBeLessThan(at('"shares_slug_valid"'));
+    // The cover key clears only cover_file_id (owner_id is NOT NULL).
+    expect(list[at('"folders_cover_file_same_owner_fk"')]).toContain(
+      'ON DELETE SET NULL ("cover_file_id")',
+    );
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

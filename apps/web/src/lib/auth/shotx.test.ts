@@ -333,6 +333,7 @@ describe('API-issued tokens (AUTH_PROVIDER=shotx)', () => {
       oidc: ['google'],
       devLogin: true,
       adminLogin: false,
+      adminMfaMode: null,
     });
     expect(api.clientIps()).toEqual(['2001:db8::1']);
     await expect(

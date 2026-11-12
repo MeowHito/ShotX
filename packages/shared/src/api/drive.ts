@@ -44,10 +44,18 @@ export const driveFolderSchema = z.object({
   deletedAt: isoDateTimeSchema.nullable(),
   /**
    * This folder's own face-index switch. Indexing covers the folder's whole subtree while the
-   * switch is on and `faceIndexExpiresAt` is in the future (see isCoveredByFaceIndex).
+   * switch is on and `faceIndexExpiresAt` is in the future (see isCoveredByFaceIndex). ADR 0011:
+   * on for every new folder (with an expiry of creation + FACE_INDEX_EXPIRY_DAYS); migration 0012
+   * switched existing folders on.
    */
   faceIndexEnabled: z.boolean(),
   faceIndexExpiresAt: isoDateTimeSchema.nullable(),
+  /**
+   * The photographer's chosen cover photo (ADR 0011), or null for the default (the first ready
+   * image of the share scope). Not re-checked here: the share page falls back to the default when
+   * the file is no longer a live, ready image inside the folder's subtree.
+   */
+  coverFileId: idSchema.nullable(),
 });
 export type DriveFolder = z.output<typeof driveFolderSchema>;
 
@@ -130,12 +138,27 @@ const atLeastOne = (keys: readonly string[]) => (value: Record<string, unknown>)
   keys.some((key) => value[key] !== undefined);
 
 /**
- * Rename and/or move a folder. `parentId: null` moves it to the root; an absent `parentId` leaves
- * it where it is. Moving rewrites the ltree path of the whole subtree in one transaction.
+ * Rename and/or move a folder, and/or set its cover. `parentId: null` moves it to the root; an
+ * absent `parentId` leaves it where it is. Moving rewrites the ltree path of the whole subtree in
+ * one transaction.
+ *
+ * `coverFileId` (ADR 0011): a file id sets the share page cover, `null` returns to the default
+ * (the first ready image). The file must be the caller's (else NOT_FOUND, like any other id) and,
+ * checked by the API in the same transaction, live, `ready`, an image and inside this folder's
+ * subtree (its folder's path `<@` this folder's path), else COVER_FILE_INVALID with the reason.
+ * The database enforces only the same owner (`folders_cover_file_same_owner_fk`) and clears the
+ * column when the file row is purged (ON DELETE SET NULL). Later moves or trashing of the file are
+ * handled at read time (share meta falls back to the default); the API need not clear the column.
  */
 export const updateFolderBodySchema = z
-  .object({ name: driveNameSchema.optional(), parentId: idSchema.nullable().optional() })
-  .refine(atLeastOne(['name', 'parentId']), { error: 'name or parentId is required' });
+  .object({
+    name: driveNameSchema.optional(),
+    parentId: idSchema.nullable().optional(),
+    coverFileId: idSchema.nullable().optional(),
+  })
+  .refine(atLeastOne(['name', 'parentId', 'coverFileId']), {
+    error: 'name, parentId or coverFileId is required',
+  });
 export type UpdateFolderBody = z.input<typeof updateFolderBodySchema>;
 
 /**
@@ -251,27 +274,33 @@ export type DriveUsageResponse = z.output<typeof driveUsageResponseSchema>;
 // --- PATCH /drive/folders/:id/face-index ---------------------------------------------------
 
 /**
- * Turn face indexing of a folder subtree on (or extend it) or off.
+ * Extend face indexing of a folder subtree (or turn it back on), or turn it off.
  *
- * - `enabled: true` needs `attendeesInformedConfirmed: true`: the photographer confirms the
- *   attendees were informed (organiser notice or registration consent), as the PDPA checklist
- *   requires; the API stores when (`folders.face_index_informed_at`). It sets
+ * ADR 0011 decision 1 (owner, risk accepted): face indexing is always on. Every folder is created
+ * with it on and every upload into a folder is indexed; the photographer no longer enables it or
+ * confirms that attendees were informed. This route remains for extending the expiry.
+ *
+ * - `enabled: true` sets `face_index_enabled` and
  *   `face_index_expires_at = max(current, now + FACE_INDEX_EXPIRY_DAYS)`, so calling it again
- *   extends the index. If the folder had no active index, the API sends `index.folder`.
+ *   extends the index. No confirmation is needed any more: `attendeesInformedConfirmed` is
+ *   accepted for older clients and ignored, and `face_index_informed_at` is no longer written. If
+ *   the folder had no active index, the API sends `index.folder`.
  *   FEATURE_DISABLED while FACE_SEARCH_ENABLED is false; SUBSCRIPTION_INACTIVE unless the
- *   subscription is trial, active or grace.
+ *   subscription is trial, active or grace (BILLING_MODE=gateway only).
  * - `enabled: false` clears the switch and the expiry and sends `unindex.folder`, which deletes the
- *   faces of files no longer covered by another active folder. Always allowed.
+ *   faces of files no longer covered by another active folder. Always allowed (kept as the
+ *   photographer's opt-out; whether the studio still shows it is a product decision).
  *
- * The response is the folder as it now is. Uploads into a covered folder extend the expiry of the
- * covering folders to last upload + FACE_INDEX_EXPIRY_DAYS (the worker does it when it indexes).
+ * The response is the folder as it now is. Every upload into a folder whose switch is on renews
+ * the expiry of its enabled covering folders (the folder and its ancestors) to at least last
+ * upload + FACE_INDEX_EXPIRY_DAYS, also when that expiry had already passed (ADR 0011: "every
+ * folder is indexed on upload"; the worker does it before it decides whether to index).
  */
 export const updateFaceIndexBodySchema = z.discriminatedUnion('enabled', [
   z.strictObject({
     enabled: z.literal(true),
-    attendeesInformedConfirmed: z.literal(true, {
-      error: 'attendeesInformedConfirmed must be true to enable face indexing',
-    }),
+    /** Deprecated (ADR 0011): ignored; accepted so clients from before it keep working. */
+    attendeesInformedConfirmed: z.literal(true).optional(),
   }),
   z.strictObject({ enabled: z.literal(false) }),
 ]);

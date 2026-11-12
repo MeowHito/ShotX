@@ -15,7 +15,12 @@ import {
   shareModeAllowedForTarget,
   type ShareStatsResponse,
   type ShareStatsValues,
-  shareUrl,
+  sharePublicPath,
+  sharePublicUrl,
+  shareSlugCandidate,
+  shareSlugSourceName,
+  SHARE_SLUG_MAX_ATTEMPTS,
+  slugifyEventName,
   subscriptionAllowsSharing,
   type updateShareBodySchema,
   viewerLoginAvailable,
@@ -24,7 +29,7 @@ import { and, asc, desc, eq, gte, isNull, lt, lte, type SQL, sql } from 'drizzle
 import type { z } from 'zod';
 import { hashPassword } from '../auth/password';
 import { type ApiConfig, billingOnline } from '../config';
-import { type Db, isUniqueViolation, type Queryable } from '../db/db';
+import { type Db, isUniqueViolation, pgErrorInfo, type Queryable } from '../db/db';
 import { currentSubscription } from '../drive/account';
 import { liveFolder } from '../drive/folders';
 import { ApiError, notFound } from '../http/api-error';
@@ -106,7 +111,9 @@ export class SharesService {
     return {
       id: share.id,
       token: share.token,
-      url: shareUrl(this.config.app.publicBaseUrl, share.token),
+      slug: share.slug,
+      path: sharePublicPath(share),
+      url: sharePublicUrl(this.config.app.publicBaseUrl, share),
       target: {
         type: share.targetType,
         id: targetId,
@@ -176,9 +183,10 @@ export class SharesService {
         }
       }
       let target: { targetFileId: string | null; targetFolderId: string | null };
+      let targetName: string;
       if (body.target.type === 'file') {
         const [file] = await tx
-          .select({ id: files.id })
+          .select({ id: files.id, name: files.name })
           .from(files)
           .where(
             and(
@@ -192,12 +200,18 @@ export class SharesService {
           .for('share');
         if (file === undefined) throw notFound('File');
         target = { targetFileId: file.id, targetFolderId: null };
+        targetName = file.name;
       } else {
         const folder = await liveFolder(tx, ownerId, body.target.folderId, 'share');
         if (folder === null || folder.purgeRequestedAt !== null) throw notFound('Folder');
         target = { targetFileId: null, targetFolderId: folder.id };
+        targetName = folder.name;
       }
-      for (let attempt = 1; ; attempt++) {
+      // ADR 0011: the readable ref, from the target's name; the base first, then suffixed
+      // candidates while `shares_slug_unique` says taken. Never changed afterwards.
+      const slugBase = slugifyEventName(shareSlugSourceName(body.target.type, targetName));
+      let slugAttempt = 0;
+      for (let tokenAttempt = 1; ;) {
         try {
           const [share] = await tx.transaction((sp) =>
             sp
@@ -207,6 +221,7 @@ export class SharesService {
                 targetType: body.target.type,
                 ...target,
                 token: generateShareToken(),
+                slug: shareSlugCandidate(slugBase, slugAttempt),
                 mode: body.mode,
                 allowDownload: body.allowDownload,
                 downloadSize: body.downloadSize,
@@ -219,7 +234,12 @@ export class SharesService {
           if (share === undefined) throw new Error('Share insert returned no row');
           return this.ownerShare(tx, ownerId, share.id);
         } catch (error) {
-          if (attempt >= TOKEN_ATTEMPTS || !isUniqueViolation(error, 'shares_token_unique')) {
+          const constraint = isUniqueViolation(error) ? pgErrorInfo(error)?.constraint : undefined;
+          if (constraint === 'shares_slug_unique' && slugAttempt + 1 < SHARE_SLUG_MAX_ATTEMPTS) {
+            slugAttempt++;
+          } else if (constraint === 'shares_token_unique' && tokenAttempt < TOKEN_ATTEMPTS) {
+            tokenAttempt++;
+          } else {
             throw error;
           }
         }

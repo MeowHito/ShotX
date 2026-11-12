@@ -2,6 +2,7 @@
 
 import { Alert, Button } from '@shotx/ui';
 import { useTranslations } from 'next-intl';
+import { PublicTopBar } from '@/components/site/public-top-bar';
 import type { ApiClient } from '@/lib/api/client';
 import type { ClientFaceConfig } from '@/lib/face/config';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
@@ -23,7 +24,7 @@ export interface FaceDeletionPageProps {
 }
 
 /**
- * `/s/[token]/delete-my-face`: "delete my face". Reads `GET /s/:token/face-deletion`, which
+ * `/s/[ref]/delete-my-face`: "delete my face" (unlinked, ADR 0011). Reads `GET /s/:ref/face-deletion`, which
  * checks the token only, so it works when the share is expired or revoked, behind a password or
  * sign-in, and when face search is switched off (PDPA; ADR 0007). Asks for the `face_deletion`
  * consent, then takes selfies (camera only: no gallery pick, so nobody deletes another person's
@@ -33,6 +34,7 @@ export function FaceDeletionPage({ testing, ...props }: FaceDeletionPageProps) {
   return (
     <ShareApiProvider signedIn={props.signedIn} publicApi={testing?.publicApi}>
       <FaceToolsProvider config={props.faceConfig} overrides={testing?.faceTools}>
+        <PublicTopBar />
         <main className="mx-auto max-w-xl px-3 py-6 sm:px-4">
           <FaceDeletion token={props.token} onClose={testing?.onClose} />
         </main>
@@ -45,7 +47,7 @@ function FaceDeletion({ token, onClose }: { token: string; onClose?: () => void 
   const t = useTranslations();
   const describe = useErrorMessage();
   const info = useFaceDeletionInfo(token);
-  const close = onClose ?? (() => window.location.assign(`/s/${token}`));
+  const close = onClose ?? (() => window.location.assign(`/s/${encodeURIComponent(token)}`));
 
   if (info.isPending) {
     return (

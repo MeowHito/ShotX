@@ -7,16 +7,15 @@ import {
   type ShareItem,
   type ShareMetaResponse,
 } from '@shotx/shared';
-import { Alert, Button } from '@shotx/ui';
+import { Alert, Button, cn } from '@shotx/ui';
 import { useQuery } from '@tanstack/react-query';
-import { ScanFaceIcon } from 'lucide-react';
-import Link from 'next/link';
+import { CheckCheckIcon, DownloadIcon, RotateCcwIcon, ScanFaceIcon } from 'lucide-react';
 import { useFormatter, useTranslations } from 'next-intl';
-import { type ReactNode, useCallback, useMemo, useState } from 'react';
-import { DriveGrid } from '@/components/drive/drive-grid';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PublicTopBar } from '@/components/site/public-top-bar';
 import type { ApiClient } from '@/lib/api/client';
 import { isApiError } from '@/lib/api/errors';
-import { ALL_VIEWER_LOGINS, type ViewerLoginOptions } from '@/lib/auth/viewer-login';
+import type { ViewerLoginOptions } from '@/lib/auth/viewer-login';
 import type { ClientFaceConfig, ClientShareConfig } from '@/lib/face/config';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import {
@@ -28,16 +27,18 @@ import {
   useWithdrawConsent,
 } from '@/lib/share/queries';
 import { ShareApiProvider, useShareApi } from '@/lib/share/share-api';
-import { DownloadBar, useSingleDownload } from './download-bar';
+import { DownloadBar, DownloadStatus, useDownloader, useSingleDownload } from './download-bar';
+import { JustifiedGrid } from './justified-grid';
 import { FaceToolsProvider, type FaceTools } from './scan/face-tools';
 import { ScanFlow } from './scan/scan-flow';
-import { faceDeletionHref, LoginRequired, PasswordForm, ShareUnavailable } from './share-gates';
+import { LoginRequired, PasswordForm, ShareUnavailable } from './share-gates';
 import { type ShareRuntime, ShareRuntimeContext, defaultShareRuntime } from './share-runtime';
 import { ShareTile } from './share-tile';
 import { useLightbox } from './use-lightbox';
 
 export interface SharePageProps {
-  token: string;
+  /** The ref of the URL: the share's slug, or an old token link (ADR 0011). */
+  shareRef: string;
   /** Meta fetched during SSR without the viewer's /api cookies (null when SSR couldn't). */
   initialMeta: ShareMetaResponse | null;
   /** The visitor has a web session (session or refresh cookie). */
@@ -54,14 +55,19 @@ export interface SharePageProps {
   };
 }
 
-/** The public share page `/s/[token]` (client part; see app/s/[token]/page.tsx for SSR). */
+/**
+ * The public share page `/s/[ref]` (client part; see app/s/[ref]/page.tsx for SSR). ADR 0011
+ * layout, mobile first: the top bar (home, language), the centered event title over a 16:3 cover,
+ * the photos in their own aspect ratios, and a sticky face-search button (share.scan) at the bottom.
+ */
 export function SharePage({ testing, ...props }: SharePageProps) {
   const runtime = useMemo(() => ({ ...defaultShareRuntime, ...testing?.runtime }), [testing]);
   return (
     <ShareApiProvider signedIn={props.signedIn} publicApi={testing?.publicApi}>
       <ShareRuntimeContext.Provider value={runtime}>
         <FaceToolsProvider config={props.faceConfig} overrides={testing?.faceTools}>
-          <main className="mx-auto max-w-5xl px-4 pt-6 pb-40 sm:px-6 sm:pt-10">
+          <PublicTopBar />
+          <main className="mx-auto max-w-5xl px-3 pt-5 pb-36 sm:px-6 sm:pt-8">
             <ShareGate {...props} />
           </main>
         </FaceToolsProvider>
@@ -70,23 +76,29 @@ export function SharePage({ testing, ...props }: SharePageProps) {
   );
 }
 
-function ShareGate({
-  token,
-  initialMeta,
-  shareConfig,
-  viewerLogin = ALL_VIEWER_LOGINS,
-}: SharePageProps) {
+/**
+ * The meta of the page's ref (slug or token). Once the API answered, the URL becomes the
+ * canonical one (`meta.path`, the slug) without a reload, and every further call uses
+ * `meta.token` (the unlock cookie's path is `/api/s/{token}`).
+ */
+function ShareGate({ shareRef, initialMeta, shareConfig, viewerLogin }: SharePageProps) {
   const t = useTranslations();
   const describe = useErrorMessage();
   const { signedIn, ensureViewerSession } = useShareApi();
-  const invalidate = useInvalidateShare(token);
-  const meta = useShareMeta(token, initialMeta);
+  const invalidate = useInvalidateShare();
+  const meta = useShareMeta(shareRef, initialMeta);
   const fresh = meta.data !== undefined && !meta.isPlaceholderData;
   const needsLogin = fresh && meta.data.access.loginRequired;
+  const path = meta.data?.path;
+
+  useEffect(() => {
+    if (!fresh || path === undefined || window.location.pathname === path) return;
+    window.history.replaceState(window.history.state, '', `${path}${window.location.search}`);
+  }, [fresh, path]);
 
   // Signed in but the public routes don't know it yet: create the viewer session once.
   const viewerSession = useQuery({
-    queryKey: [...shareKeys.all(token), 'viewer-session'],
+    queryKey: [...shareKeys.page, 'viewer-session'],
     queryFn: async () => {
       const ok = await ensureViewerSession();
       if (ok) await invalidate();
@@ -100,9 +112,7 @@ function ShareGate({
   if (meta.isError) {
     if (isApiError(meta.error, ErrorCode.SHARE_EXPIRED)) {
       const details = shareExpiredDetailsSchema.safeParse(meta.error.details);
-      return (
-        <ShareUnavailable token={token} reason={details.success ? details.data.reason : null} />
-      );
+      return <ShareUnavailable reason={details.success ? details.data.reason : null} />;
     }
     return (
       <Alert variant="destructive" className="flex items-center justify-between gap-2">
@@ -131,38 +141,60 @@ function ShareGate({
         </p>
       );
     }
-    return <LoginRequired token={token} options={viewerLogin} />;
+    return <LoginRequired path={meta.data.path} options={viewerLogin} />;
   }
-  if (meta.data.access.locked) return <PasswordForm token={token} />;
-  return <ShareContent token={token} meta={meta.data} shareConfig={shareConfig} />;
+  if (meta.data.access.locked) return <PasswordForm token={meta.data.token} />;
+  return <ShareContent token={meta.data.token} meta={meta.data} shareConfig={shareConfig} />;
 }
 
+/**
+ * The event's title, centered and prominent, over the cover cropped to 16:3 (the folder's chosen
+ * cover, else its first photo). No photographer name or photo count (ADR 0011).
+ */
 function ShareHeader({ meta }: { meta: ShareMetaResponse }) {
-  const th = useTranslations('share');
+  const ts = useTranslations('share');
   const format = useFormatter();
   const details = meta.details;
   if (details === null) return null;
   return (
-    <header className="mb-2 space-y-2">
-      {details.photographerName !== null ? (
-        <p className="eyebrow">{th('byPhotographer', { name: details.photographerName })}</p>
-      ) : null}
-      <h1 className="text-2xl leading-tight break-words sm:text-4xl">{details.title}</h1>
-      <p className="flex flex-wrap gap-x-3 text-sm text-muted-foreground">
-        {details.itemCount !== null ? (
-          <span>{th('itemCount', { count: details.itemCount })}</span>
-        ) : null}
+    <header className="mb-5 space-y-4">
+      <div className="space-y-1 text-center">
+        <h1 className="text-[clamp(1.6rem,5vw,3rem)] leading-tight font-bold break-words">
+          {details.title}
+        </h1>
         {meta.expiresAt !== null ? (
-          <span>
-            {th('expiresAt', {
+          <p className="text-xs text-muted-foreground">
+            {ts('expiresAt', {
               date: format.dateTime(new Date(meta.expiresAt), { dateStyle: 'medium' }),
             })}
-          </span>
+          </p>
         ) : null}
-      </p>
+      </div>
+      {details.cover !== null ? (
+        <div
+          className="aspect-[16/3] w-full overflow-hidden rounded-xl bg-muted sm:rounded-2xl"
+          data-testid="share-cover"
+        >
+          {/* The cover's signed preview URL (CDN); the 16:3 crop is display only. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={details.cover.previewUrl}
+            alt=""
+            className="size-full object-cover"
+            decoding="async"
+          />
+        </div>
+      ) : null}
     </header>
   );
 }
+
+type TileRenderer = (
+  item: ShareItem,
+  list: readonly ShareItem[],
+  size: { width: number; height: number },
+  extra?: { notMe?: boolean },
+) => ReactNode;
 
 function ShareContent({
   token,
@@ -178,10 +210,10 @@ function ShareContent({
   const faceOnly = meta.mode === 'face_only';
   const scanAvailable = meta.faceSearch.available;
   const [scanning, setScanning] = useState(false);
-  const maxSelection = meta.zip.maxFiles;
   const [results, setResults] = useState<FaceSearchResponse | null>(null);
   const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const [selected, setSelected] = useState<ReadonlyMap<string, ShareItem>>(new Map());
+  const resultsRef = useRef<HTMLDivElement>(null);
   const withdraw = useWithdrawConsent(token);
   const notMe = useNotMe(token);
   const single = useSingleDownload(token);
@@ -194,22 +226,20 @@ function ShareContent({
   );
   const openLightbox = useLightbox(meta.allowDownload ? onLightboxDownload : undefined);
 
-  const toggle = useCallback(
-    (item: ShareItem) => {
-      setSelected((prev) => {
-        const next = new Map(prev);
-        if (next.has(item.id)) next.delete(item.id);
-        else if (next.size < maxSelection) next.set(item.id, item);
-        return next;
-      });
-    },
-    [maxSelection],
-  );
+  const toggle = useCallback((item: ShareItem) => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(item.id)) next.delete(item.id);
+      else next.set(item.id, item);
+      return next;
+    });
+  }, []);
   const selection = useMemo(() => [...selected.values()], [selected]);
 
-  const tile = (item: ShareItem, list: readonly ShareItem[], extra?: { notMe?: boolean }) => (
+  const tile: TileRenderer = (item, list, size, extra) => (
     <ShareTile
       item={item}
+      size={size}
       onOpen={() => void openLightbox(list, list.indexOf(item))}
       selection={
         meta.allowDownload
@@ -256,17 +286,7 @@ function ShareContent({
     }
   }
 
-  const scanButton =
-    scanAvailable && !scanning ? (
-      <Button
-        size="lg"
-        className="h-12 w-full rounded-full px-6 text-base sm:w-auto"
-        onClick={() => setScanning(true)}
-      >
-        <ScanFaceIcon aria-hidden />
-        {results === null ? t('share.scan') : t('share.scanAgain')}
-      </Button>
-    ) : null;
+  const showFaceButton = scanAvailable && !scanning && selection.length === 0;
 
   return (
     <div className="space-y-5">
@@ -274,7 +294,7 @@ function ShareContent({
 
       {faceOnly ? (
         scanAvailable ? (
-          <section className="space-y-2 rounded-xl border bg-sidebar p-5">
+          <section className="space-y-2 rounded-xl border bg-sidebar p-5 text-center">
             <h2 className="font-semibold">{t('share.faceOnly.title')}</h2>
             <p className="text-sm text-muted-foreground">{t('share.faceOnly.body')}</p>
           </section>
@@ -283,41 +303,39 @@ function ShareContent({
         )
       ) : null}
 
-      {scanButton}
-
       {notice !== null ? (
         <Alert variant={notice.kind === 'error' ? 'destructive' : 'default'} role="status">
           {notice.text}
         </Alert>
       ) : null}
 
-      {scanning && scanAvailable ? (
-        <ScanFlow
-          token={token}
-          purpose="search"
-          consent={{
-            policyVersion: meta.faceSearch.policyVersion,
-            consented: meta.faceSearch.consented,
-            resultTtlSeconds: meta.faceSearch.resultTtlSeconds,
-          }}
-          limits={{
-            maxSelfies: meta.faceSearch.maxSelfies,
-            selfie: {
-              longEdge: meta.faceSearch.selfieLongEdge,
-              jpegQuality: meta.faceSearch.selfieJpegQuality,
-            },
-          }}
-          allowGallery={meta.mode === 'gallery'}
-          onResults={(r) => {
-            setResults(r);
-            setScanning(false);
-            setNotice(null);
-          }}
-          onClose={() => setScanning(false)}
-        />
+      {results !== null ? (
+        <div ref={resultsRef}>
+          <ScanResults
+            token={token}
+            results={results}
+            tile={tile}
+            allowDownload={meta.allowDownload}
+            selected={selected}
+            maxFiles={meta.zip.maxFiles}
+            shareConfig={shareConfig}
+            onSelectAll={(items, all) =>
+              setSelected((prev) => {
+                const next = new Map(prev);
+                for (const item of items) {
+                  if (all) next.set(item.id, item);
+                  else next.delete(item.id);
+                }
+                return next;
+              })
+            }
+            onRetry={() => {
+              setResults(null);
+              setScanning(true);
+            }}
+          />
+        </div>
       ) : null}
-
-      {results !== null ? <ScanResults results={results} tile={tile} /> : null}
 
       {faceOnly ? (
         results === null && scanAvailable ? (
@@ -331,28 +349,8 @@ function ShareContent({
         />
       )}
 
-      {/*
-       * "delete my face" is a PDPA right, offered whether or not face search is on. With face
-       * search on, the scan is the page's face option and this is one small, muted line at the
-       * bottom (also linked from the consent details); without it, it is the only face option.
-       */}
-      <footer className="flex flex-col items-start gap-1 border-t pt-4 text-sm">
-        {scanAvailable ? (
-          <Link
-            href={faceDeletionHref(token)}
-            className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
-          >
-            {t('share.deleteMyFaceQuiet')}
-          </Link>
-        ) : (
-          <Link
-            href={faceDeletionHref(token)}
-            className="text-primary underline-offset-4 hover:underline"
-          >
-            {t('share.deleteMyFace')}
-          </Link>
-        )}
-        {meta.faceSearch.consented ? (
+      {meta.faceSearch.consented ? (
+        <footer className="flex justify-center border-t pt-4 text-sm">
           <Button
             variant="link"
             className="h-auto p-0 text-muted-foreground"
@@ -361,8 +359,51 @@ function ShareContent({
           >
             {t('share.withdraw')}
           </Button>
-        ) : null}
-      </footer>
+        </footer>
+      ) : null}
+
+      {showFaceButton ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center px-4 pt-6 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <Button
+            size="lg"
+            className="pointer-events-auto h-14 w-full max-w-md rounded-full text-base shadow-float"
+            onClick={() => setScanning(true)}
+          >
+            <ScanFaceIcon className="size-6" aria-hidden />
+            {results === null ? t('share.scan') : t('share.scanAgain')}
+          </Button>
+        </div>
+      ) : null}
+
+      {scanning && scanAvailable ? (
+        <ScanSheet onClose={() => setScanning(false)}>
+          <ScanFlow
+            token={token}
+            purpose="search"
+            consent={{
+              policyVersion: meta.faceSearch.policyVersion,
+              consented: meta.faceSearch.consented,
+              resultTtlSeconds: meta.faceSearch.resultTtlSeconds,
+            }}
+            limits={{
+              maxSelfies: meta.faceSearch.maxSelfies,
+              selfie: {
+                longEdge: meta.faceSearch.selfieLongEdge,
+                jpegQuality: meta.faceSearch.selfieJpegQuality,
+              },
+            }}
+            allowGallery={meta.mode === 'gallery'}
+            onResults={(r) => {
+              setResults(r);
+              setScanning(false);
+              setNotice(null);
+              // Show the results, which sit under the header.
+              requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ block: 'start' }));
+            }}
+            onClose={() => setScanning(false)}
+          />
+        </ScanSheet>
+      ) : null}
 
       {meta.allowDownload ? (
         <DownloadBar
@@ -370,6 +411,7 @@ function ShareContent({
           selection={selection}
           downloadSize={meta.downloadSize}
           config={shareConfig}
+          maxFiles={meta.zip.maxFiles}
           onClear={() => setSelected(new Map())}
         />
       ) : null}
@@ -377,56 +419,146 @@ function ShareContent({
   );
 }
 
-type TileRenderer = (
-  item: ShareItem,
-  list: readonly ShareItem[],
-  extra?: { notMe?: boolean },
-) => ReactNode;
-
-/** The "strong" (it's you) and "maybe" groups, each photo with a "not me" button. */
-function ScanResults({ results, tile }: { results: FaceSearchResponse; tile: TileRenderer }) {
-  const tr = useTranslations('results');
-  const groups = [
-    { key: 'strong', items: results.strong },
-    { key: 'maybe', items: results.maybe },
-  ] as const;
-  const empty = results.strong.length === 0 && results.maybe.length === 0;
+/**
+ * The face search as a sheet over the page: full screen on phones (so the sticky button at the
+ * bottom of a long gallery doesn't open something far above), a centered card on wide screens.
+ * Escape closes it.
+ */
+function ScanSheet({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
-    <div className="space-y-5">
-      {results.selfiesWithoutFace > 0 ? (
-        <Alert variant="warning">
-          {tr('partialNoFace', { count: results.selfiesWithoutFace })}
-        </Alert>
-      ) : null}
-      {empty ? (
-        <div className="rounded-xl border-2 border-dashed p-6 text-center" role="status">
-          <p className="font-medium">{tr('none')}</p>
-          <p className="mt-1 text-sm text-muted-foreground">{tr('noneHint')}</p>
-        </div>
-      ) : (
-        groups.map((group) =>
-          group.items.length > 0 ? (
-            <section key={group.key} aria-label={tr(group.key)} className="space-y-2">
-              <h2 className="flex items-baseline gap-2 text-lg font-semibold">
-                {tr(group.key)}
-                <span className="text-sm font-normal text-muted-foreground">
-                  {tr('groupCount', { count: group.items.length })}
-                </span>
-              </h2>
-              <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
-                {group.items.map((item) => (
-                  <li key={item.id}>{tile(item, group.items, { notMe: true })}</li>
-                ))}
-              </ul>
-            </section>
-          ) : null,
-        )
-      )}
+    <div
+      ref={ref}
+      tabIndex={-1}
+      className="fixed inset-0 z-50 overflow-y-auto bg-black/50 outline-none sm:flex sm:items-center sm:justify-center sm:p-6"
+    >
+      <div className="min-h-full w-full bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] sm:min-h-0 sm:max-w-lg sm:rounded-2xl">
+        {children}
+      </div>
     </div>
   );
 }
 
-/** The virtualized, cursor-paginated grid of the share's items. */
+/**
+ * The face-search result (ADR 0011): how many photos were found, "select all" (the found photos
+ * only), "download all found", then the strong and maybe groups, each photo with "not me".
+ * Nothing found: a friendly message and a retry button back to the camera.
+ */
+function ScanResults({
+  token,
+  results,
+  tile,
+  allowDownload,
+  selected,
+  maxFiles,
+  shareConfig,
+  onSelectAll,
+  onRetry,
+}: {
+  token: string;
+  results: FaceSearchResponse;
+  tile: TileRenderer;
+  allowDownload: boolean;
+  selected: ReadonlyMap<string, ShareItem>;
+  maxFiles: number;
+  shareConfig: ClientShareConfig;
+  onSelectAll: (items: readonly ShareItem[], selected: boolean) => void;
+  onRetry: () => void;
+}) {
+  const tr = useTranslations('results');
+  const found = useMemo(() => [...results.strong, ...results.maybe], [results]);
+  const downloader = useDownloader(token, shareConfig, maxFiles);
+  const allSelected = found.length > 0 && found.every((item) => selected.has(item.id));
+  const groups = [
+    { key: 'strong', items: results.strong },
+    { key: 'maybe', items: results.maybe },
+  ] as const;
+
+  if (found.length === 0) {
+    return (
+      <section
+        className="space-y-3 rounded-2xl border-2 border-dashed p-6 text-center"
+        role="status"
+        aria-label={tr('title')}
+      >
+        {results.selfiesWithoutFace > 0 ? (
+          <Alert variant="warning">{tr('noFace')}</Alert>
+        ) : (
+          <>
+            <p className="text-lg font-semibold">{tr('none')}</p>
+            <p className="text-sm text-muted-foreground">{tr('noneHint')}</p>
+          </>
+        )}
+        <Button size="lg" className="rounded-full" onClick={onRetry}>
+          <RotateCcwIcon aria-hidden />
+          {tr('retry')}
+        </Button>
+      </section>
+    );
+  }
+
+  return (
+    <section className="space-y-4" aria-label={tr('title')}>
+      <div className="flex flex-col items-center gap-3 text-center">
+        <h2 className="text-xl font-bold" aria-live="polite">
+          {tr('found', { count: found.length })}
+        </h2>
+        {allowDownload ? (
+          <div className="flex w-full max-w-md flex-col gap-2 sm:flex-row">
+            <Button
+              variant="outline"
+              size="lg"
+              className={cn('flex-1 rounded-full', allSelected && 'border-primary text-primary')}
+              aria-pressed={allSelected}
+              onClick={() => onSelectAll(found, !allSelected)}
+            >
+              <CheckCheckIcon aria-hidden />
+              {allSelected ? tr('deselectAll') : tr('selectAll')}
+            </Button>
+            <Button
+              size="lg"
+              className="flex-1 rounded-full"
+              onClick={() => void downloader.download(found)}
+              disabled={downloader.busy}
+            >
+              <DownloadIcon aria-hidden />
+              {tr('downloadAll', { count: found.length })}
+            </Button>
+          </div>
+        ) : null}
+        <DownloadStatus state={downloader} />
+      </div>
+      {groups.map((group) =>
+        group.items.length > 0 ? (
+          <section key={group.key} aria-label={tr(group.key)} className="space-y-2">
+            <h3 className="flex items-baseline gap-2 text-base font-semibold">
+              {tr(group.key)}
+              <span className="text-sm font-normal text-muted-foreground">
+                {tr('groupCount', { count: group.items.length })}
+              </span>
+            </h3>
+            <JustifiedGrid
+              items={group.items}
+              label={tr(group.key)}
+              captionPx={36}
+              renderItem={(item, size) => tile(item, group.items, size, { notMe: true })}
+            />
+          </section>
+        ) : null,
+      )}
+    </section>
+  );
+}
+
+/** The virtualized, cursor-paginated grid of the share's items, in their own aspect ratios. */
 function ShareGallery({
   token,
   heading,
@@ -457,17 +589,14 @@ function ShareGallery({
   return (
     <section className="space-y-2">
       {heading !== null ? <h2 className="text-lg font-semibold">{heading}</h2> : null}
-      <DriveGrid
+      <JustifiedGrid
         items={listing.items}
         label={tg('galleryLabel')}
         loadingMoreLabel={tg('loadingMore')}
         hasNextPage={listing.hasNextPage}
         isFetchingNextPage={listing.isFetchingNextPage}
         fetchNextPage={listing.fetchNextPage}
-        minCellPx={110}
-        captionPx={0}
-        gapPx={4}
-        renderItem={(item) => tile(item, listing.items)}
+        renderItem={(item, size) => tile(item, listing.items, size)}
       />
     </section>
   );

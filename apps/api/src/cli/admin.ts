@@ -9,6 +9,7 @@ import {
   createAdmin,
   resetAdminPassword,
   resetAdminTotp,
+  type CreatedAdmin,
   type TotpEnrolment,
   unlockAdmin,
 } from './admin-ops';
@@ -26,6 +27,22 @@ import { readPassword } from './read-password';
 // on a terminal), never from arguments, so it stays out of shell history and `ps`.
 
 const USAGE = `Usage: admin <create|reset-totp|reset-password|unlock> --email <email> [--name <name>]`;
+
+function printCreated(created: CreatedAdmin): void {
+  if (created.mfa === 'totp') {
+    printEnrolment(created);
+    return;
+  }
+  process.stdout.write(
+    [
+      `admin user id: ${created.userId}`,
+      `subject:       ${created.subject}`,
+      'Admin MFA is off (ADMIN_MFA_MODE=off, ADR 0011): the admin signs in with email and',
+      'password only. No TOTP enrolment was created.',
+      '',
+    ].join('\n'),
+  );
+}
 
 function printEnrolment(enrolment: TotpEnrolment): void {
   // Shown once: the secret is stored encrypted and can't be displayed again (reset-totp instead).
@@ -56,7 +73,7 @@ async function main(argv: string[]): Promise<void> {
   const admin = config.shotxAuth?.admin ?? null;
   if (admin === null) {
     throw new AdminOpsError(
-      'Admin sign-in is off: needs AUTH_PROVIDER=shotx or local with AUTH_ADMINS_SIGNING_KEY and ADMIN_TOTP_ENCRYPTION_KEY',
+      'Admin sign-in is off: needs AUTH_PROVIDER=shotx or local with AUTH_ADMINS_SIGNING_KEY (and ADMIN_TOTP_ENCRYPTION_KEY with ADMIN_MFA_MODE=totp)',
     );
   }
   const pool = createPool(loadDatabaseConfig(process.env));
@@ -73,7 +90,7 @@ async function main(argv: string[]): Promise<void> {
       case 'create': {
         if (values.name === undefined) throw new AdminOpsError(USAGE);
         const password = await readPassword('New admin password: ');
-        printEnrolment(await createAdmin(ctx, { email, name: values.name, password }));
+        printCreated(await createAdmin(ctx, { email, name: values.name, password }));
         break;
       }
       case 'reset-totp':

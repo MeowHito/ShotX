@@ -134,9 +134,7 @@ describe('item menus', () => {
     };
     await focusOn(th.itemMenu.organize);
     await user.keyboard('{ArrowRight}');
-    expect(
-      await screen.findByRole('menuitem', { name: th.itemMenu.faceIndex }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('menuitem', { name: th.itemMenu.moveTo })).toBeInTheDocument();
     await user.keyboard('{ArrowLeft}{Escape}');
     await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
 
@@ -194,7 +192,9 @@ describe('item menus', () => {
     const share = {
       id: crypto.randomUUID(),
       token: 'aB3dE5fG7hJ9kL1mN3pQ5r',
-      url: 'https://photos.example.com/s/aB3dE5fG7hJ9kL1mN3pQ5r',
+      slug: 'shared',
+      path: '/s/shared',
+      url: 'https://photos.example.com/s/shared',
       target: { type: 'folder', id: shared.id, name: 'Shared', unavailable: false },
       mode: 'gallery',
       allowDownload: true,

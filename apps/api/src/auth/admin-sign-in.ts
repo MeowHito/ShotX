@@ -8,6 +8,7 @@ import {
   type AdminLoginResponse,
   type AdminSignInConfig,
   type AdminSignInStep,
+  adminSignInAmr,
   type AuthAuditAction,
   type AuthTokenResponse,
   normalizeAccountEmail,
@@ -438,7 +439,92 @@ export class AdminSignIn {
     if (row.mustChangePassword) {
       return this.issueChallenge(settings, { ...base, step: 'change_password' });
     }
+    // ADMIN_MFA_MODE=off (ADR 0011 decision 4): the password completes the sign-in.
+    if (settings.mfaMode === 'off') return this.passwordOnlySignIn(row, account, ipHash);
     return this.nextCodeStep(settings, base, row, ipHash);
+  }
+
+  /**
+   * ADMIN_MFA_MODE=off: starts the session after the password (and, for a temporary password,
+   * the change step), in one transaction with whatever the change step decided: the new hash,
+   * `must_change_password = false`, the cleared failure count and lock, `last_sign_in_at`, the
+   * audit rows and the session (`amr` ["pwd"]). The row is locked FOR UPDATE and must still be
+   * active with the password this sign-in verified (`pwdFp`), else LOGIN_STATE_INVALID /
+   * ACCOUNT_DISABLED. Clears the account's windows.
+   */
+  private async passwordOnlySignIn(
+    row: AdminRow,
+    account: string,
+    ipHash: string,
+    change?: { pwdFp: string; newPasswordHash: string },
+  ): Promise<Extract<AdminLoginResponse, { step: 'signed_in' }>> {
+    const { auth } = this.admin();
+    const now = this.clock.now();
+    const amr = adminSignInAmr('off');
+    const pwdFp = change?.pwdFp ?? passwordFingerprint(row.passwordHash);
+    const outcome = await this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({
+          status: users.status,
+          passwordHash: adminCredentials.passwordHash,
+          mustChangePassword: adminCredentials.mustChangePassword,
+        })
+        .from(adminCredentials)
+        .innerJoin(users, eq(users.id, adminCredentials.userId))
+        .where(eq(adminCredentials.userId, row.id))
+        .for('update', { of: adminCredentials })
+        .limit(1);
+      if (current === undefined || passwordFingerprint(current.passwordHash) !== pwdFp) {
+        return { kind: 'gone' } as const;
+      }
+      if (current.status !== 'active') return { kind: 'disabled' } as const;
+      // A temporary password must be replaced before a session starts.
+      if (current.mustChangePassword && change === undefined) return { kind: 'gone' } as const;
+      await tx
+        .update(adminCredentials)
+        .set({
+          failedAttempts: 0,
+          lockedUntil: null,
+          updatedAt: now,
+          ...(change === undefined
+            ? {}
+            : { passwordHash: change.newPasswordHash, mustChangePassword: false }),
+        })
+        .where(eq(adminCredentials.userId, row.id));
+      await markSignedIn(tx, row.id, now);
+      const audit = (action: AuthAuditAction, meta: Record<string, unknown>) =>
+        writeAuthAudit(tx, {
+          actorId: row.id,
+          action,
+          targetType: 'user',
+          targetId: row.id,
+          meta,
+          now,
+        });
+      if (change !== undefined) await audit('auth.admin.password_changed', { ipHash });
+      await audit('auth.admin.sign_in', { ipHash, amr, mfaMode: 'off' });
+      const session = await startSession(tx, {
+        userId: row.id,
+        pool: 'admins',
+        now,
+        ttlSeconds: auth.config.pools.admins?.refreshTokenTtlSeconds ?? 0,
+        amr,
+      });
+      return { kind: 'signed_in', session, user: await sessionUser(tx, row.id) } as const;
+    });
+    if (outcome.kind === 'disabled') throw accountDisabled();
+    if (outcome.kind === 'gone') throw loginStateInvalid();
+    await Promise.all(
+      (['pwd', 'otp'] as const).map((s) => this.limiter.reset(this.windowKey(s, 'acct', account))),
+    );
+    const tokens = await tokenResponse(auth, 'admins', outcome.user, outcome.session, amr, now);
+    return { ...tokens, step: 'signed_in' };
+  }
+
+  /** TOTP settings; ADMIN_MFA_MODE=totp always has them (the loader requires the key). */
+  private totp(settings: AdminSignInConfig): NonNullable<AdminSignInConfig['totp']> {
+    if (settings.totp === null) throw new Error('ADMIN_MFA_MODE=totp without TOTP settings');
+    return settings.totp;
   }
 
   /**
@@ -454,14 +540,15 @@ export class AdminSignIn {
     if (row.totpSecretEncrypted !== null) {
       return this.issueChallenge(settings, { ...base, step: 'totp' });
     }
+    const totp = this.totp(settings);
     const secret = generateTotpSecret();
-    const encrypted = encryptTotpSecret(settings.totp.encryptionKey, row.id, secret);
+    const encrypted = encryptTotpSecret(totp.encryptionKey, row.id, secret);
     const uri = otpauthUri({
       issuer: adminTotpIssuer(this.config.app.stage),
       account: row.email ?? row.id,
       secret,
-      digits: settings.totp.digits,
-      periodSeconds: settings.totp.periodSeconds,
+      digits: totp.digits,
+      periodSeconds: totp.periodSeconds,
     });
     secret.fill(0);
     const response = await this.issueChallenge(settings, {
@@ -532,6 +619,13 @@ export class AdminSignIn {
     });
     if ((await this.store.take(key)) === null) throw loginStateInvalid();
     const newPasswordHash = await hashPassword(newPassword, this.config.password.argon2id);
+    // ADMIN_MFA_MODE=off: store the new password and start the session now.
+    if (settings.mfaMode === 'off') {
+      return this.passwordOnlySignIn(row, challenge.account, ipHash, {
+        pwdFp: challenge.pwdFp,
+        newPasswordHash,
+      });
+    }
     return this.nextCodeStep(
       settings,
       {
@@ -561,6 +655,9 @@ export class AdminSignIn {
    */
   async verifyMfa(challengeId: string, code: string, ipHash: string): Promise<AuthTokenResponse> {
     const { auth, settings } = this.admin();
+    // ADMIN_MFA_MODE=off: no challenge is ever for this step.
+    if (settings.mfaMode === 'off') throw loginStateInvalid();
+    const totp = this.totp(settings);
     const { key, challenge } = await this.readChallenge(challengeId, ['totp', 'enrol_totp']);
     const { userId, account } = challenge;
 
@@ -604,7 +701,7 @@ export class AdminSignIn {
       now.getTime() - row.credentialsCreatedAt.getTime() > settings.totpEnrolmentTtlSeconds * 1000;
     let secret: Buffer;
     try {
-      secret = decryptTotpSecret(settings.totp.encryptionKey, row.id, stored);
+      secret = decryptTotpSecret(totp.encryptionKey, row.id, stored);
     } catch {
       // A challenge written under another key (rotated ADMIN_TOTP_ENCRYPTION_KEY): start again.
       await this.store.del(key);
@@ -612,9 +709,9 @@ export class AdminSignIn {
     }
     const check = {
       nowMs: now.getTime(),
-      periodSeconds: settings.totp.periodSeconds,
-      digits: settings.totp.digits,
-      window: settings.totp.window,
+      periodSeconds: totp.periodSeconds,
+      digits: totp.digits,
+      window: totp.window,
       lastUsedStep: enrolling ? null : row.totpLastUsedStep,
     };
     const step = matchTotp(secret, code, check);
@@ -711,6 +808,7 @@ export class AdminSignIn {
         pool: 'admins',
         now,
         ttlSeconds: auth.config.pools.admins?.refreshTokenTtlSeconds ?? 0,
+        amr: adminSignInAmr('totp'),
       });
       return { kind: 'signed_in', session, user: await sessionUser(tx, row.id) } as const;
     });
@@ -726,7 +824,14 @@ export class AdminSignIn {
     await Promise.all(
       (['pwd', 'otp'] as const).map((s) => this.limiter.reset(this.windowKey(s, 'acct', account))),
     );
-    return tokenResponse(auth, 'admins', outcome.user, outcome.session, ['pwd', 'otp', 'mfa'], now);
+    return tokenResponse(
+      auth,
+      'admins',
+      outcome.user,
+      outcome.session,
+      adminSignInAmr('totp'),
+      now,
+    );
   }
 
   /**

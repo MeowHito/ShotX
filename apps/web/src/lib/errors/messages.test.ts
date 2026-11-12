@@ -1,4 +1,5 @@
 import {
+  COVER_FILE_INVALID_REASONS,
   ERROR_CODES,
   ErrorCode,
   PASSWORD_POLICY_REASONS,
@@ -171,6 +172,17 @@ describe('error message map', () => {
     ]) {
       expect(render(messageForCode(code, undefined)), code).toMatch(/[฀-๿]/);
     }
+  });
+
+  it('says why a file can\u2019t be the folder cover (COVER_FILE_INVALID)', () => {
+    for (const reason of COVER_FILE_INVALID_REASONS) {
+      const m = messageForCode(ErrorCode.COVER_FILE_INVALID, { reason });
+      expect(m.key).toBe(`coverFile.${reason}`);
+      expect(render(m)).toBe(th.errors.coverFile[reason]);
+    }
+    expect(render(messageForCode(ErrorCode.COVER_FILE_INVALID, undefined))).toBe(
+      'ใช้รูปนี้เป็นภาพปกไม่ได้',
+    );
   });
 
   it('explains LOGIN_PROVIDER_UNAVAILABLE (require login without LINE/Google)', () => {

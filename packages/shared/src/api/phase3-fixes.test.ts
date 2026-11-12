@@ -48,6 +48,7 @@ describe('consent purposes (Phase 3 review, ADR 0007)', () => {
     const consent = {
       purpose: 'face_deletion',
       policyVersion: '2026-10-25',
+      locale: 'th',
       acceptedAt: '2026-10-26T01:00:00.000Z',
     };
     expect(consentResponseSchema.parse(consent)).toEqual(consent);

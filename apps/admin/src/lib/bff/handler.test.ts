@@ -30,6 +30,7 @@ function setup(upstream: (url: string, init: RequestInit) => Response) {
     mfa: vi.fn(),
     refresh: vi.fn((): Promise<AuthTokenResponse> => Promise.reject(new Error('no'))),
     logout: vi.fn(),
+    providers: vi.fn(),
   };
   const auth: AuthDeps = { api, adminBaseUrl: ORIGIN, secureCookies: true, now: () => NOW };
   const run = (path: string, init: RequestInit = {}) =>

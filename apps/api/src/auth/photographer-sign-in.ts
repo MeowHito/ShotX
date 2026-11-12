@@ -360,7 +360,13 @@ export class PhotographerSignIn {
         passwordChangeRequired: restricted,
       });
       return {
-        session: await startSession(tx, { userId: row.id, pool: 'users', now, ttlSeconds }),
+        session: await startSession(tx, {
+          userId: row.id,
+          pool: 'users',
+          now,
+          ttlSeconds,
+          amr: ['pwd'],
+        }),
         user: await sessionUser(tx, row.id),
       };
     });
@@ -451,6 +457,7 @@ export class PhotographerSignIn {
           pool: 'users',
           now,
           ttlSeconds: auth.config.pools.users.refreshTokenTtlSeconds,
+          amr: ['pwd'],
         }),
         user: await sessionUser(tx, row.id),
       };

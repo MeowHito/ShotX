@@ -1,6 +1,7 @@
 export * from './errors';
 export * from './domain';
 export * from './media-types';
+export * from './locale';
 export * from './s3-keys';
 export * from './queues/index';
 export * from './drive/names';
@@ -15,6 +16,7 @@ export * from './account/tokens';
 export * from './account/oidc';
 export * from './account/password-accounts';
 export * from './share/token';
+export * from './share/slug';
 export * from './share/signed-url';
 export * from './share/scope';
 export * from './share/viewer';

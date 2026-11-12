@@ -134,13 +134,19 @@ describe('auth error codes', () => {
 describe('no viewer login provider (launch decision 2026-11-11)', () => {
   it('GET /auth/providers allows an empty OIDC list, in order and without repeats', () => {
     expect(
-      authProvidersResponseSchema.parse({ oidc: [], devLogin: false, adminLogin: true }),
-    ).toEqual({ oidc: [], devLogin: false, adminLogin: true });
+      authProvidersResponseSchema.parse({
+        oidc: [],
+        devLogin: false,
+        adminLogin: true,
+        adminMfaMode: 'off',
+      }),
+    ).toEqual({ oidc: [], devLogin: false, adminLogin: true, adminMfaMode: 'off' });
     expect(
       authProvidersResponseSchema.safeParse({
         oidc: ['line', 'google'],
         devLogin: false,
         adminLogin: true,
+        adminMfaMode: null,
       }).success,
     ).toBe(true);
     expect(
@@ -148,6 +154,7 @@ describe('no viewer login provider (launch decision 2026-11-11)', () => {
         oidc: ['line', 'line'],
         devLogin: false,
         adminLogin: true,
+        adminMfaMode: null,
       }).success,
     ).toBe(false);
     expect(AUTH_ROUTES.providers.response).toBe(authProvidersResponseSchema);

@@ -204,6 +204,7 @@ async function main(): Promise<void> {
       media: config.media,
       video: worker.video,
       exifDefaultUtcOffset: worker.exifDefaultUtcOffset,
+      faceIndexExpiryDays: config.retention.faceIndexExpiryDays,
       tmpDir: worker.tmpDir,
       maxProcessingMs: worker.maxProcessingMs.media,
       originalsStorageClass: config.storage.originalsStorageClass,

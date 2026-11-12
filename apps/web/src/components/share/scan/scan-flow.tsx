@@ -7,14 +7,14 @@ import {
   type FaceSearchResponse,
   rateLimitedDetailsSchema,
 } from '@shotx/shared';
-import { Alert, Button } from '@shotx/ui';
+import { Alert, Button, Progress } from '@shotx/ui';
 import { XIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, isApiError } from '@/lib/api/errors';
 import type { SelfieLimits } from '@/lib/face/config';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
-import { SELFIE_ANGLES, type SelfieIssue } from '@/lib/face/quality-gate';
+import type { SelfieIssue } from '@/lib/face/quality-gate';
 import { processSelfie, type SelfieSource } from '@/lib/face/selfie';
 import { useFaceDeletion, useFaceSearch, useInvalidateShare } from '@/lib/share/queries';
 import { CaptchaChallenge, type CaptchaFailure } from './captcha-challenge';
@@ -40,20 +40,22 @@ export interface ScanConsent {
 }
 
 /**
- * Consent, then one to FACE_MAX_SELFIES selfies (front, slightly left, slightly right), each
- * checked by the client-side quality gate, then one multipart upload: face search ("search") or
- * the "delete my face" request ("delete"). The selfie limits come from the API (`limits`), the
- * gate from the web config. Selfies live only in this component's memory and are dropped after
- * the request; nothing is written to storage or logged.
+ * Consent first (unchanged rule), then the camera (ADR 0011): one selfie in a round frame, checked
+ * by the client-side quality gate without upfront tips (a failed check says why and the camera
+ * comes back), and for face search the search starts as soon as the photo passes: no extra
+ * angles, no second button, a progress bar while it runs. "Delete my face" ("delete", reached
+ * only by its unlinked URL) keeps an explicit confirm button, since deletion can't be undone.
+ * The selfie lives only in this component's memory and is dropped after the request; nothing is
+ * written to storage or logged.
  *
  * A scan answered with CONSENT_REQUIRED or CONSENT_VERSION_MISMATCH brings the consent screen
  * back with the version from the error details.
  *
  * Over a rate limit the API answers RATE_LIMITED before it reads any selfie. When its details
- * offer a Turnstile challenge (`captcha`, not `unavailable`), the selfies stay in memory, the
- * widget is shown (its script loads only now) and the same selfies are sent again with the token;
+ * offer a Turnstile challenge (`captcha`, not `unavailable`), the selfie stays in memory, the
+ * widget is shown (its script loads only now) and the same selfie is sent again with the token;
  * an expired or invalid token shows why and a fresh widget. Otherwise only waiting helps: the
- * wait message is shown and the selfies are dropped.
+ * wait message is shown and the selfie is dropped.
  */
 export function ScanFlow({
   token,
@@ -81,8 +83,10 @@ export function ScanFlow({
 
   const [consentNeeded, setConsentNeeded] = useState(!consent.consented);
   const [consentVersion, setConsentVersion] = useState(consent.policyVersion);
-  const [selfies, setSelfies] = useState<Selfie[]>([]);
-  const [adding, setAdding] = useState(true);
+  /** The selfie that passed the gate, kept only for a captcha retry or the delete confirm. */
+  const [selfie, setSelfie] = useState<Selfie | null>(null);
+  /** Remounts the camera for another photo. */
+  const [attempt, setAttempt] = useState(0);
   const [checking, setChecking] = useState(false);
   const [issue, setIssue] = useState<SelfieIssue | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -94,13 +98,18 @@ export function ScanFlow({
     failed: boolean;
   } | null>(null);
   const captcha = tools.config.captcha;
-  const selfiesRef = useRef(selfies);
+  const selfieRef = useRef(selfie);
   useEffect(() => {
-    selfiesRef.current = selfies;
-  }, [selfies]);
+    selfieRef.current = selfie;
+  }, [selfie]);
 
-  // Drop every selfie (and its object URL) when the flow closes.
-  useEffect(() => () => selfiesRef.current.forEach((s) => URL.revokeObjectURL(s.url)), []);
+  // Drop the selfie (and its object URL) when the flow closes.
+  useEffect(
+    () => () => {
+      if (selfieRef.current !== null) URL.revokeObjectURL(selfieRef.current.url);
+    },
+    [],
+  );
 
   const processor = useMemo(
     () => ({
@@ -110,43 +119,45 @@ export function ScanFlow({
     }),
     [tools, limits.selfie],
   );
-  const maxAngles = Math.min(limits.maxSelfies, SELFIE_ANGLES.length);
-  const angle = SELFIE_ANGLES[Math.min(selfies.length, SELFIE_ANGLES.length - 1)] ?? 'front';
-  const busy = checking || search.isPending || deletion.isPending;
+  const searching = search.isPending || deletion.isPending;
+  const busy = checking || searching;
 
-  function dropSelfies() {
-    selfiesRef.current.forEach((s) => URL.revokeObjectURL(s.url));
-    selfiesRef.current = [];
-    setSelfies([]);
-    setAdding(true);
+  function dropSelfie() {
+    if (selfieRef.current !== null) URL.revokeObjectURL(selfieRef.current.url);
+    selfieRef.current = null;
+    setSelfie(null);
+  }
+
+  /** Back to the camera for another photo. */
+  function retake() {
+    dropSelfie();
+    setAttempt((a) => a + 1);
   }
 
   async function onCaptured(source: SelfieSource) {
     setChecking(true);
     setIssue(null);
     setError(null);
+    let captured: Selfie;
     try {
-      const result = await processSelfie(source, angle, processor);
+      const result = await processSelfie(source, 'front', processor);
       if (!result.ok) {
         setIssue(result.issue);
+        setAttempt((a) => a + 1);
         return;
       }
-      const selfie = { blob: result.blob, url: URL.createObjectURL(result.blob) };
-      setSelfies((prev) => [...prev, selfie]);
-      setAdding(false);
+      captured = { blob: result.blob, url: URL.createObjectURL(result.blob) };
     } catch {
       setIssue('unreadable');
+      setAttempt((a) => a + 1);
+      return;
     } finally {
       setChecking(false);
     }
-  }
-
-  function removeSelfie(index: number) {
-    const removed = selfies[index];
-    if (removed !== undefined) URL.revokeObjectURL(removed.url);
-    const next = selfies.filter((_, i) => i !== index);
-    setSelfies(next);
-    if (next.length === 0) setAdding(true);
+    selfieRef.current = captured;
+    setSelfie(captured);
+    // Face search starts right away; deletion waits for its confirm button.
+    if (purpose === 'search') await submit(undefined, captured);
   }
 
   /** The Turnstile action the API offers for this error, or null when only waiting helps. */
@@ -170,33 +181,34 @@ export function ScanFlow({
     return new ApiError(err.status, err.code, err.message, { ...details.data, captcha: null });
   }
 
-  async function submit(captchaToken?: string) {
+  async function submit(captchaToken?: string, current: Selfie | null = selfieRef.current) {
+    if (current === null) return;
     setError(null);
-    const blobs = selfies.map((s) => s.blob);
+    const blobs = [current.blob];
     try {
       if (purpose === 'search') {
         const results = await search.mutateAsync({ selfies: blobs, captchaToken });
         setChallenge(null);
-        dropSelfies();
+        dropSelfie();
         onResults?.(results);
       } else {
         const res = await deletion.mutateAsync({ selfies: blobs, captchaToken });
         setChallenge(null);
-        dropSelfies();
+        dropSelfie();
         setDeleted(res.facesMatched);
       }
     } catch (err) {
       const action = challengeFor(err);
       if (action !== null) {
-        // The API refused before reading the selfies: keep them (in memory) for the retry.
+        // The API refused before reading the selfie: keep it (in memory) for the retry.
         setChallenge((prev) => ({ action, attempt: (prev?.attempt ?? 0) + 1, failed: false }));
         setError(describe(err));
         return;
       }
       setChallenge(null);
-      // The selfies were looked at by the server either way; never keep them for a retry
-      // unless the request never got through.
-      if (!(err instanceof Error && err.name === 'NetworkError')) dropSelfies();
+      // The selfie was looked at by the server either way; never keep it for a retry.
+      dropSelfie();
+      setAttempt((a) => a + 1);
       if (
         isApiError(err, ErrorCode.CONSENT_REQUIRED) ||
         isApiError(err, ErrorCode.CONSENT_VERSION_MISMATCH)
@@ -259,108 +271,74 @@ export function ScanFlow({
         <Button onClick={onClose}>{t('faceDeletion.close')}</Button>
       </div>
     );
+  } else if (
+    challenge !== null &&
+    captcha.provider === 'turnstile' &&
+    tools.loadTurnstile !== null
+  ) {
+    body = (
+      <div className="space-y-3">
+        {error !== null ? <Alert variant="warning">{error}</Alert> : null}
+        {busy ? (
+          <p role="status" className="text-sm">
+            {t('capture.captchaVerifying')}
+          </p>
+        ) : challenge.failed ? (
+          <Button
+            variant="outline"
+            onClick={() => {
+              setError(null);
+              setChallenge({ ...challenge, attempt: challenge.attempt + 1, failed: false });
+            }}
+          >
+            {t('capture.captchaRetry')}
+          </Button>
+        ) : (
+          <CaptchaChallenge
+            key={challenge.attempt}
+            loader={tools.loadTurnstile}
+            siteKey={captcha.siteKey}
+            action={challenge.action}
+            onToken={(captchaToken) => void submit(captchaToken)}
+            onFailure={onCaptchaFailure}
+          />
+        )}
+      </div>
+    );
+  } else if (busy) {
+    const label = checking
+      ? t('capture.checking')
+      : purpose === 'search'
+        ? t('capture.searching')
+        : t('faceDeletion.submitting');
+    body = <SearchProgress label={label} />;
+  } else if (purpose === 'delete' && selfie !== null) {
+    body = (
+      <div className="space-y-4">
+        <p className="text-sm">{t('faceDeletion.intro')}</p>
+        <div className="flex flex-col gap-2">
+          <Button size="lg" onClick={() => void submit()}>
+            {t('faceDeletion.submit')}
+          </Button>
+          <Button variant="outline" onClick={retake}>
+            {t('capture.retake')}
+          </Button>
+        </div>
+      </div>
+    );
   } else {
     body = (
       <div className="space-y-4">
         {purpose === 'delete' ? <p className="text-sm">{t('faceDeletion.intro')}</p> : null}
-        <p className="text-xs text-muted-foreground">{t('capture.notStored')}</p>
-        {selfies.length > 0 ? (
-          <ul className="flex gap-2">
-            {selfies.map((selfie, i) => (
-              <li key={selfie.url} className="relative">
-                {/* A blob: URL of the in-memory selfie; never uploaded anywhere but the API. */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={selfie.url}
-                  alt={t('capture.selfieAlt', { n: i + 1 })}
-                  className="size-20 rounded-lg object-cover"
-                />
-                <button
-                  type="button"
-                  onClick={() => removeSelfie(i)}
-                  className="absolute -top-2 -right-2 rounded-full bg-background p-1 shadow"
-                  aria-label={t('capture.remove')}
-                  disabled={busy}
-                >
-                  <XIcon className="size-3.5" aria-hidden />
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        {challenge !== null && captcha.provider === 'turnstile' && tools.loadTurnstile !== null ? (
-          <div className="space-y-3">
-            {error !== null ? <Alert variant="warning">{error}</Alert> : null}
-            {busy ? (
-              <p role="status" className="text-sm">
-                {t('capture.captchaVerifying')}
-              </p>
-            ) : challenge.failed ? (
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setError(null);
-                  setChallenge({ ...challenge, attempt: challenge.attempt + 1, failed: false });
-                }}
-              >
-                {t('capture.captchaRetry')}
-              </Button>
-            ) : (
-              <CaptchaChallenge
-                key={challenge.attempt}
-                loader={tools.loadTurnstile}
-                siteKey={captcha.siteKey}
-                action={challenge.action}
-                onToken={(token) => void submit(token)}
-                onFailure={onCaptchaFailure}
-              />
-            )}
-          </div>
-        ) : adding ? (
-          <>
-            {maxAngles > 1 ? (
-              <p className="text-sm text-muted-foreground">
-                {t('capture.angleStep', {
-                  current: selfies.length + 1,
-                  max: maxAngles,
-                  angle: t(`capture.angles.${angle}`),
-                })}
-              </p>
-            ) : null}
-            <SelfieCapture
-              onCaptured={(s) => void onCaptured(s)}
-              allowGallery={allowGallery}
-              busy={busy}
-            />
-          </>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <Button size="lg" onClick={() => void submit()} disabled={busy}>
-              {purpose === 'search'
-                ? search.isPending
-                  ? t('capture.searching')
-                  : t('capture.search')
-                : deletion.isPending
-                  ? t('faceDeletion.submitting')
-                  : t('faceDeletion.submit')}
-            </Button>
-            {selfies.length < maxAngles ? (
-              <>
-                <Button variant="outline" onClick={() => setAdding(true)} disabled={busy}>
-                  {t('capture.addAngle', { angle: t(`capture.angles.${angle}`) })}
-                </Button>
-                <p className="text-xs text-muted-foreground">{t('capture.addAngleHint')}</p>
-              </>
-            ) : null}
-          </div>
-        )}
-        {checking ? (
-          <p role="status" className="text-sm">
-            {t('capture.checking')}
-          </p>
-        ) : null}
         {issue !== null ? <Alert variant="warning">{t(`capture.issues.${issue}`)}</Alert> : null}
-        {error !== null && challenge === null ? <Alert variant="destructive">{error}</Alert> : null}
+        {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
+        <SelfieCapture
+          key={attempt}
+          onCaptured={(s) => void onCaptured(s)}
+          allowGallery={allowGallery}
+          busy={busy}
+        />
+        <p className="text-center text-xs text-muted-foreground">{t('capture.notStored')}</p>
       </div>
     );
   }
@@ -378,5 +356,23 @@ export function ScanFlow({
       </div>
       {body}
     </section>
+  );
+}
+
+/**
+ * The bar shown while the photo is checked and searched. The API gives no progress, so it moves
+ * quickly at first and slows down towards 90% until the answer arrives.
+ */
+export function SearchProgress({ label }: { label: string }) {
+  const [value, setValue] = useState(8);
+  useEffect(() => {
+    const timer = setInterval(() => setValue((v) => v + (90 - v) * 0.12), 250);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <div className="space-y-3 py-6 text-center" role="status">
+      <p className="font-medium">{label}</p>
+      <Progress value={value} aria-label={label} className="h-2.5" />
+    </div>
   );
 }

@@ -172,7 +172,7 @@ describe('loadShotxAuthConfig', () => {
       },
       lockout: { threshold: 10, seconds: 900 },
     });
-    expect(config.admin?.totp.encryptionKey).toEqual(new Uint8Array(32).fill(7));
+    expect(config.admin?.totp?.encryptionKey).toEqual(new Uint8Array(32).fill(7));
   });
 
   it('accepts PEM keys, on one line with \\n too, and normalizes them', () => {
@@ -248,10 +248,53 @@ describe('loadShotxAuthConfig', () => {
     for (const [key, message] of [
       ['AUTH_USERS_SIGNING_KEY', /AUTH_USERS_SIGNING_KEY is required/],
       ['AUTH_ADMINS_SIGNING_KEY', /AUTH_ADMINS_SIGNING_KEY is required/],
-      ['ADMIN_TOTP_ENCRYPTION_KEY', /ADMIN_TOTP_ENCRYPTION_KEY is required/],
     ] as const) {
       expect(() => loadShotxAuthConfig(without(shotx, key)), key).toThrow(message);
     }
+    // The TOTP key only with ADMIN_MFA_MODE=totp (ADR 0011 decision 4).
+    expect(() =>
+      loadShotxAuthConfig({
+        ...without(shotx, 'ADMIN_TOTP_ENCRYPTION_KEY'),
+        ADMIN_MFA_MODE: 'totp',
+      }),
+    ).toThrow(/ADMIN_TOTP_ENCRYPTION_KEY is required with ADMIN_MFA_MODE=totp/);
+  });
+
+  describe('ADMIN_MFA_MODE (ADR 0011 decision 4)', () => {
+    it('defaults to off, needs no TOTP key, and keeps a key that is set for the CLI', () => {
+      const off = loadShotxAuthConfig(without(shotx, 'ADMIN_TOTP_ENCRYPTION_KEY'));
+      expect(off.admin?.mfaMode).toBe('off');
+      expect(off.admin?.totp).toBeNull();
+      expect(off.pools.admins).not.toBeNull();
+      expect(authProvidersOf(off).adminMfaMode).toBe('off');
+      const offWithKey = loadShotxAuthConfig(shotx);
+      expect(offWithKey.admin?.mfaMode).toBe('off');
+      expect(offWithKey.admin?.totp?.encryptionKey).toEqual(new Uint8Array(32).fill(7));
+    });
+
+    it('totp restores the TOTP settings', () => {
+      const totp = loadShotxAuthConfig({ ...shotx, ADMIN_MFA_MODE: 'totp' });
+      expect(totp.admin).toMatchObject({ mfaMode: 'totp', totp: { digits: 6, window: 1 } });
+      expect(authProvidersOf(totp).adminMfaMode).toBe('totp');
+    });
+
+    it('refuses other values', () => {
+      for (const ADMIN_MFA_MODE of ['on', 'TOTP', 'sms']) {
+        expect(() => loadShotxAuthConfig({ ...shotx, ADMIN_MFA_MODE }), ADMIN_MFA_MODE).toThrow(
+          /ADMIN_MFA_MODE/,
+        );
+      }
+    });
+
+    it('keeps the lockout, rate limits and password policy in both modes', () => {
+      for (const mode of ['off', 'totp']) {
+        expect(loadShotxAuthConfig({ ...shotx, ADMIN_MFA_MODE: mode }).admin).toMatchObject({
+          passwordMinLength: 14,
+          rateLimits: { perAccount: { limit: 5 }, perIp: { limit: 20 } },
+          lockout: { threshold: 10, seconds: 900 },
+        });
+      }
+    });
   });
 
   describe('LINE and Google are optional on every stage (launch decision 2026-11-11)', () => {
@@ -267,7 +310,12 @@ describe('loadShotxAuthConfig', () => {
       const config = loadShotxAuthConfig(noOidc);
       expect(config.oidc).toEqual({ line: null, google: null });
       expect(enabledOidcProviders(config)).toEqual([]);
-      expect(authProvidersOf(config)).toEqual({ oidc: [], devLogin: false, adminLogin: true });
+      expect(authProvidersOf(config)).toEqual({
+        oidc: [],
+        devLogin: false,
+        adminLogin: true,
+        adminMfaMode: 'off',
+      });
       expect(viewerLoginAvailable(authProvidersOf(config))).toBe(false);
       // Empty values (`LINE_LOGIN_CHANNEL_ID=` in an env file) count as unset.
       const blank = {
@@ -376,8 +424,16 @@ describe('loadShotxAuthConfig', () => {
     expect(() => loadShotxAuthConfig({ ...local, ADMIN_TOTP_ENCRYPTION_KEY: TOTP_KEY })).toThrow(
       /AUTH_ADMINS_SIGNING_KEY is required/,
     );
+    // ADMIN_MFA_MODE=off (default): the admins pool needs no TOTP key; `totp` does.
+    expect(
+      loadShotxAuthConfig({ ...local, AUTH_ADMINS_SIGNING_KEY: admins.privateDer }).admin,
+    ).toMatchObject({ mfaMode: 'off', totp: null });
     expect(() =>
-      loadShotxAuthConfig({ ...local, AUTH_ADMINS_SIGNING_KEY: admins.privateDer }),
+      loadShotxAuthConfig({
+        ...local,
+        AUTH_ADMINS_SIGNING_KEY: admins.privateDer,
+        ADMIN_MFA_MODE: 'totp',
+      }),
     ).toThrow(/ADMIN_TOTP_ENCRYPTION_KEY is required/);
     expect(() => loadShotxAuthConfig(without(local, 'AUTH_USERS_SIGNING_KEY'))).toThrow(
       /AUTH_USERS_SIGNING_KEY is required/,
@@ -401,7 +457,7 @@ describe('loadShotxAuthConfig', () => {
         /must be 32 bytes, base64 encoded/,
       );
     }
-    expect(loadShotxAuthConfig({ ...shotx, ADMIN_TOTP_DIGITS: '8' }).admin?.totp.digits).toBe(8);
+    expect(loadShotxAuthConfig({ ...shotx, ADMIN_TOTP_DIGITS: '8' }).admin?.totp?.digits).toBe(8);
     expect(() => loadShotxAuthConfig({ ...shotx, ADMIN_TOTP_DIGITS: '7' })).toThrow(/6 or 8/);
     expect(() => loadShotxAuthConfig({ ...shotx, ADMIN_TOTP_WINDOW: '3' })).toThrow();
   });

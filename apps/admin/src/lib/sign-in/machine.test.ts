@@ -23,12 +23,15 @@ describe('admin sign-in steps', () => {
     expect(advance({ step: 'totp' }, { step: 'signed_in' })).toEqual({ step: 'signed_in' });
   });
 
-  it('never reaches signed_in without the code step', () => {
-    expect(advance(INITIAL_SIGN_IN_STATE, { step: 'signed_in' })).toEqual({
-      step: 'credentials',
-      notice: 'unexpected',
-    });
-    expect(advance({ step: 'change_password' }, { step: 'signed_in' }).step).toBe('credentials');
+  it('signs in after the password, or after a password change, without TOTP (mode off)', () => {
+    expect(advance(INITIAL_SIGN_IN_STATE, { step: 'signed_in' })).toEqual({ step: 'signed_in' });
+    let state = advance(INITIAL_SIGN_IN_STATE, { step: 'change_password' });
+    state = advance(state, { step: 'signed_in' });
+    expect(state).toEqual({ step: 'signed_in' });
+  });
+
+  it('refuses answers that cannot follow the current step', () => {
+    expect(advance({ step: 'signed_in' }, { step: 'totp' }).step).toBe('credentials');
     expect(advance({ step: 'change_password' }, { step: 'change_password' }).step).toBe(
       'credentials',
     );

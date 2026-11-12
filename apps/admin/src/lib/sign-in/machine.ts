@@ -2,16 +2,20 @@ import { ErrorCode } from '@shotx/shared';
 import type { SignInStepView } from './protocol';
 
 /**
- * The admin sign-in as a pure state machine (ADMIN_SIGN_IN_STEPS):
+ * The admin sign-in as a pure state machine (ADMIN_SIGN_IN_STEPS_BY_MODE). The API decides the
+ * steps; the machine only refuses answers that can't follow the current step.
  *
- *   credentials ─┬─> change_password ─┬─> enrol_totp ─┐
- *                ├────────────────────┼──────────────>├─> signed_in
- *                └─> enrol_totp / totp └─> totp ──────┘
+ *   ADMIN_MFA_MODE=off:   credentials ─┬─> change_password ──> signed_in
+ *                                      └──────────────────────> signed_in
+ *   ADMIN_MFA_MODE=totp:  credentials ─┬─> change_password ─┬─> enrol_totp ─┐
+ *                                      ├────────────────────┼──────────────>├─> signed_in
+ *                                      └─> enrol_totp / totp └─> totp ──────┘
  *
- * `totp` (or `enrol_totp`) is always last: tokens come only from a valid code, so there is no
- * path to `signed_in` that skips it. Any answer that doesn't fit the current step sends the person
- * back to the start; so does a used-up or expired challenge (LOGIN_STATE_INVALID). The enrolment
- * URI lives in the state only while the `enrol_totp` step is shown and is dropped on any move.
+ * The session cookies are set by the admin app's route handlers only from the API's `signed_in`
+ * answer, so this machine can't sign anyone in by itself. Any answer that doesn't fit the current
+ * step sends the person back to the start; so does a used-up or expired challenge
+ * (LOGIN_STATE_INVALID). The enrolment URI lives in the state only while the `enrol_totp` step is
+ * shown and is dropped on any move.
  */
 
 export type SignInState =
@@ -28,8 +32,8 @@ export const INITIAL_SIGN_IN_STATE: SignInState = { step: 'credentials', notice:
 
 /** Which answers each step may receive. */
 const ALLOWED: Record<SignInState['step'], readonly SignInStepView['step'][]> = {
-  credentials: ['change_password', 'enrol_totp', 'totp'],
-  change_password: ['enrol_totp', 'totp'],
+  credentials: ['change_password', 'enrol_totp', 'totp', 'signed_in'],
+  change_password: ['enrol_totp', 'totp', 'signed_in'],
   enrol_totp: ['signed_in'],
   totp: ['signed_in'],
   signed_in: [],

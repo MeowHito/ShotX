@@ -1,6 +1,7 @@
 import {
   type BillingNotice,
   checkoutPendingDetailsSchema,
+  coverFileInvalidDetailsSchema,
   ErrorCode,
   faceSearchUnavailableDetailsSchema,
   planChangeInvalidDetailsSchema,
@@ -38,6 +39,7 @@ export type ErrorMessageKey =
   | `details.${keyof Errors['details']}`
   | `planChange.${keyof Errors['planChange']}`
   | `passwordPolicy.${keyof Errors['passwordPolicy']}`
+  | `coverFile.${keyof Errors['coverFile']}`
   | `notices.${keyof Errors['notices']}`
   | `client.${keyof Errors['client']}`;
 
@@ -199,6 +201,11 @@ export function messageForCode(
           },
         };
       }
+      break;
+    }
+    case ErrorCode.COVER_FILE_INVALID: {
+      const d = coverFileInvalidDetailsSchema.safeParse(details);
+      if (d.success) return { key: `coverFile.${d.data.reason}` };
       break;
     }
     case ErrorCode.PASSWORD_TOO_WEAK: {

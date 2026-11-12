@@ -15,7 +15,8 @@ operator runs every step.
   `https://` plus that name), with its own `A`/`AAAA` records to the same VPS before the first
   start. Caddy gets a separate certificate for it.
 - **Bootstrap admin:** the person who runs the one-time `create` command below for
-  `action.in.th@gmail.com`, types its password and enrols TOTP on their own device.
+  `action.in.th@gmail.com` and types its password (and, only with `ADMIN_MFA_MODE=totp`, enrols
+  TOTP on their own device).
 - **VPS:** chosen 2026-11-11: Hostinger KVM 8 (8 vCPU, 32 GB RAM, 400 GB NVMe) in Kuala Lumpur,
   Malaysia (Hostinger has no Singapore VPS). The memory limits fit with room to spare; 4 vCPU /
   16 GB is the smallest size that leaves headroom. Hostinger offers no encrypted volume: backups
@@ -92,13 +93,16 @@ Then:
 
   Never pass the password as an argument or an environment variable, and never write it in any
   file (env files, `.env.production`, shell history, notes in the repository) or a log. The
-  password must meet `ADMIN_PASSWORD_MIN_LENGTH` (default 14). The CLI then prints the TOTP
-  enrolment once (an `otpauth://` URI and the manual secret): add it to the admin's
-  authenticator app right away. Then sign in at `https://<SHOTX_ADMIN_DOMAIN>` with the email,
-  the password you typed and a code from the app; the first valid code confirms the enrolment.
-  A CLI-created admin is not asked to change the password (it was typed by its owner). If the
-  enrolment output is lost, run `node dist/cli/admin.js reset-totp --email ...`. Every other
-  account, admin or photographer, is created in the admin app.
+  password must meet `ADMIN_PASSWORD_MIN_LENGTH` (default 14). With `ADMIN_MFA_MODE=off` (the
+  launch setting, ADR 0011 decision 4) the CLI prints no TOTP enrolment: sign in at
+  `https://<SHOTX_ADMIN_DOMAIN>` with the email and the password you typed. With
+  `ADMIN_MFA_MODE=totp` (needs `ADMIN_TOTP_ENCRYPTION_KEY`) the CLI prints the enrolment once (an
+  `otpauth://` URI and the manual secret): add it to the admin's authenticator app right away,
+  then sign in with the email, the password and a code from the app; the first valid code
+  confirms the enrolment. If that output is lost, run
+  `node dist/cli/admin.js reset-totp --email ...`. A CLI-created admin is not asked to change the
+  password (it was typed by its owner). Every other account, admin or photographer, is created
+  in the admin app.
 
 - Run one backup now (`docker compose --env-file .env.production run --rm backup backup --once`)
   and the restore test in [RESTORE.md](RESTORE.md) before launch.

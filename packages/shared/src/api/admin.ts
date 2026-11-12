@@ -47,6 +47,8 @@ export const adminUserSchema = z.object({
    * enrolment not yet confirmed); null for photographers. The admin UI flags `false` as "pending
    * enrolment": until then the creating admin, who knows the temporary password, could be the
    * first to sign in (ADR 0010 limitation), so a long-pending admin should be reset or disabled.
+   * With ADMIN_MFA_MODE=off (ADR 0011) it is reported the same way but means nothing for sign-in;
+   * the admin UI then hides the "pending enrolment" flag (GET /auth/providers `adminMfaMode`).
    */
   totpEnrolled: z.boolean().nullable(),
   /** Set while sign-in is locked after repeated failures (cleared by a password reset). */
@@ -109,8 +111,9 @@ export type ListAdminUsersResponse = z.output<typeof listAdminUsersResponseSchem
 /**
  * POST /admin/users: create an account (201, the new item).
  * - `admin`: admins pool, subject adminAccountSubject(id), admin_credentials with the argon2id
- *   hash, `must_change_password = true` and no TOTP secret (enrolled at first sign-in,
- *   ADMIN_SIGN_IN_STEPS). Password policy: ADMIN_PASSWORD_MIN_LENGTH.
+ *   hash, `must_change_password = true` and no TOTP secret (enrolled at first sign-in with
+ *   ADMIN_MFA_MODE=totp; with `off`, the default since ADR 0011, never; ADMIN_SIGN_IN_STEPS).
+ *   Password policy: ADMIN_PASSWORD_MIN_LENGTH.
  * - `photographer`: users pool, subject passwordAccountSubject(id), user_password_credentials
  *   (`must_change_password = true`) and a storage_usage row. Policy:
  *   PHOTOGRAPHER_PASSWORD_MIN_LENGTH.

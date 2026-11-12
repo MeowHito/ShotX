@@ -5,6 +5,7 @@ import { ArrowLeftIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { type ReactNode, useState } from 'react';
+import { useTotpEnabled } from '@/components/admin-settings';
 import { CashPayments } from '@/components/cash/cash-payments';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { formatDateTime, formatGigabytes } from '@/lib/format';
@@ -41,6 +42,7 @@ export function UserDetail({
   const query = useUser(userId);
   const actions = useUserActions();
   const [now] = useState(() => Date.now());
+  const totp = useTotpEnabled();
 
   const back = (
     <Link
@@ -147,7 +149,7 @@ export function UserDetail({
               )}
             </Row>
           ) : null}
-          {user.totpEnrolled !== null ? (
+          {totp && user.totpEnrolled !== null ? (
             <Row label={t('totp')}>
               {user.totpEnrolled ? (
                 <span data-testid="totp-state">{t('totpEnrolled')}</span>
