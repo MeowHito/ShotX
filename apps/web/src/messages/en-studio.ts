@@ -305,6 +305,8 @@ export const enStudio: StudioMessages = {
     trash: 'Trash',
     shares: 'Shared links',
     designs: 'Share page design',
+    sync: 'Folder sync',
+    syncRunning: 'Syncing a folder',
     billing: 'Plans and payment',
     settings: 'Account settings',
     logout: 'Sign out',
@@ -448,6 +450,79 @@ export const enStudio: StudioMessages = {
       upload: 'Upload files',
       search: 'Go to search',
       help: 'Show keyboard shortcuts',
+    },
+  },
+  folderSync: {
+    title: 'Sync a folder from your computer',
+    intro:
+      'New photos in a folder on your computer go up to Snap on their own. Made for the folder Lightroom exports to. Works in the browser, nothing to install.',
+    loading: 'Loading…',
+    unsupportedTitle: 'This browser can’t sync folders yet',
+    unsupportedBody:
+      'Open this page in Google Chrome or Microsoft Edge on a computer (Mac or Windows). Safari, Firefox and phones aren’t supported.',
+    pickFailed: 'Couldn’t open this folder. Try another one.',
+    setup: {
+      title: 'Set up the sync',
+      source: '1. Folder on your computer',
+      sourceHint: 'Choose the folder Lightroom exports to',
+      chooseSource: 'Choose folder',
+      changeSource: 'Change folder',
+      destination: '2. Upload to this Snap folder',
+      chooseDestination: 'Choose destination',
+      destinationTitle: 'Upload photos to',
+      destinationConfirm: 'Use this folder',
+      includeSubfolders: 'Include subfolders (the same subfolders are created in Snap)',
+      includeExisting: 'Also upload the photos already in the folder',
+      includeExistingHint: 'Unticked: only photos exported from now on are uploaded',
+      start: 'Start syncing',
+    },
+    status: {
+      running: 'Syncing',
+      paused: 'Paused',
+      needsPermission: 'Waiting for permission',
+      error: 'Sync stopped',
+    },
+    lastScan: 'Folder last checked {time}',
+    stats: {
+      uploaded: 'Uploaded',
+      uploading: 'Uploading',
+      waiting: 'Waiting',
+      exists: 'Already in Snap',
+      skipped: 'Skipped',
+      failed: 'Failed',
+    },
+    ignored: '{count, number} files that aren’t JPEG, PNG, WebP, MP4 or MOV are not synced',
+    pause: 'Pause',
+    resume: 'Resume',
+    allow: 'Allow and resume',
+    stop: 'Stop syncing',
+    permissionBody:
+      'After the page is reopened, the browser needs your permission to read “{folder}” again. Press the button below and choose “Allow”.',
+    errors: {
+      folderMissing:
+        'Couldn’t find “{folder}” on your computer. It may have been moved or renamed. Stop syncing and set it up again.',
+      destinationMissing:
+        'The Snap folder was deleted or moved to the trash. Stop syncing and choose another folder.',
+      otherTab: 'Another tab is already syncing. Close it, then press Resume.',
+      browser: 'The browser couldn’t save the sync settings. Try reloading the page.',
+    },
+    recentTitle: 'Latest files',
+    recentEmpty: 'No new files yet. Export from Lightroom and they show up here.',
+    outcome: {
+      uploaded: 'Uploaded',
+      exists: 'Already in Snap, not uploaded again',
+      skipped: 'Skipped (file type or size not supported)',
+      failed: 'Upload failed',
+    },
+    tips: {
+      title: 'Using it with Lightroom',
+      lightroom:
+        'In Lightroom’s Export dialog, set Export To to “Specific folder” and choose the same folder as here.',
+      keepOpen:
+        'Keep Snap open in a tab. You can move to other Snap pages, but closing the tab or the browser stops the sync.',
+      noSleep: 'During the event, set the computer not to go to sleep.',
+      noDuplicates:
+        'A photo with the same name as one already in the Snap folder isn’t uploaded again.',
     },
   },
   designs: {

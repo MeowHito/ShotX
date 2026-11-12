@@ -18,6 +18,9 @@ export function designHref(designId: string): string {
   return `${DESIGNS_HREF}/${designId}`;
 }
 
+/** Folder sync from the computer (ADR 0014). */
+export const SYNC_HREF = '/studio/sync';
+
 /** Account settings: name, email and the password change (ADR 0010). */
 export const SETTINGS_HREF = '/studio/settings';
 

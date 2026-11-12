@@ -4,10 +4,15 @@ import { SubscriptionBanner } from '@/components/billing/subscription-banner';
 import { StudioGate } from '@/components/studio/studio-gate';
 import { StudioShell } from '@/components/studio/studio-shell';
 import { UploadPanel } from '@/components/upload/upload-panel';
+import { FolderSyncProvider } from '@/components/sync/folder-sync-context';
 import { UploadProvider } from '@/components/upload/upload-context';
 import { AUTH_PATHS } from '@/lib/auth/handlers';
 import { viewerLoginIsAvailable, viewerState } from '@/lib/server/auth';
-import { clientStudioConfig, clientUploadConfig } from '@/lib/server/config';
+import {
+  clientFolderSyncConfig,
+  clientStudioConfig,
+  clientUploadConfig,
+} from '@/lib/server/config';
 
 export default async function StudioLayout({ children }: { children: ReactNode }) {
   const viewer = await viewerState();
@@ -20,17 +25,20 @@ export default async function StudioLayout({ children }: { children: ReactNode }
     // photographers' are told to ask the admin (ADR 0010).
     <StudioGate>
       <UploadProvider config={clientUploadConfig()}>
-        {/* useSearchParams (the search field) needs a Suspense boundary. */}
-        <Suspense>
-          <StudioShell
-            user={user}
-            // Subscriptions only exist with online billing (BILLING_MODE=gateway).
-            banner={config.billingMode === 'gateway' ? <SubscriptionBanner /> : undefined}
-            config={config}
-          >
-            {children}
-          </StudioShell>
-        </Suspense>
+        {/* Folder sync runs for the whole studio session, on every studio page (ADR 0014). */}
+        <FolderSyncProvider config={clientFolderSyncConfig()}>
+          {/* useSearchParams (the search field) needs a Suspense boundary. */}
+          <Suspense>
+            <StudioShell
+              user={user}
+              // Subscriptions only exist with online billing (BILLING_MODE=gateway).
+              banner={config.billingMode === 'gateway' ? <SubscriptionBanner /> : undefined}
+              config={config}
+            >
+              {children}
+            </StudioShell>
+          </Suspense>
+        </FolderSyncProvider>
         <UploadPanel />
       </UploadProvider>
     </StudioGate>

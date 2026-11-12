@@ -1,6 +1,6 @@
 'use client';
 
-import { type DriveFile, folderRefFromId } from '@shotx/shared';
+import { type DriveFile, folderRefFromId, type UploadNameConflictMode } from '@shotx/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   createContext,
@@ -33,9 +33,33 @@ export interface UploadEntry {
   error?: unknown;
 }
 
+/** What happened to one picked file in addFiles, in the order given. */
+export type AddFileResult =
+  | { status: 'queued'; id: string }
+  /** Refused by the client-side checks (type, size, path); shown in the panel. */
+  | { status: 'rejected'; error: Error }
+  /** Uppy already has the same file in the queue. */
+  | { status: 'duplicate' };
+
+export interface AddFilesOptions {
+  /** `fail`: an existing name in the folder is NAME_TAKEN, not a renamed copy (folder sync). */
+  onNameConflict?: UploadNameConflictMode;
+}
+
+/** How a queued upload ended: stored, or failed with the error behind it. */
+export type UploadOutcome = { ok: true; file: DriveFile } | { ok: false; error: unknown };
+
 interface UploadContextValue {
   entries: UploadEntry[];
-  addFiles: (files: PickedFile[], folderId: string | null) => void;
+  addFiles: (
+    files: PickedFile[],
+    folderId: string | null,
+    options?: AddFilesOptions,
+  ) => AddFileResult[];
+  /** Calls `listener` whenever an upload ends; returns the unsubscribe function. */
+  watch: (listener: (id: string, outcome: UploadOutcome) => void) => () => void;
+  /** Drops a file from the queue and the panel (aborts it if it is still uploading). */
+  remove: (id: string) => void;
   cancel: (id: string) => void;
   retry: (id: string) => void;
   clearFinished: () => void;
@@ -69,13 +93,16 @@ export function UploadProvider({
   const api = useApiClient();
   const queryClient = useQueryClient();
   const [rejected, setRejected] = useState<UploadEntry[]>([]);
+  // The stored file of each completed upload by Uppy id (key = file id), for watch().
+  const [uploadedFiles] = useState(() => new Map<string, DriveFile>());
 
   const [uploader] = useState<DriveUploader>(() =>
     createDriveUploader({
       api,
       partBytes: config.partBytes,
       partConcurrency: config.partConcurrency,
-      onUploaded: (file: DriveFile) => {
+      onUploaded: (file: DriveFile, uppyFileId: string) => {
+        uploadedFiles.set(uppyFileId, file);
         void queryClient.invalidateQueries({
           queryKey: driveKeys.children(folderRefFromId(file.folderId)),
         });
@@ -123,9 +150,10 @@ export function UploadProvider({
   }, [uppyState, rejected, uploader]);
 
   const addFiles = useCallback(
-    (files: PickedFile[], folderId: string | null) => {
+    (files: PickedFile[], folderId: string | null, options?: AddFilesOptions) => {
       const rejectedNow: UploadEntry[] = [];
-      for (const { file, relativePath } of files) {
+      const results: AddFileResult[] = [];
+      for (const { file, relativePath, clientUploadId } of files) {
         const check = precheckFile(file, config.maxBytes, relativePath);
         if (!check.ok) {
           rejectedNow.push({
@@ -135,28 +163,64 @@ export function UploadProvider({
             percent: 0,
             error: check.error,
           });
+          results.push({ status: 'rejected', error: check.error });
           continue;
         }
         try {
-          uppy.addFile({
+          const id = uppy.addFile({
             name: file.name,
             type: check.mime,
             data: file,
-            meta: { folderId, drivePath: relativePath, mime: check.mime },
+            meta: {
+              folderId,
+              drivePath: relativePath,
+              mime: check.mime,
+              ...(options?.onNameConflict ? { onNameConflict: options.onNameConflict } : {}),
+              ...(clientUploadId ? { clientUploadId } : {}),
+            },
           });
+          results.push({ status: 'queued', id });
         } catch {
-          // Uppy refuses exact duplicates already in the queue; nothing to do.
+          // Uppy refuses exact duplicates already in the queue.
+          results.push({ status: 'duplicate' });
         }
       }
       if (rejectedNow.length > 0) setRejected((prev) => [...prev, ...rejectedNow]);
+      return results;
     },
     [uppy, config.maxBytes],
+  );
+
+  const watch = useCallback(
+    (listener: (id: string, outcome: UploadOutcome) => void) => {
+      const onSuccess = (file: DriveUppyFile | undefined) => {
+        const stored = file === undefined ? undefined : uploadedFiles.get(file.id);
+        if (file !== undefined && stored !== undefined) {
+          listener(file.id, { ok: true, file: stored });
+        }
+      };
+      const onError = (file: DriveUppyFile | undefined) => {
+        if (file !== undefined) listener(file.id, { ok: false, error: uploader.errorFor(file.id) });
+      };
+      uppy.on('upload-success', onSuccess);
+      uppy.on('upload-error', onError);
+      return () => {
+        uppy.off('upload-success', onSuccess);
+        uppy.off('upload-error', onError);
+      };
+    },
+    [uppy, uploader, uploadedFiles],
   );
 
   const value = useMemo<UploadContextValue>(
     () => ({
       entries,
       addFiles,
+      watch,
+      remove: (id) => {
+        uploadedFiles.delete(id);
+        if (uppy.getFile(id) !== undefined) uppy.removeFile(id);
+      },
       cancel: (id) => {
         if (id.startsWith('rejected-')) setRejected((prev) => prev.filter((e) => e.id !== id));
         else uppy.removeFile(id);
@@ -165,11 +229,14 @@ export function UploadProvider({
       clearFinished: () => {
         setRejected([]);
         for (const file of uppy.getFiles()) {
-          if (file.progress.uploadComplete) uppy.removeFile(file.id);
+          if (file.progress.uploadComplete) {
+            uploadedFiles.delete(file.id);
+            uppy.removeFile(file.id);
+          }
         }
       },
     }),
-    [entries, addFiles, uppy],
+    [entries, addFiles, watch, uppy, uploadedFiles],
   );
 
   return <UploadContext.Provider value={value}>{children}</UploadContext.Provider>;

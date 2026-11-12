@@ -20,9 +20,12 @@ export interface MoveDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   items: DriveItemRef[];
-  /** Folder the items are in now; moving there is a no-op. */
-  sourceFolderId: string | null;
-  onMove: (targetId: string | null) => Promise<unknown>;
+  /** Folder the items are in now; moving there is a no-op. Omitted: any folder can be chosen. */
+  sourceFolderId?: string | null;
+  onMove: (targetId: string | null, targetName: string) => Promise<unknown>;
+  /** Replace the move wording (the dialog also picks folder sync's destination). */
+  title?: string;
+  confirmLabel?: string;
 }
 
 export function MoveDialog(props: MoveDialogProps) {
@@ -34,7 +37,14 @@ export function MoveDialog(props: MoveDialogProps) {
 }
 
 /** Browses folders from the root; folders being moved can't be opened or chosen. */
-function FolderPicker({ onOpenChange, items, sourceFolderId, onMove }: MoveDialogProps) {
+function FolderPicker({
+  onOpenChange,
+  items,
+  sourceFolderId,
+  onMove,
+  title,
+  confirmLabel,
+}: MoveDialogProps) {
   const t = useTranslations();
   const describe = useErrorMessage();
   const [current, setCurrent] = useState<{ id: string; name: string } | null>(null);
@@ -62,7 +72,7 @@ function FolderPicker({ onOpenChange, items, sourceFolderId, onMove }: MoveDialo
     setBusy(true);
     setError(null);
     try {
-      await onMove(targetId);
+      await onMove(targetId, current?.name ?? t('drive.root'));
       onOpenChange(false);
     } catch (err) {
       setError(describe(err));
@@ -74,7 +84,7 @@ function FolderPicker({ onOpenChange, items, sourceFolderId, onMove }: MoveDialo
   return (
     <DialogContent closeLabel={t('common.close')} aria-describedby={undefined}>
       <DialogHeader>
-        <DialogTitle>{t('move.title', { count: items.length })}</DialogTitle>
+        <DialogTitle>{title ?? t('move.title', { count: items.length })}</DialogTitle>
       </DialogHeader>
       <nav aria-label={t('drive.breadcrumbLabel')}>
         <ol className="flex flex-wrap items-center gap-1 text-sm">
@@ -140,11 +150,13 @@ function FolderPicker({ onOpenChange, items, sourceFolderId, onMove }: MoveDialo
         <Button
           type="button"
           disabled={
-            busy || targetId === sourceFolderId || (targetId !== null && moving.has(targetId))
+            busy ||
+            (sourceFolderId !== undefined && targetId === sourceFolderId) ||
+            (targetId !== null && moving.has(targetId))
           }
           onClick={() => void move()}
         >
-          {t('move.here')}
+          {confirmLabel ?? t('move.here')}
         </Button>
       </DialogFooter>
     </DialogContent>

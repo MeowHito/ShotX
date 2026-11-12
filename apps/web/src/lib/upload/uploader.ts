@@ -5,6 +5,7 @@ import {
   multipartPlan,
   UPLOAD_ROUTES,
   UPLOAD_SIGN_PARTS_MAX,
+  type UploadNameConflictMode,
 } from '@shotx/shared';
 import AwsS3, { type uploadPartBytes as UploadPartBytesFn } from '@uppy/aws-s3';
 import Uppy, { type UppyFile } from '@uppy/core';
@@ -40,6 +41,11 @@ export interface DriveUploadMeta extends Record<string, unknown> {
    * be reused (CONFLICT: that upload completed, failed or expired).
    */
   clientUploadId?: string;
+  /**
+   * `fail`: a file with the same name already in the folder answers NAME_TAKEN instead of being
+   * stored as `name (2).ext` (folder sync, ADR 0014: the name already being there means synced).
+   */
+  onNameConflict?: UploadNameConflictMode;
 }
 
 export type DriveUploadBody = Record<string, never>;
@@ -56,7 +62,8 @@ export interface DriveUploaderOptions {
   uploadPartBytes?: UploadPartBytesFn;
   /** Retry delays of part uploads (ms); tests pass []. */
   retryDelays?: number[];
-  onUploaded?: (file: DriveFile) => void;
+  /** A stored file, with the Uppy id of the upload it came from. */
+  onUploaded?: (file: DriveFile, uppyFileId: string) => void;
   onFoldersCreated?: (folders: DriveFolder[]) => void;
   /** Start uploading as soon as files are added (default true). */
   autoProceed?: boolean;
@@ -180,6 +187,7 @@ export function createDriveUploader(options: DriveUploaderOptions): DriveUploade
               mime: file.meta.mime,
               folderId: file.meta.folderId,
               ...(file.meta.drivePath ? { relativePath: file.meta.drivePath } : {}),
+              ...(file.meta.onNameConflict ? { onNameConflict: file.meta.onNameConflict } : {}),
               clientUploadId,
             },
           });
@@ -233,7 +241,7 @@ export function createDriveUploader(options: DriveUploaderOptions): DriveUploade
           signal,
         });
         forget(key);
-        options.onUploaded?.(res.file);
+        options.onUploaded?.(res.file, file.id);
         return {};
       }),
 

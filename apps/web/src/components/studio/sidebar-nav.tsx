@@ -4,6 +4,7 @@ import { cn } from '@shotx/ui';
 import {
   ClockIcon,
   CreditCardIcon,
+  FolderSyncIcon,
   HardDriveIcon,
   LinkIcon,
   type LucideIcon,
@@ -17,17 +18,20 @@ import {
   DESIGNS_HREF,
   RECENT_HREF,
   SHARES_HREF,
+  SYNC_HREF,
   TRASH_HREF,
 } from '@/components/drive/paths';
+import { useOptionalFolderSync } from '@/components/sync/folder-sync-context';
 import { useStudio } from './studio-context';
 
-export type StudioNavId = 'drive' | 'recent' | 'shares' | 'designs' | 'trash' | 'billing';
+export type StudioNavId = 'drive' | 'recent' | 'shares' | 'designs' | 'sync' | 'trash' | 'billing';
 
 const NAV: { id: StudioNavId; href: string; icon: LucideIcon }[] = [
   { id: 'drive', href: '/studio', icon: HardDriveIcon },
   { id: 'recent', href: RECENT_HREF, icon: ClockIcon },
   { id: 'shares', href: SHARES_HREF, icon: LinkIcon },
   { id: 'designs', href: DESIGNS_HREF, icon: PaletteIcon },
+  { id: 'sync', href: SYNC_HREF, icon: FolderSyncIcon },
   { id: 'trash', href: TRASH_HREF, icon: Trash2Icon },
   { id: 'billing', href: BILLING_HREF, icon: CreditCardIcon },
 ];
@@ -39,6 +43,7 @@ export function activeNav(pathname: string): StudioNavId | null {
   if (under(RECENT_HREF)) return 'recent';
   if (under(SHARES_HREF)) return 'shares';
   if (under(DESIGNS_HREF)) return 'designs';
+  if (under(SYNC_HREF)) return 'sync';
   if (under(TRASH_HREF)) return 'trash';
   if (under(BILLING_HREF)) return 'billing';
   return null;
@@ -61,6 +66,7 @@ export function SidebarNav({
   const t = useTranslations('studio');
   const { config } = useStudio();
   const active = activeNav(pathname);
+  const syncing = useOptionalFolderSync()?.snapshot.status === 'running';
   const items = NAV.filter(({ id }) => id !== 'billing' || config.billingMode === 'gateway');
   return (
     <nav aria-label={t('navLabel')}>
@@ -90,6 +96,16 @@ export function SidebarNav({
                   aria-hidden
                 />
                 <span className={cn('truncate', rail && 'md:max-lg:sr-only')}>{t(id)}</span>
+                {id === 'sync' && syncing ? (
+                  <span
+                    className={cn(
+                      'ml-auto size-2 shrink-0 rounded-full bg-green-500 motion-safe:animate-pulse',
+                      rail && 'md:max-lg:hidden',
+                    )}
+                    data-testid="sync-running-dot"
+                    title={t('syncRunning')}
+                  />
+                ) : null}
               </Link>
             </li>
           );

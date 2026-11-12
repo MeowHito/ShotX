@@ -86,7 +86,10 @@ describe('drive uploader (Uppy + @uppy/aws-s3 multipart)', () => {
         { partNumber: 3, etag: '"etag-3"' },
       ],
     });
-    expect(uploaded).toHaveBeenCalledWith(expect.objectContaining({ status: 'processing' }));
+    expect(uploaded).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'processing' }),
+      expect.any(String),
+    );
     // No API request carried file bytes.
     for (const call of fake.calls)
       expect(JSON.stringify(call.body ?? '').length).toBeLessThan(2000);

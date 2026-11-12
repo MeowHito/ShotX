@@ -7,6 +7,11 @@ export interface PickedFile {
   file: File;
   /** Folders between the drop target and the file, `/`-separated; null for loose files. */
   relativePath: string | null;
+  /**
+   * The idempotency key of upload init to use (a new one when omitted). Folder sync passes the
+   * key it saved, so an upload cut off by a reload is resumed rather than started again.
+   */
+  clientUploadId?: string;
 }
 
 /** The folder part of a `webkitRelativePath` (folder picker): `a/b/c.jpg` → `a/b`. */

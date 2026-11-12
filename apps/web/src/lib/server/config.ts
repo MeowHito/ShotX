@@ -197,6 +197,38 @@ const webShareEnvSchema = z
     WEB_PRICING_RECOMMENDED_PLAN: z.union([z.literal(''), planCodeSchema]).default('standard'),
     /** How often a drive listing refreshes while it shows a file still processing (copies, uploads). */
     WEB_DRIVE_PROCESSING_POLL_MS: z.coerce.number().int().min(1000).max(60_000).default(3000),
+    /** Folder sync (ADR 0014): how often the watched folder is scanned. */
+    WEB_FOLDER_SYNC_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(1000)
+      .max(5 * 60_000)
+      .default(5000),
+    /** Folder sync: files in the upload queue at once (the rest wait for later scans). */
+    WEB_FOLDER_SYNC_MAX_QUEUED: z.coerce.number().int().min(1).max(200).default(20),
+    /** Folder sync: subfolder levels under the watched folder that are synced too. */
+    WEB_FOLDER_SYNC_MAX_DEPTH: z.coerce.number().int().min(0).max(10).default(3),
+    /** Folder sync: waits before retrying a failed upload, comma-separated ms; then it gives up. */
+    WEB_FOLDER_SYNC_RETRY_DELAYS_MS: z
+      .string()
+      .default('30000,120000,600000')
+      .transform((v) =>
+        v
+          .split(',')
+          .filter((p) => p.trim() !== '')
+          .map((p) => Number(p.trim())),
+      )
+      .pipe(
+        z
+          .array(
+            z
+              .number()
+              .int()
+              .min(0)
+              .max(60 * 60_000),
+          )
+          .max(10),
+      ),
   })
   .refine((e) => e.WEB_FACE_GATE_MIN_BRIGHTNESS < e.WEB_FACE_GATE_MAX_BRIGHTNESS, {
     error: 'WEB_FACE_GATE_MIN_BRIGHTNESS must be below WEB_FACE_GATE_MAX_BRIGHTNESS',
@@ -304,6 +336,24 @@ export function clientPricingConfig(env: Env = process.env): {
   return {
     recommendedPlanCode:
       e.WEB_PRICING_RECOMMENDED_PLAN === '' ? null : e.WEB_PRICING_RECOMMENDED_PLAN,
+  };
+}
+
+/** Folder sync tunables (ADR 0014; SyncEngineConfig without the UI's recent-list length). */
+export interface ClientFolderSyncConfig {
+  intervalMs: number;
+  maxQueued: number;
+  maxDepth: number;
+  retryDelaysMs: number[];
+}
+
+export function clientFolderSyncConfig(env: Env = process.env): ClientFolderSyncConfig {
+  const e = parseEnv(webShareEnvSchema, env, 'web share');
+  return {
+    intervalMs: e.WEB_FOLDER_SYNC_INTERVAL_MS,
+    maxQueued: e.WEB_FOLDER_SYNC_MAX_QUEUED,
+    maxDepth: e.WEB_FOLDER_SYNC_MAX_DEPTH,
+    retryDelaysMs: e.WEB_FOLDER_SYNC_RETRY_DELAYS_MS,
   };
 }
 
