@@ -13,6 +13,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -131,6 +133,28 @@ describe('menus', () => {
     await screen.findByRole('menuitem', { name: 'Share' });
     await userEvent.keyboard('{ArrowRight}');
     expect(await screen.findByRole('menuitem', { name: 'Copy link' })).toBeInTheDocument();
+  });
+
+  it('dropdown radio items: the chosen one is checked, choosing reports the value', async () => {
+    const onValueChange = vi.fn();
+    render(
+      <DropdownMenu>
+        <DropdownMenuTrigger>size</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuRadioGroup value="s" onValueChange={onValueChange}>
+            <DropdownMenuRadioItem value="s">Small</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="l">Large</DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'size' }));
+    expect(await screen.findByRole('menuitemradio', { name: 'Small' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    await userEvent.click(screen.getByRole('menuitemradio', { name: 'Large' }));
+    expect(onValueChange).toHaveBeenCalledWith('l');
   });
 
   it('renders a sheet from the bottom, and an aria-hidden skeleton', () => {

@@ -32,7 +32,7 @@ const errorCodes = {
   QUOTA_EXCEEDED: 'พื้นที่จัดเก็บไม่พอ ลองลบไฟล์ในถังขยะหรืออัปเกรดแพ็กเกจ',
   SHARE_EXPIRED: 'ลิงก์นี้หมดอายุ',
   CONSENT_REQUIRED: 'กรุณายอมรับเงื่อนไขการใช้ข้อมูลใบหน้าก่อนสแกน',
-  NO_FACE_DETECTED: 'ไม่พบใบหน้าในรูป กรุณาหันหน้าตรง ถอดแว่นดำหรือแมสก์ และอยู่ในที่สว่าง',
+  NO_FACE_DETECTED: 'ไม่พบใบหน้าในรูป',
   RATE_LIMITED: 'ส่งคำขอบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่',
   PAYLOAD_TOO_LARGE: 'ข้อมูลที่ส่งมีขนาดใหญ่เกินไป',
   UNSUPPORTED_FILE_TYPE: 'ไม่รองรับไฟล์ประเภทนี้ รองรับเฉพาะ JPEG, PNG, WebP, MP4 และ MOV',
@@ -426,13 +426,13 @@ const shareUnavailableReasons = {
 } as const satisfies Record<ShareUnavailableReason, string>;
 
 const selfieIssues = {
-  unreadable: 'อ่านรูปนี้ไม่ได้ กรุณาถ่ายใหม่',
-  noFace: 'ไม่พบใบหน้า กรุณาหันหน้าตรง ถอดแว่นดำ/แมสก์ และอยู่ในที่สว่าง',
-  multipleFaces: 'พบใบหน้ามากกว่าหนึ่งคน กรุณาถ่ายให้มีแค่คุณคนเดียวในรูป',
-  tooSmall: 'ใบหน้าเล็กเกินไป กรุณาถือกล้องให้ใกล้ขึ้น',
-  notFrontal: 'กรุณาหันหน้าตรงเข้าหากล้อง',
-  tooDark: 'รูปมืดเกินไป กรุณาไปอยู่ในที่สว่าง',
-  tooBright: 'รูปสว่างจ้าเกินไป กรุณาหลบแสงที่ส่องเข้าหน้าโดยตรง',
+  unreadable: 'อ่านรูปนี้ไม่ได้',
+  noFace: 'ไม่พบใบหน้าในรูป',
+  multipleFaces: 'พบใบหน้ามากกว่าหนึ่งคน',
+  tooSmall: 'ใบหน้าเล็กเกินไป',
+  notFrontal: 'ใบหน้าไม่ได้หันตรงเข้ากล้อง',
+  tooDark: 'รูปมืดเกินไป',
+  tooBright: 'รูปสว่างเกินไป',
 } as const satisfies Record<SelfieIssue, string>;
 
 const zipStatus = {
@@ -516,6 +516,8 @@ export const th = {
     home: 'หน้าแรก',
     language: 'ภาษา',
     locales: { th: 'ไทย', en: 'English', zh: '中文' },
+    /** The switcher button's label for the current language (each in its own script). */
+    localeShort: { th: 'TH', en: 'EN', zh: '中文' },
   },
   common: {
     appName: 'ShotX',
@@ -1107,9 +1109,8 @@ export const th = {
     notMe: 'ไม่ใช่ฉัน',
     notMeLabel: 'ไม่ใช่ฉัน: {name}',
     notMeDone: 'ซ่อนรูปนี้แล้ว ขอบคุณที่ช่วยให้การค้นหาแม่นยำขึ้น',
-    none: 'ยังไม่พบรูปของคุณในลิงก์นี้',
-    noneHint: 'ลองถ่ายใหม่ในที่สว่าง หันหน้าตรงเข้าหากล้อง',
-    noFace: 'ไม่พบใบหน้าในรูปที่ถ่าย ลองถ่ายใหม่ในที่สว่าง หันหน้าตรงเข้าหากล้อง',
+    none: 'ไม่พบรูปของคุณ',
+    noFace: 'ไม่พบใบหน้าในรูป ลองถ่ายใหม่',
   },
   faceDeletion: {
     title: 'ขอลบใบหน้าของฉัน',
@@ -1143,6 +1144,10 @@ export const th = {
     zoom: 'ซูม',
     download: 'ดาวน์โหลดรูปนี้',
     downloadShort: 'ดาวน์โหลด',
+    dialog: 'ตัวดูรูป',
+    carousel: 'ชุดรูป',
+    slide: 'รูป',
+    loadError: 'โหลดรูปนี้ไม่ได้',
   },
   drive: {
     root: 'ไดรฟ์ของฉัน',
@@ -1250,8 +1255,7 @@ export const th = {
       shareUnavailable: 'ลิงก์นี้หมดอายุ รูปในลิงก์นี้ไม่เปิดให้ดูแล้ว',
       zipTooLarge:
         'ดาวน์โหลดพร้อมกันได้ไม่เกิน {maxFiles, number} รูป และรวมไม่เกิน {maxBytes} (เลือกไว้ {files, number} รูป {bytes})',
-      noFaceDetected:
-        'ไม่พบใบหน้าในรูปที่ส่ง ({count, number} รูป) กรุณาหันหน้าตรง ถอดแว่นดำ/แมสก์ และอยู่ในที่สว่าง',
+      noFaceDetected: 'ไม่พบใบหน้าในรูปที่ส่ง ({count, number} รูป)',
       faceSearchNotFolder: 'ค้นหาด้วยใบหน้าได้เฉพาะลิงก์ที่แชร์ทั้งโฟลเดอร์',
       faceSearchNotIndexed: 'ช่างภาพยังไม่เปิดการค้นหาด้วยใบหน้าสำหรับรูปในลิงก์นี้',
       checkoutPending:

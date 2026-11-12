@@ -489,13 +489,11 @@ function ScanResults({
         role="status"
         aria-label={tr('title')}
       >
+        {/* Owner feedback 2026-11-12: a plain statement and a retry button, no selfie tips. */}
         {results.selfiesWithoutFace > 0 ? (
           <Alert variant="warning">{tr('noFace')}</Alert>
         ) : (
-          <>
-            <p className="text-lg font-semibold">{tr('none')}</p>
-            <p className="text-sm text-muted-foreground">{tr('noneHint')}</p>
-          </>
+          <p className="text-lg font-semibold">{tr('none')}</p>
         )}
         <Button size="lg" className="rounded-full" onClick={onRetry}>
           <RotateCcwIcon aria-hidden />

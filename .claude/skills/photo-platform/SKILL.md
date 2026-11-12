@@ -167,7 +167,7 @@ tmp/index/{fileId}.jpg    tmp/zips/{jobId}.zip                                  
 
 1. Consent screen (Thai, versioned) → `POST /s/:token/consent`.
 2. Capture with `getUserMedia`, falling back to `<input type="file" accept="image/*" capture="user">` because LINE and Facebook in-app browsers often block the camera API. "Choose from gallery" is allowed only in `gallery` mode.
-3. Client-side quality gate with MediaPipe Face Detector: exactly one face, large enough, bright enough. Guide the user in Thai (หันหน้าตรง ถอดแว่นดำ/แมสก์ อยู่ในที่สว่าง). Optionally collect up to 3 angles (front, slightly left, slightly right). Downscale to at most 1280 px JPEG before upload.
+3. Client-side quality gate with MediaPipe Face Detector: exactly one face, large enough, bright enough. State the problem in short words with no coaching tips, and search as soon as one photo passes (ADR 0011: no selfie tips, no extra angles). Downscale to at most 1280 px JPEG before upload.
 4. `POST /s/:token/face-search` (multipart, kept in memory): rate-limit per IP, per share and per viewer; WAF CAPTCHA when abused.
 5. For each selfie call `SearchFacesByImage` on the photographer's collection with `FaceMatchThreshold = FACE_MAYBE` and `MaxFaces` around 1000. Rekognition matches the largest face in the input image.
 6. Expansion: take the top `FACE_EXPANSION_SEEDS` matches with similarity ≥ `FACE_STRONG` and call `SearchFaces` with each FaceId; union the results. This recovers profile and far-away shots that a selfie misses.

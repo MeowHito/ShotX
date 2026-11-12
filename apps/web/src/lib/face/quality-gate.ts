@@ -1,11 +1,14 @@
 /**
  * Client-side quality gate for selfies, before anything is uploaded: exactly one face, large
  * enough, facing the camera (for the front shot) and lit well enough. The server still decides
- * (NO_FACE_DETECTED); this only saves a round trip and tells the person what to fix, in Thai.
+ * (NO_FACE_DETECTED); this only saves a round trip and says what was wrong with the shot.
  * Thresholds come from config (ClientFaceConfig.gate), never literals.
  */
 
-/** Why a selfie was refused. Each has Thai guidance under `capture.issues`. */
+/**
+ * Why a selfie was refused. Each has a short statement of the problem under `capture.issues`
+ * (no how-to tips: owner feedback 2026-11-12).
+ */
 export const SELFIE_ISSUES = [
   'unreadable',
   'noFace',

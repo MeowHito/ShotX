@@ -1,15 +1,16 @@
+import { HTML_LANG } from '@/i18n/config';
 import { LOCALE_COOKIE } from '@shotx/shared';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { FakeApi } from '../../../test/fake-api';
-import { fakeNavigator, renderSharePage } from '../../../test/share-harness';
+import { fakeNavigator, goodFace, renderSharePage } from '../../../test/share-harness';
 import { MESSAGES, TIME_ZONE } from '@/i18n/config';
 import { reloadPage } from '@/lib/browser/navigate';
 import { localeCookie } from '@/lib/i18n/locale-cookie';
 import { PublicTopBar } from './public-top-bar';
-import { DRIVE_ROOT } from '@shotx/shared';
+import { DRIVE_ROOT, LATEST_CONSENT_POLICY_VERSION } from '@shotx/shared';
 import { within } from '@testing-library/react';
 import { apiClientFor, renderWithProviders } from '../../../test/render';
 import { DriveBrowser } from '@/components/drive/drive-browser';
@@ -31,6 +32,8 @@ vi.mock('next/headers', () => ({
 }));
 
 beforeAll(() => {
+  URL.createObjectURL = () => 'blob:selfie';
+  URL.revokeObjectURL = () => undefined;
   HTMLMediaElement.prototype.play = () => Promise.resolve();
   Object.defineProperty(HTMLVideoElement.prototype, 'videoWidth', { get: () => 1280 });
   Object.defineProperty(HTMLVideoElement.prototype, 'videoHeight', { get: () => 960 });
@@ -50,18 +53,74 @@ function bar(locale: 'th' | 'en' | 'zh') {
 }
 
 describe('language switcher (ADR 0011)', () => {
-  it('offers ไทย / English / 中文, stores the choice in LOCALE_COOKIE and reloads', async () => {
+  it('is one compact menu button: the icon, the current short label, a 44px target', () => {
     bar('th');
-    const thai = screen.getByRole('button', { name: 'ไทย' });
-    expect(thai).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: '中文' })).toHaveAttribute('lang', 'zh');
-    expect(screen.getByRole('link', { name: /หน้าแรก/ })).toHaveAttribute('href', '/');
+    const nav = screen.getByRole('navigation', { name: MESSAGES.th.publicNav.label });
+    expect(within(nav).getByRole('link', { name: /หน้าแรก/ })).toHaveAttribute('href', '/');
+    const button = within(nav).getByRole('button', { name: 'ภาษา TH' });
+    expect(button).toHaveAttribute('type', 'button');
+    expect(button).toHaveAttribute('aria-haspopup', 'menu');
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(button).toHaveClass('h-11', 'min-w-11', 'shrink-0');
+    expect(button.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    // Nothing else in the bar: no row of language buttons any more.
+    expect(within(nav).getAllByRole('button')).toHaveLength(1);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
 
-    await userEvent.click(screen.getByRole('button', { name: 'English' }));
+  it.each([
+    ['en', 'Language EN'],
+    ['zh', '语言 中文'],
+  ] as const)('%s: the button is named from the messages (%s)', (locale, name) => {
+    bar(locale);
+    const button = screen.getByRole('button', { name });
+    expect(button.querySelector('[lang]')).toHaveAttribute('lang', HTML_LANG[locale]);
+  });
+
+  it('opens a menu of ไทย / English / 中文, each in its own script, the current one checked', async () => {
+    bar('th');
+    const button = screen.getByRole('button', { name: 'ภาษา TH' });
+    await userEvent.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    const menu = await screen.findByRole('menu');
+    const items = within(menu).getAllByRole('menuitemradio');
+    expect(items.map((i) => i.textContent)).toEqual(['ไทย', 'English', '中文']);
+    expect(items.map((i) => i.getAttribute('lang'))).toEqual(['th', 'en', 'zh-Hans']);
+    expect(items.map((i) => i.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false']);
+  });
+
+  it('choosing a language writes LOCALE_COOKIE and reloads; the current one does nothing', async () => {
+    bar('th');
+    await userEvent.click(screen.getByRole('button', { name: 'ภาษา TH' }));
+    await userEvent.click(await screen.findByRole('menuitemradio', { name: 'English' }));
     expect(document.cookie).toContain(`${LOCALE_COOKIE}=en`);
     expect(reloadPage).toHaveBeenCalledTimes(1);
-    // The current language does nothing.
-    await userEvent.click(thai);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'ภาษา TH' }));
+    await userEvent.click(await screen.findByRole('menuitemradio', { name: 'ไทย' }));
+    expect(reloadPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('works from the keyboard, and Escape closes the menu back to the button', async () => {
+    bar('en');
+    const button = screen.getByRole('button', { name: 'Language EN' });
+    button.focus();
+    await userEvent.keyboard('{Enter}');
+    const menu = await screen.findByRole('menu');
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(button).toHaveFocus();
+    expect(reloadPage).not.toHaveBeenCalled();
+
+    // Arrow keys move through the languages; Enter chooses.
+    await userEvent.keyboard('{ArrowDown}');
+    const chinese = await screen.findByRole('menuitemradio', { name: '中文' });
+    while (document.activeElement !== chinese) await userEvent.keyboard('{ArrowDown}');
+    await userEvent.keyboard('{Enter}');
+    expect(document.cookie).toContain(`${LOCALE_COOKIE}=zh`);
     expect(reloadPage).toHaveBeenCalledTimes(1);
   });
 
@@ -99,6 +158,65 @@ describe('language switcher (ADR 0011)', () => {
     expect(await screen.findByRole('button', { name: 'Take photo' })).toBeInTheDocument();
     expect(share.consentLocales).toEqual(['en']);
   });
+
+  it.each(['en', 'zh'] as const)(
+    '%s: share page, face search, results and downloads show no Thai, labels included',
+    async (locale) => {
+      const m = MESSAGES[locale];
+      const noThai = () => {
+        expect(document.body.textContent).not.toMatch(/[\u0E00-\u0E7F]/);
+        for (const el of document.querySelectorAll('[aria-label],[title],[alt],[placeholder]')) {
+          const label = ['aria-label', 'title', 'alt', 'placeholder']
+            .map((a) => el.getAttribute(a) ?? '')
+            .join(' ');
+          expect(label, el.outerHTML.slice(0, 120)).not.toMatch(/[\u0E00-\u0E7F]/);
+        }
+      };
+      const fake = new FakeApi({ faceSearch: true });
+      const share = fake.addPublicShare({ faceSearchAvailable: true, itemCount: 4 });
+      const [a, b, c] = share.items;
+      share.faceMatches = { strong: [a?.id ?? '', b?.id ?? ''], maybe: [c?.id ?? ''] };
+      const { scenario } = renderSharePage(fake, share.token, {
+        locale,
+        nav: fakeNavigator().nav,
+      });
+      await screen.findByRole('list', { name: m.share.galleryLabel });
+      expect(
+        screen.getByRole('button', {
+          name: `${m.publicNav.language} ${m.publicNav.localeShort[locale]}`,
+        }),
+      ).toBeInTheDocument();
+      noThai();
+
+      await userEvent.click(screen.getByRole('button', { name: m.share.scan }));
+      noThai();
+      const policy = m.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION];
+      await userEvent.click(screen.getByRole('checkbox', { name: policy.checkbox }));
+      await userEvent.click(screen.getByRole('button', { name: m.consent.accept }));
+
+      // A refused shot: a short statement in the UI language.
+      scenario.faces = [];
+      const take = await screen.findByRole('button', { name: m.capture.takePhoto });
+      await waitFor(() => expect(take).toBeEnabled());
+      await userEvent.click(take);
+      expect(await screen.findByText(m.capture.issues.noFace)).toBeInTheDocument();
+      noThai();
+
+      scenario.faces = [goodFace()];
+      const again = await screen.findByRole('button', { name: m.capture.takePhoto });
+      await waitFor(() => expect(again).toBeEnabled());
+      await userEvent.click(again);
+      await screen.findByRole('region', { name: m.results.strong });
+      expect(screen.getByRole('region', { name: m.results.maybe })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: m.results.selectAll })).toBeInTheDocument();
+      noThai();
+
+      // Select all found: the download bar.
+      await userEvent.click(screen.getByRole('button', { name: m.results.selectAll }));
+      expect(await screen.findByRole('button', { name: m.downloads.clear })).toBeInTheDocument();
+      noThai();
+    },
+  );
 
   it('the studio is translated too: drive, menus and the storage meter in English and Chinese', async () => {
     const fake = new FakeApi({ quotaBytes: null, usedBytes: 1.5 * 1024 ** 3 });

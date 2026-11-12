@@ -7,9 +7,11 @@
 /*
  * Share page lightbox (ADR 0011): previous/next arrows on touch screens too (PhotoSwipe hides
  * them until a mouse is used), and a clear download button at the bottom, thumb-reachable and
- * above the home indicator.
+ * above the home indicator. The arrow rule is one class more specific than PhotoSwipe's own
+ * `.pswp--touch .pswp__button--arrow { visibility: hidden }`: photoswipe/style.css comes with
+ * the share page's chunk, after this file, so an equal selector would lose.
  */
-.pswp--touch .pswp__button--arrow {
+.pswp.pswp--touch .pswp__button--arrow {
   visibility: visible;
 }
 .pswp__download-bottom {

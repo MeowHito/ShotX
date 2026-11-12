@@ -1,19 +1,27 @@
-import { ME_ROUTES, PUBLIC_SHARE_ROUTES } from '@shotx/shared';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { LATEST_CONSENT_POLICY_VERSION, ME_ROUTES, PUBLIC_SHARE_ROUTES } from '@shotx/shared';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeApi, shareItem } from '../../../test/fake-api';
 import { renderSharePage } from '../../../test/share-harness';
+import { MESSAGES } from '@/i18n/config';
 import { th } from '@/messages/th';
 
 const photoswipe = vi.hoisted(() => ({
   instances: [] as Record<string, unknown>[],
   elements: [] as Record<string, unknown>[],
+  doms: [] as { element: HTMLElement; scrollWrap: HTMLElement; holders: HTMLElement[] }[],
 }));
 vi.mock('photoswipe', () => ({
   default: class {
     ui = { registerElement: (el: Record<string, unknown>) => photoswipe.elements.push(el) };
     currIndex = 0;
+    element?: HTMLElement;
+    scrollWrap?: HTMLElement;
+    mainScroll = { itemHolders: [] as { el: HTMLElement }[] };
     private handlers = new Map<string, () => void>();
     constructor(options: Record<string, unknown>) {
       photoswipe.instances.push(options);
@@ -23,15 +31,38 @@ vi.mock('photoswipe', () => ({
       this.handlers.set(name, fn);
     }
     init() {
+      // Like PhotoSwipe: the dialog, the carousel and three slide holders, in English.
+      this.element = document.createElement('div');
+      this.element.setAttribute('role', 'dialog');
+      this.scrollWrap = document.createElement('section');
+      this.scrollWrap.setAttribute('aria-roledescription', 'carousel');
+      const holders = [0, 1, 2].map(() => {
+        const el = document.createElement('div');
+        el.setAttribute('aria-roledescription', 'slide');
+        return el;
+      });
+      this.mainScroll.itemHolders = holders.map((el) => ({ el }));
+      photoswipe.doms.push({ element: this.element, scrollWrap: this.scrollWrap, holders });
       this.handlers.get('uiRegister')?.();
     }
     destroy() {}
   },
 }));
 
+function resetPhotoswipe() {
+  photoswipe.instances.length = 0;
+  photoswipe.elements.length = 0;
+  photoswipe.doms.length = 0;
+}
+
 beforeAll(() => {
   // jsdom has no media playback.
   HTMLMediaElement.prototype.play = () => Promise.resolve();
+  // The scan flow (results lightbox test): object URLs and a front camera frame.
+  URL.createObjectURL = () => 'blob:selfie';
+  URL.revokeObjectURL = () => undefined;
+  Object.defineProperty(HTMLVideoElement.prototype, 'videoWidth', { get: () => 1280 });
+  Object.defineProperty(HTMLVideoElement.prototype, 'videoHeight', { get: () => 960 });
 });
 
 describe('share page: states', () => {
@@ -44,7 +75,9 @@ describe('share page: states', () => {
     expect(title.parentElement).toHaveClass('text-center');
     const nav = screen.getByRole('navigation', { name: th.publicNav.label });
     expect(within(nav).getByRole('link', { name: /หน้าแรก/ })).toHaveAttribute('href', '/');
-    expect(within(nav).getByRole('group', { name: th.publicNav.language })).toBeInTheDocument();
+    expect(
+      within(nav).getByRole('button', { name: new RegExp(th.publicNav.language) }),
+    ).toHaveAttribute('aria-haspopup', 'menu');
     const cover = screen.getByTestId('share-cover');
     expect(cover).toHaveClass('aspect-[16/3]');
     expect(cover.querySelector('img')).toHaveAttribute('src', share.items[0]?.previewUrl);
@@ -287,5 +320,113 @@ describe('share page: states', () => {
     renderSharePage(fake, share.token);
     await screen.findByRole('list', { name: th.share.galleryLabel });
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  });
+});
+
+describe('lightbox (ADR 0011, owner feedback 2026-11-12)', () => {
+  beforeEach(resetPhotoswipe);
+
+  async function scanAndShowResults() {
+    await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
+    await userEvent.click(
+      screen.getByRole('checkbox', {
+        name: th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION].checkbox,
+      }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
+    const take = await screen.findByRole('button', { name: th.capture.takePhoto });
+    await waitFor(() => expect(take).toBeEnabled());
+    await userEvent.click(take);
+    return screen.findByRole('region', { name: th.results.strong });
+  }
+
+  it('face-search results open the same lightbox: arrows, swipe list and the bottom download', async () => {
+    const fake = new FakeApi({ faceSearch: true });
+    const share = fake.addPublicShare({ faceSearchAvailable: true, itemCount: 5 });
+    const [a, b, c] = share.items;
+    share.faceMatches = { strong: [a?.id ?? '', b?.id ?? ''], maybe: [c?.id ?? ''] };
+    const view = renderSharePage(fake, share.token);
+    const strong = await scanAndShowResults();
+    await userEvent.click(within(strong).getByRole('button', { name: `เปิดดู ${b?.name}` }));
+    await waitFor(() => expect(photoswipe.instances).toHaveLength(1));
+    const options = photoswipe.instances[0] as { index: number; dataSource: { src: string }[] };
+    // The group's photos only, so swiping and the arrows stay within the results.
+    expect(options.dataSource.map((x) => x.src)).toEqual([a?.previewUrl, b?.previewUrl]);
+    expect(options).toMatchObject({ index: 1, arrowPrev: true, arrowNext: true });
+    const button = photoswipe.elements.find((e) => e.name === 'bottomDownload') as {
+      onClick: () => void;
+    };
+    button.onClick();
+    await waitFor(() => expect(view.startDownload).toHaveBeenCalledTimes(1));
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.downloads)[0]?.body).toEqual({ fileIds: [b?.id] });
+  });
+
+  it('no bottom download when the share disallows downloads (arrows stay)', async () => {
+    const fake = new FakeApi();
+    const share = fake.addPublicShare({ itemCount: 3, allowDownload: false });
+    renderSharePage(fake, share.token);
+    await userEvent.click(await screen.findByRole('button', { name: 'เปิดดู IMG_0001.jpg' }));
+    await waitFor(() => expect(photoswipe.instances).toHaveLength(1));
+    expect(photoswipe.instances[0]).toMatchObject({ arrowPrev: true, arrowNext: true });
+    expect(photoswipe.elements.find((e) => e.name === 'bottomDownload')).toBeUndefined();
+  });
+
+  it.each(['en', 'zh'] as const)(
+    '%s: every PhotoSwipe title, label and message comes from the messages, none Thai',
+    async (locale) => {
+      const m = MESSAGES[locale];
+      const fake = new FakeApi();
+      const share = fake.addPublicShare({ itemCount: 3 });
+      renderSharePage(fake, share.token, { locale });
+      const open = await screen.findByRole('button', {
+        name: m.share.open.replace('{name}', 'IMG_0001.jpg'),
+      });
+      await userEvent.click(open);
+      await waitFor(() => expect(photoswipe.instances).toHaveLength(1));
+      const options = photoswipe.instances[0] as Record<string, unknown>;
+      expect(options).toMatchObject({
+        closeTitle: m.lightbox.close,
+        zoomTitle: m.lightbox.zoom,
+        arrowPrevTitle: m.lightbox.prev,
+        arrowNextTitle: m.lightbox.next,
+        errorMsg: m.lightbox.loadError,
+      });
+      const button = photoswipe.elements.find((e) => e.name === 'bottomDownload') as {
+        title: string;
+        ariaLabel: string;
+        html: string;
+      };
+      expect(button.ariaLabel).toBe(m.lightbox.download);
+      expect(button.html).toContain(m.lightbox.downloadShort);
+      const dom = photoswipe.doms[0];
+      expect(dom?.element).toHaveAttribute('aria-label', m.lightbox.dialog);
+      expect(dom?.scrollWrap).toHaveAttribute('aria-roledescription', m.lightbox.carousel);
+      for (const holder of dom?.holders ?? []) {
+        expect(holder).toHaveAttribute('aria-roledescription', m.lightbox.slide);
+      }
+      const texts = [
+        ...Object.values(options).filter((v): v is string => typeof v === 'string'),
+        button.title,
+        button.ariaLabel,
+        button.html,
+        dom?.element.getAttribute('aria-label') ?? '',
+      ];
+      for (const text of texts) expect(text).not.toMatch(/[\u0E00-\u0E7F]/);
+      // The page around it too: no Thai anywhere on screen or in an accessible label.
+      expect(document.body.textContent).not.toMatch(/[\u0E00-\u0E7F]/);
+      for (const el of document.querySelectorAll('[aria-label],[title],[alt]')) {
+        const label = ['aria-label', 'title', 'alt'].map((a) => el.getAttribute(a) ?? '').join('');
+        expect(label).not.toMatch(/[\u0E00-\u0E7F]/);
+      }
+    },
+  );
+
+  it('arrows show on touch phones: our rule beats PhotoSwipe\u2019s touch rule', () => {
+    const css = readFileSync(path.join(__dirname, '../../app/globals.css'), 'utf8');
+    expect(css).toMatch(/\.pswp\.pswp--touch \.pswp__button--arrow \{\s*visibility: visible;/);
+    // The rule we override is still PhotoSwipe's (two classes; ours has three).
+    const require = createRequire(import.meta.url);
+    const pswpCss = readFileSync(require.resolve('photoswipe/style.css'), 'utf8');
+    expect(pswpCss).toMatch(/\n\.pswp--touch \.pswp__button--arrow \{\s*visibility: hidden;/);
   });
 });

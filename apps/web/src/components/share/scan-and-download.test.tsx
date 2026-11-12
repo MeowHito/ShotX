@@ -282,14 +282,18 @@ describe('scan', () => {
     expect(screen.queryByRole('region', { name: th.results.maybe })).not.toBeInTheDocument();
   });
 
-  it('nothing found: a friendly message and "ลองใหม่" back to the camera', async () => {
+  it('nothing found: a plain message, no selfie tips, and "ลองใหม่" back to the camera', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = fake.addPublicShare({ faceSearchAvailable: true, consented: true });
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     await takeLiveSelfie();
     expect(await screen.findByText(th.results.none)).toBeInTheDocument();
-    expect(screen.getByText(th.results.noneHint)).toBeInTheDocument();
+    expect(th.results.none).toBe('ไม่พบรูปของคุณ');
+    // Owner feedback 2026-11-12: no advice on how to take the selfie.
+    const status = screen.getByRole('status', { name: th.results.title });
+    expect(status).toHaveTextContent(`${th.results.none}${th.results.retry}`);
+    expect(screen.queryByText(/หันหน้า|ที่สว่าง|แว่น|แมสก์/)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: th.results.retry }));
     // Consent is already given: straight back to the camera.
     expect(await screen.findByRole('button', { name: th.capture.takePhoto })).toBeInTheDocument();

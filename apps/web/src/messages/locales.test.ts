@@ -139,3 +139,40 @@ describe('every page in th, en and zh (ADR 0011)', () => {
     expect(zh.consent.translationNote).toContain('泰文');
   });
 });
+
+describe('no selfie tips (owner feedback 2026-11-12)', () => {
+  /** How-to advice the owner asked to remove: light, facing the camera, glasses, masks, distance. */
+  const COACHING =
+    /หันหน้า|ที่สว่าง|แว่น|แมสก์|ใกล้ขึ้น|กรุณา|good light|face the camera|sunglasses|mask|closer|brighter|move |make sure|光线|请正对|墨镜|口罩|拿近|请确保|请到|避开/i;
+  const ALL = [
+    ['th', MESSAGES.th],
+    ['en', MESSAGES.en],
+    ['zh', MESSAGES.zh],
+  ] as const;
+
+  it.each(ALL)('%s: selfie problems are short statements, without advice', (_, m) => {
+    const texts: [string, string][] = [
+      ...leaves(m.capture.issues).map(([k, v]): [string, string] => [`capture.issues.${k}`, v]),
+      ['results.none', m.results.none],
+      ['results.noFace', m.results.noFace],
+      ['errors.codes.NO_FACE_DETECTED', m.errors.codes.NO_FACE_DETECTED],
+      ['errors.details.noFaceDetected', m.errors.details.noFaceDetected],
+    ];
+    for (const [key, text] of texts) {
+      expect(text, key).not.toMatch(COACHING);
+      expect(text.length, key).toBeLessThanOrEqual(60);
+    }
+    expect(m.results).not.toHaveProperty('noneHint');
+  });
+
+  it.each(ALL)('%s keeps "not stored" and the in-app browser hint', (_, m) => {
+    expect(m.capture.notStored).not.toBe('');
+    expect(m.capture.inAppHint).toMatch(/LINE/);
+    expect(m.capture.inAppHint).toMatch(/Facebook/);
+  });
+
+  it('the Thai wording the owner gave', () => {
+    expect(th.results.none).toBe('ไม่พบรูปของคุณ');
+    expect(th.results.noFace).toBe('ไม่พบใบหน้าในรูป ลองถ่ายใหม่');
+  });
+});

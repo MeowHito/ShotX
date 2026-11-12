@@ -113,7 +113,7 @@ describe('error message map', () => {
     ).toBe('ดาวน์โหลดพร้อมกันได้ไม่เกิน 500 รูป และรวมไม่เกิน 2 GB (เลือกไว้ 600 รูป 3 GB)');
     expect(
       render(messageForCode(ErrorCode.NO_FACE_DETECTED, { selfies: 2, selfiesWithoutFace: 2 })),
-    ).toContain('หันหน้าตรง ถอดแว่นดำ/แมสก์');
+    ).toBe('ไม่พบใบหน้าในรูปที่ส่ง (2 รูป)');
     expect(
       messageForCode(ErrorCode.FACE_SEARCH_UNAVAILABLE, { reason: 'not_folder_share' }).key,
     ).toBe('details.faceSearchNotFolder');

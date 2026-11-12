@@ -36,6 +36,28 @@ export function bottomDownloadHtml(label: string): string {
   return `<svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${escapeAttribute(label)}</span>`;
 }
 
+/** The parts of a PhotoSwipe instance that carry PhotoSwipe's own (English) accessibility text. */
+interface LightboxDom {
+  element?: HTMLElement;
+  scrollWrap?: HTMLElement;
+  mainScroll?: { itemHolders?: { el: HTMLElement }[] };
+}
+
+/**
+ * Replaces PhotoSwipe's hard-coded English accessibility text (the dialog has no name, the
+ * carousel and slides say "carousel" / "slide") with the UI language's.
+ */
+export function localizeLightbox(
+  pswp: LightboxDom,
+  labels: { dialog: string; carousel: string; slide: string },
+): void {
+  pswp.element?.setAttribute('aria-label', labels.dialog);
+  pswp.scrollWrap?.setAttribute('aria-roledescription', labels.carousel);
+  for (const holder of pswp.mainScroll?.itemHolders ?? []) {
+    holder.el.setAttribute('aria-roledescription', labels.slide);
+  }
+}
+
 /**
  * Opens PhotoSwipe on a list of share items (loaded on first open, its own chunk). ADR 0011:
  * swipe left/right (PhotoSwipe's own gestures), previous/next arrows that stay visible on touch
@@ -62,6 +84,7 @@ export function useLightbox(onDownload?: (item: ShareItem) => void) {
         zoomTitle: t('zoom'),
         arrowPrevTitle: t('prev'),
         arrowNextTitle: t('next'),
+        errorMsg: t('loadError'),
         arrowPrev: true,
         arrowNext: true,
         bgOpacity: 0.95,
@@ -89,6 +112,12 @@ export function useLightbox(onDownload?: (item: ShareItem) => void) {
       });
       current.current = pswp;
       pswp.init();
+      // The DOM exists once init() has run.
+      localizeLightbox(pswp, {
+        dialog: t('dialog'),
+        carousel: t('carousel'),
+        slide: t('slide'),
+      });
     },
     [t],
   );
