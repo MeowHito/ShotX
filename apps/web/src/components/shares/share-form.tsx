@@ -18,6 +18,7 @@ import { useTranslations } from 'next-intl';
 import { type FormEvent, type ReactNode, useId, useState } from 'react';
 import { useStudio } from '@/components/studio/studio-context';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
+import { DesignPicker } from './design-picker';
 
 /** Thailand has no DST: end of a Bangkok day is always 23:59:59.999 at +07:00. */
 export function endOfBangkokDay(date: string): string {
@@ -51,7 +52,7 @@ function Row({ children }: { children: ReactNode }) {
 
 /**
  * Share settings: mode (face_only only for folders and only while face search is enabled),
- * downloads and their size, login, password and expiry. Validates with the shared schemas.
+ * downloads and their size, login, password, expiry and the share page design (ADR 0013). Validates with the shared schemas.
  * "Require login" needs a viewer sign-in (studio config viewerLoginAvailable): without one the
  * toggle is hidden with a note, except on an existing require_login share, which can still turn
  * it off (but not back on). An edit sends `requireLogin` only when it changed, so such a share
@@ -73,6 +74,7 @@ export function ShareForm(props: ShareFormProps) {
   const [password, setPassword] = useState('');
   const [useExpiry, setUseExpiry] = useState(existing?.expiresAt != null);
   const [expiry, setExpiry] = useState(existing?.expiresAt ? bangkokDate(existing.expiresAt) : '');
+  const [designId, setDesignId] = useState<string | null>(existing?.designId ?? null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -122,6 +124,7 @@ export function ShareForm(props: ShareFormProps) {
           requireLogin: loginAvailable && requireLogin,
           password: pw.value ?? null,
           expiresAt,
+          designId,
         });
       } else {
         await props.onSubmit({
@@ -130,6 +133,7 @@ export function ShareForm(props: ShareFormProps) {
           downloadSize,
           ...(requireLogin !== props.share.requireLogin ? { requireLogin } : {}),
           expiresAt,
+          ...(designId !== props.share.designId ? { designId } : {}),
           ...(pw.value !== undefined ? { password: pw.value } : {}),
         });
       }
@@ -253,6 +257,8 @@ export function ShareForm(props: ShareFormProps) {
           />
         </div>
       ) : null}
+
+      <DesignPicker value={designId} onChange={setDesignId} preselectDefault={existing === null} />
 
       {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
       <Button type="submit" disabled={busy}>

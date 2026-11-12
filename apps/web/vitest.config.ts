@@ -9,6 +9,8 @@ export default defineConfig({
       '@': path.join(import.meta.dirname, 'src'),
       // `server-only` throws outside React Server Components; tests import server modules directly.
       'server-only': path.join(import.meta.dirname, 'test/server-only.ts'),
+      // next/font loads fonts at build time inside Next only; tests get named stand-in faces.
+      'next/font/google': path.join(import.meta.dirname, 'test/next-font-google.ts'),
     },
   },
   test: {

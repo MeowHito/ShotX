@@ -65,6 +65,17 @@ import {
   updateFileBodySchema,
   updateFolderBodySchema,
 } from './drive';
+import {
+  createDesignAssetBodySchema,
+  createDesignAssetResponseSchema,
+  createDesignBodySchema,
+  designAssetViewSchema,
+  designSchema,
+  listDesignAssetsQuerySchema,
+  listDesignAssetsResponseSchema,
+  listDesignsResponseSchema,
+  updateDesignBodySchema,
+} from './designs';
 import { meResponseSchema } from './me';
 import {
   copyFileBodySchema,
@@ -119,7 +130,8 @@ import {
   uploadInitResponseSchema,
 } from './uploads';
 
-export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+/** `PUT` since ADR 0013 (`PUT /designs/:id`): web's BFF proxy must forward it too. */
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /**
  * Who may call a route:
@@ -599,6 +611,7 @@ export const SHARE_ROUTES = {
       ErrorCode.SUBSCRIPTION_INACTIVE,
       ErrorCode.FEATURE_DISABLED,
       ErrorCode.LOGIN_PROVIDER_UNAVAILABLE,
+      ErrorCode.DESIGN_NOT_FOUND,
     ),
   },
   /** Added: the studio's share list (optionally of one file or folder). */
@@ -635,6 +648,7 @@ export const SHARE_ROUTES = {
       ErrorCode.CONFLICT,
       ErrorCode.FEATURE_DISABLED,
       ErrorCode.LOGIN_PROVIDER_UNAVAILABLE,
+      ErrorCode.DESIGN_NOT_FOUND,
     ),
   },
   /** Added: revoke (is_active = false), final and idempotent. */
@@ -656,6 +670,135 @@ export const SHARE_ROUTES = {
     response: shareStatsResponseSchema,
     errors: signedIn(ErrorCode.NOT_FOUND),
   },
+} as const satisfies Record<string, RouteContract>;
+
+/**
+ * Share page designs and their images (ADR 0013); see api/designs for the rules. Photographer
+ * only and owner-scoped; another owner's design or image is NOT_FOUND. The image routes come
+ * before `get` so first-match routers see `GET /designs/assets` before `GET /designs/:id`;
+ * NestJS controllers must declare them in that order too.
+ */
+export const DESIGN_ROUTES = {
+  list: {
+    method: 'GET',
+    path: '/designs',
+    status: 200,
+    auth: 'photographer',
+    response: listDesignsResponseSchema,
+    errors: signedIn(),
+  },
+  /** From a template, a document or blank. Body up to DESIGN_BODY_MAX_BYTES. */
+  create: {
+    method: 'POST',
+    path: '/designs',
+    status: 201,
+    auth: 'photographer',
+    body: createDesignBodySchema,
+    response: designSchema,
+    errors: signedIn(
+      ErrorCode.DESIGN_LIMIT_REACHED,
+      ErrorCode.DESIGN_DOC_TOO_LARGE,
+      ErrorCode.DESIGN_ASSET_NOT_FOUND,
+      ErrorCode.PAYLOAD_TOO_LARGE,
+    ),
+  },
+  listAssets: {
+    method: 'GET',
+    path: '/designs/assets',
+    status: 200,
+    auth: 'photographer',
+    query: listDesignAssetsQuerySchema,
+    response: listDesignAssetsResponseSchema,
+    errors: signedIn(),
+  },
+  createAsset: {
+    method: 'POST',
+    path: '/designs/assets',
+    status: 201,
+    auth: 'photographer',
+    body: createDesignAssetBodySchema,
+    response: createDesignAssetResponseSchema,
+    errors: signedIn(
+      ErrorCode.UNSUPPORTED_FILE_TYPE,
+      ErrorCode.FILE_TOO_LARGE,
+      ErrorCode.QUOTA_EXCEEDED,
+      ErrorCode.SUBSCRIPTION_INACTIVE,
+    ),
+  },
+  /** After the PUT: `processing` and the design.asset job. Idempotent. */
+  completeAsset: {
+    method: 'POST',
+    path: '/designs/assets/:id/complete',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    response: designAssetViewSchema,
+    errors: signedIn(ErrorCode.NOT_FOUND, ErrorCode.UPLOAD_EXPIRED, ErrorCode.CONFLICT),
+  },
+  getAsset: {
+    method: 'GET',
+    path: '/designs/assets/:id',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    response: designAssetViewSchema,
+    errors: signedIn(ErrorCode.NOT_FOUND),
+  },
+  /** Added: the editor's Uploads panel. */
+  get: {
+    method: 'GET',
+    path: '/designs/:id',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    response: designSchema,
+    errors: signedIn(ErrorCode.NOT_FOUND),
+  },
+  /** Save with the revision the editor started from. Body up to DESIGN_BODY_MAX_BYTES. */
+  update: {
+    method: 'PUT',
+    path: '/designs/:id',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    body: updateDesignBodySchema,
+    response: designSchema,
+    errors: signedIn(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.DESIGN_REVISION_CONFLICT,
+      ErrorCode.DESIGN_DOC_TOO_LARGE,
+      ErrorCode.DESIGN_ASSET_NOT_FOUND,
+      ErrorCode.PAYLOAD_TOO_LARGE,
+    ),
+  },
+  /** Hard delete; its shares' design_id becomes null. */
+  delete: {
+    method: 'DELETE',
+    path: '/designs/:id',
+    status: 204,
+    auth: 'photographer',
+    params: idParamsSchema,
+    errors: signedIn(ErrorCode.NOT_FOUND),
+  },
+  /** Make it the default (clears the previous one in the same transaction). Idempotent. */
+  setDefault: {
+    method: 'POST',
+    path: '/designs/:id/default',
+    status: 204,
+    auth: 'photographer',
+    params: idParamsSchema,
+    errors: signedIn(ErrorCode.NOT_FOUND),
+  },
+  /** Added: stop it being the default (a no-op when it isn't). */
+  clearDefault: {
+    method: 'DELETE',
+    path: '/designs/:id/default',
+    status: 204,
+    auth: 'photographer',
+    params: idParamsSchema,
+    errors: signedIn(ErrorCode.NOT_FOUND),
+  },
+  /** Reserve, insert the asset row, presign one PUT. */
 } as const satisfies Record<string, RouteContract>;
 
 /** Unknown or malformed token, and a share that serves nothing. */
@@ -1225,6 +1368,7 @@ export const API_ROUTES = {
   uploads: UPLOAD_ROUTES,
   me: ME_ROUTES,
   shares: SHARE_ROUTES,
+  designs: DESIGN_ROUTES,
   publicShare: PUBLIC_SHARE_ROUTES,
   billing: BILLING_ROUTES,
   auth: AUTH_ROUTES,

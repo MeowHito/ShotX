@@ -1,6 +1,8 @@
-import { faces, files, folders, subscriptions } from '@shotx/db';
+import { designAssets, faces, files, folders, shareDesigns, subscriptions } from '@shotx/db';
 import { faceCollectionId } from '@shotx/face';
 import {
+  designAssetKeys,
+  designAssetsPrefix,
   derivedPrefix,
   fileQuotaBucket,
   originalsPrefix,
@@ -59,8 +61,9 @@ export async function isSupersededSubscription(db: Db, row: SubscriptionRow): Pr
 class NotDue extends Error {}
 
 /**
- * Step 1: every S3 object under `originals/{photographerId}/` and `derived/{photographerId}/`
- * (prefixes from the shared builders), orphans included, in DeleteObjects batches.
+ * Step 1: every S3 object under `originals/{photographerId}/`, `derived/{photographerId}/` and
+ * `designs/{photographerId}/` (ADR 0013 design images; prefixes from the shared builders),
+ * orphans included, in DeleteObjects batches.
  */
 async function deleteObjects(
   ctx: JobContext,
@@ -68,7 +71,11 @@ async function deleteObjects(
   row: SubscriptionRow,
   at: Date,
 ): Promise<boolean> {
-  for (const prefix of [originalsPrefix(row.photographerId), derivedPrefix(row.photographerId)]) {
+  for (const prefix of [
+    originalsPrefix(row.photographerId),
+    derivedPrefix(row.photographerId),
+    designAssetsPrefix(row.photographerId),
+  ]) {
     let keys: string[] = [];
     const flush = async () => {
       if (keys.length === 0) return;
@@ -199,13 +206,100 @@ async function deleteFolderRows(
 }
 
 /**
+ * Step 3c (ADR 0013): design images in batches, each in one transaction with the subscription
+ * locked FOR SHARE and re-checked: the rows locked FOR UPDATE, their bytes taken out of their
+ * quota bucket (fileQuotaBucket, as for files), the rows deleted. After each commit both objects
+ * of the batch are deleted again: a design.asset job may have written web.webp after step 1 (a
+ * job still running finds no row and deletes what it wrote; a crash before this delete is covered
+ * by step 1 of the next run, which runs until the subscription is marked purged). Then the
+ * designs themselves (`shares.design_id` is ON DELETE SET NULL).
+ */
+async function deleteDesignRows(
+  ctx: JobContext,
+  deps: SubscriptionJobDeps,
+  row: SubscriptionRow,
+  at: Date,
+): Promise<boolean> {
+  const owner = row.photographerId;
+  let assetsDone = false;
+  while (!assetsDone && mayContinue(ctx)) {
+    const ids = await ctx.db.transaction(async (tx) => {
+      if ((await stillDue(tx, row.id, at, deps, 'share')) === null) throw new NotDue();
+      const locked = await tx
+        .select({
+          id: designAssets.id,
+          sizeBytes: designAssets.sizeBytes,
+          status: designAssets.status,
+          verifiedAt: designAssets.verifiedAt,
+          purgeRequestedAt: designAssets.purgeRequestedAt,
+        })
+        .from(designAssets)
+        .where(eq(designAssets.ownerId, owner))
+        .orderBy(asc(designAssets.id))
+        .limit(ctx.batchSize)
+        .for('update');
+      let used = 0;
+      let reserved = 0;
+      for (const a of locked) {
+        const move = releaseMoveFor(fileQuotaBucket(a));
+        if (move === 'releaseUsed') used += a.sizeBytes;
+        else if (move === 'releaseReserved') reserved += a.sizeBytes;
+      }
+      if (used > 0) await applyQuotaMove(tx, owner, 'releaseUsed', used, ctx.log);
+      if (reserved > 0) await applyQuotaMove(tx, owner, 'releaseReserved', reserved, ctx.log);
+      const ids = locked.map((a) => a.id);
+      if (ids.length > 0) {
+        await tx
+          .delete(designAssets)
+          .where(and(eq(designAssets.ownerId, owner), inArray(designAssets.id, ids)));
+      }
+      return ids;
+    });
+    if (ids.length === 0) {
+      assetsDone = true;
+      break;
+    }
+    await ctx.store.deleteObjects(
+      ids.flatMap((assetId) => Object.values(designAssetKeys({ photographerId: owner, assetId }))),
+    );
+  }
+  if (!assetsDone) return false;
+  while (mayContinue(ctx)) {
+    const deleted = await ctx.db.transaction(async (tx) => {
+      if ((await stillDue(tx, row.id, at, deps, 'share')) === null) throw new NotDue();
+      const batch = await tx
+        .select({ id: shareDesigns.id })
+        .from(shareDesigns)
+        .where(eq(shareDesigns.ownerId, owner))
+        .orderBy(asc(shareDesigns.id))
+        .limit(ctx.batchSize)
+        .for('update');
+      if (batch.length === 0) return 0;
+      await tx.delete(shareDesigns).where(
+        and(
+          eq(shareDesigns.ownerId, owner),
+          inArray(
+            shareDesigns.id,
+            batch.map((d) => d.id),
+          ),
+        ),
+      );
+      return batch.length;
+    });
+    if (deleted === 0) return true;
+  }
+  return false;
+}
+
+/**
  * The purge of an expired account (spec: `purged` SUBSCRIPTION_PURGE_AFTER_EXPIRY_DAYS after
  * expiry), in batches that resume across runs:
  * 1. delete every S3 object of the photographer (originals and derived, orphans included);
  * 2. delete the Rekognition collection `faceCollectionId(photographerId)` through FaceProvider
  *    (missing is fine), and the faces.reconcile scan state;
  * 3. delete the drive rows in the FK RESTRICT order of trash purge: faces, shares → consents →
- *    files, then folders leaves first with their shares;
+ *    files, then folders leaves first with their shares, then the design images (quota released)
+ *    and the share page designs (ADR 0013);
  * 4. mark the subscription `purged` with a `purged` event, in one transaction that re-checks it.
  * Billing records (payments, subscriptions, subscription_events, checkouts, notices) are kept,
  * and so are face_deletions (the audit trail of "ขอลบใบหน้าของฉัน", no biometrics).
@@ -239,6 +333,7 @@ export async function purgeAccount(
     await ctx.store.deleteObjects([reconcileScanKey(row.photographerId)]);
     if (!(await deleteFileRows(ctx, deps, row, at))) return 'incomplete';
     if (!(await deleteFolderRows(ctx, deps, row, at))) return 'incomplete';
+    if (!(await deleteDesignRows(ctx, deps, row, at))) return 'incomplete';
   } catch (error) {
     if (error instanceof NotDue) {
       log.error('subscription changed during the account purge; stopped, data partly deleted');
@@ -277,7 +372,24 @@ async function markPurged(
         .from(folders)
         .where(eq(folders.ownerId, locked.photographerId))
         .limit(1);
-      if (left !== undefined || leftFolder !== undefined) return false;
+      const [leftAsset] = await tx
+        .select({ id: designAssets.id })
+        .from(designAssets)
+        .where(eq(designAssets.ownerId, locked.photographerId))
+        .limit(1);
+      const [leftDesign] = await tx
+        .select({ id: shareDesigns.id })
+        .from(shareDesigns)
+        .where(eq(shareDesigns.ownerId, locked.photographerId))
+        .limit(1);
+      if (
+        left !== undefined ||
+        leftFolder !== undefined ||
+        leftAsset !== undefined ||
+        leftDesign !== undefined
+      ) {
+        return false;
+      }
     }
     await tx
       .update(subscriptions)

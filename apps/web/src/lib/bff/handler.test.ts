@@ -4,6 +4,7 @@ import {
   ALL_ROUTES,
   AUTH_ROUTES,
   BILLING_ROUTES,
+  DESIGN_ROUTES,
   DRIVE_ROUTES,
   ME_ROUTES,
   PHOTOGRAPHER_ACCOUNT_ROUTES,
@@ -64,6 +65,12 @@ describe('BFF', () => {
     expect(matchRoute('POST', `/uploads/${ID}/parts`)).toBe(UPLOAD_ROUTES.signParts);
     expect(matchRoute('GET', `/uploads/${ID}/parts`)).toBe(UPLOAD_ROUTES.listParts);
     expect(matchRoute('DELETE', `/uploads/${ID}`)).toBe(UPLOAD_ROUTES.abort);
+    // A literal segment beats a `:param` whatever the table order (ADR 0013).
+    expect(matchRoute('GET', '/designs/assets')).toBe(DESIGN_ROUTES.listAssets);
+    expect(matchRoute('GET', `/designs/${ID}`)).toBe(DESIGN_ROUTES.get);
+    expect(matchRoute('PUT', `/designs/${ID}`)).toBe(DESIGN_ROUTES.update);
+    expect(matchRoute('POST', '/designs/assets')).toBe(DESIGN_ROUTES.createAsset);
+    expect(matchRoute('POST', `/designs/assets/${ID}/complete`)).toBe(DESIGN_ROUTES.completeAsset);
     expect(matchRoute('GET', '/admin/metrics/revenue')).toBeNull();
     expect(matchRoute('PUT', '/drive/folders')).toBeNull();
   });
@@ -92,6 +99,27 @@ describe('BFF', () => {
       ...SERVER_HEADERS,
     });
     expect(init?.body).toBe('{"parentId":null,"name":"a"}');
+  });
+
+  it('forwards PUT with its JSON body (PUT /designs/:id, ADR 0013)', async () => {
+    const fetch = upstream();
+    const body = JSON.stringify({ name: 'Gala', doc: {}, revision: 3 });
+    await handleBffRequest(
+      new Request(`${BASE}/bff/designs/${ID}`, {
+        method: 'PUT',
+        headers: {
+          origin: BASE,
+          cookie: `${names.session}=${session}`,
+          'content-type': 'application/json',
+        },
+        body,
+      }),
+      deps(fetch),
+    );
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toBe(`http://internal-alb/api/designs/${ID}`);
+    expect(init?.method).toBe('PUT');
+    expect(init?.body).toBe(body);
   });
 
   it('keeps the query string', async () => {

@@ -39,6 +39,9 @@ import { WebhookService } from './billing/webhook.service';
 import type { ApiConfig } from './config';
 import { type EventLog, StdoutEventLog } from './infra/events';
 import type { Db } from './db/db';
+import { DesignViews } from './designs/design-views';
+import { DesignsController } from './designs/designs.controller';
+import { DesignsService } from './designs/designs.service';
 import { DriveController } from './drive/drive.controller';
 import { DriveService } from './drive/drive.service';
 import { DriveFileMapper } from './drive/media-urls';
@@ -155,6 +158,7 @@ export class AppModule {
         UploadController,
         MeController,
         SharesController,
+        DesignsController,
         PublicShareController,
         BillingController,
         AuthController,
@@ -216,6 +220,8 @@ export class AppModule {
         UploadService,
         MeService,
         SharesService,
+        DesignViews,
+        DesignsService,
         ShareAccess,
         SharePageService,
         FaceService,
@@ -249,7 +255,7 @@ export async function createApiApp(
   server.set('case sensitive routing', true);
   server.set('strict routing', true);
   server.disable('x-powered-by');
-  server.use(jsonBodyMiddleware(deps.config.limits));
+  server.use(jsonBodyMiddleware(deps.config.limits, deps.config.design.bodyMaxBytes));
 
   const appLogger: LoggerService = logger === false ? SILENT_LOGGER : logger;
   const app = await NestFactory.create(

@@ -24,6 +24,7 @@ import { verifyPassword } from '../auth/password';
 import type { PublicContext } from '../auth/public.guard';
 import type { ApiConfig } from '../config';
 import { type Db, rows } from '../db/db';
+import { DesignViews } from '../designs/design-views';
 import { ApiError } from '../http/api-error';
 import { sha256Hex } from '../http/client';
 import { validationError } from '../http/zod';
@@ -91,6 +92,7 @@ export class SharePageService {
     @Inject(RATE_LIMITER) private readonly limiter: RateLimiter,
     @Inject(ShareAccess) private readonly access: ShareAccess,
     @Inject(SignedUrls) private readonly urls: SignedUrls,
+    @Inject(DesignViews) private readonly designs: DesignViews,
   ) {}
 
   /** FACE_SEARCH_ENABLED and a folder share with an active face index at, above or below it. */
@@ -151,6 +153,7 @@ export class SharePageService {
     const open = !loginRequired && !locked;
 
     let details: ShareMetaResponse['details'] = null;
+    let design: ShareMetaResponse['design'] = null;
     if (open) {
       const gallery = share.mode === 'gallery';
       let itemCount: number | null = null;
@@ -198,6 +201,9 @@ export class SharePageService {
         }
       }
       details = { title: share.targetName, photographerName: share.ownerName, itemCount, cover };
+      // ADR 0013: behind the same gates as `details` (a design shows the event's name and logos).
+      // No activity event, like the cover.
+      design = await this.designs.shareDesign(share);
     }
 
     const available = await this.faceSearchAvailable(share);
@@ -214,6 +220,7 @@ export class SharePageService {
       expiresAt: share.expiresAt === null ? null : share.expiresAt.toISOString(),
       access: { loginRequired, locked },
       details,
+      design,
       faceSearch: {
         available,
         policyVersion: available ? this.config.consent.policyVersion : null,

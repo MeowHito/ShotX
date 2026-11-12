@@ -2,6 +2,8 @@ import {
   type BillingNotice,
   checkoutPendingDetailsSchema,
   coverFileInvalidDetailsSchema,
+  designDocTooLargeDetailsSchema,
+  designLimitReachedDetailsSchema,
   ErrorCode,
   faceSearchUnavailableDetailsSchema,
   planChangeInvalidDetailsSchema,
@@ -215,6 +217,24 @@ export function messageForCode(
     case ErrorCode.COVER_FILE_INVALID: {
       const d = coverFileInvalidDetailsSchema.safeParse(details);
       if (d.success) return { key: `coverFile.${d.data.reason}` };
+      break;
+    }
+    case ErrorCode.DESIGN_LIMIT_REACHED: {
+      const d = designLimitReachedDetailsSchema.safeParse(details);
+      if (d.success)
+        return { key: 'details.designLimitReached', values: { max: d.data.maxDesigns } };
+      break;
+    }
+    case ErrorCode.DESIGN_DOC_TOO_LARGE: {
+      const d = designDocTooLargeDetailsSchema.safeParse(details);
+      if (d.success) {
+        return d.data.reason === 'elements'
+          ? {
+              key: 'details.designTooManyElements',
+              values: { max: d.data.max, actual: d.data.actual },
+            }
+          : { key: 'details.designTooManyBytes' };
+      }
       break;
     }
     case ErrorCode.PASSWORD_TOO_WEAK: {

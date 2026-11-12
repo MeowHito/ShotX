@@ -49,6 +49,16 @@ export interface ObjectStorage {
     partNumber: number;
     expiresInSeconds: number;
   }): Promise<string>;
+  /**
+   * A presigned single PUT of `key` (design images, ADR 0013) whose signature covers Content-Type
+   * and Content-Length, so the browser must send exactly `contentType` and `contentLength` bytes.
+   */
+  presignPutObject(input: {
+    key: string;
+    contentType: string;
+    contentLength: number;
+    expiresInSeconds: number;
+  }): Promise<string>;
   /** Every part S3 has, ascending; null when the upload doesn't exist (NoSuchUpload). */
   listParts(input: { key: string; uploadId: string }): Promise<UploadedPart[] | null>;
   /** CompleteMultipartUpload; false when the upload doesn't exist (NoSuchUpload). */

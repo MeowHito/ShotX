@@ -41,6 +41,12 @@ const settings = {
   password: sharePasswordSchema.nullable(),
   /** null: never expires. Must be in the future (else VALIDATION_FAILED). */
   expiresAt: isoDateTimeSchema.nullable(),
+  /**
+   * The share page design (ADR 0013): one of the caller's designs (else DESIGN_NOT_FOUND), or
+   * null: no design (the plain layout). The owner's default design is not applied at view time;
+   * the studio preselects it when a share is created.
+   */
+  designId: idSchema.nullable(),
 };
 
 // --- POST /shares -----------------------------------------------------------------------------
@@ -61,6 +67,7 @@ export const createShareBodySchema = z
     requireLogin: settings.requireLogin.default(false),
     password: settings.password.default(null),
     expiresAt: settings.expiresAt.default(null),
+    designId: settings.designId.default(null),
   })
   .refine((b) => shareModeAllowedForTarget(b.mode, b.target.type), {
     error: 'face_only shares must target a folder',
@@ -98,6 +105,11 @@ export const ownerShareSchema = z.object({
   requireLogin: z.boolean(),
   passwordProtected: z.boolean(),
   expiresAt: isoDateTimeSchema.nullable(),
+  /**
+   * `shares.design_id` (ADR 0013): the chosen design, or null (the owner's default applies at view
+   * time). Becomes null when the design is deleted.
+   */
+  designId: idSchema.nullable(),
   /** ownerShareStatus: `revoked` (is_active false), `expired` (expires_at passed) or `active`. */
   status: z.enum(SHARE_STATUSES),
   createdAt: isoDateTimeSchema,
@@ -152,6 +164,7 @@ export const updateShareBodySchema = z
     requireLogin: settings.requireLogin.optional(),
     password: settings.password.optional(),
     expiresAt: settings.expiresAt.optional(),
+    designId: settings.designId.optional(),
   })
   .refine((b) => Object.values(b).some((v) => v !== undefined), {
     error: 'at least one setting is required',

@@ -10,6 +10,8 @@ import { fileExtension } from './media-types';
  *                                                          Tiering on AWS, STANDARD on R2)
  *   derived/{photographerId}/{fileId}/{variant file}       thumb.webp, preview.webp, web.jpg,
  *                                                          poster.jpg, preview.mp4
+ *   designs/{photographerId}/{assetId}/original            share page design images (ADR 0013),
+ *   designs/{photographerId}/{assetId}/web.webp            STANDARD; see designAssetKey
  *   tmp/zips/{jobId}.zip                                   tmp/ is lifecycle-expired
  *   tmp/reconcile/...                                      worker's orphan-face scans (ADR 0006)
  *
@@ -19,6 +21,8 @@ import { fileExtension } from './media-types';
 export const S3_PREFIXES = {
   originals: 'originals/',
   derived: 'derived/',
+  /** Share page design images (ADR 0013). Not under tmp/: kept until the orphan purge. */
+  designs: 'designs/',
   tmp: 'tmp/',
   tmpZips: 'tmp/zips/',
   /** The worker's reconciliation scan files (faces.reconcile.daily), with their own rule. */
@@ -220,13 +224,69 @@ export function zipKey(jobId: string): string {
   return `${S3_PREFIXES.tmpZips}${segment('Zip job id', jobId)}.zip`;
 }
 
+// --- Design images (ADR 0013) ------------------------------------------------------------------
+
+/**
+ * Objects of one design image: the uploaded bytes (`original`, no extension: its type is
+ * `design_assets.mime`, and the presigned PUT sets the Content-Type) and the worker's `web.webp`
+ * (long edge <= DESIGN_ASSET_LONG_EDGE, alpha kept, metadata stripped), the only one ever served.
+ */
+export const DESIGN_ASSET_FILE_NAMES = {
+  original: 'original',
+  web: 'web.webp',
+} as const;
+export type DesignAssetVariant = keyof typeof DESIGN_ASSET_FILE_NAMES;
+export const DESIGN_ASSET_VARIANTS = Object.keys(
+  DESIGN_ASSET_FILE_NAMES,
+) as readonly DesignAssetVariant[];
+
+export interface DesignAssetKeyParts {
+  photographerId: string;
+  assetId: string;
+}
+
+/** `designs/{photographerId}/{assetId}/original` or `.../web.webp`. */
+export function designAssetKey(parts: DesignAssetKeyParts, variant: DesignAssetVariant): string {
+  const fileName = DESIGN_ASSET_FILE_NAMES[variant] as string | undefined;
+  if (fileName === undefined) {
+    throw new RangeError(`Unknown design asset variant ${JSON.stringify(variant)}`);
+  }
+  return `${designAssetsPrefix(parts.photographerId, parts.assetId)}${fileName}`;
+}
+
+/** Both keys of a design image, by variant (the orphan purge deletes both). */
+export function designAssetKeys(parts: DesignAssetKeyParts): Record<DesignAssetVariant, string> {
+  return Object.fromEntries(
+    DESIGN_ASSET_VARIANTS.map((v) => [v, designAssetKey(parts, v)]),
+  ) as Record<DesignAssetVariant, string>;
+}
+
+/**
+ * `designs/{photographerId}/`, or `designs/{photographerId}/{assetId}/` with an asset id. For
+ * quota reconciliation (the `original` objects count) and purges.
+ */
+export function designAssetsPrefix(photographerId: string, assetId?: string): string {
+  const base = `${S3_PREFIXES.designs}${segment('Photographer id', photographerId)}/`;
+  return assetId === undefined ? base : `${base}${segment('Design asset id', assetId)}/`;
+}
+
 export type ParsedS3Key =
   | { kind: 'original'; photographerId: string; fileId: string; originalName: string }
   | { kind: 'derived'; photographerId: string; fileId: string; variant: DerivedVariant }
-  | { kind: 'zip'; jobId: string };
+  | { kind: 'zip'; jobId: string }
+  | {
+      kind: 'designAsset';
+      photographerId: string;
+      assetId: string;
+      variant: DesignAssetVariant;
+    };
 
 const VARIANT_BY_FILE_NAME = new Map<string, DerivedVariant>(
   DERIVED_VARIANTS.map((v) => [DERIVED_FILE_NAMES[v], v]),
+);
+
+const DESIGN_VARIANT_BY_FILE_NAME = new Map<string, DesignAssetVariant>(
+  DESIGN_ASSET_VARIANTS.map((v) => [DESIGN_ASSET_FILE_NAMES[v], v]),
 );
 
 /**
@@ -248,6 +308,12 @@ export function parseS3Key(key: string): ParsedS3Key | null {
     const variant = VARIANT_BY_FILE_NAME.get(fileName);
     if (!safe(photographerId, fileId) || variant === undefined) return null;
     return { kind: 'derived', photographerId, fileId, variant };
+  }
+  if (s[0] === 'designs' && s.length === 4) {
+    const [, photographerId = '', assetId = '', fileName = ''] = s;
+    const variant = DESIGN_VARIANT_BY_FILE_NAME.get(fileName);
+    if (!safe(photographerId, assetId) || variant === undefined) return null;
+    return { kind: 'designAsset', photographerId, assetId, variant };
   }
   if (s[0] === 'tmp' && s[1] === 'zips' && s.length === 3) {
     const fileName = s[2] ?? '';

@@ -4,18 +4,20 @@ import { ltree } from '@electric-sql/pglite/contrib/ltree';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { vector } from '@electric-sql/pglite-pgvector';
 import {
+  designAssets,
   files,
   folderPath,
   folders,
   MIGRATIONS_FOLDER,
   type NewDriveFile,
   type NewFolder,
+  shareDesigns,
   storageUsage,
   users,
 } from '@shotx/db';
 import * as schema from '@shotx/db';
 import type { PgPoolLike } from '@shotx/face';
-import { originalKey } from '@shotx/shared';
+import { blankDesignDoc, type DesignDoc, designAssetKey, originalKey } from '@shotx/shared';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
@@ -129,4 +131,86 @@ export async function usageOf(db: Db, photographerId: string) {
 export async function fileById(db: Db, id: string) {
   const [row] = await db.select().from(files).where(eq(files.id, id));
   return row;
+}
+
+/**
+ * A design image row (ADR 0013). Default: as `POST /designs/assets/:id/complete` leaves it
+ * (`processing`, `queued_at` now, bytes reserved by the caller), PNG of 1000 bytes.
+ */
+export async function createDesignAsset(
+  db: Db,
+  ownerId: string,
+  overrides: Partial<typeof designAssets.$inferInsert> = {},
+): Promise<{ id: string; originalKey: string; webKey: string }> {
+  const id = overrides.id ?? randomUUID();
+  const status = overrides.status ?? 'processing';
+  await db.insert(designAssets).values({
+    mime: 'image/png',
+    sizeBytes: 1000,
+    queuedAt: new Date(),
+    ...(status === 'uploading' ? { uploadExpiresAt: new Date(Date.now() + 3_600_000) } : {}),
+    ...overrides,
+    status,
+    id,
+    ownerId,
+  });
+  const parts = { photographerId: ownerId, assetId: id };
+  return {
+    id,
+    originalKey: designAssetKey(parts, 'original'),
+    webKey: designAssetKey(parts, 'web'),
+  };
+}
+
+export async function designAssetById(db: Db, id: string) {
+  const [row] = await db.select().from(designAssets).where(eq(designAssets.id, id));
+  return row;
+}
+
+/**
+ * A blank design whose background is `backgroundAssetId` (if given) with one image element per
+ * id in `imageAssetIds`. `doc` replaces the document (any JSON object; the database only checks
+ * that it is one).
+ */
+export async function createDesign(
+  db: Db,
+  ownerId: string,
+  options: { backgroundAssetId?: string; imageAssetIds?: string[]; doc?: unknown } = {},
+): Promise<string> {
+  const base = blankDesignDoc();
+  const doc: DesignDoc = {
+    ...base,
+    background:
+      options.backgroundAssetId === undefined
+        ? base.background
+        : { type: 'image', assetId: options.backgroundAssetId, blur: 0, dim: 0, color: '#000000' },
+    elements: [
+      ...base.elements,
+      ...(options.imageAssetIds ?? []).map((assetId, i) => ({
+        id: `img-${i}`,
+        type: 'image' as const,
+        assetId,
+        x: 10,
+        y: 10,
+        w: 100,
+        h: 100,
+        rotation: 0,
+        opacity: 1,
+        locked: false,
+        hidden: false,
+        fit: 'contain' as const,
+        radius: 0,
+        flipX: false,
+      })),
+    ],
+  };
+  const [row] = await db
+    .insert(shareDesigns)
+    .values({
+      ownerId,
+      name: `design-${randomUUID().slice(0, 8)}`,
+      doc: (options.doc ?? doc) as DesignDoc,
+    })
+    .returning({ id: shareDesigns.id });
+  return row!.id;
 }

@@ -1,4 +1,4 @@
-import { loadWorkerSettings } from '@shotx/shared';
+import { loadDesignConfig, loadWorkerSettings } from '@shotx/shared';
 import type { JobsHandlerDeps } from '../jobs/handler';
 import { MemoryQueueClient } from './memory-aws';
 
@@ -7,11 +7,16 @@ export const TEST_DESTINATIONS = { media: 'test://media', faces: 'test://faces' 
 
 /**
  * The queue and sweep dependencies of the jobs handler and JobContext, with the default
- * settings (loadWorkerSettings({})). `queues.sent` shows what the jobs enqueued.
+ * settings (loadWorkerSettings({}), loadDesignConfig({})). `queues.sent` shows what the jobs enqueued.
  */
 export function testJobQueues(queues = new MemoryQueueClient()): Pick<
   JobsHandlerDeps,
-  'queues' | 'destinations' | 'sweeps' | 'authSessionRetentionDays' | 'faceSearchEnabled'
+  | 'queues'
+  | 'destinations'
+  | 'sweeps'
+  | 'authSessionRetentionDays'
+  | 'faceSearchEnabled'
+  | 'designAssets'
 > & {
   queues: MemoryQueueClient;
 } {
@@ -21,5 +26,6 @@ export function testJobQueues(queues = new MemoryQueueClient()): Pick<
     sweeps: loadWorkerSettings({}).sweeps,
     authSessionRetentionDays: 7,
     faceSearchEnabled: true,
+    designAssets: loadDesignConfig({}).asset,
   };
 }

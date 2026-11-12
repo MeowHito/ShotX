@@ -34,6 +34,8 @@ const MAX_BODY_BYTES = 2 * 1024 * 1024;
 interface CompiledRoute {
   route: RouteContract;
   pattern: RegExp;
+  /** How many `:param` segments the path has (fewer is more specific). */
+  params: number;
 }
 
 function compile(route: RouteContract): CompiledRoute {
@@ -43,7 +45,8 @@ function compile(route: RouteContract): CompiledRoute {
       segment.startsWith(':') ? '[^/]+' : segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
     )
     .join('/');
-  return { route, pattern: new RegExp(`^${source}$`) };
+  const params = route.path.split('/').filter((segment) => segment.startsWith(':')).length;
+  return { route, pattern: new RegExp(`^${source}$`), params };
 }
 
 const COMPILED = ALL_ROUTES.map(compile);
@@ -87,9 +90,18 @@ export function isBrowserForwardable(route: RouteContract): boolean {
   return (route.auth === 'photographer' || route.auth === 'user') && route.serverOnly !== true;
 }
 
-/** The contract route for a method and API path (relative to /api), or null. */
+/**
+ * The contract route for a method and API path (relative to /api), or null. A literal segment
+ * beats a `:param` (`GET /designs/assets` is listAssets, not `GET /designs/:id`), whatever the
+ * order of the route table.
+ */
 export function matchRoute(method: string, path: string): RouteContract | null {
-  return COMPILED.find((c) => c.route.method === method && c.pattern.test(path))?.route ?? null;
+  let best: CompiledRoute | null = null;
+  for (const c of COMPILED) {
+    if (c.route.method !== method || !c.pattern.test(path)) continue;
+    if (best === null || c.params < best.params) best = c;
+  }
+  return best?.route ?? null;
 }
 
 /**

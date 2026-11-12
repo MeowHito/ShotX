@@ -1,4 +1,4 @@
-import { files } from '@shotx/db';
+import { designAssets, files } from '@shotx/db';
 import {
   originalCompletedMessage,
   serializeQueueMessage,
@@ -15,6 +15,10 @@ export interface MediaSweepResult {
   requeued: number;
   /** `processing` rows past MEDIA_SWEEP_MAX_REQUEUES (left for the operator). */
   overCap: number;
+  /** `processing` design images (ADR 0013) whose `design.asset` was sent again. */
+  designAssetsRequeued: number;
+  /** `processing` design images past MEDIA_SWEEP_MAX_REQUEUES (left for the operator). */
+  designAssetsOverCap: number;
   /** `uploading` rows completed from their object (markCompleted lost). */
   uploadsRecovered: number;
   /** `uploading` rows still being uploaded, or without a complete object (left alone). */
@@ -130,6 +134,73 @@ async function reportOverCap(ctx: JobContext, settings: Settings): Promise<numbe
   return stuck.length;
 }
 
+/** A `processing`, not purge-requested design image last sent more than the age ago. */
+const staleDesignAsset = (settings: Settings) => sql`
+  ${designAssets.status} = 'processing'
+  AND ${designAssets.purgeRequestedAt} IS NULL
+  AND coalesce(${designAssets.queuedAt}, ${designAssets.createdAt})
+    < now() - make_interval(secs => ${settings.processingAgeSeconds})`;
+
+/**
+ * ADR 0013: re-sends `design.asset` for stale `processing` design images below the requeue cap,
+ * bumping `queued_at` and `requeues` in the same guarded UPDATE first (as for files), so
+ * concurrent sweeps can't both send and a failed send waits for the next age window.
+ */
+async function requeueDesignAssets(
+  ctx: JobContext,
+  settings: Settings,
+): Promise<{ requeued: number; overCap: number }> {
+  const below = sql`${designAssets.requeues} < ${settings.maxRequeues}`;
+  const updated = await rows<{ id: string; owner_id: string }>(
+    ctx.db,
+    sql`UPDATE ${designAssets}
+      SET "queued_at" = now(), "requeues" = ${designAssets.requeues} + 1
+      WHERE ${designAssets.id} IN (
+          SELECT ${designAssets.id} FROM ${designAssets}
+          WHERE ${staleDesignAsset(settings)} AND ${below}
+          ORDER BY coalesce(${designAssets.queuedAt}, ${designAssets.createdAt})
+          LIMIT ${settings.batchSize}
+        )
+        AND ${staleDesignAsset(settings)} AND ${below}
+      RETURNING ${designAssets.id} AS "id", ${designAssets.ownerId} AS "owner_id"`,
+  );
+  if (updated.length > 0) {
+    await ctx.queues.sendMessages(
+      ctx.destinations.media,
+      updated.map((row) =>
+        serializeQueueMessage('media', {
+          kind: 'design.asset',
+          assetId: row.id,
+          photographerId: row.owner_id,
+        }),
+      ),
+    );
+  }
+  for (const row of updated) {
+    ctx.log.info('re-sent the design.asset message of a stale processing design image', {
+      assetId: row.id,
+    });
+  }
+  const stuck = await rows<{ id: string }>(
+    ctx.db,
+    sql`SELECT ${designAssets.id} AS "id" FROM ${designAssets}
+      WHERE ${staleDesignAsset(settings)} AND ${designAssets.requeues} >= ${settings.maxRequeues}
+      ORDER BY coalesce(${designAssets.queuedAt}, ${designAssets.createdAt})
+      LIMIT ${settings.batchSize}`,
+  );
+  if (stuck.length > 0) {
+    ctx.log.error('design images stuck in processing after every requeue; the operator must look', {
+      count: stuck.length,
+      maxRequeues: settings.maxRequeues,
+      assetIds: stuck
+        .slice(0, MAX_LOGGED_IDS)
+        .map((r) => r.id)
+        .join(','),
+    });
+  }
+  return { requeued: updated.length, overCap: stuck.length };
+}
+
 /**
  * `uploading` rows older than MEDIA_SWEEP_UPLOADING_AGE_SECONDS: when the multipart upload is gone
  * (ListParts) and the object exists with exactly `size_bytes` (HeadObject), the API crashed between
@@ -203,12 +274,17 @@ export async function runMediaSweep(
   mayContinue(ctx);
   const processing = await requeueProcessing(ctx, settings);
   const overCap = await reportOverCap(ctx, settings);
+  const design = mayContinue(ctx)
+    ? await requeueDesignAssets(ctx, settings)
+    : { requeued: 0, overCap: 0 };
   const uploads = mayContinue(ctx)
     ? await recoverUploads(ctx, settings)
     : { recovered: 0, left: 0, errors: 0 };
   return {
     requeued: processing.requeued,
     overCap,
+    designAssetsRequeued: design.requeued,
+    designAssetsOverCap: design.overCap,
     uploadsRecovered: uploads.recovered,
     uploadsLeft: uploads.left,
     errors: processing.errors + uploads.errors,

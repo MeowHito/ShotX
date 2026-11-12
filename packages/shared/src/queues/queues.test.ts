@@ -3,11 +3,14 @@ import { derivedKey, originalKey } from '../s3-keys';
 import {
   createdObjects,
   createdOriginals,
+  isDesignAsset,
+  isFileCopy,
   isOriginalCompleted,
   isS3TestEvent,
   mediaOriginals,
   originalCompletedMessage,
   parseQueueMessage,
+  queueJobName,
   QUEUE_MESSAGE_SCHEMAS,
   QUEUE_NAMES,
   QUEUE_URL_ENV,
@@ -448,5 +451,37 @@ describe('jobs queue', () => {
     { type: 'trash.purge.daily', scheduledTime: 'yesterday' },
   ])('rejects %j', (body) => {
     expect(() => parseQueueMessage('jobs', JSON.stringify(body))).toThrow(QueueMessageError);
+  });
+});
+
+describe('media queue: design.asset (ADR 0013)', () => {
+  const assetId = '0195f3a2-9e3a-7f6c-9d4b-5e6f7a8b9c0d';
+  const message = { kind: 'design.asset', assetId, photographerId } as const;
+
+  it('round-trips, is told apart from the other variants and has its job name', () => {
+    const parsed = parseQueueMessage('media', serializeQueueMessage('media', message));
+    expect(parsed).toEqual(message);
+    expect(isDesignAsset(parsed)).toBe(true);
+    expect(isFileCopy(parsed)).toBe(false);
+    expect(isOriginalCompleted(parsed)).toBe(false);
+    expect(isS3TestEvent(parsed)).toBe(false);
+    expect(isDesignAsset(parseQueueMessage('media', JSON.stringify(testEvent)))).toBe(false);
+    expect(queueJobName('media', parsed)).toBe('media.design-asset');
+  });
+
+  it.each([
+    ['a non-uuid asset id', { assetId: 'a/b' }],
+    ['no photographer', { photographerId: undefined }],
+    ['another kind', { kind: 'design.assets' }],
+  ])('rejects %s', (_label, change) => {
+    const body = { ...message, ...change };
+    expect(() => parseQueueMessage('media', JSON.stringify(body))).toThrow(QueueMessageError);
+  });
+
+  it('is never mistaken for an original: the helpers for originals refuse it', () => {
+    const parsed = parseQueueMessage('media', JSON.stringify(message));
+    expect(() => mediaOriginals(parsed, 'shotx-prod-media')).toThrow(/isDesignAsset/);
+    expect(() => createdObjects(parsed)).toThrow(/isDesignAsset/);
+    expect(() => createdOriginals(parsed)).toThrow(/isDesignAsset/);
   });
 });

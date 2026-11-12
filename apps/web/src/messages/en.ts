@@ -29,6 +29,20 @@ export const en: PublicMessages = {
     },
   },
   share: {
+    design: {
+      label: 'Event page',
+      camera: 'Take a selfie',
+      choosePhoto: 'Use a photo',
+      help: 'How it works',
+      howTo: {
+        title: 'How to find your photos',
+        camera: 'Tap “Take a selfie” and accept the face data terms.',
+        choosePhoto: 'Or tap “Use a photo” to pick a clear photo of your face from your device.',
+        photo: 'Face the camera, with only your face clearly in the picture.',
+        results: 'The photos you appear in show up. Select them and save.',
+        close: 'Got it',
+      },
+    },
     expiresAt: 'Link valid until {date}',
     galleryLabel: 'Photos in this link',
     empty: 'No photos in this link yet',
@@ -341,6 +355,12 @@ export const en: PublicMessages = {
       PASSWORD_TOO_WEAK: 'The new password is too easy to guess.',
       LOGIN_PROVIDER_UNAVAILABLE: 'Viewer sign-in with LINE or Google is turned off.',
       COVER_FILE_INVALID: 'This photo can’t be the cover.',
+      DESIGN_REVISION_CONFLICT: 'This design was changed elsewhere. Reload to see the latest.',
+      DESIGN_ASSET_NOT_FOUND: 'Some images in this design are missing. Remove them and try again.',
+      DESIGN_LIMIT_REACHED:
+        'You have the maximum number of designs. Delete one you don’t use first.',
+      DESIGN_DOC_TOO_LARGE: 'This design is too large. Remove some elements and try again.',
+      DESIGN_NOT_FOUND: 'The selected design wasn’t found. It may have been deleted.',
     },
     details: {
       quotaExceeded: 'Not enough space: this file needs {requested} but only {available} is left.',
@@ -366,6 +386,11 @@ export const en: PublicMessages = {
       captchaInvalid: 'The check failed. Please try again.',
       rateLimitedWait:
         '{minutes, plural, one {Too many requests. Please wait # minute and try again.} other {Too many requests. Please wait # minutes and try again.}}',
+      designLimitReached:
+        'You can keep up to {max, number} designs. Delete one you don’t use first.',
+      designTooManyElements:
+        'A design can have up to {max, number} elements (this one has {actual, number}). Remove some first.',
+      designTooManyBytes: 'This design is too large. Remove or shorten some text first.',
     },
     hints: {
       heic: 'HEIC files aren’t supported yet. Please convert them to JPEG first.',
@@ -388,6 +413,9 @@ export const en: PublicMessages = {
         'There is a new version of the consent text. Please refresh this page to read it before accepting.',
       captchaUnavailable:
         'The check is temporarily unavailable. Please wait a moment and try again.',
+      designAssetFailed:
+        'This image couldn’t be processed. It may be damaged or not an image; try another one.',
+      designAssetTimeout: 'Preparing the image took too long. Please try again.',
     },
   },
 };

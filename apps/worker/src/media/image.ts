@@ -1,6 +1,6 @@
-import type { MediaConfig } from '@shotx/shared';
+import type { DesignAssetConfig, MediaConfig } from '@shotx/shared';
 import sharp from 'sharp';
-import { isTransientMediaFailure, MediaDecodeError } from './errors';
+import { isTransientMediaFailure, MediaDecodeError, MediaFormatMismatchError } from './errors';
 import { takenAtFromExif } from './exif';
 
 // Keep memory flat on a long-running worker: libvips' operation cache only helps repeated work.
@@ -96,6 +96,54 @@ export async function renderPosterDerivatives(
     ]);
     return { poster, thumb, width, height };
   } catch (error) {
+    throw decodeError(error);
+  }
+}
+
+export interface DesignAssetWeb {
+  /** web.webp's bytes and dimensions (after EXIF orientation and the resize). */
+  web: Buffer;
+  width: number;
+  height: number;
+}
+
+/**
+ * A share page design image (ADR 0013) as `web.webp`: EXIF orientation applied, fitted inside
+ * DESIGN_ASSET_LONG_EDGE without enlarging, alpha kept (lossless alpha plane), every metadata
+ * block stripped (sharp writes none unless asked: no EXIF incl. GPS, XMP, IPTC or ICC; colours
+ * converted to sRGB). Animated images use their first frame.
+ *
+ * The decoder's own idea of the format must be `expectedFormat` (the row's verified MIME type)
+ * before anything is rendered: the magic-byte check ran on an earlier read, and the bytes may have
+ * been replaced since. Throws MediaFormatMismatchError when it isn't, MediaDecodeError when the
+ * bytes don't decode.
+ */
+export async function renderDesignAssetWeb(
+  path: string,
+  expectedFormat: 'jpeg' | 'png' | 'webp',
+  config: Pick<DesignAssetConfig, 'longEdge' | 'webpQuality'>,
+): Promise<DesignAssetWeb> {
+  try {
+    const source = sharp(path, { failOn: 'error' });
+    const metadata = await source.metadata();
+    if (metadata.format !== expectedFormat) {
+      throw new MediaFormatMismatchError(expectedFormat, metadata.format);
+    }
+    const { width, height } = metadata.autoOrient;
+    if (!(width > 0 && height > 0)) throw new MediaDecodeError('Image has no dimensions');
+    const { data, info } = await source
+      .autoOrient()
+      .resize({
+        width: config.longEdge,
+        height: config.longEdge,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .webp({ quality: config.webpQuality, alphaQuality: 100 })
+      .toBuffer({ resolveWithObject: true });
+    return { web: data, width: info.width, height: info.height };
+  } catch (error) {
+    if (error instanceof MediaDecodeError || error instanceof MediaFormatMismatchError) throw error;
     throw decodeError(error);
   }
 }

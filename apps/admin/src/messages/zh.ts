@@ -287,6 +287,11 @@ export const zh: TranslatedMessages = {
       COVER_FILE_INVALID: '此文件不能用作封面，必须是此文件夹或其子文件夹中已就绪的图片',
       LOGIN_PROVIDER_UNAVAILABLE:
         '暂时无法让观看者登录（尚未设置 LINE 或 Google），因此不能将链接设为须登录后查看',
+      DESIGN_REVISION_CONFLICT: '此设计已在别处修改，请重新加载后再编辑',
+      DESIGN_ASSET_NOT_FOUND: '设计中使用的部分图片未找到',
+      DESIGN_LIMIT_REACHED: '设计数量已达上限',
+      DESIGN_DOC_TOO_LARGE: '此设计过大，请删除部分元素',
+      DESIGN_NOT_FOUND: '未找到所选设计',
     },
     passwordPolicy: {
       too_short: '密码太短，至少需要 {minLength, number} 个字符',

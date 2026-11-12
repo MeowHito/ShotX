@@ -71,6 +71,8 @@ describe('schema', () => {
         'face_vectors',
         'user_password_credentials',
         'cash_payments',
+        'share_designs',
+        'design_assets',
       ].sort(),
     );
   });
@@ -263,6 +265,27 @@ describe('schema', () => {
         'expires_at',
       ],
       zip_job_entries: ['job_id', 'photographer_id', 'position', 'file_id', 'name'],
+      // ADR 0013.
+      share_designs: [
+        'id',
+        'owner_id',
+        'name',
+        'doc',
+        'revision',
+        'is_default',
+        'created_at',
+        'updated_at',
+      ],
+      design_assets: [
+        'id',
+        'owner_id',
+        'mime',
+        'size_bytes',
+        'width',
+        'height',
+        'status',
+        'created_at',
+      ],
       face_vectors: [
         'face_id',
         'collection_id',
@@ -624,6 +647,39 @@ describe('schema', () => {
       (fk) => fk.getName() === 'faces_file_same_owner_fk',
     );
     expect(facesFk?.onDelete).toBe('restrict');
+  });
+
+  it('has the share page designer tables and the share design key of migration 0013 (ADR 0013)', () => {
+    expect(column('shares', 'design_id').notNull).toBe(false);
+    const designFk = config('shares').foreignKeys.find(
+      (fk) => fk.getName() === 'shares_design_same_owner_fk',
+    );
+    const ref = designFk?.reference();
+    expect({
+      columns: ref?.columns.map((c) => c.name),
+      foreignTable: ref === undefined ? undefined : getTableName(ref.foreignTable),
+      foreignColumns: ref?.foreignColumns.map((c) => c.name),
+      onDelete: designFk?.onDelete,
+    }).toEqual({
+      columns: ['design_id', 'owner_id'],
+      foreignTable: 'share_designs',
+      foreignColumns: ['id', 'owner_id'],
+      onDelete: 'set null',
+    });
+    expect(config('share_designs').uniqueConstraints.map((u) => u.name)).toContain(
+      'share_designs_id_owner_unique',
+    );
+    const defaultIndex = config('share_designs').indexes.find(
+      (i) => i.config.name === 'share_designs_one_default_per_owner',
+    );
+    expect(defaultIndex?.config.unique).toBe(true);
+    expect(defaultIndex?.config.where).toBeDefined();
+    expect(column('share_designs', 'doc').getSQLType()).toBe('jsonb');
+    expect(column('share_designs', 'revision').default).toBe(1);
+    expect(column('share_designs', 'is_default').default).toBe(false);
+    // Same value set as files (ADR 0013: uploading|processing|ready|failed).
+    expect(column('design_assets', 'status').getSQLType()).toBe('file_status');
+    expect(column('design_assets', 'size_bytes').getSQLType()).toBe('bigint');
   });
 
   it('gives activity_events a primary key that includes the partition key', () => {

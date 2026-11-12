@@ -69,12 +69,19 @@ function FaceGuide() {
 export function SelfieCapture({
   onCaptured,
   allowGallery,
+  startWith = 'camera',
   busy,
 }: {
   onCaptured: (source: SelfieSource) => void;
   allowGallery: boolean;
+  /**
+   * `gallery` (ADR 0013, the "use a photo" button): the gallery picker comes first and the camera only
+   * starts when asked. Ignored without `allowGallery`.
+   */
+  startWith?: 'camera' | 'gallery';
   busy: boolean;
 }) {
+  const galleryFirst = allowGallery && startWith === 'gallery';
   const t = useTranslations('capture');
   const { navigator: nav, config } = useFaceTools();
   const [liveSupported] = useState(() => canUseLiveCamera(nav));
@@ -104,8 +111,9 @@ export function SelfieCapture({
   }
 
   // Start the camera right away (consent was just given); once per mount, also in Strict Mode.
+  // Not when the viewer asked to use a photo from the device.
   useEffect(() => {
-    if (!liveSupported || startedRef.current) return;
+    if (!liveSupported || galleryFirst || startedRef.current) return;
     startedRef.current = true;
     void start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -143,8 +151,22 @@ export function SelfieCapture({
   const showFallback = !liveSupported || camera === 'blocked';
   const showFrame = camera === 'live' || camera === 'starting';
 
+  const galleryPicker = allowGallery ? (
+    <label
+      className={cn(
+        buttonVariants({ size: 'lg', variant: galleryFirst ? 'default' : 'outline' }),
+        'w-full cursor-pointer',
+      )}
+    >
+      <ImageIcon aria-hidden />
+      {t('chooseFromGallery')}
+      <input type="file" accept="image/*" className="sr-only" onChange={onFile} disabled={busy} />
+    </label>
+  ) : null;
+
   return (
     <div className="space-y-4">
+      {galleryFirst && !showFrame ? galleryPicker : null}
       {showFrame ? (
         <div className="space-y-5">
           <div className="relative mx-auto aspect-square w-full max-w-[17rem] overflow-hidden rounded-full bg-black shadow-float ring-4 ring-primary/40">
@@ -174,7 +196,13 @@ export function SelfieCapture({
         </div>
       ) : null}
       {liveSupported && camera === 'idle' ? (
-        <Button size="lg" className="w-full" onClick={() => void start()} disabled={busy}>
+        <Button
+          size="lg"
+          variant={galleryFirst ? 'outline' : 'default'}
+          className="w-full"
+          onClick={() => void start()}
+          disabled={busy}
+        >
           <CameraIcon aria-hidden />
           {t('openCamera')}
         </Button>
@@ -194,24 +222,7 @@ export function SelfieCapture({
           />
         </label>
       ) : null}
-      {allowGallery ? (
-        <label
-          className={cn(
-            buttonVariants({ size: 'lg', variant: 'outline' }),
-            'w-full cursor-pointer',
-          )}
-        >
-          <ImageIcon aria-hidden />
-          {t('chooseFromGallery')}
-          <input
-            type="file"
-            accept="image/*"
-            className="sr-only"
-            onChange={onFile}
-            disabled={busy}
-          />
-        </label>
-      ) : null}
+      {galleryFirst && !showFrame ? null : galleryPicker}
       {inApp ? <p className="text-xs text-muted-foreground">{t('inAppHint')}</p> : null}
     </div>
   );

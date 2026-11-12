@@ -1,0 +1,469 @@
+'use client';
+
+import {
+  DESIGN_ARTBOARD,
+  type DesignBackground,
+  type DesignDoc,
+  type DesignElement,
+  type DesignElementOf,
+  type ShareMode,
+} from '@shotx/shared';
+import { cn } from '@shotx/ui';
+import { CameraIcon, CircleHelpIcon, ImageIcon, LoaderCircleIcon } from 'lucide-react';
+import { useTranslations } from 'next-intl';
+import type { CSSProperties, ReactNode, Ref } from 'react';
+import { designFontFamily } from '@/lib/design/fonts';
+import { FaceGlyph } from './face-glyph';
+
+/**
+ * The one renderer of a share page design (ADR 0013), used by the share page, the editor and the
+ * mini previews so they all look the same. The document is laid out on the 390 x 844 artboard in
+ * design units; one design unit is the CSS length `--u`:
+ * - `fill` (share page): the background fills the element, the artboard is centred and as wide as
+ *   the element up to `maxWidth` (container query units, so it is right in the SSR HTML too);
+ * - `artboard` (editor, previews): the element is the artboard, `unit` px per design unit.
+ *
+ * Text is rendered as text nodes only (React escapes it; never HTML). Colours, numbers and enums
+ * come from a document validated by designDocSchema; image URLs come from the API's asset map.
+ * Labels of the buttons come from i18n (share.design), in the viewer's language.
+ */
+
+/** Widest the artboard is drawn on the share page (desktops show a phone-sized card). */
+export const DESIGN_CANVAS_MAX_WIDTH = 480;
+
+/** assetId -> signed CDN URL (null: not ready yet, draw nothing). */
+export type DesignCanvasAssets = Readonly<Record<string, string | null>>;
+
+export interface DesignCanvasActions {
+  onCamera: () => void;
+  onChoosePhoto: () => void;
+  onHelp: () => void;
+}
+
+export type DesignCanvasLayout =
+  { kind: 'fill'; maxWidth?: number } | { kind: 'artboard'; unit: number };
+
+export interface DesignCanvasProps {
+  doc: DesignDoc;
+  assets: DesignCanvasAssets;
+  /** `face_only` shows the camera button alone (ADR 0011: choosing a photo is gallery-only). */
+  mode: ShareMode;
+  layout: DesignCanvasLayout;
+  /** The share page's handlers; without them the buttons are inert (editor, previews). */
+  actions?: DesignCanvasActions | null;
+  /** False: no scan buttons at all (face search unavailable for this share). */
+  scanAvailable?: boolean;
+  /** The scan buttons' element (the share page watches whether it is on screen). */
+  scanButtonsRef?: Ref<HTMLDivElement>;
+  /** Editor: a text element being edited in place (drawn invisible under its text field). */
+  editingId?: string | null;
+  /** Editor: image assets still processing (a spinner instead of nothing). */
+  pendingAssets?: ReadonlySet<string>;
+  /** Mini previews: hidden from assistive technology. */
+  decorative?: boolean;
+  /** Accessible name of the design (share page). */
+  label?: string;
+  className?: string;
+  style?: CSSProperties;
+}
+
+/** A length of `n` design units. */
+export const du = (n: number) => `calc(var(--u) * ${n})`;
+
+/** The CSS `--u` of a layout. */
+function unitCss(layout: DesignCanvasLayout): string {
+  return layout.kind === 'artboard'
+    ? `${layout.unit}px`
+    : // `--design-cap` (optional, set by the page) can lower the cap, e.g. to fit the height.
+      `calc(min(100cqw, var(--design-cap, ${layout.maxWidth ?? DESIGN_CANVAS_MAX_WIDTH}px)) / ${DESIGN_ARTBOARD.width})`;
+}
+
+/** The CSS background of a colour or gradient background (an image background: its colour). */
+export function backgroundCss(bg: DesignBackground): string {
+  switch (bg.type) {
+    case 'color':
+    case 'image':
+      return bg.color;
+    case 'gradient':
+      // CSS angle semantics (0deg: bottom to top, 90deg: left to right), as the document's.
+      return `linear-gradient(${bg.angle}deg, ${bg.stops
+        .map((s) => `${s.color} ${Math.round(s.at * 1000) / 10}%`)
+        .join(', ')})`;
+  }
+}
+
+function Background({ bg, assets }: { bg: DesignBackground; assets: DesignCanvasAssets }) {
+  if (bg.type !== 'image') return null;
+  const url = assets[bg.assetId] ?? null;
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+      {url !== null ? (
+        // Signed CDN URL of the design image (web.webp); blur and dim are display only.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={url}
+          alt=""
+          draggable={false}
+          data-testid="design-background-image"
+          className="absolute inset-0 size-full object-cover"
+          style={{
+            filter: bg.blur > 0 ? `blur(${du(bg.blur)})` : undefined,
+            // Blur bleeds transparent edges in; scale slightly so they stay outside.
+            transform: bg.blur > 0 ? 'scale(1.08)' : undefined,
+          }}
+        />
+      ) : null}
+      {bg.dim > 0 ? (
+        <div className="absolute inset-0" style={{ background: `rgba(0, 0, 0, ${bg.dim})` }} />
+      ) : null}
+    </div>
+  );
+}
+
+function boxStyle(e: DesignElement): CSSProperties {
+  return {
+    position: 'absolute',
+    left: du(e.x),
+    top: du(e.y),
+    width: du(e.w),
+    height: du(e.h),
+    transform: e.rotation !== 0 ? `rotate(${e.rotation}deg)` : undefined,
+    opacity: e.opacity,
+  };
+}
+
+export function textStyle(e: DesignElementOf<'text'>): CSSProperties {
+  return {
+    fontFamily: designFontFamily(e.font),
+    fontSize: du(e.size),
+    fontWeight: e.weight,
+    fontStyle: e.italic ? 'italic' : 'normal',
+    color: e.color,
+    textAlign: e.align,
+    lineHeight: e.lineHeight,
+    letterSpacing: du(e.letterSpacing),
+    textTransform: e.uppercase ? 'uppercase' : 'none',
+    textShadow:
+      e.shadow === null
+        ? undefined
+        : `${du(e.shadow.x)} ${du(e.shadow.y)} ${du(e.shadow.blur)} ${e.shadow.color}`,
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'break-word',
+  };
+}
+
+function TextElement({ e, editing }: { e: DesignElementOf<'text'>; editing: boolean }) {
+  return (
+    <div
+      data-element-type="text"
+      style={{ ...textStyle(e), width: '100%', visibility: editing ? 'hidden' : undefined }}
+    >
+      {/* A text node: whatever was typed shows as typed, never as markup. */}
+      {e.text}
+    </div>
+  );
+}
+
+function ShapeElement({ e }: { e: DesignElementOf<'shape'> }) {
+  if (e.shape === 'line') {
+    return e.stroke === null ? null : (
+      <div
+        data-element-type="shape"
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: '50%',
+          height: du(Math.max(e.strokeWidth, 0.5)),
+          transform: 'translateY(-50%)',
+          background: e.stroke,
+        }}
+      />
+    );
+  }
+  const blur = e.glass > 0 ? `blur(${du(e.glass)})` : undefined;
+  return (
+    <div
+      data-element-type="shape"
+      data-glass={e.glass > 0 ? 'true' : undefined}
+      style={{
+        width: '100%',
+        height: '100%',
+        boxSizing: 'border-box',
+        background: e.fill ?? 'transparent',
+        border:
+          e.stroke !== null && e.strokeWidth > 0
+            ? `${du(e.strokeWidth)} solid ${e.stroke}`
+            : undefined,
+        borderRadius: e.shape === 'ellipse' ? '50%' : du(e.radius),
+        backdropFilter: blur,
+        WebkitBackdropFilter: blur,
+      }}
+    />
+  );
+}
+
+function ImageElement({
+  e,
+  url,
+  pending,
+}: {
+  e: DesignElementOf<'image'>;
+  url: string | null;
+  pending: boolean;
+}) {
+  if (url === null) {
+    return pending ? (
+      <div className="flex size-full items-center justify-center rounded bg-black/5" role="status">
+        <LoaderCircleIcon
+          className="size-1/4 max-h-8 max-w-8 animate-spin text-black/40"
+          aria-hidden
+        />
+      </div>
+    ) : null;
+  }
+  return (
+    // Signed CDN URL of a design image (web.webp).
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={url}
+      alt=""
+      draggable={false}
+      data-element-type="image"
+      style={{
+        width: '100%',
+        height: '100%',
+        objectFit: e.fit,
+        borderRadius: du(e.radius),
+        transform: e.flipX ? 'scaleX(-1)' : undefined,
+        display: 'block',
+      }}
+    />
+  );
+}
+
+/** A button of the design; a real button only when it has a handler. */
+function DesignButton({
+  onClick,
+  style,
+  children,
+}: {
+  onClick?: () => void;
+  style: CSSProperties;
+  children: ReactNode;
+}) {
+  const common = {
+    style: {
+      ...style,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: du(8),
+      fontFamily: 'var(--font-noto-thai), sans-serif',
+      fontWeight: 600,
+      lineHeight: 1.2,
+      boxSizing: 'border-box' as const,
+      whiteSpace: 'nowrap' as const,
+      overflow: 'hidden',
+    },
+  };
+  return onClick !== undefined ? (
+    <button
+      type="button"
+      onClick={onClick}
+      className="cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      {...common}
+    >
+      {children}
+    </button>
+  ) : (
+    <div {...common}>{children}</div>
+  );
+}
+
+function ScanButtons({
+  e,
+  mode,
+  actions,
+  buttonsRef,
+}: {
+  e: DesignElementOf<'scanButtons'>;
+  mode: ShareMode;
+  actions: DesignCanvasActions | null;
+  buttonsRef?: Ref<HTMLDivElement>;
+}) {
+  const t = useTranslations('share.design');
+  const both = mode === 'gallery';
+  // The contract's box rule: each button `height` tall, as wide as the box (column) or half the
+  // box minus the gap (row), centred vertically in the box. One button (face_only) spans the box.
+  const width = !both || e.layout === 'column' ? '100%' : `calc(50% - ${du(e.gap / 2)})`;
+  const font = du(Math.min(17, e.height * 0.34));
+  const icon = {
+    width: du(Math.min(20, e.height * 0.4)),
+    height: du(Math.min(20, e.height * 0.4)),
+  };
+  const base: CSSProperties = {
+    width,
+    height: du(e.height),
+    borderRadius: du(e.radius),
+    fontSize: font,
+    flexShrink: 0,
+  };
+  return (
+    <div
+      ref={buttonsRef}
+      data-element-type="scanButtons"
+      style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        flexDirection: both && e.layout === 'row' ? 'row' : 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: du(e.gap),
+      }}
+    >
+      <DesignButton
+        onClick={actions?.onCamera}
+        style={{ ...base, background: e.primary.bg, color: e.primary.fg }}
+      >
+        <CameraIcon style={icon} aria-hidden />
+        {t('camera')}
+      </DesignButton>
+      {both ? (
+        <DesignButton
+          onClick={actions?.onChoosePhoto}
+          style={{
+            ...base,
+            background: e.secondary.bg,
+            color: e.secondary.fg,
+            border:
+              e.secondary.border !== null ? `${du(1.5)} solid ${e.secondary.border}` : undefined,
+          }}
+        >
+          <ImageIcon style={icon} aria-hidden />
+          {t('choosePhoto')}
+        </DesignButton>
+      ) : null}
+    </div>
+  );
+}
+
+function HelpButton({
+  e,
+  actions,
+}: {
+  e: DesignElementOf<'helpButton'>;
+  actions: DesignCanvasActions | null;
+}) {
+  const t = useTranslations('share.design');
+  const icon = { width: du(Math.min(18, e.h * 0.45)), height: du(Math.min(18, e.h * 0.45)) };
+  return (
+    <DesignButton
+      onClick={actions?.onHelp}
+      style={{
+        width: '100%',
+        height: '100%',
+        background: e.bg,
+        color: e.fg,
+        borderRadius: du(e.radius),
+        fontSize: du(Math.min(15, e.h * 0.42)),
+        fontWeight: 500,
+      }}
+    >
+      <CircleHelpIcon style={icon} aria-hidden />
+      {t('help')}
+    </DesignButton>
+  );
+}
+
+function ElementView({ e, props }: { e: DesignElement; props: DesignCanvasProps }) {
+  const actions = props.actions ?? null;
+  let content: ReactNode;
+  switch (e.type) {
+    case 'text':
+      content = <TextElement e={e} editing={props.editingId === e.id} />;
+      break;
+    case 'shape':
+      content = <ShapeElement e={e} />;
+      break;
+    case 'image':
+      content = (
+        <ImageElement
+          e={e}
+          url={props.assets[e.assetId] ?? null}
+          pending={props.pendingAssets?.has(e.assetId) ?? false}
+        />
+      );
+      break;
+    case 'faceIcon':
+      content = (
+        <FaceGlyph color={e.color} strokeWidth={e.strokeWidth} boxSize={Math.min(e.w, e.h)} />
+      );
+      break;
+    case 'scanButtons':
+      if (props.scanAvailable === false) return null;
+      content = (
+        <ScanButtons e={e} mode={props.mode} actions={actions} buttonsRef={props.scanButtonsRef} />
+      );
+      break;
+    case 'helpButton':
+      content = <HelpButton e={e} actions={actions} />;
+      break;
+  }
+  return (
+    <div style={boxStyle(e)} data-element-id={e.id}>
+      {content}
+    </div>
+  );
+}
+
+export function DesignCanvas(props: DesignCanvasProps) {
+  const { doc, layout } = props;
+  const unit = unitCss(layout);
+  const artboard = (
+    <div
+      className="relative shrink-0"
+      data-testid="design-artboard"
+      style={
+        {
+          '--u': unit,
+          width: du(DESIGN_ARTBOARD.width),
+          height: du(DESIGN_ARTBOARD.height),
+        } as CSSProperties
+      }
+    >
+      {doc.elements.map((e) => (e.hidden ? null : <ElementView key={e.id} e={e} props={props} />))}
+    </div>
+  );
+  const background = backgroundCss(doc.background);
+  return (
+    <div
+      className={cn(
+        'relative overflow-hidden',
+        layout.kind === 'fill' && 'flex items-center justify-center',
+        props.className,
+      )}
+      data-testid="design-canvas"
+      aria-hidden={props.decorative ? true : undefined}
+      role={props.label !== undefined ? 'region' : undefined}
+      aria-label={props.label}
+      style={{
+        background,
+        ...(layout.kind === 'fill'
+          ? { containerType: 'inline-size' }
+          : {
+              '--u': unit,
+              width: du(DESIGN_ARTBOARD.width),
+              height: du(DESIGN_ARTBOARD.height),
+            }),
+        ...props.style,
+      }}
+    >
+      <div className="absolute inset-0" style={{ '--u': unit } as CSSProperties} aria-hidden>
+        <Background bg={doc.background} assets={props.assets} />
+      </div>
+      {artboard}
+    </div>
+  );
+}

@@ -14,6 +14,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { users } from './accounts';
 import { createdAt, id, timestamptz } from './columns';
+import { shareDesigns } from './designs';
 import { files, folders } from './drive';
 import {
   consentPurpose,
@@ -77,6 +78,13 @@ export const shares = pgTable(
     expiresAt: timestamptz('expires_at'),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: createdAt(),
+    /**
+     * The share page design (ADR 0013, migration 0013); null: the owner's default design at view
+     * time, else the plain layout. The foreign key on (design_id, owner_id) keeps it the owner's
+     * design and clears it when the design is deleted (ON DELETE SET NULL of design_id only,
+     * hand-written in the migration as for `folders.cover_file_id`).
+     */
+    designId: uuid('design_id'),
   },
   (t) => [
     unique('shares_token_unique').on(t.token),
@@ -105,6 +113,16 @@ export const shares = pgTable(
       sql`(${t.targetType} = 'file') = (${t.targetFileId} IS NOT NULL) AND (${t.targetType} = 'folder') = (${t.targetFolderId} IS NOT NULL)`,
     ),
     check('shares_token_base62', sql`${t.token} ~ '^[0-9A-Za-z]{16,64}$'`),
+    // Migration 0013 (ADR 0013).
+    foreignKey({
+      name: 'shares_design_same_owner_fk',
+      columns: [t.designId, t.ownerId],
+      foreignColumns: [shareDesigns.id, shareDesigns.ownerId],
+    }).onDelete('set null'),
+    // The FK's ON DELETE when a design is deleted.
+    index('shares_design_idx')
+      .on(t.designId, t.ownerId)
+      .where(sql`${t.designId} IS NOT NULL`),
     // Migration 0012.
     unique('shares_slug_unique').on(t.slug),
     check(

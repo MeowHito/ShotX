@@ -3,6 +3,7 @@ import { faceDeletions, faces, files } from '@shotx/db';
 import {
   derivedKey,
   type DerivedVariant,
+  loadDesignConfig,
   loadMediaConfig,
   serializeQueueMessage,
 } from '@shotx/shared';
@@ -54,6 +55,7 @@ describe('media consumer: file.copy', () => {
       bucket: 'shotx-test-media',
       facesQueueUrl: FACES_URL,
       media: loadMediaConfig({}),
+      designAssets: loadDesignConfig({}).asset,
       video: {
         ffmpegPath: 'ffmpeg',
         ffprobePath: 'ffprobe',

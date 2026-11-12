@@ -24,6 +24,12 @@ import { SelfieCapture } from './selfie-capture';
 
 export type ScanPurpose = 'search' | 'delete';
 
+/**
+ * What the capture step opens with: the live camera (default), or the gallery picker (the
+ * designed card's "use a photo" button, ADR 0013; gallery-mode shares only).
+ */
+export type ScanSource = 'camera' | 'gallery';
+
 interface Selfie {
   blob: Blob;
   /** Object URL for the thumbnail; revoked as soon as the selfie is dropped. */
@@ -63,6 +69,7 @@ export function ScanFlow({
   consent,
   limits,
   allowGallery,
+  startWith = 'camera',
   onResults,
   onClose,
 }: {
@@ -71,6 +78,7 @@ export function ScanFlow({
   consent: ScanConsent;
   limits: SelfieLimits;
   allowGallery: boolean;
+  startWith?: ScanSource;
   onResults?: (results: FaceSearchResponse) => void;
   onClose: () => void;
 }) {
@@ -336,6 +344,7 @@ export function ScanFlow({
           key={attempt}
           onCaptured={(s) => void onCaptured(s)}
           allowGallery={allowGallery}
+          startWith={startWith}
           busy={busy}
         />
         <p className="text-center text-xs text-muted-foreground">{t('capture.notStored')}</p>

@@ -2,10 +2,12 @@ import { TEST_DESTINATIONS, testJobQueues } from '../../testing/jobs';
 import { randomUUID } from 'node:crypto';
 import {
   consents,
+  designAssets,
   faces,
   files,
   folders,
   payments,
+  shareDesigns,
   shares,
   storageUsage,
   subscriptionEvents,
@@ -15,6 +17,7 @@ import {
 import { faceCollectionId } from '@shotx/face';
 import { FakeFaceProvider, SyntheticWorld } from '@shotx/face/testing';
 import {
+  designAssetsPrefix,
   derivedKeys,
   derivedPrefix,
   ErrorCode,
@@ -40,6 +43,8 @@ import {
   testSubscriptionDeps,
 } from '../../testing/billing';
 import {
+  createDesign,
+  createDesignAsset,
   createFileRow,
   createFolder,
   openTestDatabase,
@@ -666,11 +671,26 @@ describe('subscriptions.transition.daily', () => {
           ipHash: 'h',
         });
       }
+      // ADR 0013: a ready design image (40 bytes used), one still processing (20 reserved), a
+      // design using the first, and the file share showing that design.
+      const logo = await createDesignAsset(env.db, owner, {
+        status: 'ready',
+        verifiedAt: new Date(),
+        width: 1,
+        height: 1,
+        sizeBytes: 40,
+      });
+      const pending = await createDesignAsset(env.db, owner, { sizeBytes: 20 });
+      env.store.seed(logo.originalKey, new Uint8Array(40));
+      env.store.seed(logo.webKey, new Uint8Array(1));
+      env.store.seed(pending.originalKey, new Uint8Array(20));
+      const designId = await createDesign(env.db, owner, { imageAssetIds: [logo.id] });
+      await env.db.update(shares).set({ designId }).where(eq(shares.targetFileId, ready.id));
       await env.db
         .update(storageUsage)
-        .set({ usedBytes: 500, reservedBytes: 100 })
+        .set({ usedBytes: 540, reservedBytes: 120 })
         .where(eq(storageUsage.photographerId, owner));
-      return { files: [ready, trashed, uploading] };
+      return { files: [ready, trashed, uploading], designAssets: [logo, pending] };
     }
 
     async function expiredForPurge(owner: string) {
@@ -693,15 +713,27 @@ describe('subscriptions.transition.daily', () => {
     }
 
     async function remaining(owner: string) {
-      const count = async (table: typeof files | typeof folders | typeof shares | typeof faces) =>
-        (await env.db.select().from(table).where(eq(table.ownerId, owner))).length;
+      const count = async (
+        table:
+          | typeof files
+          | typeof folders
+          | typeof shares
+          | typeof faces
+          | typeof designAssets
+          | typeof shareDesigns,
+      ) => (await env.db.select().from(table).where(eq(table.ownerId, owner))).length;
       return {
         files: await count(files),
         folders: await count(folders),
         shares: await count(shares),
         faces: await count(faces),
+        designAssets: await count(designAssets),
+        designs: await count(shareDesigns),
         objects: [...env.store.objects.keys()].filter(
-          (k) => k.startsWith(originalsPrefix(owner)) || k.startsWith(derivedPrefix(owner)),
+          (k) =>
+            k.startsWith(originalsPrefix(owner)) ||
+            k.startsWith(derivedPrefix(owner)) ||
+            k.startsWith(designAssetsPrefix(owner)),
         ).length,
       };
     }
@@ -730,6 +762,8 @@ describe('subscriptions.transition.daily', () => {
         folders: 0,
         shares: 0,
         faces: 0,
+        designAssets: 0,
+        designs: 0,
         objects: 0,
       });
       expect(env.store.calls.aborted).toEqual(['mpu-1']);
@@ -753,16 +787,46 @@ describe('subscriptions.transition.daily', () => {
       expect((await eventsOf(env.db, id)).map((e) => e.type)).toEqual(['purged']);
 
       // The other photographer is untouched.
-      expect(await remaining(other)).toMatchObject({ files: 3, folders: 3, shares: 2, faces: 1 });
+      expect(await remaining(other)).toMatchObject({
+        files: 3,
+        folders: 3,
+        shares: 2,
+        faces: 1,
+        designAssets: 2,
+        designs: 1,
+        objects: 16,
+      });
       await expect(
         env.provider.listFaces({ collectionId: faceCollectionId(other), maxResults: 10 }),
       ).resolves.toBeDefined();
-      expect(await usageOf(env.db, other)).toEqual({ usedBytes: 500, reservedBytes: 100 });
+      expect(await usageOf(env.db, other)).toEqual({ usedBytes: 540, reservedBytes: 120 });
 
       // Rerun: nothing more happens.
       const again = await run(env, plus(purgeAt, DAY));
       expect(again.purged).toBe(0);
       expect(await eventsOf(env.db, id)).toHaveLength(1);
+    });
+
+    it('deletes a design web.webp written after the object step (a design.asset job racing)', async () => {
+      const owner = await createBillingPhotographer(env.db);
+      const { designAssets: seeded } = await seedAccount(owner);
+      const { id, purgeAt } = await expiredForPurge(owner);
+      const logo = seeded[0]!;
+      // The job writes web.webp again right after step 1 deleted the designs/ prefix.
+      const deleteObjects = env.store.deleteObjects.bind(env.store);
+      let rewritten = false;
+      env.store.deleteObjects = async (keys: readonly string[]) => {
+        await deleteObjects(keys);
+        if (!rewritten && keys.includes(logo.webKey)) {
+          rewritten = true;
+          env.store.seed(logo.webKey, new Uint8Array(1));
+        }
+      };
+      expect(await purgeAccount(context(env), env.deps, id, purgeAt)).toBe('purged');
+      expect(rewritten).toBe(true);
+      expect(env.store.objects.has(logo.webKey)).toBe(false);
+      expect(await remaining(owner)).toMatchObject({ designAssets: 0, designs: 0, objects: 0 });
+      expect(await usageOf(env.db, owner)).toEqual({ usedBytes: 0, reservedBytes: 0 });
     });
 
     it('resumes across runs when the runtime budget runs out', async () => {
@@ -775,9 +839,11 @@ describe('subscriptions.transition.daily', () => {
       while (outcome !== 'purged') {
         runs++;
         expect(runs).toBeLessThan(40);
-        // A clock that allows a handful of budget checks per run.
+        // A clock that allows a handful of budget checks per run: one per object prefix
+        // (originals, derived, designs), one per step's final empty check, and at least one
+        // batch of the step after them.
         let ticks = 0;
-        const ctx = context(env, { batchSize: 1, now: () => ticks++, deadline: 6 });
+        const ctx = context(env, { batchSize: 1, now: () => ticks++, deadline: 8 });
         outcome = await purgeAccount(ctx, env.deps, id, purgeAt);
         if (outcome !== 'purged') {
           expect(outcome).toBe('incomplete');
@@ -790,6 +856,8 @@ describe('subscriptions.transition.daily', () => {
         folders: 0,
         shares: 0,
         faces: 0,
+        designAssets: 0,
+        designs: 0,
         objects: 0,
       });
       expect((await subscriptionById(env.db, id)).status).toBe('purged');

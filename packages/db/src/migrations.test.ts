@@ -240,6 +240,22 @@ describe('migrations', () => {
     );
   });
 
+  it('0013 is share_designs: additive, the design key clears only design_id', () => {
+    expect(journal.entries[13]?.tag).toBe('0013_share_designs');
+    const list = statements(sqlOf('0013_share_designs'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    expect(list.some((s) => /\b(DROP|RENAME)\b/.test(s))).toBe(false);
+    // The previous api keeps inserting shares: the new column is nullable without a default.
+    expect(list[at('ADD COLUMN "design_id"')]).toBe(
+      'ALTER TABLE "shares" ADD COLUMN "design_id" uuid;',
+    );
+    expect(at('CREATE TABLE "share_designs"')).toBeLessThan(at('"shares_design_same_owner_fk"'));
+    expect(list[at('"shares_design_same_owner_fk"')]).toContain('ON DELETE SET NULL ("design_id")');
+    expect(list[at('"share_designs_one_default_per_owner"')]).toMatch(
+      /^CREATE UNIQUE INDEX .* \("owner_id"\) WHERE "share_designs"\."is_default";$/,
+    );
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

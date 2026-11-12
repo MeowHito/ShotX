@@ -135,13 +135,44 @@ export const fileCopyMessageSchema = z
 export type FileCopyMessage = z.output<typeof fileCopyMessageSchema>;
 
 /**
+ * "Process this design image" (ADR 0013; BullMQ job name `media.design-asset`). Sent by the API
+ * after `POST /designs/assets/:id/complete` commits (the row is `processing` with `queued_at`
+ * set in the same transaction; an enqueue failure does not fail the request), and re-sent by
+ * media.sweep for `processing` rows whose `queued_at` is older than
+ * MEDIA_SWEEP_PROCESSING_AGE_SECONDS (bumping `queued_at` and `requeues`, capped by
+ * MEDIA_SWEEP_MAX_REQUEUES). The keys are designAssetKey(photographerId, assetId, ...).
+ *
+ * The worker loads the `design_assets` row by `assetId` and requires `owner_id =
+ * photographerId`; then:
+ * - no row, `purge_requested_at` set, `failed`, or `ready` with `verified_at` set: nothing to do
+ *   (redelivery is a no-op);
+ * - not verified: HeadObject of `original` (size must equal `size_bytes`) and a magic-byte sniff
+ *   (must match `mime`: JPEG, PNG or WebP). On a mismatch or a missing object: delete the object,
+ *   `failed`, release the reservation (guarded as in drive/quota). Otherwise set `verified_at` and
+ *   move the bytes from reserved to used, guarded so nothing moves twice;
+ * - verified, not ready: sharp with EXIF orientation applied, long edge at most
+ *   DESIGN_ASSET_LONG_EDGE (never enlarged), alpha kept, every metadata block stripped, written as
+ *   `web.webp` (DESIGN_ASSET_WEBP_QUALITY); then `width`, `height` (of web.webp) and `ready` in
+ *   one guarded UPDATE. An image sharp can't read is `failed` (verified bytes stay in used until
+ *   the purge, as for files).
+ * Never deletes or changes any design.
+ */
+export const designAssetMessageSchema = z.object({
+  kind: z.literal('design.asset'),
+  assetId: z.uuid(),
+  photographerId: z.uuid(),
+});
+export type DesignAssetMessage = z.output<typeof designAssetMessageSchema>;
+
+/**
  * Body of a `media` queue message: an `original.completed` message (API and media.sweep), a
- * `file.copy` message (Wave 7), or what S3 bucket notifications send (AWS stacks, kept until
- * infra/ is removed).
+ * `file.copy` message (Wave 7), a `design.asset` message (ADR 0013), or what S3 bucket
+ * notifications send (AWS stacks, kept until infra/ is removed).
  */
 export const mediaQueueMessageSchema = z.union([
   originalCompletedMessageSchema,
   fileCopyMessageSchema,
+  designAssetMessageSchema,
   s3EventNotificationSchema,
   s3TestEventSchema,
 ]);
@@ -149,6 +180,11 @@ export type MediaQueueMessage = z.output<typeof mediaQueueMessageSchema>;
 
 export function isFileCopy(message: MediaQueueMessage): message is FileCopyMessage {
   return 'kind' in message && message.kind === 'file.copy';
+}
+
+/** Handle before mediaOriginals and createdObjects, which throw on it (it is not an original). */
+export function isDesignAsset(message: MediaQueueMessage): message is DesignAssetMessage {
+  return 'kind' in message && message.kind === 'design.asset';
 }
 
 export function isS3TestEvent(message: MediaQueueMessage): message is S3TestEvent {
@@ -195,6 +231,9 @@ export function createdObjects(message: MediaQueueMessage): CreatedObject[] {
   }
   if (isFileCopy(message)) {
     throw new RangeError('file.copy carries no S3 event records; handle it with isFileCopy');
+  }
+  if (isDesignAsset(message)) {
+    throw new RangeError('design.asset carries no S3 event records; handle it with isDesignAsset');
   }
   if (isS3TestEvent(message)) return [];
   return message.Records.map((r) => ({
@@ -301,6 +340,10 @@ export function mediaOriginals(
     // Not an original to verify and render: thrown, not ignored, so a consumer that predates the
     // variant fails the job instead of dropping it.
     throw new RangeError('file.copy is not an original; handle it with isFileCopy first');
+  }
+  if (isDesignAsset(message)) {
+    // Same: a worker release that predates ADR 0013 fails (and retries) the job, never drops it.
+    throw new RangeError('design.asset is not an original; handle it with isDesignAsset first');
   }
   if (isOriginalCompleted(message)) {
     const parsed = parseS3Key(message.key);

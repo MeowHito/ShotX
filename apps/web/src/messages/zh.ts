@@ -29,6 +29,20 @@ export const zh: PublicMessages = {
     },
   },
   share: {
+    design: {
+      label: '活动首页',
+      camera: '拍摄自拍',
+      choosePhoto: '使用照片',
+      help: '查找方法',
+      howTo: {
+        title: '如何找到你的照片',
+        camera: '点击“拍摄自拍”，并同意人脸数据使用条款。',
+        choosePhoto: '或点击“使用照片”，从设备中选择一张清晰的正脸照。',
+        photo: '正对镜头，画面中只有你清晰的脸。',
+        results: '有你的照片会显示出来，选中后即可保存。',
+        close: '知道了',
+      },
+    },
     expiresAt: '链接有效期至 {date}',
     galleryLabel: '此链接中的照片',
     empty: '此链接中还没有照片',
@@ -322,6 +336,11 @@ export const zh: PublicMessages = {
       PASSWORD_TOO_WEAK: '新密码太容易被猜到。',
       LOGIN_PROVIDER_UNAVAILABLE: '观众的 LINE 或 Google 登录已关闭。',
       COVER_FILE_INVALID: '这张照片不能作为封面。',
+      DESIGN_REVISION_CONFLICT: '此设计已在别处修改，请重新加载查看最新版本。',
+      DESIGN_ASSET_NOT_FOUND: '设计中的部分图片已不存在，请移除后重试。',
+      DESIGN_LIMIT_REACHED: '设计数量已达上限，请先删除不用的设计。',
+      DESIGN_DOC_TOO_LARGE: '此设计过大，请删除部分元素后重试。',
+      DESIGN_NOT_FOUND: '找不到所选设计，可能已被删除。',
     },
     details: {
       quotaExceeded: '空间不足：此文件需要 {requested}，但只剩 {available}。',
@@ -345,6 +364,10 @@ export const zh: PublicMessages = {
       captchaExpired: '验证已过期，请重新验证。',
       captchaInvalid: '验证失败，请重试。',
       rateLimitedWait: '请求过于频繁，请等待 {minutes, number} 分钟后再试。',
+      designLimitReached: '最多可保存 {max, number} 个设计，请先删除不用的设计。',
+      designTooManyElements:
+        '一个设计最多 {max, number} 个元素（当前 {actual, number} 个），请先删除一些。',
+      designTooManyBytes: '此设计过大，请先删除或缩短部分文字。',
     },
     hints: {
       heic: '暂不支持 HEIC 文件，请先转换为 JPEG。',
@@ -365,6 +388,8 @@ export const zh: PublicMessages = {
       copyFailed: '复制失败，请长按链接手动复制。',
       consentVersionUnknown: '同意书有新版本，请刷新此页面阅读最新版本后再同意。',
       captchaUnavailable: '验证服务暂时不可用，请稍候再试。',
+      designAssetFailed: '无法处理此图片，文件可能已损坏或不是图片，请换一张。',
+      designAssetTimeout: '处理图片时间过长，请重试。',
     },
   },
 };

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { files, folders } from '@shotx/db';
 import {
   derivedKey,
+  loadDesignConfig,
   loadMediaConfig,
   originalCompletedMessage,
   QueueMessageError,
@@ -88,6 +89,7 @@ describe('media consumer', () => {
       bucket: BUCKET,
       facesQueueUrl: FACES_URL,
       media: loadMediaConfig({}),
+      designAssets: loadDesignConfig({}).asset,
       video: {
         ffmpegPath: 'ffmpeg',
         ffprobePath: 'ffprobe',

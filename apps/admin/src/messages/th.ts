@@ -68,6 +68,11 @@ const errorCodes = {
     'ใช้ไฟล์นี้เป็นรูปปกไม่ได้ ต้องเป็นรูปภาพที่พร้อมใช้งานและอยู่ในโฟลเดอร์นี้หรือโฟลเดอร์ย่อย',
   LOGIN_PROVIDER_UNAVAILABLE:
     'ยังเปิดให้ผู้ชมเข้าสู่ระบบไม่ได้ (ยังไม่ได้ตั้งค่า LINE หรือ Google) จึงตั้งลิงก์ให้ต้องเข้าสู่ระบบก่อนดูไม่ได้',
+  DESIGN_REVISION_CONFLICT: 'ดีไซน์นี้ถูกแก้จากที่อื่น โหลดใหม่ก่อนแก้ต่อ',
+  DESIGN_ASSET_NOT_FOUND: 'ไม่พบรูปบางรูปที่ใช้ในดีไซน์',
+  DESIGN_LIMIT_REACHED: 'สร้างดีไซน์ครบจำนวนสูงสุดแล้ว',
+  DESIGN_DOC_TOO_LARGE: 'ดีไซน์นี้ใหญ่เกินไป ลดจำนวนชิ้นส่วนลง',
+  DESIGN_NOT_FOUND: 'ไม่พบดีไซน์ที่เลือก',
 } as const satisfies Record<ErrorCode, string>;
 
 /** PASSWORD_TOO_WEAK details.reason, with the pool's minimum length. */

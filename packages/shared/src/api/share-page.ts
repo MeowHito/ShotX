@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { CONSENT_POLICY_VERSIONS, consentPolicyVersionSchema } from '../config/consent';
 import { SHARE_PAGE_SIZE_LIMIT, ZIP_MAX_FILES_LIMIT } from '../config/share';
 import { CURSOR_MAX_LENGTH } from '../cursor-codec';
+import { designDocSchema } from '../design/doc';
 import {
   CONSENT_PURPOSES,
   DOWNLOAD_SIZES,
@@ -69,6 +70,27 @@ export const shareItemSchema = z.object({
 export type ShareItem = z.output<typeof shareItemSchema>;
 
 // --- GET /s/:token ------------------------------------------------------------------------------
+
+/** One ready design image as the share page gets it. */
+export const shareDesignAssetSchema = z.object({
+  /** Signed CDN URL of web.webp (view TTL, like previews). */
+  url: signedUrlSchema,
+  /** Of web.webp. */
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+});
+export type ShareDesignAsset = z.output<typeof shareDesignAssetSchema>;
+
+/**
+ * The design of a share page: the document and its `ready` images by asset id (images that are
+ * not ready, failed or gone are left out and draw nothing; an image background shows its
+ * `color`). The URLs write no activity event, like the cover's.
+ */
+export const shareMetaDesignSchema = z.object({
+  doc: designDocSchema,
+  assets: z.record(z.uuid(), shareDesignAssetSchema),
+});
+export type ShareMetaDesign = z.output<typeof shareMetaDesignSchema>;
 
 /**
  * Share meta for the page and its SSR OG tags. Available to anyone with the token (after
@@ -165,6 +187,14 @@ export const shareMetaResponseSchema = z.object({
      */
     resultTtlSeconds: z.number().int().positive(),
   }),
+  /**
+   * The share page design (ADR 0013): the share's design (`shares.design_id`), else the owner's
+   * default design, else null (the plain layout of ADR 0011/0012). Null, like `details`, until
+   * both gates pass (a design shows the event's name and logos). Shown in both modes: in a
+   * `gallery` share as a full-screen card above the photos, in a `face_only` share as the whole
+   * page until a scan; after a scan the card is hidden and the found photos come first.
+   */
+  design: shareMetaDesignSchema.nullable(),
   /** Zip limits of `POST /s/:token/downloads`. */
   zip: z.object({
     /** ZIP_MAX_FILES: the most files one selection may download. */

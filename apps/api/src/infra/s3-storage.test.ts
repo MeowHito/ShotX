@@ -159,4 +159,41 @@ describe('S3ObjectStorage', () => {
       [...url.searchParams.keys()].filter((k) => k.toLowerCase().includes('checksum')),
     ).toEqual([]);
   });
+
+  it('presigns a single design-image PUT that signs Content-Type and Content-Length (ADR 0013)', async () => {
+    const client = createS3Client(
+      loadMediaStorageConfig({
+        APP_STAGE: 'prod',
+        MEDIA_BUCKET: 'shotx-prod-media',
+        STORAGE_ENDPOINT_URL: 'https://0123456789abcdef.r2.cloudflarestorage.com',
+        STORAGE_REGION: 'auto',
+        STORAGE_ACCESS_KEY_ID: 'r2key',
+        STORAGE_SECRET_ACCESS_KEY: 'r2secret',
+        STORAGE_ORIGINALS_CLASS: 'STANDARD',
+      }),
+    );
+    const designKey = 'designs/p/a/original';
+    const url = new URL(
+      await new S3ObjectStorage(client, 'shotx-prod-media', 'STANDARD').presignPutObject({
+        key: designKey,
+        contentType: 'image/png',
+        contentLength: 2048,
+        expiresInSeconds: 3600,
+      }),
+    );
+    expect(url.hostname.endsWith('0123456789abcdef.r2.cloudflarestorage.com')).toBe(true);
+    expect(url.pathname.endsWith(`/${designKey}`)).toBe(true);
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('3600');
+    expect(url.searchParams.get('X-Amz-SignedHeaders')?.split(';').sort()).toEqual([
+      'content-length',
+      'content-type',
+      'host',
+    ]);
+    // Signed as headers, not hoisted into the query (the browser must send them).
+    expect(url.searchParams.has('Content-Type')).toBe(false);
+    expect(
+      [...url.searchParams.keys()].filter((k) => k.toLowerCase().includes('checksum')),
+    ).toEqual([]);
+    expect(s3Mock.calls()).toHaveLength(0);
+  });
 });

@@ -307,6 +307,11 @@ export const en: TranslatedMessages = {
         'This file can’t be used as a cover. It must be a ready image in this folder or a subfolder.',
       LOGIN_PROVIDER_UNAVAILABLE:
         'Viewer sign-in isn’t available yet (LINE or Google is not set up), so a link can’t require sign-in.',
+      DESIGN_REVISION_CONFLICT: 'This design was changed elsewhere. Reload before editing.',
+      DESIGN_ASSET_NOT_FOUND: 'Some images used in the design were not found.',
+      DESIGN_LIMIT_REACHED: 'The maximum number of designs has been reached.',
+      DESIGN_DOC_TOO_LARGE: 'This design is too large. Remove some elements.',
+      DESIGN_NOT_FOUND: 'The chosen design was not found.',
     },
     passwordPolicy: {
       too_short: 'The password is too short. It must be at least {minLength, number} characters.',

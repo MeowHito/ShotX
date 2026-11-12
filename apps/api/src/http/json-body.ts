@@ -6,6 +6,19 @@ import { errorResponse } from './exception.filter';
 /** `POST /api/uploads/:id/complete` carries every part's ETag, so it gets a larger limit. */
 const COMPLETE_PATH = /^\/api\/uploads\/[^/]+\/complete$/;
 
+const DESIGN_PUT_PATH = /^\/api\/designs\/[^/]+$/;
+
+/**
+ * `POST /api/designs` and `PUT /api/designs/:id` carry a whole design document (ADR 0013), so they
+ * get DESIGN_BODY_MAX_BYTES; every other design route keeps the small limit.
+ */
+export function isDesignDocumentWrite(method: string, path: string): boolean {
+  return (
+    (method === 'POST' && path === '/api/designs') ||
+    (method === 'PUT' && DESIGN_PUT_PATH.test(path))
+  );
+}
+
 /**
  * `POST /api/billing/webhooks/:gateway` (RouteContract.rawBody): the exact bytes, unparsed, because
  * the gateway's signature covers them. Same limit as JSON bodies.
@@ -23,12 +36,19 @@ export function rawBodyOf(body: unknown): Buffer {
  * API's error format; the body itself is never logged. Other content types are not parsed and
  * fail the route's schema. Webhook bodies are read raw, whatever their content type.
  */
-export function jsonBodyMiddleware(limits: ApiLimits): RequestHandler {
+export function jsonBodyMiddleware(limits: ApiLimits, designBodyMaxBytes: number): RequestHandler {
   const small = express.json({ limit: limits.jsonBodyMaxBytes, strict: true });
   const large = express.json({ limit: limits.completeBodyMaxBytes, strict: true });
+  const design = express.json({ limit: designBodyMaxBytes, strict: true });
   const raw = express.raw({ limit: limits.jsonBodyMaxBytes, type: () => true });
   return (req, res, next) => {
-    const parser = WEBHOOK_PATH.test(req.path) ? raw : COMPLETE_PATH.test(req.path) ? large : small;
+    const parser = WEBHOOK_PATH.test(req.path)
+      ? raw
+      : COMPLETE_PATH.test(req.path)
+        ? large
+        : isDesignDocumentWrite(req.method, req.path)
+          ? design
+          : small;
     void parser(req, res, (error?: unknown) => {
       if (error === undefined || error === null) {
         next();

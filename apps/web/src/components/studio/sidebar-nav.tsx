@@ -7,19 +7,27 @@ import {
   HardDriveIcon,
   LinkIcon,
   type LucideIcon,
+  PaletteIcon,
   Trash2Icon,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { BILLING_HREF, RECENT_HREF, SHARES_HREF, TRASH_HREF } from '@/components/drive/paths';
+import {
+  BILLING_HREF,
+  DESIGNS_HREF,
+  RECENT_HREF,
+  SHARES_HREF,
+  TRASH_HREF,
+} from '@/components/drive/paths';
 import { useStudio } from './studio-context';
 
-export type StudioNavId = 'drive' | 'recent' | 'shares' | 'trash' | 'billing';
+export type StudioNavId = 'drive' | 'recent' | 'shares' | 'designs' | 'trash' | 'billing';
 
 const NAV: { id: StudioNavId; href: string; icon: LucideIcon }[] = [
   { id: 'drive', href: '/studio', icon: HardDriveIcon },
   { id: 'recent', href: RECENT_HREF, icon: ClockIcon },
   { id: 'shares', href: SHARES_HREF, icon: LinkIcon },
+  { id: 'designs', href: DESIGNS_HREF, icon: PaletteIcon },
   { id: 'trash', href: TRASH_HREF, icon: Trash2Icon },
   { id: 'billing', href: BILLING_HREF, icon: CreditCardIcon },
 ];
@@ -30,6 +38,7 @@ export function activeNav(pathname: string): StudioNavId | null {
   if (pathname === '/studio' || under('/studio/folders')) return 'drive';
   if (under(RECENT_HREF)) return 'recent';
   if (under(SHARES_HREF)) return 'shares';
+  if (under(DESIGNS_HREF)) return 'designs';
   if (under(TRASH_HREF)) return 'trash';
   if (under(BILLING_HREF)) return 'billing';
   return null;

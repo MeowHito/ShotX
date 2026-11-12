@@ -252,3 +252,30 @@ describe('error message map', () => {
     );
   });
 });
+
+describe('share page designer errors (ADR 0013)', () => {
+  it('have short Thai messages, specific ones from their details', () => {
+    expect(th.errors.codes.DESIGN_REVISION_CONFLICT).toContain('โหลดใหม่');
+    expect(render(messageForCode(ErrorCode.DESIGN_LIMIT_REACHED, { maxDesigns: 50 }))).toBe(
+      'สร้างดีไซน์ได้สูงสุด 50 แบบ ลบแบบที่ไม่ใช้ก่อนสร้างใหม่',
+    );
+    expect(
+      render(
+        messageForCode(ErrorCode.DESIGN_DOC_TOO_LARGE, { reason: 'elements', max: 60, actual: 61 }),
+      ),
+    ).toBe('ดีไซน์มีองค์ประกอบได้ไม่เกิน 60 ชิ้น (ตอนนี้ 61) ลบบางชิ้นออกก่อน');
+    expect(
+      messageForCode(ErrorCode.DESIGN_DOC_TOO_LARGE, {
+        reason: 'bytes',
+        max: 65536,
+        actual: 70000,
+      }),
+    ).toEqual({ key: 'details.designTooManyBytes' });
+    expect(messageForCode(ErrorCode.DESIGN_NOT_FOUND, undefined)).toEqual({
+      key: 'codes.DESIGN_NOT_FOUND',
+    });
+    expect(describeError(new ClientError('client.designAssetFailed'))).toEqual({
+      key: 'client.designAssetFailed',
+    });
+  });
+});

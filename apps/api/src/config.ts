@@ -12,6 +12,7 @@ import {
   type CloudFrontSigningConfig,
   type CognitoPoolConfig,
   type ConsentConfig,
+  type DesignConfig,
   type DriveConfig,
   type EmailConfig,
   type Env,
@@ -33,6 +34,7 @@ import {
   loadCloudFrontSigningConfig,
   loadCognitoConfig,
   loadConsentConfig,
+  loadDesignConfig,
   loadDriveConfig,
   loadEmailConfig,
   loadFaceConfig,
@@ -204,6 +206,11 @@ export interface ApiConfig {
   adminConsole: AdminConsoleConfig;
   /** `fake` is refused in production by the loader. */
   email: EmailConfig;
+  /**
+   * DESIGN_* (ADR 0013): designs per owner, document limits, the JSON body limit of
+   * `POST /designs` and `PUT /designs/:id`, and the design image upload settings.
+   */
+  design: DesignConfig;
 }
 
 /** Everything the API reads from the environment, through the shared loaders only. */
@@ -246,6 +253,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     storageQuota: loadStorageQuotaConfig(env),
     adminConsole: loadAdminConsoleConfig(env),
     email: loadEmailConfig(env),
+    design: loadDesignConfig(env),
   };
 }
 

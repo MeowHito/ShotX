@@ -4,6 +4,7 @@ import {
   CreateMultipartUploadCommand,
   HeadObjectCommand,
   ListPartsCommand,
+  PutObjectCommand,
   S3Client,
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
@@ -79,6 +80,33 @@ export class S3ObjectStorage implements ObjectStorage {
         PartNumber: input.partNumber,
       }),
       { expiresIn: input.expiresInSeconds },
+    );
+  }
+
+  /**
+   * A presigned single PutObject URL (design images, ADR 0013) that signs `content-type` and
+   * `content-length`: the PUT must send exactly that type and exactly `contentLength` bytes (the
+   * browser sets Content-Length from the body). The object gets the bucket's default class.
+   */
+  presignPutObject(input: {
+    key: string;
+    contentType: string;
+    contentLength: number;
+    expiresInSeconds: number;
+  }): Promise<string> {
+    return getSignedUrl(
+      this.client,
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: input.key,
+        ContentType: input.contentType,
+        ContentLength: input.contentLength,
+      }),
+      {
+        expiresIn: input.expiresInSeconds,
+        // Without this the presigner leaves content-type unsigned.
+        signableHeaders: new Set(['content-type', 'content-length']),
+      },
     );
   }
 

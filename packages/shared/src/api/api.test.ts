@@ -217,7 +217,7 @@ describe('upload schemas', () => {
 });
 
 describe('route table', () => {
-  it('covers every Phase 2, 3 and 4 route of the spec, the added ones, auth (ADR 0008) and accounts (ADR 0010)', () => {
+  it('covers every Phase 2, 3 and 4 route of the spec, the added ones, auth (ADR 0008), accounts (ADR 0010) and designs (ADR 0013)', () => {
     const routes = ALL_ROUTES.map((r) => `${r.method} ${r.path}`);
     expect(routes).toEqual([
       'GET /drive/folders/:id/children',
@@ -254,6 +254,18 @@ describe('route table', () => {
       'PATCH /shares/:id',
       'DELETE /shares/:id',
       'GET /shares/:id/stats',
+      // ADR 0013: share page designer.
+      'GET /designs',
+      'POST /designs',
+      'GET /designs/assets',
+      'POST /designs/assets',
+      'POST /designs/assets/:id/complete',
+      'GET /designs/assets/:id',
+      'GET /designs/:id',
+      'PUT /designs/:id',
+      'DELETE /designs/:id',
+      'POST /designs/:id/default',
+      'DELETE /designs/:id/default',
       'GET /s/:token',
       'GET /s/:token/items',
       'POST /s/:token/unlock',

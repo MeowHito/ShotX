@@ -22,6 +22,7 @@ import {
 } from '@shotx/shared';
 import { matchRoute } from '@/lib/bff/handler';
 import { FakeBilling, handleBilling } from './fake-billing-api';
+import { FakeDesigns, handleDesigns } from './fake-design-api';
 import {
   createPublicShare,
   handlePhase3,
@@ -30,6 +31,7 @@ import {
 } from './fake-share-api';
 
 export { shareItem, type PublicShareFixture } from './fake-share-api';
+export { FakeDesigns, STORAGE_ORIGIN } from './fake-design-api';
 
 /**
  * In-memory stand-in for the API, speaking the shared route contracts over `fetch`: request
@@ -146,6 +148,8 @@ export class FakeApi {
   zipKeys = new Map<string, { ids: string; jobId: string }>();
   /** Plans, subscription and payments of the billing routes. */
   billing = new FakeBilling();
+  /** Share page designs and design images (ADR 0013). */
+  designs = new FakeDesigns();
 
   constructor(options: FakeApiOptions = {}) {
     this.options = {
@@ -302,9 +306,13 @@ export class FakeApi {
         parsedBody,
         extra.headers,
       );
-      const phase3 =
+      const designs =
         billing !== NOT_HANDLED
           ? billing
+          : handleDesigns(this, route, params as Record<string, string>, query, parsedBody);
+      const phase3 =
+        designs !== NOT_HANDLED
+          ? designs
           : handlePhase3(this, route, params as Record<string, string>, query, parsedBody, extra);
       this.lastHeaders = Object.fromEntries(
         Object.entries(extra.headers).filter((e): e is [string, string] => e[1] !== undefined),

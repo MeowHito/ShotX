@@ -211,7 +211,7 @@ describe('.env.example', () => {
     expect(() => loadPaymentGatewayConfig(env)).not.toThrow();
     expect(loadEmailConfig(env)).toEqual({
       provider: 'fake',
-      from: { address: 'no-reply@shotx.test', name: 'ShotX' },
+      from: { address: 'no-reply@shotx.test', name: 'Snap' },
     });
   });
 

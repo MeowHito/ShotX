@@ -1,4 +1,9 @@
-import { parseQueueMessage, type ScheduledJobType, type WorkerSweepSettings } from '@shotx/shared';
+import {
+  type DesignAssetConfig,
+  parseQueueMessage,
+  type ScheduledJobType,
+  type WorkerSweepSettings,
+} from '@shotx/shared';
 import type { ObjectStore } from '../aws/object-store';
 import type { Db } from '../db';
 import type { FaceProvider } from '@shotx/face';
@@ -8,6 +13,7 @@ import type { QueueSender } from '../queue/sender';
 import type { MessageHandler } from '../sqs/consumer';
 import { runAuthSessionsPurge } from './auth-sessions-purge';
 import type { JobContext } from './context';
+import { runDesignAssetPurge } from './design-assets-purge';
 import { runFacesExpire } from './faces-expire';
 import { runFacesReconcile } from './faces-reconcile';
 import { runFacesSweep } from './faces-sweep';
@@ -51,6 +57,8 @@ export interface JobsHandlerDeps {
   /** FACE_SEARCH_ENABLED: faces.sweep sends index jobs only while it is on. */
   faceSearchEnabled: boolean;
   trashRetentionDays: number;
+  /** DESIGN_ASSET_ORPHAN_DAYS: trash.purge.daily's design image orphan purge (ADR 0013). */
+  designAssets: Pick<DesignAssetConfig, 'orphanDays'>;
   batchSize: number;
   /** A run stops starting batches after this long (well under SQS's 12 h cap). */
   maxRuntimeMs: number;
@@ -115,9 +123,13 @@ export function createJobsHandler(deps: JobsHandlerDeps): MessageHandler {
     };
     let result: LogFields;
     switch (job.type) {
-      case 'trash.purge.daily':
-        result = { ...(await runTrashPurge(ctx, deps.trashRetentionDays)) };
+      case 'trash.purge.daily': {
+        const trash = await runTrashPurge(ctx, deps.trashRetentionDays);
+        // ADR 0013: the design image orphan purge runs in this job (no new schedule).
+        const design = await runDesignAssetPurge(ctx, deps.designAssets.orphanDays);
+        result = { ...trash, ...design, complete: trash.complete && design.complete };
         break;
+      }
       case 'quota.reconcile.nightly':
         result = { ...(await runQuotaReconcile(ctx)) };
         break;

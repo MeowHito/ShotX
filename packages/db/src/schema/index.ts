@@ -4,6 +4,7 @@ export * from './accounts';
 export * from './auth';
 export * from './billing';
 export * from './drive';
+export * from './designs';
 export * from './sharing';
 export * from './downloads';
 export * from './analytics';

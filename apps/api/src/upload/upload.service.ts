@@ -659,7 +659,7 @@ export class UploadService {
   }
 }
 
-function quotaExceeded(details: {
+export function quotaExceeded(details: {
   quotaBytes: number;
   usedBytes: number;
   reservedBytes: number;

@@ -207,6 +207,29 @@ export class FakeObjectStorage implements ObjectStorage {
     );
   }
 
+  presignPutObject(input: {
+    key: string;
+    contentType: string;
+    contentLength: number;
+    expiresInSeconds: number;
+  }): Promise<string> {
+    this.calls.push(`presign-put ${input.key}`);
+    const q = new URLSearchParams({
+      'X-Amz-Expires': String(input.expiresInSeconds),
+      'X-Amz-SignedHeaders': 'content-length;content-type;host',
+      'x-test-content-type': input.contentType,
+      'x-test-content-length': String(input.contentLength),
+    });
+    return Promise.resolve(
+      `https://shotx-test-media.s3.ap-southeast-1.amazonaws.com/${input.key}?${q.toString()}`,
+    );
+  }
+
+  /** What a browser PUT to a presigned single-PUT URL does. */
+  putObject(key: string, size: number, contentType: string): void {
+    this.objects.set(key, { size, contentType });
+  }
+
   /** What a browser PUT to a part URL does. Returns the ETag (quoted, as S3 sends it). */
   putPart(uploadId: string, partNumber: number, size: number): string {
     const upload = this.uploads.get(uploadId);

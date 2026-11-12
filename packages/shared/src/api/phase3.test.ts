@@ -132,6 +132,7 @@ describe('owner share schemas', () => {
       requireLogin: false,
       password: null,
       expiresAt: null,
+      designId: null,
     });
   });
 
@@ -244,6 +245,7 @@ describe('public share schemas', () => {
         selfieJpegQuality: 90,
         resultTtlSeconds: 86_400,
       },
+      design: null,
       zip: { maxFiles: 500 },
     };
     expect(shareMetaResponseSchema.parse(meta)).toEqual(meta);

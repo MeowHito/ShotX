@@ -130,6 +130,8 @@ describe('share management', () => {
       requireLogin: false,
       password: 'abcd',
       expiresAt: '2099-12-31T16:59:59.999Z',
+      // ADR 0013: "default" (the owner's default design at view time).
+      designId: null,
     });
 
     // The new link is listed with its flags; copy puts the URL on the clipboard.

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { PASSWORD_POLICY_REASONS } from './account/password-accounts';
+import { DESIGN_DOC_LIMIT_REASONS } from './design/doc';
 import {
   CAPTCHA_ACTIONS,
   CAPTCHA_REJECT_REASONS,
@@ -227,6 +228,37 @@ export const ErrorCode = {
    * unknown or another owner's file id is NOT_FOUND. Details: CoverFileInvalidDetails.
    */
   COVER_FILE_INVALID: 'COVER_FILE_INVALID',
+
+  // Share page designer (ADR 0013). Unknown or other owners' designs and design images in the
+  // /designs routes themselves are NOT_FOUND, as everywhere.
+  /**
+   * `PUT /designs/:id` with a `revision` other than the design's current one: someone (another
+   * tab, an earlier autosave) saved since the editor loaded it. Nothing is changed; the editor
+   * offers to reload. Details: DesignRevisionConflictDetails.
+   */
+  DESIGN_REVISION_CONFLICT: 'DESIGN_REVISION_CONFLICT',
+  /**
+   * A document sent to `POST /designs` or `PUT /designs/:id` references design images that are
+   * not the caller's (unknown, another owner's, or purged). Images still uploading or processing
+   * are allowed. Nothing is changed. Details: DesignAssetNotFoundDetails.
+   */
+  DESIGN_ASSET_NOT_FOUND: 'DESIGN_ASSET_NOT_FOUND',
+  /**
+   * `POST /designs` when the caller already has DESIGN_MAX_PER_OWNER designs. Details:
+   * DesignLimitReachedDetails.
+   */
+  DESIGN_LIMIT_REACHED: 'DESIGN_LIMIT_REACHED',
+  /**
+   * A document over the configured DESIGN_MAX_ELEMENTS or DESIGN_DOC_MAX_BYTES
+   * (checkDesignDocLimits); documents over the hard ceilings fail validation instead. Nothing is
+   * changed. Details: DesignDocTooLargeDetails.
+   */
+  DESIGN_DOC_TOO_LARGE: 'DESIGN_DOC_TOO_LARGE',
+  /**
+   * `POST /shares` or `PATCH /shares/:id` with a `designId` that is not one of the caller's
+   * designs (unknown, another owner's, or deleted). Nothing is changed. Details: none.
+   */
+  DESIGN_NOT_FOUND: 'DESIGN_NOT_FOUND',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -289,6 +321,11 @@ export const ERROR_HTTP_STATUS = {
   PASSWORD_TOO_WEAK: 422,
   LOGIN_PROVIDER_UNAVAILABLE: 409,
   COVER_FILE_INVALID: 422,
+  DESIGN_REVISION_CONFLICT: 409,
+  DESIGN_ASSET_NOT_FOUND: 422,
+  DESIGN_LIMIT_REACHED: 409,
+  DESIGN_DOC_TOO_LARGE: 422,
+  DESIGN_NOT_FOUND: 422,
 } as const satisfies Record<ErrorCode, number>;
 
 /** Body of every API error response. */
@@ -515,6 +552,35 @@ export const coverFileInvalidDetailsSchema = z.object({
 });
 export type CoverFileInvalidDetails = z.output<typeof coverFileInvalidDetailsSchema>;
 
+/** DESIGN_REVISION_CONFLICT: the design's revision now (reload to get its document). */
+export const designRevisionConflictDetailsSchema = z.object({
+  currentRevision: z.number().int().positive(),
+});
+export type DesignRevisionConflictDetails = z.output<typeof designRevisionConflictDetailsSchema>;
+
+/** DESIGN_ASSET_NOT_FOUND: every referenced id that is not the caller's, in document order. */
+export const designAssetNotFoundDetailsSchema = z.object({
+  assetIds: z.array(z.uuid()).min(1),
+});
+export type DesignAssetNotFoundDetails = z.output<typeof designAssetNotFoundDetailsSchema>;
+
+/** DESIGN_LIMIT_REACHED: DESIGN_MAX_PER_OWNER. */
+export const designLimitReachedDetailsSchema = z.object({
+  maxDesigns: z.number().int().positive(),
+});
+export type DesignLimitReachedDetails = z.output<typeof designLimitReachedDetailsSchema>;
+
+/**
+ * DESIGN_DOC_TOO_LARGE: the first configured limit broken (checkDesignDocLimits): `elements`
+ * (count vs DESIGN_MAX_ELEMENTS) or `bytes` (JSON UTF-8 bytes vs DESIGN_DOC_MAX_BYTES).
+ */
+export const designDocTooLargeDetailsSchema = z.object({
+  reason: z.enum(DESIGN_DOC_LIMIT_REASONS),
+  max: z.number().int().positive(),
+  actual: z.number().int().positive(),
+});
+export type DesignDocTooLargeDetails = z.output<typeof designDocTooLargeDetailsSchema>;
+
 /** Schema of `details` for the codes that have them. */
 export const ERROR_DETAILS_SCHEMAS = {
   VALIDATION_FAILED: validationFailedDetailsSchema,
@@ -537,6 +603,10 @@ export const ERROR_DETAILS_SCHEMAS = {
   IDENTITY_PROVIDER_ERROR: identityProviderErrorDetailsSchema,
   PASSWORD_TOO_WEAK: passwordTooWeakDetailsSchema,
   COVER_FILE_INVALID: coverFileInvalidDetailsSchema,
+  DESIGN_REVISION_CONFLICT: designRevisionConflictDetailsSchema,
+  DESIGN_ASSET_NOT_FOUND: designAssetNotFoundDetailsSchema,
+  DESIGN_LIMIT_REACHED: designLimitReachedDetailsSchema,
+  DESIGN_DOC_TOO_LARGE: designDocTooLargeDetailsSchema,
 } as const satisfies Partial<Record<ErrorCode, z.ZodType>>;
 
 /**

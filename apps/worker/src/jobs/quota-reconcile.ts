@@ -1,5 +1,13 @@
-import { files, storageUsage } from '@shotx/db';
-import { expectedUsage, fileQuotaBucket, originalsPrefix } from '@shotx/shared';
+import { designAssets, files, storageUsage } from '@shotx/db';
+import {
+  designAssetKey,
+  designAssetsPrefix,
+  expectedUsage,
+  fileQuotaBucket,
+  type FileStatus,
+  originalsPrefix,
+  parseS3Key,
+} from '@shotx/shared';
 import { and, asc, eq, inArray, isNotNull, isNull, lt, notInArray, sql } from 'drizzle-orm';
 import { isUuid, rows } from '../db';
 import { errorFields } from '../logger';
@@ -12,6 +20,9 @@ export interface QuotaReconcileResult {
   /** Expired upload rows whose object was complete: completed and sent to the media pipeline. */
   uploadsRecovered: number;
   uploadsSkipped: number;
+  /** Design image uploads (ADR 0013) past `upload_expires_at`: failed, reservation released. */
+  designUploadsExpired: number;
+  designUploadsSkipped: number;
   photographersChecked: number;
   /** Photographers whose storage_usage counters were corrected. */
   countersFixed: number;
@@ -100,6 +111,94 @@ async function expireAbandonedUploads(
   return { expired, recovered, skipped: skippedIds.size };
 }
 
+/**
+ * ADR 0013: design image uploads still `uploading` past `upload_expires_at` (one presigned PUT, no
+ * multipart upload to recover): `failed` with the reservation released in one guarded
+ * transaction, then the `original` object, if the PUT made it, is deleted. A failed asset is
+ * later orphan-purged with its row by trash.purge.daily.
+ */
+async function expireDesignUploads(ctx: JobContext): Promise<{ expired: number; skipped: number }> {
+  const now = new Date(ctx.now());
+  const abandoned = and(
+    eq(designAssets.status, 'uploading'),
+    lt(designAssets.uploadExpiresAt, now),
+    isNull(designAssets.verifiedAt),
+    isNull(designAssets.purgeRequestedAt),
+  );
+  const skippedIds = new Set<string>();
+  let expired = 0;
+  while (mayContinue(ctx)) {
+    const batch = await ctx.db
+      .select({ id: designAssets.id, ownerId: designAssets.ownerId })
+      .from(designAssets)
+      .where(
+        skippedIds.size === 0
+          ? abandoned
+          : and(abandoned, notInArray(designAssets.id, [...skippedIds])),
+      )
+      .orderBy(asc(designAssets.uploadExpiresAt), asc(designAssets.id))
+      .limit(ctx.batchSize);
+    if (batch.length === 0) break;
+    for (const upload of batch) {
+      const log = ctx.log.child({ assetId: upload.id });
+      try {
+        const failed = await ctx.db.transaction(async (tx) => {
+          const [row] = await tx
+            .update(designAssets)
+            .set({ status: 'failed' })
+            .where(and(eq(designAssets.id, upload.id), abandoned))
+            .returning({ ownerId: designAssets.ownerId, sizeBytes: designAssets.sizeBytes });
+          if (row === undefined) return false;
+          await applyQuotaMove(tx, row.ownerId, 'releaseReserved', row.sizeBytes, log);
+          return true;
+        });
+        if (failed) {
+          await ctx.store.deleteObjects([
+            designAssetKey({ photographerId: upload.ownerId, assetId: upload.id }, 'original'),
+          ]);
+          expired++;
+        }
+      } catch (error) {
+        log.warn('could not expire an abandoned design image upload; retrying next run', {
+          ...errorFields(error),
+        });
+        skippedIds.add(upload.id);
+      }
+    }
+  }
+  return { expired, skipped: skippedIds.size };
+}
+
+interface QuotaRowFields {
+  status: FileStatus;
+  verifiedAt: Date | null;
+  purgeRequestedAt: Date | null;
+  sizeBytes: number;
+}
+
+/** A counted object: a drive original or a design image's `original` (ADR 0013). */
+interface StoredRow extends QuotaRowFields {
+  key: string;
+}
+
+/** The photographer's design image rows with their `original` keys. */
+async function designRows(db: JobContext['db'], photographerId: string): Promise<StoredRow[]> {
+  const owned = await db
+    .select({
+      id: designAssets.id,
+      status: designAssets.status,
+      verifiedAt: designAssets.verifiedAt,
+      purgeRequestedAt: designAssets.purgeRequestedAt,
+      sizeBytes: designAssets.sizeBytes,
+    })
+    .from(designAssets)
+    .where(eq(designAssets.ownerId, photographerId));
+  return owned.map(({ id, ...fields }) => ({
+    ...fields,
+    key: designAssetKey({ photographerId, assetId: id }, 'original'),
+  }));
+}
+
 interface Drift {
   countersFixed: boolean;
   s3Drift: boolean;
@@ -121,7 +220,8 @@ async function reconcilePhotographer(ctx: JobContext, photographerId: string): P
       })
       .from(files)
       .where(eq(files.ownerId, photographerId));
-    const expected = expectedUsage(owned);
+    // Design images count like originals (ADR 0013); the same lock covers their transitions.
+    const expected = expectedUsage([...owned, ...(await designRows(tx, photographerId))]);
     if (
       expected.usedBytes === before.usedBytes &&
       expected.reservedBytes === before.reservedBytes
@@ -139,36 +239,77 @@ async function reconcilePhotographer(ctx: JobContext, photographerId: string): P
   });
 
   // S3: rows first, then the listing. A verified row's object existed before it was verified,
-  // so a verified row missing from the later listing is real drift (purges excluded).
-  const fileRows = await ctx.db
-    .select({
-      s3Key: files.s3Key,
-      status: files.status,
-      verifiedAt: files.verifiedAt,
-      purgeRequestedAt: files.purgeRequestedAt,
-      sizeBytes: files.sizeBytes,
-    })
-    .from(files)
-    .where(eq(files.ownerId, photographerId));
+  // so a verified row missing from the later listing is real drift (purges excluded). Design
+  // images: only their `original` objects count (web.webp is a derivative).
+  const fileRows: StoredRow[] = (
+    await ctx.db
+      .select({
+        s3Key: files.s3Key,
+        status: files.status,
+        verifiedAt: files.verifiedAt,
+        purgeRequestedAt: files.purgeRequestedAt,
+        sizeBytes: files.sizeBytes,
+      })
+      .from(files)
+      .where(eq(files.ownerId, photographerId))
+  ).map(({ s3Key, ...fields }) => ({ ...fields, key: s3Key }));
+  const assetRows = await designRows(ctx.db, photographerId);
   const listed = new Map<string, number>();
   for await (const object of ctx.store.list(originalsPrefix(photographerId))) {
     listed.set(object.key, object.size);
   }
-  const known = new Set(fileRows.map((r) => r.s3Key));
+  let designOriginals = 0;
+  for await (const object of ctx.store.list(designAssetsPrefix(photographerId))) {
+    const parsed = parseS3Key(object.key);
+    if (parsed?.kind !== 'designAsset' || parsed.variant !== 'original') continue;
+    listed.set(object.key, object.size);
+    designOriginals++;
+  }
+  const allRows = [...fileRows, ...assetRows];
+  const known = new Set(allRows.map((r) => r.key));
   let candidates = [...listed.keys()].filter((key) => !known.has(key));
   // Rows created after the read above (new uploads) are not orphans: look them up again.
   for (const keys of chunk(candidates, 500)) {
-    const found = await ctx.db
-      .select({ s3Key: files.s3Key })
-      .from(files)
-      .where(inArray(files.s3Key, keys));
-    const foundKeys = new Set(found.map((r) => r.s3Key));
+    // Design originals are looked up by asset id, drive originals by key.
+    const keyByAssetId = new Map<string, string>();
+    const fileKeys: string[] = [];
+    for (const key of keys) {
+      const parsed = parseS3Key(key);
+      if (parsed?.kind === 'designAsset') {
+        if (isUuid(parsed.assetId)) keyByAssetId.set(parsed.assetId, key);
+      } else {
+        fileKeys.push(key);
+      }
+    }
+    const foundKeys = new Set<string>();
+    if (fileKeys.length > 0) {
+      const found = await ctx.db
+        .select({ s3Key: files.s3Key })
+        .from(files)
+        .where(inArray(files.s3Key, fileKeys));
+      for (const r of found) foundKeys.add(r.s3Key);
+    }
+    if (keyByAssetId.size > 0) {
+      const found = await ctx.db
+        .select({ id: designAssets.id })
+        .from(designAssets)
+        .where(
+          and(
+            eq(designAssets.ownerId, photographerId),
+            inArray(designAssets.id, [...keyByAssetId.keys()]),
+          ),
+        );
+      for (const r of found) {
+        const key = keyByAssetId.get(r.id);
+        if (key !== undefined) foundKeys.add(key);
+      }
+    }
     candidates = candidates.filter((k) => !foundKeys.has(k));
   }
-  const counted = fileRows.filter((r) => fileQuotaBucket(r) === 'used');
-  const missing = counted.filter((r) => !listed.has(r.s3Key));
+  const counted = allRows.filter((r) => fileQuotaBucket(r) === 'used');
+  const missing = counted.filter((r) => !listed.has(r.key));
   const sizeMismatch = counted.filter((r) => {
-    const size = listed.get(r.s3Key);
+    const size = listed.get(r.key);
     return size !== undefined && size !== r.sizeBytes;
   });
   const orphanBytes = candidates.reduce((sum, key) => sum + (listed.get(key) ?? 0), 0);
@@ -179,6 +320,7 @@ async function reconcilePhotographer(ctx: JobContext, photographerId: string): P
     log.warn('S3 originals disagree with the files rows', {
       s3Objects: listed.size,
       s3Bytes,
+      designOriginals,
       usedBytes: counted.reduce((sum, r) => sum + r.sizeBytes, 0),
       orphanObjects: candidates.length,
       orphanBytes,
@@ -190,13 +332,15 @@ async function reconcilePhotographer(ctx: JobContext, photographerId: string): P
 }
 
 /**
- * `quota.reconcile.nightly`. First expires abandoned uploads (so their reservations are gone),
- * then per photographer recomputes storage_usage from `expectedUsage(files)` and fixes the
- * counters, and compares the rows with the objects under `originals/{photographerId}/`, reporting
- * drift. Idempotent: every step recomputes from the current state.
+ * `quota.reconcile.nightly`. First expires abandoned uploads, drive and design images (so their
+ * reservations are gone), then per photographer recomputes storage_usage from
+ * `expectedUsage(files + design_assets)` and fixes the counters, and compares the rows with the
+ * objects under `originals/{photographerId}/` and the `original` objects under
+ * `designs/{photographerId}/`, reporting drift. Idempotent: every step recomputes from the current state.
  */
 export async function runQuotaReconcile(ctx: JobContext): Promise<QuotaReconcileResult> {
   const uploads = await expireAbandonedUploads(ctx);
+  const designUploads = await expireDesignUploads(ctx);
   let cursor = '00000000-0000-0000-0000-000000000000';
   let checked = 0;
   let countersFixed = 0;
@@ -207,6 +351,7 @@ export async function runQuotaReconcile(ctx: JobContext): Promise<QuotaReconcile
       sql`SELECT id FROM (
             SELECT ${storageUsage.photographerId} AS id FROM ${storageUsage}
             UNION SELECT DISTINCT ${files.ownerId} AS id FROM ${files}
+            UNION SELECT DISTINCT ${designAssets.ownerId} AS id FROM ${designAssets}
           ) AS photographers
           WHERE id > ${cursor}::uuid ORDER BY id LIMIT ${ctx.batchSize}`,
     );
@@ -232,6 +377,8 @@ export async function runQuotaReconcile(ctx: JobContext): Promise<QuotaReconcile
     uploadsExpired: uploads.expired,
     uploadsRecovered: uploads.recovered,
     uploadsSkipped: uploads.skipped,
+    designUploadsExpired: designUploads.expired,
+    designUploadsSkipped: designUploads.skipped,
     photographersChecked: checked,
     countersFixed,
     s3Drift,

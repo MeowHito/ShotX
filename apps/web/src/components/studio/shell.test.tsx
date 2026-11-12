@@ -57,6 +57,8 @@ describe('aside', () => {
       'ไดรฟ์ของฉัน',
       'ล่าสุด',
       'ลิงก์ที่แชร์',
+      // ADR 0013: the share page designer.
+      'ออกแบบหน้าแชร์',
       'ถังขยะ',
     ]);
     expect(links[0]).toHaveAttribute('aria-current', 'page');
@@ -64,6 +66,8 @@ describe('aside', () => {
     expect(activeNav('/studio/shares/123')).toBe('shares');
     expect(activeNav('/studio/billing/return')).toBe('billing');
     expect(activeNav('/studio/recent')).toBe('recent');
+    expect(activeNav('/studio/designs')).toBe('designs');
+    expect(activeNav(`/studio/designs/${crypto.randomUUID()}`)).toBe('designs');
     expect(activeNav('/studio/search')).toBeNull();
   });
 

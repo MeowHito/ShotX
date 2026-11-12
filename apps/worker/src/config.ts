@@ -6,6 +6,7 @@ import {
   type BillingConfig,
   type BillingOperatingMode,
   type BullMqQueueSettings,
+  type DesignAssetConfig,
   type EmailConfig,
   type Env,
   type FaceConfig,
@@ -14,6 +15,7 @@ import {
   loadAwsConfig,
   loadBillingConfig,
   loadBillingModeConfig,
+  loadDesignConfig,
   loadEmailConfig,
   loadFaceConfig,
   loadFeatureFlags,
@@ -93,6 +95,11 @@ export interface WorkerConfig {
   redis: RedisConfig;
   queue: WorkerQueueConfig;
   media: MediaConfig;
+  /**
+   * DESIGN_ASSET_* (ADR 0013): the design.asset job's web.webp, the orphan purge in
+   * trash.purge.daily (DESIGN_ASSET_ORPHAN_DAYS).
+   */
+  design: DesignAssetConfig;
   retention: RetentionConfig;
   face: FaceConfig;
   features: FeatureFlags;
@@ -131,6 +138,7 @@ export function loadWorkerConfig(env: Env): WorkerConfig {
     redis: loadRedisConfig(env),
     queue: loadWorkerQueueConfig(env),
     media: loadMediaConfig(env),
+    design: loadDesignConfig(env).asset,
     retention: loadRetentionConfig(env),
     face: loadFaceConfig(env),
     features: loadFeatureFlags(env),

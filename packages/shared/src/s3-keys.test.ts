@@ -5,6 +5,10 @@ import {
   derivedKey,
   derivedKeys,
   derivedPrefix,
+  DESIGN_ASSET_VARIANTS,
+  designAssetKey,
+  designAssetKeys,
+  designAssetsPrefix,
   isSafeKeySegment,
   isSafeOriginalName,
   isValidOriginalNameInput,
@@ -337,5 +341,61 @@ describe('decodeS3EventKey', () => {
   it('rejects malformed encoding', () => {
     expect(() => decodeS3EventKey('originals/p/f/%E0%B8.jpg')).toThrow(RangeError);
     expect(() => decodeS3EventKey('originals/p/f/%zz.jpg')).toThrow(RangeError);
+  });
+});
+
+describe('design image keys (ADR 0013)', () => {
+  const assetId = '0195f3a2-9e3a-7f6c-9d4b-5e6f7a8b9c0d';
+  const parts = { photographerId, assetId };
+
+  it('builds designs/{photographerId}/{assetId}/original and web.webp', () => {
+    expect(designAssetKey(parts, 'original')).toBe(`designs/${photographerId}/${assetId}/original`);
+    expect(designAssetKey(parts, 'web')).toBe(`designs/${photographerId}/${assetId}/web.webp`);
+    expect(designAssetKeys(parts)).toEqual({
+      original: `designs/${photographerId}/${assetId}/original`,
+      web: `designs/${photographerId}/${assetId}/web.webp`,
+    });
+    expect(designAssetsPrefix(photographerId)).toBe(`designs/${photographerId}/`);
+    expect(designAssetsPrefix(photographerId, assetId)).toBe(
+      `designs/${photographerId}/${assetId}/`,
+    );
+    expect(S3_PREFIXES.designs).toBe('designs/');
+    // Not lifecycle-expired, and attributable to the photographer like every other key.
+    expect(S3_PREFIXES.designs.startsWith(S3_PREFIXES.tmp)).toBe(false);
+  });
+
+  it('round-trips through parseS3Key, so the signers accept them', () => {
+    for (const variant of DESIGN_ASSET_VARIANTS) {
+      expect(parseS3Key(designAssetKey(parts, variant))).toEqual({
+        kind: 'designAsset',
+        photographerId,
+        assetId,
+        variant,
+      });
+    }
+  });
+
+  it('refuses unsafe ids and unknown variants', () => {
+    for (const bad of ['', '..', 'a/b', 'a.b', 'x'.repeat(129)]) {
+      expect(() => designAssetKey({ photographerId: bad, assetId }, 'web'), bad).toThrow(
+        RangeError,
+      );
+      expect(() => designAssetKey({ photographerId, assetId: bad }, 'web'), bad).toThrow(
+        RangeError,
+      );
+    }
+    expect(() => designAssetKey(parts, 'thumb' as never)).toThrow(RangeError);
+  });
+
+  it.each([
+    `designs/${photographerId}/${assetId}`,
+    `designs/${photographerId}/${assetId}/`,
+    `designs/${photographerId}/${assetId}/original.png`,
+    `designs/${photographerId}/${assetId}/thumb.webp`,
+    `designs/${photographerId}/${assetId}/web.webp/x`,
+    `designs/${photographerId}/../web.webp`,
+    `designs/${photographerId}/${assetId}/../web.webp`,
+  ])('returns null for %j', (key) => {
+    expect(parseS3Key(key)).toBeNull();
   });
 });

@@ -330,7 +330,7 @@
       "email": {
         "provider": "ses",
         "fromAddress": "no-reply@photos.example.com",
-        "fromName": "ShotX"
+        "fromName": "Snap"
       },
       "rekognition": {
         "collectionPrefix": "pg-"

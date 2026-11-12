@@ -19,6 +19,7 @@ import {
   SHARE_ROUTES,
   type ShareItem,
   type ShareMode,
+  type ShareMetaDesign,
   type ShareStatsResponse,
   type ShareUnavailableReason,
   type UpdateShareBody,
@@ -69,6 +70,8 @@ export interface PublicShareFixture {
   consentMismatchOnce: boolean;
   /** The next face search answers CONSENT_VERSION_MISMATCH (the policy changed after consent). */
   searchConsentStale: boolean;
+  /** meta.design (ADR 0013) once the gates pass; null: the plain layout. */
+  design: ShareMetaDesign | null;
   /** What face search finds (ids of `items`). */
   faceMatches: { strong: string[]; maybe: string[] };
   /** The viewer's face-search result (the face_only grant). */
@@ -138,6 +141,7 @@ export function createPublicShare(
     serverPolicyVersion: LATEST_CONSENT_POLICY_VERSION,
     consentMismatchOnce: false,
     searchConsentStale: false,
+    design: null,
     faceMatches: { strong: [], maybe: [] },
     grant: new Set(),
     noFace: false,
@@ -333,6 +337,9 @@ export function handlePhase3(
       if (b.requireLogin && !api.options.viewerLoginAvailable) {
         throw new Fail('LOGIN_PROVIDER_UNAVAILABLE');
       }
+      if (b.designId !== null && !api.designs.designs.has(b.designId)) {
+        throw new Fail('DESIGN_NOT_FOUND');
+      }
       const token = generateShareToken();
       const slug = shareSlugCandidate(slugifyEventName(target.name), 0);
       const path = sharePublicPath({ slug, token });
@@ -349,6 +356,7 @@ export function handlePhase3(
         requireLogin: b.requireLogin,
         passwordProtected: b.password !== null,
         expiresAt: b.expiresAt,
+        designId: b.designId,
         status: 'active',
         createdAt: NOW,
       };
@@ -377,6 +385,13 @@ export function handlePhase3(
       // Only an explicit `true`: a PATCH without requireLogin keeps an existing one editable.
       if (settings.requireLogin === true && !api.options.viewerLoginAvailable) {
         throw new Fail('LOGIN_PROVIDER_UNAVAILABLE');
+      }
+      if (
+        settings.designId !== undefined &&
+        settings.designId !== null &&
+        !api.designs.designs.has(settings.designId)
+      ) {
+        throw new Fail('DESIGN_NOT_FOUND');
       }
       const defined = Object.fromEntries(
         Object.entries(settings).filter(([, v]) => v !== undefined),
@@ -441,6 +456,7 @@ export function handlePhase3(
           selfieJpegQuality: api.options.selfieJpegQuality,
           resultTtlSeconds: api.options.resultTtlSeconds,
         },
+        design: loginRequired || locked ? null : share.design,
         zip: { maxFiles: api.options.zipMaxFiles },
       };
     }

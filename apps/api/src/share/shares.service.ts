@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { files, folders, shareDailyStats, shares } from '@shotx/db';
+import { files, folders, shareDailyStats, shareDesigns, shares } from '@shotx/db';
 import {
   authProvidersOf,
   type createShareBodySchema,
@@ -126,6 +126,7 @@ export class SharesService {
       requireLogin: share.requireLogin,
       passwordProtected: share.passwordHash !== null,
       expiresAt: share.expiresAt === null ? null : share.expiresAt.toISOString(),
+      designId: share.designId,
       status: ownerShareStatus(share, this.clock.now()),
       createdAt: share.createdAt.toISOString(),
     };
@@ -159,6 +160,22 @@ export class SharesService {
         'LOGIN_PROVIDER_UNAVAILABLE',
         'No viewer sign-in (LINE or Google) is configured, so a share cannot require login',
       );
+    }
+  }
+
+  /**
+   * DESIGN_NOT_FOUND unless `designId` is one of the caller's designs. Locked FOR KEY SHARE until
+   * the share write commits, so the design can't be deleted in between (the foreign key on
+   * (design_id, owner_id) would refuse it anyway).
+   */
+  private async assertOwnDesign(q: Queryable, ownerId: string, designId: string): Promise<void> {
+    const [design] = await q
+      .select({ id: shareDesigns.id })
+      .from(shareDesigns)
+      .where(and(eq(shareDesigns.id, designId), eq(shareDesigns.ownerId, ownerId)))
+      .for('key share');
+    if (design === undefined) {
+      throw new ApiError('DESIGN_NOT_FOUND', 'No design of yours has this id');
     }
   }
 
@@ -207,6 +224,7 @@ export class SharesService {
         target = { targetFileId: null, targetFolderId: folder.id };
         targetName = folder.name;
       }
+      if (body.designId !== null) await this.assertOwnDesign(tx, ownerId, body.designId);
       // ADR 0011: the readable ref, from the target's name; the base first, then suffixed
       // candidates while `shares_slug_unique` says taken. Never changed afterwards.
       const slugBase = slugifyEventName(shareSlugSourceName(body.target.type, targetName));
@@ -228,6 +246,7 @@ export class SharesService {
                 requireLogin: body.requireLogin,
                 passwordHash,
                 expiresAt,
+                designId: body.designId,
               })
               .returning({ id: shares.id }),
           );
@@ -321,6 +340,9 @@ export class SharesService {
         body.expiresAt === undefined
           ? undefined
           : this.expiry(body.expiresAt, ['body', 'expiresAt']);
+      if (body.designId !== undefined && body.designId !== null) {
+        await this.assertOwnDesign(tx, ownerId, body.designId);
+      }
       await tx
         .update(shares)
         .set({
@@ -330,6 +352,7 @@ export class SharesService {
           ...(body.requireLogin === undefined ? {} : { requireLogin: body.requireLogin }),
           ...(passwordHash === undefined ? {} : { passwordHash }),
           ...(expiresAt === undefined ? {} : { expiresAt }),
+          ...(body.designId === undefined ? {} : { designId: body.designId }),
         })
         .where(and(eq(shares.id, id), eq(shares.ownerId, ownerId)));
       return this.ownerShare(tx, ownerId, id);

@@ -1,14 +1,16 @@
 import {
   type IgnoredMediaReason,
+  isDesignAsset,
   isFileCopy,
   mediaOriginals,
   parseQueueMessage,
 } from '@shotx/shared';
 import type { MessageHandler } from '../sqs/consumer';
 import { type FileCopyDeps, processFileCopy } from './copy-file';
+import { type DesignAssetDeps, processDesignAsset } from './design-asset';
 import { processOriginal } from './process-original';
 
-export interface MediaHandlerDeps extends FileCopyDeps {
+export interface MediaHandlerDeps extends FileCopyDeps, DesignAssetDeps {
   /** The media bucket; S3 event records for any other bucket are ignored. */
   bucket: string;
   /** Upper bound for one message (ffmpeg is killed after it), below SQS's 12 h cap. */
@@ -17,8 +19,9 @@ export interface MediaHandlerDeps extends FileCopyDeps {
 
 /**
  * Consumer of the `media` queue: `original.completed` (the API after `POST /uploads/:id/complete`,
- * media.sweep, upload recovery), `file.copy` (`POST /drive/files/:id/copy`, media.sweep) and, on
- * AWS, S3 ObjectCreated events on `originals/`. Validates
+ * media.sweep, upload recovery), `file.copy` (`POST /drive/files/:id/copy`, media.sweep),
+ * `design.asset` (ADR 0013: `POST /designs/assets/:id/complete`, media.sweep) and, on AWS, S3
+ * ObjectCreated events on `originals/`. Validates
  * the body with the shared schema (an invalid body throws QueueMessageError, which the consumer
  * treats as permanent) and processes each original `mediaOriginals` finds, in order. Both variants
  * may arrive for the same file (AWS sends the S3 event too); processOriginal is idempotent, so the
@@ -27,6 +30,18 @@ export interface MediaHandlerDeps extends FileCopyDeps {
 export function createMediaHandler(deps: MediaHandlerDeps): MessageHandler {
   return async (body, context) => {
     const message = parseQueueMessage('media', body);
+    if (isDesignAsset(message)) {
+      // Before mediaOriginals, which throws on it: a design image is not a drive original.
+      const log = context.log.child({
+        assetId: message.assetId,
+        photographerId: message.photographerId,
+        source: 'design.asset',
+      });
+      const signal = AbortSignal.any([context.signal, AbortSignal.timeout(deps.maxProcessingMs)]);
+      const outcome = await processDesignAsset(message, deps, log, signal);
+      log.info('design asset processed', { outcome });
+      return;
+    }
     if (isFileCopy(message)) {
       // Before mediaOriginals, which throws on it: a copy is not an original to render.
       const log = context.log.child({

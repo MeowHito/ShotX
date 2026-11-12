@@ -19,6 +19,8 @@ import { MIGRATIONS_FOLDER, migrateDatabase } from './migrate';
 import {
   ADMIN_AUDIT_ACTIONS,
   AUTH_AUDIT_ACTIONS,
+  DESIGN_TEMPLATES,
+  designDocSchema,
   driveNameKey,
   isCoveredByFaceIndex,
   isFileInShareScope,
@@ -2958,5 +2960,166 @@ describe('event gallery and admin sessions constraints (migration 0012, PGlite)'
         constraint: 'auth_sessions_amr_valid',
       });
     }
+  });
+});
+
+describe('share page designs (migration 0013, PGlite)', () => {
+  let client: PGlite;
+  let db: ReturnType<typeof drizzlePglite<typeof schema>>;
+  beforeAll(async () => {
+    client = await PGlite.create({ extensions: { ltree, pg_trgm, vector } });
+    db = drizzlePglite({ client, schema });
+    await migratePglite(db, { migrationsFolder: MIGRATIONS_FOLDER });
+  }, 120_000);
+  afterAll(async () => {
+    await client.close();
+  });
+
+  const template = DESIGN_TEMPLATES[0]?.doc;
+  if (template === undefined) throw new Error('no template');
+
+  const newOwner = async () =>
+    one(
+      await db
+        .insert(schema.users)
+        .values({ authPool: 'users', authSubject: randomUUID(), role: 'photographer' })
+        .returning(),
+    );
+  const newDesign = async (
+    ownerId: string,
+    values: Partial<typeof schema.shareDesigns.$inferInsert> = {},
+  ) =>
+    one(
+      await db
+        .insert(schema.shareDesigns)
+        .values({ ownerId, name: 'งานวิ่ง', doc: template, ...values })
+        .returning(),
+    );
+  const newShareOf = async (ownerId: string, designId: string | null) => {
+    const folderId = randomUUID();
+    await db
+      .insert(schema.folders)
+      .values({ id: folderId, ownerId, name: `f ${folderId}`, path: folderPath(null, folderId) });
+    return db
+      .insert(schema.shares)
+      .values({
+        ownerId,
+        targetType: 'folder',
+        targetFolderId: folderId,
+        token: newToken(),
+        designId,
+      })
+      .returning();
+  };
+
+  it('stores a document as sent and starts at revision 1, not the default', async () => {
+    const owner = await newOwner();
+    const design = await newDesign(owner.id);
+    expect(design).toMatchObject({ revision: 1, isDefault: false });
+    const [row] = await db
+      .select()
+      .from(schema.shareDesigns)
+      .where(eq(schema.shareDesigns.id, design.id));
+    expect(row?.doc).toEqual(template);
+    expect(designDocSchema.parse(row?.doc)).toEqual(template);
+  });
+
+  it('keeps at most one default per owner', async () => {
+    const owner = await newOwner();
+    const other = await newOwner();
+    await newDesign(owner.id, { isDefault: true });
+    await newDesign(owner.id);
+    await newDesign(other.id, { isDefault: true });
+    expect(await pgError(newDesign(owner.id, { isDefault: true }))).toEqual({
+      code: UNIQUE,
+      constraint: 'share_designs_one_default_per_owner',
+    });
+  });
+
+  it('checks the name, the revision and that the document is an object', async () => {
+    const owner = await newOwner();
+    for (const name of ['', ' padded ', 'x'.repeat(81)]) {
+      expect(await pgError(newDesign(owner.id, { name })), name).toEqual({
+        code: CHECK,
+        constraint: 'share_designs_name_valid',
+      });
+    }
+    await newDesign(owner.id, { name: 'ก'.repeat(80) });
+    expect(await pgError(newDesign(owner.id, { revision: 0 }))).toEqual({
+      code: CHECK,
+      constraint: 'share_designs_revision_positive',
+    });
+    expect(
+      await pgError(
+        db.execute(
+          sql`INSERT INTO share_designs (owner_id, name, doc) VALUES (${owner.id}, 'x', '[]'::jsonb)`,
+        ),
+      ),
+    ).toEqual({ code: CHECK, constraint: 'share_designs_doc_valid' });
+  });
+
+  it("lets a share use only its owner's design and clears it when the design is deleted", async () => {
+    const owner = await newOwner();
+    const other = await newOwner();
+    const design = await newDesign(owner.id);
+    const othersDesign = await newDesign(other.id);
+    expect(await pgError(newShareOf(owner.id, othersDesign.id))).toEqual({
+      code: FOREIGN_KEY,
+      constraint: 'shares_design_same_owner_fk',
+    });
+    const [share] = await newShareOf(owner.id, design.id);
+    expect(share?.designId).toBe(design.id);
+    const [plain] = await newShareOf(owner.id, null);
+    expect(plain?.designId).toBeNull();
+    await db.delete(schema.shareDesigns).where(eq(schema.shareDesigns.id, design.id));
+    const after = one(
+      await db
+        .select()
+        .from(schema.shares)
+        .where(eq(schema.shares.id, share?.id ?? '')),
+    );
+    expect(after.designId).toBeNull();
+    expect(after.ownerId).toBe(owner.id);
+  });
+
+  it('keeps design images to JPEG, PNG and WebP, with an expiry while uploading and sizes when ready', async () => {
+    const owner = await newOwner();
+    const expiresAt = new Date(Date.now() + 3_600_000);
+    const asset = (values: Partial<typeof schema.designAssets.$inferInsert>) =>
+      db
+        .insert(schema.designAssets)
+        .values({
+          ownerId: owner.id,
+          mime: 'image/png',
+          sizeBytes: 1024,
+          uploadExpiresAt: expiresAt,
+          ...values,
+        })
+        .returning();
+    const [uploading] = await asset({});
+    expect(uploading).toMatchObject({ status: 'uploading', requeues: 0, width: null });
+    for (const mime of ['image/svg+xml', 'image/heic', 'video/mp4', 'IMAGE/PNG']) {
+      expect(await pgError(asset({ mime })), mime).toEqual({
+        code: CHECK,
+        constraint: 'design_assets_mime_allowed',
+      });
+    }
+    expect(await pgError(asset({ sizeBytes: 0 }))).toEqual({
+      code: CHECK,
+      constraint: 'design_assets_size_positive',
+    });
+    expect(await pgError(asset({ uploadExpiresAt: null }))).toEqual({
+      code: CHECK,
+      constraint: 'design_assets_uploading_has_expiry',
+    });
+    expect(await pgError(asset({ status: 'ready', verifiedAt: new Date() }))).toEqual({
+      code: CHECK,
+      constraint: 'design_assets_ready_complete',
+    });
+    await asset({ status: 'ready', verifiedAt: new Date(), width: 2560, height: 1440 });
+    expect(await pgError(asset({ width: 0 }))).toEqual({
+      code: CHECK,
+      constraint: 'design_assets_dimensions_positive',
+    });
   });
 });

@@ -12,6 +12,8 @@ import { useQuery } from '@tanstack/react-query';
 import { CheckCheckIcon, RotateCcwIcon, ScanFaceIcon } from 'lucide-react';
 import { useFormatter, useTranslations } from 'next-intl';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { DesignCanvas, type DesignCanvasActions } from '@/components/design/design-canvas';
+import { HowToSheet } from '@/components/design/how-to-sheet';
 import { PublicTopBar } from '@/components/site/public-top-bar';
 import type { ApiClient } from '@/lib/api/client';
 import { isApiError } from '@/lib/api/errors';
@@ -29,7 +31,7 @@ import { ShareApiProvider, useShareApi } from '@/lib/share/share-api';
 import { DownloadBar, useSingleDownload } from './download-bar';
 import { JustifiedGrid } from './justified-grid';
 import { FaceToolsProvider, type FaceTools } from './scan/face-tools';
-import { ScanFlow } from './scan/scan-flow';
+import { ScanFlow, type ScanSource } from './scan/scan-flow';
 import { LoginRequired, PasswordForm, ShareUnavailable } from './share-gates';
 import { type ShareRuntime, ShareRuntimeContext, defaultShareRuntime } from './share-runtime';
 import { ShareTile } from './share-tile';
@@ -58,6 +60,8 @@ export interface SharePageProps {
  * The public share page `/s/[ref]` (client part; see app/s/[ref]/page.tsx for SSR). ADR 0011
  * layout, mobile first: the top bar (home, language), the centered event title over a 16:3 cover,
  * the photos in their own aspect ratios, and a sticky face-search button (share.scan) at the bottom.
+ * With a design (ADR 0013, meta.design) the designed card replaces the title and cover as a
+ * full-screen first screen under the top bar.
  */
 export function SharePage({ testing, ...props }: SharePageProps) {
   const runtime = useMemo(() => ({ ...defaultShareRuntime, ...testing?.runtime }), [testing]);
@@ -66,13 +70,18 @@ export function SharePage({ testing, ...props }: SharePageProps) {
       <ShareRuntimeContext.Provider value={runtime}>
         <FaceToolsProvider config={props.faceConfig} overrides={testing?.faceTools}>
           <PublicTopBar />
-          <main className="mx-auto max-w-5xl px-3 pt-5 pb-36 sm:px-6 sm:pt-8">
+          <main className="pb-36">
             <ShareGate {...props} />
           </main>
         </FaceToolsProvider>
       </ShareRuntimeContext.Provider>
     </ShareApiProvider>
   );
+}
+
+/** The page's centred column (everything but a design's full-bleed card). */
+function Column({ children }: { children: ReactNode }) {
+  return <div className="mx-auto max-w-5xl px-3 pt-5 sm:px-6 sm:pt-8">{children}</div>;
 }
 
 /**
@@ -111,38 +120,63 @@ function ShareGate({ shareRef, initialMeta, shareConfig, viewerLogin }: SharePag
   if (meta.isError) {
     if (isApiError(meta.error, ErrorCode.SHARE_EXPIRED)) {
       const details = shareExpiredDetailsSchema.safeParse(meta.error.details);
-      return <ShareUnavailable reason={details.success ? details.data.reason : null} />;
+      return (
+        <Column>
+          <ShareUnavailable reason={details.success ? details.data.reason : null} />
+        </Column>
+      );
     }
     return (
-      <Alert variant="destructive" className="flex items-center justify-between gap-2">
-        <span>{describe(meta.error)}</span>
-        <Button size="sm" variant="outline" onClick={() => void meta.refetch()}>
-          {t('common.retry')}
-        </Button>
-      </Alert>
+      <Column>
+        <Alert variant="destructive" className="flex items-center justify-between gap-2">
+          <span>{describe(meta.error)}</span>
+          <Button size="sm" variant="outline" onClick={() => void meta.refetch()}>
+            {t('common.retry')}
+          </Button>
+        </Alert>
+      </Column>
     );
   }
   if (!fresh) {
+    const design = meta.data?.design ?? null;
     return (
       <>
-        {meta.data?.details ? <ShareHeader meta={meta.data} /> : null}
-        <p className="py-10 text-center text-muted-foreground" role="status">
-          {t('common.loading')}
-        </p>
+        {/* SSR's meta: the designed card (inert until the page is live), else the title. */}
+        {design !== null && meta.data !== undefined ? (
+          <DesignedCard meta={meta.data} design={design} />
+        ) : null}
+        <Column>
+          {meta.data?.details && design === null ? <ShareHeader meta={meta.data} /> : null}
+          <p className="py-10 text-center text-muted-foreground" role="status">
+            {t('common.loading')}
+          </p>
+        </Column>
       </>
     );
   }
   if (needsLogin) {
     if (signedIn && viewerSession.data !== false) {
       return (
-        <p className="py-10 text-center text-muted-foreground" role="status">
-          {t('share.login.connecting')}
-        </p>
+        <Column>
+          <p className="py-10 text-center text-muted-foreground" role="status">
+            {t('share.login.connecting')}
+          </p>
+        </Column>
       );
     }
-    return <LoginRequired path={meta.data.path} options={viewerLogin} />;
+    return (
+      <Column>
+        <LoginRequired path={meta.data.path} options={viewerLogin} />
+      </Column>
+    );
   }
-  if (meta.data.access.locked) return <PasswordForm token={meta.data.token} />;
+  if (meta.data.access.locked) {
+    return (
+      <Column>
+        <PasswordForm token={meta.data.token} />
+      </Column>
+    );
+  }
   return <ShareContent token={meta.data.token} meta={meta.data} shareConfig={shareConfig} />;
 }
 
@@ -188,6 +222,64 @@ function ShareHeader({ meta }: { meta: ShareMetaResponse }) {
   );
 }
 
+/**
+ * The share's design (ADR 0013) as the full-screen first screen under the top bar: the background
+ * fills the screen, the artboard is centred. Without `actions` its buttons are inert.
+ */
+function DesignedCard({
+  meta,
+  design,
+  actions,
+  scanButtonsRef,
+}: {
+  meta: ShareMetaResponse;
+  design: NonNullable<ShareMetaResponse['design']>;
+  actions?: DesignCanvasActions;
+  scanButtonsRef?: (el: HTMLDivElement | null) => void;
+}) {
+  const tDesign = useTranslations('share.design');
+  const assets = useMemo(
+    () => Object.fromEntries(Object.entries(design.assets).map(([id, a]) => [id, a.url])),
+    [design.assets],
+  );
+  return (
+    <DesignCanvas
+      doc={design.doc}
+      assets={assets}
+      mode={meta.mode}
+      layout={{ kind: 'fill' }}
+      actions={actions}
+      scanAvailable={meta.faceSearch.available}
+      scanButtonsRef={scanButtonsRef}
+      label={tDesign('label')}
+      // The first screen: the viewport below the top bar (h-14 plus the safe area). Phones scale
+      // the artboard to the width; wider screens also fit it to the height (whole card visible).
+      className="min-h-[calc(100svh-3.5rem-env(safe-area-inset-top))] sm:[--design-cap:min(480px,calc((100svh_-_3.5rem)_*_390_/_844))]"
+    />
+  );
+}
+
+/**
+ * Whether an element is on screen (IntersectionObserver). Without the API (old browsers,
+ * tests) it counts as on screen.
+ */
+function useOnScreen(element: Element | null): boolean {
+  // The observer's last answer for the element it watched; a new element starts on screen
+  // (the card is the first screen) until its observer says otherwise.
+  const [seen, setSeen] = useState<{ element: Element; visible: boolean } | null>(null);
+  useEffect(() => {
+    if (element === null || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries.at(-1);
+      if (entry !== undefined) setSeen({ element, visible: entry.isIntersecting });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  if (element === null) return false;
+  return seen !== null && seen.element === element ? seen.visible : true;
+}
+
 type TileRenderer = (
   item: ShareItem,
   list: readonly ShareItem[],
@@ -207,7 +299,10 @@ function ShareContent({
   const describe = useErrorMessage();
   const faceOnly = meta.mode === 'face_only';
   const scanAvailable = meta.faceSearch.available;
-  const [scanning, setScanning] = useState(false);
+  /** The open face-search sheet and what it starts with, or null. */
+  const [scanning, setScanning] = useState<ScanSource | null>(null);
+  const [howToOpen, setHowToOpen] = useState(false);
+  const [cardButtons, setCardButtons] = useState<HTMLDivElement | null>(null);
   const [results, setResults] = useState<FaceSearchResponse | null>(null);
   const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const [selected, setSelected] = useState<ReadonlyMap<string, ShareItem>>(new Map());
@@ -250,7 +345,7 @@ function ShareContent({
     try {
       await withdraw.mutateAsync();
       setResults(null);
-      setScanning(false);
+      setScanning(null);
       setSelected(new Map());
       setNotice({ kind: 'info', text: t('share.withdrawn') });
     } catch (err) {
@@ -258,133 +353,176 @@ function ShareContent({
     }
   }
 
-  const showFaceButton = scanAvailable && !scanning && selection.length === 0;
+  // ADR 0013: a design replaces the title and cover until a scan, like the header (ADR 0012).
+  const design = meta.design;
+  const showCard = design !== null && results === null;
+  const cardButtonsOnScreen = useOnScreen(showCard ? cardButtons : null);
+  const showFaceButton =
+    scanAvailable &&
+    scanning === null &&
+    selection.length === 0 &&
+    // The card's own buttons do the same while they are on screen.
+    !(showCard && cardButtonsOnScreen);
+  const cardActions = useMemo<DesignCanvasActions>(
+    () => ({
+      onCamera: () => setScanning('camera'),
+      onChoosePhoto: () => setScanning('gallery'),
+      onHelp: () => setHowToOpen(true),
+    }),
+    [],
+  );
 
   return (
-    <div className="space-y-5">
-      {/* After a scan the found photos come first: no event title or cover (owner, 2026-11-12). */}
-      {results === null ? <ShareHeader meta={meta} /> : null}
-
-      {faceOnly ? (
-        scanAvailable ? (
-          <section className="space-y-2 rounded-xl border bg-sidebar p-5 text-center">
-            <h2 className="font-semibold">{t('share.faceOnly.title')}</h2>
-            <p className="text-sm text-muted-foreground">{t('share.faceOnly.body')}</p>
-          </section>
-        ) : (
-          <Alert variant="warning">{t('share.faceOnly.unavailable')}</Alert>
-        )
+    <>
+      {showCard ? (
+        <DesignedCard
+          meta={meta}
+          design={design}
+          actions={cardActions}
+          scanButtonsRef={setCardButtons}
+        />
       ) : null}
+      <Column>
+        <div className="space-y-5">
+          {/* After a scan the found photos come first: no event title or cover (owner, 2026-11-12). */}
+          {results === null && design === null ? <ShareHeader meta={meta} /> : null}
 
-      {notice !== null ? (
-        <Alert variant={notice.kind === 'error' ? 'destructive' : 'default'} role="status">
-          {notice.text}
-        </Alert>
-      ) : null}
+          {faceOnly ? (
+            scanAvailable ? (
+              showCard ? null : (
+                <section className="space-y-2 rounded-xl border bg-sidebar p-5 text-center">
+                  <h2 className="font-semibold">{t('share.faceOnly.title')}</h2>
+                  <p className="text-sm text-muted-foreground">{t('share.faceOnly.body')}</p>
+                </section>
+              )
+            ) : (
+              <Alert variant="warning">{t('share.faceOnly.unavailable')}</Alert>
+            )
+          ) : null}
 
-      {results !== null ? (
-        <div ref={resultsRef}>
-          <ScanResults
-            results={results}
-            tile={tile}
-            allowDownload={meta.allowDownload}
-            selected={selected}
-            onSelectAll={(items, all) =>
-              setSelected((prev) => {
-                const next = new Map(prev);
-                for (const item of items) {
-                  if (all) next.set(item.id, item);
-                  else next.delete(item.id);
+          {notice !== null ? (
+            <Alert variant={notice.kind === 'error' ? 'destructive' : 'default'} role="status">
+              {notice.text}
+            </Alert>
+          ) : null}
+
+          {results !== null ? (
+            <div ref={resultsRef}>
+              <ScanResults
+                results={results}
+                tile={tile}
+                allowDownload={meta.allowDownload}
+                selected={selected}
+                onSelectAll={(items, all) =>
+                  setSelected((prev) => {
+                    const next = new Map(prev);
+                    for (const item of items) {
+                      if (all) next.set(item.id, item);
+                      else next.delete(item.id);
+                    }
+                    return next;
+                  })
                 }
-                return next;
-              })
-            }
-            onRetry={() => {
-              setResults(null);
-              setScanning(true);
-            }}
-          />
+                onRetry={() => {
+                  setResults(null);
+                  setScanning('camera');
+                }}
+              />
+            </div>
+          ) : null}
+
+          {faceOnly ? (
+            results === null && scanAvailable ? (
+              <ShareGallery
+                token={token}
+                heading={t('share.yourPhotos')}
+                tile={tile}
+                hideWhenEmpty
+              />
+            ) : null
+          ) : (
+            <ShareGallery
+              token={token}
+              heading={results !== null ? t('share.allPhotos') : null}
+              tile={tile}
+            />
+          )}
+
+          {meta.faceSearch.consented ? (
+            <footer className="flex justify-center border-t pt-4 text-sm">
+              <Button
+                variant="link"
+                className="h-auto p-0 text-muted-foreground"
+                onClick={() => void withdrawConsent()}
+                disabled={withdraw.isPending}
+              >
+                {t('share.withdraw')}
+              </Button>
+            </footer>
+          ) : null}
+
+          {showFaceButton ? (
+            <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center px-4 pt-6 pb-[max(1rem,env(safe-area-inset-bottom))]">
+              <Button
+                size="lg"
+                className="pointer-events-auto h-14 w-full max-w-md rounded-full text-base shadow-float"
+                onClick={() => setScanning('camera')}
+              >
+                <ScanFaceIcon className="size-6" aria-hidden />
+                {results === null ? t('share.scan') : t('share.scanAgain')}
+              </Button>
+            </div>
+          ) : null}
+
+          {scanning !== null && scanAvailable ? (
+            <ScanSheet onClose={() => setScanning(null)}>
+              <ScanFlow
+                token={token}
+                purpose="search"
+                consent={{
+                  policyVersion: meta.faceSearch.policyVersion,
+                  consented: meta.faceSearch.consented,
+                  resultTtlSeconds: meta.faceSearch.resultTtlSeconds,
+                }}
+                limits={{
+                  maxSelfies: meta.faceSearch.maxSelfies,
+                  selfie: {
+                    longEdge: meta.faceSearch.selfieLongEdge,
+                    jpegQuality: meta.faceSearch.selfieJpegQuality,
+                  },
+                }}
+                allowGallery={meta.mode === 'gallery'}
+                startWith={scanning}
+                onResults={(r) => {
+                  setResults(r);
+                  setScanning(null);
+                  setNotice(null);
+                  // Show the results, which sit under the header.
+                  requestAnimationFrame(() =>
+                    resultsRef.current?.scrollIntoView({ block: 'start' }),
+                  );
+                }}
+                onClose={() => setScanning(null)}
+              />
+            </ScanSheet>
+          ) : null}
+
+          {design !== null ? (
+            <HowToSheet open={howToOpen} onOpenChange={setHowToOpen} mode={meta.mode} />
+          ) : null}
+
+          {meta.allowDownload ? (
+            <DownloadBar
+              token={token}
+              selection={selection}
+              downloadSize={meta.downloadSize}
+              config={shareConfig}
+              onClear={() => setSelected(new Map())}
+            />
+          ) : null}
         </div>
-      ) : null}
-
-      {faceOnly ? (
-        results === null && scanAvailable ? (
-          <ShareGallery token={token} heading={t('share.yourPhotos')} tile={tile} hideWhenEmpty />
-        ) : null
-      ) : (
-        <ShareGallery
-          token={token}
-          heading={results !== null ? t('share.allPhotos') : null}
-          tile={tile}
-        />
-      )}
-
-      {meta.faceSearch.consented ? (
-        <footer className="flex justify-center border-t pt-4 text-sm">
-          <Button
-            variant="link"
-            className="h-auto p-0 text-muted-foreground"
-            onClick={() => void withdrawConsent()}
-            disabled={withdraw.isPending}
-          >
-            {t('share.withdraw')}
-          </Button>
-        </footer>
-      ) : null}
-
-      {showFaceButton ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center px-4 pt-6 pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <Button
-            size="lg"
-            className="pointer-events-auto h-14 w-full max-w-md rounded-full text-base shadow-float"
-            onClick={() => setScanning(true)}
-          >
-            <ScanFaceIcon className="size-6" aria-hidden />
-            {results === null ? t('share.scan') : t('share.scanAgain')}
-          </Button>
-        </div>
-      ) : null}
-
-      {scanning && scanAvailable ? (
-        <ScanSheet onClose={() => setScanning(false)}>
-          <ScanFlow
-            token={token}
-            purpose="search"
-            consent={{
-              policyVersion: meta.faceSearch.policyVersion,
-              consented: meta.faceSearch.consented,
-              resultTtlSeconds: meta.faceSearch.resultTtlSeconds,
-            }}
-            limits={{
-              maxSelfies: meta.faceSearch.maxSelfies,
-              selfie: {
-                longEdge: meta.faceSearch.selfieLongEdge,
-                jpegQuality: meta.faceSearch.selfieJpegQuality,
-              },
-            }}
-            allowGallery={meta.mode === 'gallery'}
-            onResults={(r) => {
-              setResults(r);
-              setScanning(false);
-              setNotice(null);
-              // Show the results, which sit under the header.
-              requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ block: 'start' }));
-            }}
-            onClose={() => setScanning(false)}
-          />
-        </ScanSheet>
-      ) : null}
-
-      {meta.allowDownload ? (
-        <DownloadBar
-          token={token}
-          selection={selection}
-          downloadSize={meta.downloadSize}
-          config={shareConfig}
-          onClear={() => setSelected(new Map())}
-        />
-      ) : null}
-    </div>
+      </Column>
+    </>
   );
 }
 

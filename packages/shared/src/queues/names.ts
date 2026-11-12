@@ -184,7 +184,21 @@ export const SCHEDULED_JOB_TYPES = [
   'stats.rollup.hourly',
   /** trial/active -> grace -> expired -> purged, and renewal reminders. */
   'subscriptions.transition.daily',
-  /** Purge files trashed more than TRASH_RETENTION_DAYS ago. */
+  /**
+   * Purge files trashed more than TRASH_RETENTION_DAYS ago.
+   *
+   * Also the design image orphan purge (ADR 0013; in this job so no new schedule is needed). Per
+   * owner, an asset is referenced when any of the owner's `share_designs` documents names it
+   * (designDocAssetIds). For live assets (`purge_requested_at IS NULL`, not `uploading`):
+   * referenced with `orphaned_at` set: clear it; unreferenced with `orphaned_at` null: set it to
+   * now(); `orphaned_at` older than DESIGN_ASSET_ORPHAN_DAYS: purge. The purge locks the row
+   * (`SELECT ... FOR UPDATE`), re-checks that no design references it in the same transaction,
+   * sets `purge_requested_at` and subtracts `size_bytes` from its quota bucket; after commit it
+   * deletes both objects (designAssetKeys) and then the row. Rows with `purge_requested_at` set
+   * (a crash after commit) are finished on the next run. The api's write of a document locks the
+   * referenced rows (`FOR KEY SHARE`) and treats purge-requested rows as missing, so a save and
+   * the purge can't both win. Deleting a design never deletes its images.
+   */
   'trash.purge.daily',
   /** Delete faces of folders past face_index_expires_at. */
   'faces.expire.daily',
@@ -193,7 +207,13 @@ export const SCHEDULED_JOB_TYPES = [
    * row (left by failed indexing attempts) and stayed unknown for FACE_ORPHAN_GRACE_MS.
    */
   'faces.reconcile.daily',
-  /** Reconcile storage_usage against the objects in S3. */
+  /**
+   * Reconcile storage_usage against the objects in S3. Design images count like originals (ADR
+   * 0013): the `original` object under designs/{photographerId}/ of each asset that is not
+   * purge-requested, in the bucket its `verified_at` says. Also expires abandoned design image
+   * uploads: `uploading` rows past `upload_expires_at` become `failed` (reservation released in
+   * the same guarded UPDATE) and their `original` object, if any, is deleted.
+   */
   'quota.reconcile.nightly',
   /**
    * Restart lost media work (ADR 0008 section 3, "Lost jobs"; WorkerSettings.sweeps.media):
@@ -211,6 +231,10 @@ export const SCHEDULED_JOB_TYPES = [
    * abandoned upload (releasing the reservation and deleting the object), so a completed object
    * never becomes an orphan outside quota. Rows past the requeue cap are left as they are and
    * logged at error level for the operator. At most MEDIA_SWEEP_BATCH_SIZE rows per run.
+   * - design images (ADR 0013): `processing` `design_assets` rows whose `queued_at` is older than
+   *   MEDIA_SWEEP_PROCESSING_AGE_SECONDS and `requeues` below MEDIA_SWEEP_MAX_REQUEUES: send
+   *   `design.asset` again, bumping both in the same guarded UPDATE first
+   *   (`design_assets_processing_idx`).
    */
   'media.sweep',
   /**

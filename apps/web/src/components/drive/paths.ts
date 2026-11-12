@@ -11,6 +11,13 @@ export const RECENT_HREF = '/studio/recent';
 
 export const SHARES_HREF = '/studio/shares';
 
+/** Share page designs (ADR 0013). */
+export const DESIGNS_HREF = '/studio/designs';
+
+export function designHref(designId: string): string {
+  return `${DESIGNS_HREF}/${designId}`;
+}
+
 /** Account settings: name, email and the password change (ADR 0010). */
 export const SETTINGS_HREF = '/studio/settings';
 
