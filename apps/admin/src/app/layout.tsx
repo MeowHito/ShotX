@@ -5,6 +5,7 @@ import { NextIntlClientProvider } from 'next-intl';
 import { getLocale, getTranslations } from 'next-intl/server';
 import type { ReactNode } from 'react';
 import { Providers } from '@/components/providers';
+import { htmlLang } from '@/i18n/config';
 import './globals.css';
 
 /*
@@ -43,7 +44,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   await connection();
   const locale = await getLocale();
   return (
-    <html lang={locale} className={`${notoSansThai.variable} ${inter.variable}`}>
+    <html lang={htmlLang(locale)} className={`${notoSansThai.variable} ${inter.variable}`}>
       <body className="min-h-dvh antialiased">
         <NextIntlClientProvider>
           <Providers>{children}</Providers>

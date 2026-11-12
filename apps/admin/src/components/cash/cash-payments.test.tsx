@@ -121,4 +121,27 @@ describe('cash payments', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(api.calls).toHaveLength(0);
   });
+
+  it('asks before the page goes away (e.g. a language switch) while an amount is typed', async () => {
+    const user = userEvent.setup();
+    const api = new FakeAdminApi([photographer]);
+    renderWithProviders(<CashPaymentForm photographer={photographer} today="2026-11-10" />, {
+      fetch: api.fetch,
+    });
+    const leave = () => {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(leave()).toBe(false);
+    await user.type(screen.getByLabelText('จำนวนเงิน (บาท)'), '500');
+    expect(leave()).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'บันทึกรับเงิน' }));
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'ยืนยันบันทึก' }),
+    );
+    await screen.findByText('บันทึกรับเงิน ฿500 แล้ว');
+    // Recorded: the form is empty again and nothing is lost by leaving.
+    expect(leave()).toBe(false);
+  });
 });

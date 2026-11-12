@@ -8,7 +8,7 @@ import { type ReactNode, useState } from 'react';
 import { useTotpEnabled } from '@/components/admin-settings';
 import { CashPayments } from '@/components/cash/cash-payments';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
-import { formatDateTime, formatGigabytes } from '@/lib/format';
+import { useFormat } from '@/lib/i18n/use-format';
 import { useUser } from '@/lib/users/queries';
 import { UserActionDialogs, useUserActions } from './user-action-dialogs';
 import { availableActions } from './users-table';
@@ -38,6 +38,7 @@ export function UserDetail({
   const tr = useTranslations('roles');
   const ts = useTranslations('statuses');
   const tc = useTranslations('common');
+  const format = useFormat();
   const errorMessage = useErrorMessage();
   const query = useUser(userId);
   const actions = useUserActions();
@@ -126,12 +127,12 @@ export function UserDetail({
             {ts(user.status)}
             {user.mustChangePassword ? ` · ${tu('mustChange')}` : ''}
             {user.disabledAt !== null
-              ? ` · ${t('disabledAt', { time: formatDateTime(user.disabledAt) })}`
+              ? ` · ${t('disabledAt', { time: format.dateTime(user.disabledAt) })}`
               : ''}
           </Row>
           {locked && user.lockedUntil !== null ? (
             <Row label={tu('locked')}>
-              {t('lockedUntil', { time: formatDateTime(user.lockedUntil) })}
+              {t('lockedUntil', { time: format.dateTime(user.lockedUntil) })}
             </Row>
           ) : null}
           <Row label={t('signIn')}>
@@ -161,14 +162,14 @@ export function UserDetail({
             </Row>
           ) : null}
           <Row label={tu('columns.lastSignIn')}>
-            {user.lastSignInAt !== null ? formatDateTime(user.lastSignInAt) : tu('never')}
+            {user.lastSignInAt !== null ? format.dateTime(user.lastSignInAt) : tu('never')}
           </Row>
           <Row label={tu('columns.created')}>
-            {formatDateTime(user.createdAt)} ·{' '}
+            {format.dateTime(user.createdAt)} ·{' '}
             {user.createdById !== null ? t('createdBy') : t('createdByCli')}
           </Row>
           <Row label={tu('columns.storage')}>
-            {user.usedBytes !== null ? formatGigabytes(user.usedBytes) : tc('none')}
+            {user.usedBytes !== null ? format.gigabytes(user.usedBytes) : tc('none')}
           </Row>
         </dl>
       </section>

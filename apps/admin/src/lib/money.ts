@@ -27,8 +27,11 @@ export function thbToSatang(text: string, max: number = CASH_PAYMENT_MAX_SATANG)
   return { ok: true, satang };
 }
 
-/** Integer satang as Thai baht (THB currency format, satang only when not whole). */
-export function formatSatang(satang: number, locale = 'th-TH'): string {
+/**
+ * Integer satang as baht (THB currency in the UI language's Intl locale, satang only when not
+ * whole), e.g. `฿1,500` (th-TH) or `THB 1,500` (en-GB, zh-CN).
+ */
+export function formatSatang(satang: number, locale: string): string {
   return new Intl.NumberFormat(locale, {
     style: 'currency',
     currency: 'THB',

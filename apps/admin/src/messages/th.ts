@@ -1,8 +1,10 @@
 import type { AccountRole, AccountStatus, ErrorCode, PasswordPolicyReason } from '@shotx/shared';
 
 /**
- * Thai copy of the admin app (the only locale for now). Every API ErrorCode has a message
- * (`errors.codes` is an exhaustive Record), so an unknown code can't reach the screen untranslated.
+ * Thai copy of the admin app, the default locale and the source of the key tree: messages/en.ts
+ * and messages/zh.ts translate every key (messages/translation.ts, locales.test.ts). Every API
+ * ErrorCode has a message (`errors.codes` is an exhaustive Record), so an unknown code can't reach
+ * the screen untranslated.
  */
 
 const errorCodes = {
@@ -106,6 +108,11 @@ export const th = {
     retry: 'ลองอีกครั้ง',
     back: 'ย้อนกลับ',
     none: '–',
+  },
+  /** The language switcher (sign-in page and admin frame). Each language in its own script. */
+  language: {
+    label: 'ภาษา',
+    locales: { th: 'ไทย', en: 'English', zh: '中文' },
   },
   login: {
     eyebrow: 'สำหรับแอดมินเท่านั้น',

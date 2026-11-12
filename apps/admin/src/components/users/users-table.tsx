@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { useState } from 'react';
 import { useTotpEnabled } from '@/components/admin-settings';
-import { formatDateTime, formatGigabytes } from '@/lib/format';
+import { useFormat } from '@/lib/i18n/use-format';
 
 export type UserAction = 'rename' | 'resetPassword' | 'toggleStatus';
 
@@ -72,6 +72,7 @@ export function UsersTable({
   const tr = useTranslations('roles');
   const ts = useTranslations('statuses');
   const tc = useTranslations('common');
+  const format = useFormat();
   const [mountedAt] = useState(() => Date.now());
   const totp = useTotpEnabled();
   const now = nowProp ?? mountedAt;
@@ -151,19 +152,15 @@ export function UsersTable({
                 </td>
                 <td
                   className="px-4 py-3 text-right tabular-nums"
-                  title={
-                    user.usedBytes !== null
-                      ? `${user.usedBytes.toLocaleString('th-TH')} B`
-                      : undefined
-                  }
+                  title={user.usedBytes !== null ? format.bytes(user.usedBytes) : undefined}
                 >
-                  {user.usedBytes !== null ? formatGigabytes(user.usedBytes) : tc('none')}
+                  {user.usedBytes !== null ? format.gigabytes(user.usedBytes) : tc('none')}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
-                  {user.lastSignInAt !== null ? formatDateTime(user.lastSignInAt) : t('never')}
+                  {user.lastSignInAt !== null ? format.dateTime(user.lastSignInAt) : t('never')}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
-                  {formatDateTime(user.createdAt)}
+                  {format.dateTime(user.createdAt)}
                 </td>
                 <td className="px-2 py-2 text-right">
                   <DropdownMenu modal={false}>

@@ -42,8 +42,14 @@ describe('THB → satang', () => {
 
 describe('satang → THB display', () => {
   it('shows whole baht without decimals and satang with two', () => {
-    expect(formatSatang(150_000)).toBe('฿1,500.00'.replace('.00', ''));
-    expect(formatSatang(150_050)).toBe('฿1,500.50');
-    expect(formatSatang(1)).toBe('฿0.01');
+    expect(formatSatang(150_000, 'th-TH')).toBe('฿1,500');
+    expect(formatSatang(150_050, 'th-TH')).toBe('฿1,500.50');
+    expect(formatSatang(1, 'th-TH')).toBe('฿0.01');
+  });
+
+  it('formats THB in the UI language', () => {
+    const plain = (text: string) => text.replace(/\u00a0/g, ' ');
+    expect(plain(formatSatang(150_000, 'en-GB'))).toBe('THB 1,500');
+    expect(plain(formatSatang(150_050, 'zh-CN'))).toBe('THB 1,500.50');
   });
 });

@@ -26,9 +26,17 @@ export function SignInFlow({
   initialNotice = null,
   fetchImpl,
   onSignedIn = (path) => window.location.assign(path),
+  languageSwitcher = null,
 }: {
   /** Where to go after signing in (already a safe same-origin path). */
   next: string;
+  /**
+   * The language switcher, shown only on the email + password step (and not while it is being
+   * checked). Switching reloads the page, and the sign-in state lives only in this component: a
+   * reload on a later step would send the admin back to the start, and on `enrol_totp` it would
+   * void the QR they just scanned (the next sign-in issues a new secret).
+   */
+  languageSwitcher?: ReactNode;
   /** `session`: sent here because the session ended. */
   initialNotice?: 'session' | null;
   fetchImpl?: typeof fetch;
@@ -74,6 +82,7 @@ export function SignInFlow({
 
   return (
     <div className="space-y-5">
+      {state.step === 'credentials' && !pending ? languageSwitcher : null}
       {notice !== null ? <Alert variant="warning">{notice}</Alert> : null}
       {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
       {state.step === 'credentials' ? (

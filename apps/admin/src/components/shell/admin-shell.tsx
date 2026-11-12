@@ -5,6 +5,7 @@ import { LogOutIcon, type LucideIcon, MenuIcon, UsersIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { type ReactNode, useState } from 'react';
+import { LanguageSwitcher } from '@/components/language-switcher';
 import type { SessionUser } from '@/lib/auth/session';
 import { SIGN_IN_PATHS } from '@/lib/sign-in/protocol';
 
@@ -62,7 +63,8 @@ export function LogoutButton({ className }: { className?: string }) {
 
 /**
  * The admin frame: the aside (md and up) or a drawer (phones) with the navigation, the signed-in
- * admin and sign out. Same tokens and look as the studio, with an "แอดมิน" badge.
+ * admin, the language switcher and sign out. Same tokens and look as the studio, with an admin
+ * badge.
  */
 export function AdminShell({
   pathname,
@@ -96,6 +98,7 @@ export function AdminShell({
           {t('shell.signedInAs', { name: who })}
         </p>
       ) : null}
+      <LanguageSwitcher className="px-1" />
       <LogoutButton />
     </div>
   );

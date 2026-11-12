@@ -5,9 +5,10 @@ const BYTES_PER_GB = 1024 ** 3;
 
 /**
  * Storage used, always in GB (1024³ bytes, labelled GB as in the studio) so the users table's
- * column compares at a glance: `0 GB`, `0.01 GB`, `12.5 GB`, `1,024 GB`.
+ * column compares at a glance: `0 GB`, `0.01 GB`, `12.5 GB`, `1,024 GB`. `locale` is the UI
+ * language's Intl locale (i18n/config intlLocale).
  */
-export function formatGigabytes(bytes: number, locale = 'th-TH'): string {
+export function formatGigabytes(bytes: number, locale: string): string {
   const gb = Math.max(0, bytes) / BYTES_PER_GB;
   const digits = gb === 0 ? 0 : gb < 10 ? 2 : gb < 100 ? 1 : 0;
   const shown =
@@ -17,8 +18,16 @@ export function formatGigabytes(bytes: number, locale = 'th-TH'): string {
   return `${shown} GB`;
 }
 
-/** An ISO timestamp as a Thai date and time in Asia/Bangkok, e.g. `10 พ.ย. 2569 14:05`. */
-export function formatDateTime(iso: string, locale = 'th-TH'): string {
+/** An exact byte count with grouping, e.g. `1,610,612,736 B` (the storage cell's tooltip). */
+export function formatBytes(bytes: number, locale: string): string {
+  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(bytes)} B`;
+}
+
+/**
+ * An ISO timestamp as a date and time in Asia/Bangkok in the UI language, e.g. Thai
+ * `10 พ.ย. 2569 14:05`, English `10 Nov 2026, 14:05`.
+ */
+export function formatDateTime(iso: string, locale: string): string {
   return new Intl.DateTimeFormat(locale, {
     dateStyle: 'medium',
     timeStyle: 'short',
@@ -26,14 +35,17 @@ export function formatDateTime(iso: string, locale = 'th-TH'): string {
   }).format(new Date(iso));
 }
 
-/** An ISO timestamp as a Thai date in Asia/Bangkok, e.g. `10 พ.ย. 2569`. */
-export function formatDate(iso: string, locale = 'th-TH'): string {
+/** An ISO timestamp as a date in Asia/Bangkok in the UI language, e.g. `10 พ.ย. 2569`. */
+export function formatDate(iso: string, locale: string): string {
   return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: TIME_ZONE }).format(
     new Date(iso),
   );
 }
 
-/** Today's date in Asia/Bangkok as `YYYY-MM-DD` (the value of an `<input type="date">`). */
+/**
+ * Today's date in Asia/Bangkok as `YYYY-MM-DD` (the value of an `<input type="date">`; a machine
+ * date, so not in the UI language).
+ */
 export function todayInBangkok(now: Date = new Date()): string {
   // en-CA formats dates as YYYY-MM-DD.
   return new Intl.DateTimeFormat('en-CA', {

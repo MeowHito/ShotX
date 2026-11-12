@@ -1,5 +1,6 @@
 import { getTranslations } from 'next-intl/server';
 import { SignInFlow } from '@/components/auth/sign-in-flow';
+import { LanguageSwitcher } from '@/components/language-switcher';
 import { safeNextPath } from '@/lib/auth/session';
 import { adminMfaMode } from '@/lib/server/auth';
 
@@ -16,7 +17,7 @@ export default async function LoginPage({
   const mfaMode = await adminMfaMode();
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center bg-sidebar px-4 py-12">
+    <main className="relative flex min-h-dvh flex-col items-center justify-center bg-sidebar px-4 py-16">
       <p className="mb-6 flex items-center gap-2 text-xl font-bold tracking-[-0.015em]">
         {tc('appName')}
         <span className="rounded-md bg-band px-1.5 py-0.5 text-xs font-semibold text-band-foreground">
@@ -31,7 +32,16 @@ export default async function LoginPage({
             {mfaMode === 'totp' ? t('subtitleTotp') : t('subtitle')}
           </p>
         </div>
-        <SignInFlow next={next} initialNotice={notice} />
+        <SignInFlow
+          next={next}
+          initialNotice={notice}
+          languageSwitcher={
+            // Positioned against <main> (top right of the page), as on the web app's login page.
+            <div className="absolute top-3 right-3">
+              <LanguageSwitcher />
+            </div>
+          }
+        />
       </div>
     </main>
   );

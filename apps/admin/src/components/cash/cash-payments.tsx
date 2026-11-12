@@ -11,15 +11,16 @@ import {
 import { Alert, Button, Input, Label, Skeleton } from '@shotx/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { type FormEvent, useId, useMemo, useRef, useState } from 'react';
+import { type FormEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useApiClient, useSessionEndedHandler } from '@/components/providers';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { ApiError } from '@/lib/api/errors';
 import { IdempotencyKeys } from '@/lib/cash/idempotency';
 import { cashKeys, useCashPayments } from '@/lib/cash/queries';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
-import { bangkokDateToIso, formatDate, formatDateTime, todayInBangkok } from '@/lib/format';
-import { formatSatang, thbToSatang } from '@/lib/money';
+import { bangkokDateToIso, todayInBangkok } from '@/lib/format';
+import { useFormat } from '@/lib/i18n/use-format';
+import { thbToSatang } from '@/lib/money';
 
 /**
  * A photographer's cash payments (ADR 0010, optional ledger): the list, newest first, and the
@@ -30,6 +31,7 @@ import { formatSatang, thbToSatang } from '@/lib/money';
 export function CashPayments({ photographer }: { photographer: AdminUser }) {
   const t = useTranslations('cash');
   const tc = useTranslations('common');
+  const format = useFormat();
   const errorMessage = useErrorMessage();
   const list = useCashPayments(photographer.id);
   const payments = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
@@ -80,13 +82,13 @@ export function CashPayments({ photographer }: { photographer: AdminUser }) {
               <tbody className="divide-y">
                 {payments.map((p) => (
                   <tr key={p.id}>
-                    <td className="px-4 py-3 whitespace-nowrap">{formatDate(p.paidAt)}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">{format.date(p.paidAt)}</td>
                     <td className="px-4 py-3 text-right font-medium tabular-nums">
-                      {formatSatang(p.amountSatang)}
+                      {format.satang(p.amountSatang)}
                     </td>
                     <td className="px-4 py-3 break-words">{p.note ?? tc('none')}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
-                      {formatDateTime(p.createdAt)}
+                      {format.dateTime(p.createdAt)}
                     </td>
                   </tr>
                 ))}
@@ -94,7 +96,7 @@ export function CashPayments({ photographer }: { photographer: AdminUser }) {
             </table>
           </div>
           <p className="text-right text-sm text-muted-foreground">
-            {t('total', { amount: formatSatang(total) })}
+            {t('total', { amount: format.satang(total) })}
           </p>
           {list.hasNextPage ? (
             <div className="flex justify-center">
@@ -132,6 +134,7 @@ export function CashPaymentForm({
   const queryClient = useQueryClient();
   const sessionEnded = useSessionEndedHandler();
   const errorMessage = useErrorMessage();
+  const format = useFormat();
   const id = useId();
   const keys = useRef(new IdempotencyKeys());
 
@@ -144,6 +147,16 @@ export function CashPaymentForm({
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
+  // An amount or note typed but not recorded: the browser asks before the page goes away (the
+  // language switcher reloads the page; so does closing or refreshing the tab).
+  const dirty = amount.trim() !== '' || note.trim() !== '';
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
   function review(event: FormEvent) {
     event.preventDefault();
     setMessage(null);
@@ -155,7 +168,7 @@ export function CashPaymentForm({
           ? t('invalidAmount')
           : money.reason === 'not_positive'
             ? t('amountNotPositive')
-            : t('amountTooLarge', { max: formatSatang(CASH_PAYMENT_MAX_SATANG) });
+            : t('amountTooLarge', { max: format.satang(CASH_PAYMENT_MAX_SATANG) });
     }
     const paidAt = bangkokDateToIso(date);
     if (paidAt === null) errors.date = t('invalidDate');
@@ -189,7 +202,7 @@ export function CashPaymentForm({
       setPendingBody(null);
       setAmount('');
       setNote('');
-      setMessage(t('recorded', { amount: formatSatang(payment.amountSatang) }));
+      setMessage(t('recorded', { amount: format.satang(payment.amountSatang) }));
       void queryClient.invalidateQueries({ queryKey: cashKeys.byPhotographer(photographer.id) });
     } catch (caught) {
       // A definite refusal can't have recorded anything: the next try gets a new key. Without an
@@ -283,10 +296,10 @@ export function CashPaymentForm({
             setError(null);
           }
         }}
-        title={t('confirmTitle', { amount: formatSatang(pendingBody?.amountSatang ?? 0) })}
+        title={t('confirmTitle', { amount: format.satang(pendingBody?.amountSatang ?? 0) })}
         description={t('confirmDescription', {
           name: photographer.name ?? photographer.email ?? '',
-          date: pendingBody !== null ? formatDate(pendingBody.paidAt) : '',
+          date: pendingBody !== null ? format.date(pendingBody.paidAt) : '',
         })}
         confirmLabel={t('confirm')}
         pending={submitting}
