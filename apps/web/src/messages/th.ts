@@ -506,7 +506,7 @@ const billingModes = {
 
 export const th = {
   metadata: {
-    title: 'ShotX',
+    title: 'Snap',
     description: 'ฝากรูปงานอีเวนต์ แชร์ลิงก์ และให้ผู้ร่วมงานค้นหารูปตัวเองด้วยใบหน้า',
     shareDescription: 'ดูรูปจากงาน และค้นหารูปของคุณด้วยใบหน้า',
   },
@@ -518,7 +518,7 @@ export const th = {
     locales: { th: 'ไทย', en: 'English', zh: '中文' },
   },
   common: {
-    appName: 'ShotX',
+    appName: 'Snap',
     cancel: 'ยกเลิก',
     save: 'บันทึก',
     close: 'ปิด',

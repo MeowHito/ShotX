@@ -62,6 +62,8 @@ describe('language switcher (ADR 0011)', () => {
     expect(button).toHaveAttribute('aria-haspopup', 'menu');
     expect(button).toHaveAttribute('aria-expanded', 'false');
     expect(button).toHaveClass('h-11', 'min-w-11', 'shrink-0');
+    // Owner feedback 2026-11-12: no frame around the button.
+    expect(button).not.toHaveClass('border');
     // Owner feedback 2026-11-12: a flag instead of "TH".
     expect(within(button).getByTestId('flag-th')).toHaveAttribute('aria-hidden', 'true');
     expect(button).not.toHaveTextContent(/TH/);

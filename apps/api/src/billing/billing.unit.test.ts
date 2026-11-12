@@ -85,7 +85,7 @@ describe('email templates', () => {
 
   it('renders the receipt with the VAT split in THB and Bangkok time', () => {
     const { subject, text } = renderEmail(message('payment_receipt'));
-    expect(subject).toBe('ใบเสร็จรับเงิน ShotX - Pro');
+    expect(subject).toBe('ใบเสร็จรับเงิน Snap - Pro');
     expect(text).toContain('อัปเกรดแพ็กเกจ Pro');
     expect(text).toContain('ยอดรวม: 420.50 บาท');
     expect(text).toContain('ภาษีมูลค่าเพิ่ม: 27.51 บาท');
@@ -178,7 +178,7 @@ describe('payment gateways', () => {
       method: 'promptpay' as const,
       amountSatang: 14_900,
       currency: 'THB' as const,
-      description: 'ShotX starter',
+      description: 'Snap starter',
       expiresAt: clock.now(),
       returnUrl: null,
       saveCard: false,

@@ -2,7 +2,7 @@
  * Design tokens for @shotx/ui (shadcn/ui conventions, Tailwind v4). Apps import this after
  * `@import 'tailwindcss'` and add `@source` for this package so its classes are generated.
  *
- * ShotX look: quiet and editorial. White and mist surfaces, hairline borders, one deep indigo
+ * Snap look: quiet and editorial. White and mist surfaces, hairline borders, one deep indigo
  * for what you press or what is selected, soft long shadows, calm motion. Contrast (WCAG 2.2 AA)
  * is noted next to each text colour, against the surfaces it is used on.
  */

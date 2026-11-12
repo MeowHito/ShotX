@@ -206,7 +206,7 @@ const emailEnvSchema = z
      */
     EMAIL_FROM_ADDRESS: z.email({ error: 'must be an email address' }).max(254).optional(),
     /** Display name of the sender (Thai allowed). */
-    EMAIL_FROM_NAME: z.string().trim().min(1).max(100).default('ShotX'),
+    EMAIL_FROM_NAME: z.string().trim().min(1).max(100).default('Snap'),
   })
   .superRefine((e, ctx) => {
     if (e.EMAIL_PROVIDER !== 'off' && e.EMAIL_FROM_ADDRESS === undefined) {
@@ -241,7 +241,7 @@ export type EmailConfig = SendingEmailConfig | OffEmailConfig;
 
 /**
  * Reads EMAIL_PROVIDER (default `fake`), EMAIL_FROM_ADDRESS (required unless `off`) and
- * EMAIL_FROM_NAME (`ShotX`). Throws when APP_STAGE is `prod` and the provider is `fake` (NODE_ENV
+ * EMAIL_FROM_NAME (`Snap`). Throws when APP_STAGE is `prod` and the provider is `fake` (NODE_ENV
  * doesn't matter); `off` is allowed on every stage. With `ses` and `fake` the SES_* values are
  * validated (format only); with `off` no SES_* setting is read. The SES client (with `ses`):
  * loadSesClientConfig (aws-clients.ts).

@@ -6,10 +6,10 @@ import type { TranslatedMessages } from './translation';
  */
 export const zh: TranslatedMessages = {
   metadata: {
-    title: 'ShotX 管理后台',
+    title: 'Snap 管理后台',
   },
   common: {
-    appName: 'ShotX',
+    appName: 'Snap',
     adminBadge: '管理员',
     close: '关闭',
     cancel: '取消',

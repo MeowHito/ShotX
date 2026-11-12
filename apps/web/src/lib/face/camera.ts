@@ -51,28 +51,3 @@ export function centerCrop(width: number, height: number, zoom: number): FrameRe
   const h = Math.max(1, Math.round(height / z));
   return { x: Math.round((width - w) / 2), y: Math.round((height - h) / 2), width: w, height: h };
 }
-
-type ZoomCapabilities = MediaTrackCapabilities & { zoom?: { min?: number; max?: number } };
-type ZoomSettings = MediaTrackSettings & { zoom?: number };
-
-/**
- * Phones hand getUserMedia the front camera's full, wide field of view, while their own camera
- * app crops it, so a selfie looks like a wide-angle shot. Asks the camera itself for `zoom` where
- * the browser supports the constraint, and returns the zoom still to do digitally (preview scale
- * and frame crop): `zoom` when the camera can't, 1 when it did all of it.
- */
-export async function zoomCamera(stream: MediaStream, zoom: number): Promise<number> {
-  if (zoom <= 1) return 1;
-  const track = stream.getVideoTracks?.()[0];
-  if (track === undefined || typeof track.getCapabilities !== 'function') return zoom;
-  try {
-    const range = (track.getCapabilities() as ZoomCapabilities).zoom;
-    if (range?.max === undefined || range.max <= (range.min ?? 1)) return zoom;
-    const target = Math.min(range.max, Math.max(range.min ?? 1, zoom));
-    await track.applyConstraints({ advanced: [{ zoom: target } as MediaTrackConstraintSet] });
-    const applied = (track.getSettings() as ZoomSettings).zoom ?? 1;
-    return Math.max(1, zoom / Math.max(1, applied));
-  } catch {
-    return zoom;
-  }
-}

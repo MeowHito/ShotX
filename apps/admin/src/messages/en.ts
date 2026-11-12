@@ -6,10 +6,10 @@ import type { TranslatedMessages } from './translation';
  */
 export const en: TranslatedMessages = {
   metadata: {
-    title: 'ShotX Admin',
+    title: 'Snap Admin',
   },
   common: {
-    appName: 'ShotX',
+    appName: 'Snap',
     adminBadge: 'Admin',
     close: 'Close',
     cancel: 'Cancel',

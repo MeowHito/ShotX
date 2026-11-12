@@ -353,7 +353,7 @@ describe('subscriptions.transition.daily', () => {
           paymentMethodRef: 'card_saved_1',
           amountSatang: 39_000,
           currency: 'THB',
-          description: 'ShotX standard 1 month renewal',
+          description: 'Snap standard 1 month renewal',
         },
       ]);
       const sub = await subscriptionById(env.db, id);

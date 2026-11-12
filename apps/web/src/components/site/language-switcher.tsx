@@ -36,8 +36,8 @@ function isSupportedLocale(value: string): value is SupportedLocale {
 }
 
 /**
- * The language choice in the top bar (ADR 0011, owner feedback 2026-11-12): a compact button
- * showing the current language's flag (Thailand, United States, China; no short text), 44px
+ * The language choice in the top bar (ADR 0011, owner feedback 2026-11-12): a compact borderless
+ * button showing the current language's small flag (Thailand, United States, China; no short text), 44px
  * tall, that opens a menu of Thai / English / Chinese, each with its flag and its name in its own
  * script with `lang`, the current one checked. Choosing stores LOCALE_COOKIE and reloads, so the server renders every message (and
  * the consent text) in the new language. Radix gives the menu button semantics (aria-haspopup,
@@ -59,7 +59,7 @@ export function LanguageSwitcher({
         <button
           type="button"
           className={cn(
-            'flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-full border bg-background px-3 text-sm font-semibold text-foreground transition-colors outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-accent',
+            'flex h-11 min-w-11 shrink-0 items-center justify-center gap-1 rounded-full px-2 text-sm font-semibold text-foreground transition-colors outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-accent',
             className,
           )}
         >
@@ -70,8 +70,8 @@ export function LanguageSwitcher({
               <span lang={HTML_LANG[active]}>{t(`locales.${active}`)}</span>
             ) : null}
           </span>
-          {active !== null ? <LocaleFlag locale={active} className="h-5 w-[30px]" /> : null}
-          <ChevronDownIcon className="size-4 text-muted-foreground" aria-hidden />
+          {active !== null ? <LocaleFlag locale={active} className="h-4 w-6" /> : null}
+          <ChevronDownIcon className="size-3.5 text-muted-foreground" aria-hidden />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" collisionPadding={12} className="min-w-44">
@@ -88,7 +88,7 @@ export function LanguageSwitcher({
               lang={HTML_LANG[locale]}
               className="min-h-11 gap-2.5 text-base"
             >
-              <LocaleFlag locale={locale} className="h-4 w-6" />
+              <LocaleFlag locale={locale} className="h-3.5 w-5" />
               {t(`locales.${locale}`)}
             </DropdownMenuRadioItem>
           ))}

@@ -5,6 +5,8 @@ description: Architecture, settled decisions and business rules for the photo-di
 
 # Photo distribution platform
 
+The product is called **Snap** (snap.action.in.th): every user-facing name, title, email and authenticator label says Snap, never ShotX. `ShotX`/`shotx` survives only in code identifiers (`@shotx/*` packages, `AUTH_PROVIDER=shotx`, file and container names) and the repository folder.
+
 An admin creates each photographer's account after the photographer pays in cash; the photographer signs in with email and password, uploads photos and videos into their own Drive-like folder tree, and shares files or folders by link. Anyone with a link can scan their face (live camera or a photo from the device) to see and download the photos they appear in. Admins create and manage accounts (admin or photographer) and see per-photographer usage. The operator is a large company in Thailand: UI copy is Thai, code/comments/commits are English, money is THB.
 
 Three things decide whether this product succeeds. When a design choice trades against them, they win:
@@ -198,30 +200,6 @@ Build the evaluation harness before the product UI: one real event plus 20–30 
 ## Plans, quota and billing
 
 > **Not active (ADR 0010).** Payment is offline (cash to the owner, optionally recorded by an admin), there is no checkout, webhook or subscription lifecycle, and uploads are not limited by a quota (`STORAGE_QUOTA_ENFORCED=false`). Still do: maintain `storage_usage` exactly (reservation, release, nightly reconciliation) so limits can return and admins see usage; keep per-file size limits and the MIME allowlist. Account access is the account status (`active`/`disabled`) only. The text below describes online billing for when the bank's details arrive; a new ADR will map admin-created accounts to plans then.
-
-Seed plans (prices include 7% VAT; editable by admins):
-
-| code | quota | THB / month | THB / year |
-|---|---|---|---|
-| starter | 10 GB | 149 | 1,490 |
-| standard | 50 GB | 390 | 3,900 |
-| pro | 200 GB | 990 | 9,900 |
-| studio | 500 GB | 2,290 | 22,900 |
-
-Trial: 2 GB for 14 days, face search included.
-
-- Quota counts originals only, trash included. Derivatives are absorbed by the pricing.
-- Subscription lifecycle, driven by a daily scheduled job with email reminders at T-14, T-7 and T-1:
-  - `trial` / `active`: full access.
-  - `grace` (14 days after `period_end`): uploads blocked; shares and downloads keep working.
-  - `expired`: shares show "ลิงก์นี้หมดอายุ"; the photographer can still log in, renew and download their own files.
-  - `purged` (45 days after expiry, configurable 30–60): delete S3 objects and the Rekognition collection; keep billing records.
-- Upgrade takes effect immediately with a prorated charge. Downgrade applies at period end; if usage exceeds the new quota, block uploads until it fits. Never auto-delete user files on downgrade.
-- PromptPay buys prepaid periods (1, 3, 6 or 12 months); cards auto-renew. Webhooks: verify the signature, upsert by `(gateway, gateway_ref)`, apply inside a transaction.
-- Fair use lives in the Terms; alert admins when an account's monthly egress is anomalous (e.g. above 20× its stored bytes).
-- Notifications by email; LINE Official Account messages (Messaging API) are optional. LINE Notify has been discontinued — don't use it.
-- Later phase: full tax invoices (ใบกำกับภาษีเต็มรูป) for business customers.
-
 ## Admin dashboard
 
 Charts read from rollups and use ECharts.

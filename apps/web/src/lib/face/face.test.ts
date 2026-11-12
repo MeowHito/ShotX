@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canUseLiveCamera, centerCrop, isInAppBrowser, isIOS, zoomCamera } from './camera';
+import { canUseLiveCamera, centerCrop, isInAppBrowser, isIOS } from './camera';
 import type { ClientFaceConfig, SelfieLimits } from './config';
 import { createMediaPipeDetectorLoader } from './detector';
 import { evaluateSelfie, type FaceBox, meanLuma, type SelfieGateConfig } from './quality-gate';
@@ -249,46 +249,10 @@ describe('camera support', () => {
 });
 
 describe('live camera zoom (owner feedback 2026-11-12: not the wide-angle view)', () => {
-  function stream(track: Partial<MediaStreamTrack> | undefined) {
-    return { getVideoTracks: () => (track ? [track] : []) } as unknown as MediaStream;
-  }
-
   it('centerCrop keeps the centred 1/zoom of the frame', () => {
     expect(centerCrop(1280, 960, 1.4)).toEqual({ x: 183, y: 137, width: 914, height: 686 });
     expect(centerCrop(1280, 960, 1)).toEqual({ x: 0, y: 0, width: 1280, height: 960 });
     expect(centerCrop(1280, 960, 0.5)).toEqual({ x: 0, y: 0, width: 1280, height: 960 });
-  });
-
-  it('uses the camera zoom when the browser offers it, else leaves it to the page', async () => {
-    let zoom = 1;
-    const applyConstraints = vi.fn((c: MediaTrackConstraints) => {
-      zoom = (c.advanced?.[0] as { zoom: number }).zoom;
-      return Promise.resolve();
-    });
-    const zoomable = {
-      getCapabilities: () => ({ zoom: { min: 1, max: 4 } }) as MediaTrackCapabilities,
-      getSettings: () => ({ zoom }) as MediaTrackSettings,
-      applyConstraints,
-    };
-    expect(await zoomCamera(stream(zoomable), 1.4)).toBe(1);
-    expect(applyConstraints).toHaveBeenCalledWith({ advanced: [{ zoom: 1.4 }] });
-
-    // No zoom capability, no tracks API, or a refused constraint: all digital.
-    expect(await zoomCamera(stream({ getCapabilities: () => ({}) }), 1.4)).toBe(1.4);
-    expect(await zoomCamera(stream(undefined), 1.4)).toBe(1.4);
-    const refusing = { ...zoomable, applyConstraints: () => Promise.reject(new Error('no')) };
-    expect(await zoomCamera(stream(refusing), 1.4)).toBe(1.4);
-    // Off.
-    expect(await zoomCamera(stream(zoomable), 1)).toBe(1);
-  });
-
-  it('a camera that zooms only part of the way leaves the rest to the page', async () => {
-    const track = {
-      getCapabilities: () => ({ zoom: { min: 1, max: 1.2 } }) as MediaTrackCapabilities,
-      getSettings: () => ({ zoom: 1.2 }) as MediaTrackSettings,
-      applyConstraints: () => Promise.resolve(),
-    };
-    expect(await zoomCamera(stream(track), 1.5)).toBeCloseTo(1.25);
   });
 
   it('a cropped frame is what gets fitted and encoded', async () => {

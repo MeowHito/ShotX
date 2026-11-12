@@ -36,7 +36,7 @@ const METHOD_TH: Record<PaymentMethod, string> = {
   card: 'บัตรเครดิต/เดบิต',
 };
 
-const SIGNATURE = '\n\nขอบคุณที่ใช้บริการ\nทีมงาน ShotX';
+const SIGNATURE = '\n\nขอบคุณที่ใช้บริการ\nทีมงาน Snap';
 
 type Text<T extends EmailTemplate> = (params: EmailTemplateParams<T>) => string;
 
@@ -58,7 +58,7 @@ const TEXT: { [T in EmailTemplate]: TemplateText<T> } = {
       ].join('\n\n') + SIGNATURE,
   },
   payment_receipt: {
-    subject: (p) => `ใบเสร็จรับเงิน ShotX แพ็กเกจ ${p.planName}`,
+    subject: (p) => `ใบเสร็จรับเงิน Snap แพ็กเกจ ${p.planName}`,
     body: (p) =>
       [
         'เราได้รับชำระเงินของคุณเรียบร้อยแล้ว',
@@ -86,7 +86,7 @@ const TEXT: { [T in EmailTemplate]: TemplateText<T> } = {
       ].join('\n\n') + SIGNATURE,
   },
   subscription_expired: {
-    subject: () => 'บัญชี ShotX ของคุณหมดอายุแล้ว',
+    subject: () => 'บัญชี Snap ของคุณหมดอายุแล้ว',
     body: (p) =>
       [
         'บัญชีของคุณหมดอายุแล้ว ลิงก์แชร์ทั้งหมดจะแสดงข้อความ "ลิงก์นี้หมดอายุ"',

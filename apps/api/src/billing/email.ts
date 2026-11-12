@@ -68,7 +68,7 @@ export const EMAIL_MESSAGES_TH: {
         : 'กรุณาต่ออายุเพื่ออัปโหลดรูปภาพต่อได้โดยไม่สะดุด',
       `จัดการแพ็กเกจ: ${p.billingUrl}`,
     ].join('\n\n'),
-  'email.paymentReceipt.subject': (p) => `ใบเสร็จรับเงิน ShotX - ${p.planName}`,
+  'email.paymentReceipt.subject': (p) => `ใบเสร็จรับเงิน Snap - ${p.planName}`,
   'email.paymentReceipt.body': (p) =>
     [
       'ขอบคุณสำหรับการชำระเงิน',

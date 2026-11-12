@@ -555,7 +555,7 @@ export class WebhookService {
         idempotencyKey: `receipt:${claimed.id}`,
         params: {
           paymentId: claimed.id,
-          planName: plan?.name ?? 'ShotX',
+          planName: plan?.name ?? 'Snap',
           changeType: checkout?.changeType ?? null,
           method: claimed.method,
           totalSatang: claimed.amountSatang,

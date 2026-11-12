@@ -6,7 +6,7 @@ import type { PublicMessages } from './public';
  */
 export const zh: PublicMessages = {
   metadata: {
-    title: 'ShotX',
+    title: 'Snap',
     description: '活动照片分享：发送一个链接，来宾即可通过人脸找到自己的照片。',
     shareDescription: '查看活动照片，并通过人脸找到你的照片。',
   },
@@ -17,7 +17,7 @@ export const zh: PublicMessages = {
     locales: { th: 'ไทย', en: 'English', zh: '中文' },
   },
   common: {
-    appName: 'ShotX',
+    appName: 'Snap',
     cancel: '取消',
     save: '保存',
     close: '关闭',

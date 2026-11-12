@@ -217,7 +217,7 @@ describe('renewal gateway adapters', () => {
     paymentMethodRef: 'card_1',
     amountSatang: 39_000,
     currency: 'THB' as const,
-    description: 'ShotX standard 1 month renewal',
+    description: 'Snap standard 1 month renewal',
   };
 
   it('the fake is idempotent by key, scriptable, and keeps charges whose response was lost', async () => {

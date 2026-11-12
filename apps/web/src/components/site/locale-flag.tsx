@@ -79,13 +79,13 @@ const FLAGS: Record<SupportedLocale, () => React.JSX.Element> = {
   zh: China,
 };
 
-/** The flag shown for a UI language (3:2, rounded, decorative: the label names the language). */
+/** The flag shown for a UI language (3:2, slightly rounded, no frame, decorative: the label names the language). */
 export function LocaleFlag({ locale, className }: { locale: SupportedLocale; className?: string }) {
   const Flag = FLAGS[locale];
   return (
     <svg
       viewBox="0 0 30 20"
-      className={cn('shrink-0 overflow-hidden rounded-[3px] ring-1 ring-black/10', className)}
+      className={cn('shrink-0 overflow-hidden rounded-[2px]', className)}
       aria-hidden
       data-testid={`flag-${locale}`}
       preserveAspectRatio="xMidYMid slice"

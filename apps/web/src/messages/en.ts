@@ -6,7 +6,7 @@ import type { PublicMessages } from './public';
  */
 export const en: PublicMessages = {
   metadata: {
-    title: 'ShotX',
+    title: 'Snap',
     description: 'Event photo delivery: share a link, and guests find their own photos by face.',
     shareDescription: 'See the event photos and find yours by face.',
   },
@@ -17,7 +17,7 @@ export const en: PublicMessages = {
     locales: { th: 'ไทย', en: 'English', zh: '中文' },
   },
   common: {
-    appName: 'ShotX',
+    appName: 'Snap',
     cancel: 'Cancel',
     save: 'Save',
     close: 'Close',

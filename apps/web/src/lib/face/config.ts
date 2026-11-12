@@ -15,7 +15,7 @@ export interface ClientFaceConfig {
    * `vision_wasm_internal.{js,wasm}` and the face detector model file.
    */
   detector: { wasmBasePath: string; modelPath: string };
-  /** WEB_FACE_CAMERA_ZOOM: the live camera's zoom (the camera's own where it can, else a crop). */
+  /** WEB_FACE_CAMERA_ZOOM: the live camera's zoom, done by the page (preview scale, frame crop). */
   cameraZoom: number;
   /**
    * The challenge face search and face deletion may ask for after a rate-limit hit

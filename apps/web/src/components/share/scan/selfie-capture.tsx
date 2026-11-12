@@ -10,7 +10,6 @@ import {
   isInAppBrowser,
   openFrontCamera,
   stopStream,
-  zoomCamera,
 } from '@/lib/face/camera';
 import type { SelfieSource } from '@/lib/face/selfie';
 import { useFaceTools } from './face-tools';
@@ -43,8 +42,8 @@ function FaceGuide() {
       <ellipse
         cx="50"
         cy="47"
-        rx="25"
-        ry="33"
+        rx="19"
+        ry="25"
         fill="none"
         stroke="white"
         strokeOpacity="0.9"
@@ -62,8 +61,10 @@ function FaceGuide() {
  * capture="user">`, which opens the phone's camera app. "Choose from gallery" only when
  * `allowGallery` (gallery-mode shares). The image goes straight to `onCaptured`, in memory.
  * The live camera is zoomed (WEB_FACE_CAMERA_ZOOM) so it looks like the phone's camera app, not
- * the front camera's full wide-angle view: by the camera where the browser allows, else by
- * scaling the preview and cropping the photo the same way.
+ * the front camera's full wide-angle view: always by the page (preview scaled, photo cropped to
+ * the same centre), since a camera's own `zoom` support can't be checked from the page. The face
+ * outline is small enough that the phone is held at arm's length: up close a front camera
+ * distorts the face, which reads as "wide angle" however much the frame is zoomed.
  */
 export function SelfieCapture({
   onCaptured,
@@ -79,8 +80,7 @@ export function SelfieCapture({
   const [liveSupported] = useState(() => canUseLiveCamera(nav));
   const inApp = nav !== undefined && isInAppBrowser(nav.userAgent);
   const [camera, setCamera] = useState<CameraState>('idle');
-  // The zoom still done by the page (preview scale, frame crop) after the camera's own.
-  const [digitalZoom, setDigitalZoom] = useState(1);
+  const digitalZoom = Math.max(1, config.cameraZoom);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const startedRef = useRef(false);
@@ -99,7 +99,6 @@ export function SelfieCapture({
       return;
     }
     streamRef.current = stream;
-    setDigitalZoom(await zoomCamera(stream, config.cameraZoom));
     setCamera('live');
     attach(videoRef.current, stream);
   }

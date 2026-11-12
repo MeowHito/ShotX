@@ -748,7 +748,7 @@ describe('billing config', () => {
   it('reads the email sender and refuses the fake provider on the prod stage', () => {
     expect(loadEmailConfig({ EMAIL_FROM_ADDRESS: 'no-reply@photos.example.com' })).toEqual({
       provider: 'fake',
-      from: { address: 'no-reply@photos.example.com', name: 'ShotX' },
+      from: { address: 'no-reply@photos.example.com', name: 'Snap' },
     });
     expect(() => loadEmailConfig({})).toThrow(/EMAIL_FROM_ADDRESS/);
     const from = { EMAIL_FROM_ADDRESS: 'a@b.co' };

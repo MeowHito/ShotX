@@ -32,6 +32,8 @@
 - The language switcher shows flags (Thailand, United States, China) instead of TH/EN/中文.
 - The live selfie camera is zoomed (`WEB_FACE_CAMERA_ZOOM`, default 1.4): phones give
   getUserMedia the front camera's full wide-angle view, while their camera app crops it. The
-  camera's own zoom is used where the browser supports the `zoom` constraint; otherwise the
-  preview is scaled and the photo cropped to the same centre. The face-search sheet is centred
+  page always does the zoom (preview scaled, photo cropped to the same centre): the camera's own
+  `zoom` constraint was tried first and still looked wide on the owner's phone. The face outline
+  is smaller (about 38% of the frame's width) so the phone is held at arm's length; up close a
+  front camera distorts the face, which reads as wide angle. The face-search sheet is centred
   vertically on phones.

@@ -95,10 +95,10 @@ const statuses = { active: 'ใช้งานอยู่', disabled: 'ปิ�
 
 export const th = {
   metadata: {
-    title: 'ShotX แอดมิน',
+    title: 'Snap แอดมิน',
   },
   common: {
-    appName: 'ShotX',
+    appName: 'Snap',
     adminBadge: 'แอดมิน',
     close: 'ปิด',
     cancel: 'ยกเลิก',

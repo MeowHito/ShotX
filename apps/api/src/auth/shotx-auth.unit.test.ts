@@ -106,7 +106,7 @@ describe('TOTP (RFC 6238 / RFC 4226)', () => {
   it('builds an otpauth URI authenticator apps accept', () => {
     const uri = new URL(
       otpauthUri({
-        issuer: 'ShotX Admin (test)',
+        issuer: 'Snap Admin (test)',
         account: 'a@example.com',
         secret: rfcSecret,
         digits: 6,
@@ -115,9 +115,9 @@ describe('TOTP (RFC 6238 / RFC 4226)', () => {
     );
     expect(uri.protocol).toBe('otpauth:');
     expect(uri.host).toBe('totp');
-    expect(decodeURIComponent(uri.pathname)).toBe('/ShotX Admin (test):a@example.com');
+    expect(decodeURIComponent(uri.pathname)).toBe('/Snap Admin (test):a@example.com');
     expect(uri.searchParams.get('secret')).toBe(base32Encode(rfcSecret));
-    expect(uri.searchParams.get('issuer')).toBe('ShotX Admin (test)');
+    expect(uri.searchParams.get('issuer')).toBe('Snap Admin (test)');
     expect(uri.searchParams.get('digits')).toBe('6');
     expect(uri.searchParams.get('period')).toBe('30');
   });

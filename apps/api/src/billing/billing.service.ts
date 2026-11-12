@@ -366,7 +366,7 @@ export class BillingService {
         method: session.method,
         amountSatang: session.amountSatang,
         currency: 'THB',
-        description: `ShotX ${plan.code} ${session.changeType}${
+        description: `Snap ${plan.code} ${session.changeType}${
           session.months === null ? '' : ` ${session.months}m`
         }`,
         expiresAt: session.expiresAt,

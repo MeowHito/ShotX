@@ -103,7 +103,7 @@ export async function chargeRenewalIfDue(
       paymentMethodRef: row.paymentMethodRef,
       amountSatang,
       currency: 'THB',
-      description: `ShotX ${plan.code} ${months} month${months === 1 ? '' : 's'} renewal`,
+      description: `Snap ${plan.code} ${months} month${months === 1 ? '' : 's'} renewal`,
     });
   } catch (error) {
     log.warn('auto-renew charge failed to reach the gateway; retrying next run', {
