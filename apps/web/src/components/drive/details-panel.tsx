@@ -6,7 +6,7 @@ import { FolderIcon } from 'lucide-react';
 import { useFormatter, useTranslations } from 'next-intl';
 import type { ReactNode } from 'react';
 import { useItemInfo } from '@/lib/drive/queries';
-import { formatBytes } from '@/lib/format';
+import { useFormatBytes } from '@/lib/i18n/use-format';
 
 /**
  * The right-hand details panel of a file or folder: size, type, dimensions, dates, and the
@@ -23,6 +23,7 @@ export function DetailsPanel({
   location?: string;
   onOpenChange: (open: boolean) => void;
 }) {
+  const formatBytes = useFormatBytes();
   const t = useTranslations();
   const format = useFormatter();
   const info = useItemInfo(item === null ? null : { kind: item.kind, id: item.id });

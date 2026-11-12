@@ -8,12 +8,10 @@ import { reloadPage } from '@/lib/browser/navigate';
 import { writeLocaleCookie } from '@/lib/i18n/locale-cookie';
 
 /**
- * The language choice, Thai / English / Chinese (ADR 0011): stores the choice in LOCALE_COOKIE and reloads, so the server
- * renders every message (and the consent text) in the new language. Each name is in its own
- * script, so anyone can find theirs.
+ * The current UI language and a chooser that stores a new one in LOCALE_COOKIE and reloads (so
+ * the server renders every message in it). Shared by the switcher and the studio account menu.
  */
-export function LanguageSwitcher({ onChange }: { onChange?: (locale: SupportedLocale) => void }) {
-  const t = useTranslations('publicNav');
+export function useChooseLocale(onChange?: (locale: SupportedLocale) => void) {
   const current = useLocale();
   function choose(locale: SupportedLocale) {
     if (locale === current) return;
@@ -21,6 +19,17 @@ export function LanguageSwitcher({ onChange }: { onChange?: (locale: SupportedLo
     if (onChange) onChange(locale);
     else reloadPage();
   }
+  return { current, choose };
+}
+
+/**
+ * The language choice, Thai / English / Chinese (ADR 0011): stores the choice in LOCALE_COOKIE and reloads, so the server
+ * renders every message (and the consent text) in the new language. Each name is in its own
+ * script, so anyone can find theirs.
+ */
+export function LanguageSwitcher({ onChange }: { onChange?: (locale: SupportedLocale) => void }) {
+  const t = useTranslations('publicNav');
+  const { current, choose } = useChooseLocale(onChange);
   return (
     <div role="group" aria-label={t('language')} className="flex items-center gap-1">
       <LanguagesIcon className="size-4 text-muted-foreground" aria-hidden />

@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
 import { useState } from 'react';
 import { BILLING_HREF } from '@/components/drive/paths';
-import { formatBytes, formatSatang } from '@/lib/format';
+import { useFormatBytes, useFormatSatang } from '@/lib/i18n/use-format';
 
 type Interval = 'month' | 'year';
 
@@ -23,6 +23,8 @@ export function PricingTable({
   plans: PlansResponse;
   recommendedPlanCode?: string | null;
 }) {
+  const formatBytes = useFormatBytes();
+  const formatSatang = useFormatSatang();
   const t = useTranslations('pricing');
   const locale = useLocale();
   const [period, setPeriod] = useState<Interval>('month');

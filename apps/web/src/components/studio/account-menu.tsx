@@ -9,10 +9,12 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@shotx/ui';
-import { KeyboardIcon, LogOutIcon, SettingsIcon } from 'lucide-react';
+import { SUPPORTED_LOCALES } from '@shotx/shared';
+import { CheckIcon, KeyboardIcon, LanguagesIcon, LogOutIcon, SettingsIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { SETTINGS_HREF } from '@/components/drive/paths';
+import { useChooseLocale } from '@/components/site/language-switcher';
 import { AUTH_PATHS } from '@/lib/auth/handlers';
 import type { ApiClient } from '@/lib/api/client';
 import { shortcutHint } from '@/lib/studio/shortcuts';
@@ -36,6 +38,8 @@ export function AccountMenu({
   onSubmitLogout?: (form: HTMLFormElement) => void;
 }) {
   const t = useTranslations('studio');
+  const tn = useTranslations('publicNav');
+  const language = useChooseLocale();
   const studio = useStudio();
   const { formRef, busy, logout } = useLogout({ publicApi, onSubmitForm: onSubmitLogout });
   const display = user?.name ?? user?.email ?? null;
@@ -77,6 +81,26 @@ export function AccountMenu({
             {t('shortcuts')}
             <DropdownMenuShortcut>{shortcutHint('help', studio.apple)}</DropdownMenuShortcut>
           </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="flex items-center gap-2 text-xs">
+            <LanguagesIcon className="size-3.5" aria-hidden />
+            {tn('language')}
+          </DropdownMenuLabel>
+          {SUPPORTED_LOCALES.map((locale) => (
+            <DropdownMenuItem
+              key={locale}
+              lang={locale}
+              aria-current={locale === language.current ? 'true' : undefined}
+              onSelect={() => language.choose(locale)}
+            >
+              <CheckIcon
+                className={locale === language.current ? 'opacity-100' : 'opacity-0'}
+                aria-hidden
+              />
+              {tn(`locales.${locale}`)}
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
           <DropdownMenuItem disabled={busy} onSelect={() => void logout()}>
             <LogOutIcon aria-hidden />
             {t('logout')}

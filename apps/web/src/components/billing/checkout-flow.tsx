@@ -17,7 +17,7 @@ import { isApiError } from '@/lib/api/errors';
 import { changeTypeFor, useCheckout, useInvalidateBilling } from '@/lib/billing/queries';
 import { newIdempotencyKey } from '@/lib/downloads/downloads';
 import { useErrorMessage, useNoticeMessage } from '@/lib/errors/use-error-message';
-import { formatBytes, formatSatang } from '@/lib/format';
+import { useFormatBytes, useFormatSatang } from '@/lib/i18n/use-format';
 import { PaymentPanel } from './payment-panel';
 
 type Method = 'promptpay' | 'card';
@@ -77,6 +77,8 @@ export function PlanPicker({
   subscription: SubscriptionView | null;
   onSelect: (plan: PublicPlan) => void;
 }) {
+  const formatBytes = useFormatBytes();
+  const formatSatang = useFormatSatang();
   const t = useTranslations('billing');
   const tp = useTranslations('pricing');
   const blocked = subscription?.pendingChange != null && subscription.status === 'active';
@@ -151,6 +153,7 @@ export function CheckoutFlow({
   redirect: (url: string) => void;
   onBack: () => void;
 }) {
+  const formatSatang = useFormatSatang();
   const t = useTranslations('billing');
   const describe = useErrorMessage();
   const noticeText = useNoticeMessage();

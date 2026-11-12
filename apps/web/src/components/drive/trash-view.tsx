@@ -16,7 +16,7 @@ import { useFormatter, useTranslations } from 'next-intl';
 import { useState } from 'react';
 import { itemRef, useEmptyTrash, useRestoreItems, useTrash } from '@/lib/drive/queries';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
-import { formatBytes } from '@/lib/format';
+import { useFormatBytes } from '@/lib/i18n/use-format';
 import { DriveGrid } from './drive-grid';
 import { ItemCard } from './item-card';
 
@@ -24,6 +24,7 @@ type Notice = { kind: 'info' | 'error'; text: string } | null;
 
 /** Trash: restore selected items, or empty the trash for good. */
 export function TrashView() {
+  const formatBytes = useFormatBytes();
   const t = useTranslations();
   const format = useFormatter();
   const describe = useErrorMessage();

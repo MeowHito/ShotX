@@ -6,13 +6,14 @@ import Link from 'next/link';
 import { useFormatter, useTranslations } from 'next-intl';
 import { BILLING_HREF } from '@/components/drive/paths';
 import { useDriveUsage } from '@/lib/drive/queries';
-import { formatBytes } from '@/lib/format';
+import { useFormatBytes } from '@/lib/i18n/use-format';
 
 /**
  * The billing page's storage summary. Without a quota (STORAGE_QUOTA_ENFORCED=false, quotaBytes
  * null; ADR 0010) it shows the used bytes only: no bar, no limit.
  */
 export function UsageSummary({ usage }: { usage: DriveUsageResponse }) {
+  const formatBytes = useFormatBytes();
   const t = useTranslations('usage');
   const format = useFormatter();
   const used = usage.usedBytes + usage.reservedBytes;

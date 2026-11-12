@@ -71,12 +71,21 @@ export function messageForPasswordPolicy(
   return { key: `passwordPolicy.${reason}`, values: { minLength } };
 }
 
+/** How a message is worded: status labels, and the Intl locale of sizes and times. */
+export interface MessageLabels {
+  subscriptionStatus: (status: string) => string;
+  /** BCP 47 locale (INTL_LOCALE); Thai when absent. */
+  locale?: string;
+}
+
 /** The message for an error code and its (untrusted) details. */
 export function messageForCode(
   code: ErrorCode,
   details: unknown,
-  labels: { subscriptionStatus: (status: string) => string } = { subscriptionStatus: (s) => s },
+  labels: MessageLabels = { subscriptionStatus: (s) => s },
 ): ErrorMessage {
+  const intl = labels.locale ?? 'th-TH';
+  const bytes = (n: number) => formatBytes(n, intl);
   switch (code) {
     case ErrorCode.QUOTA_EXCEEDED: {
       const d = quotaExceededDetailsSchema.safeParse(details);
@@ -84,8 +93,8 @@ export function messageForCode(
         return {
           key: 'details.quotaExceeded',
           values: {
-            requested: formatBytes(d.data.requestedBytes),
-            available: formatBytes(d.data.availableBytes),
+            requested: bytes(d.data.requestedBytes),
+            available: bytes(d.data.availableBytes),
           },
         };
       }
@@ -94,7 +103,7 @@ export function messageForCode(
     case ErrorCode.FILE_TOO_LARGE: {
       const d = fileTooLargeDetailsSchema.safeParse(details);
       if (d.success) {
-        return { key: 'details.fileTooLarge', values: { max: formatBytes(d.data.maxBytes) } };
+        return { key: 'details.fileTooLarge', values: { max: bytes(d.data.maxBytes) } };
       }
       break;
     }
@@ -156,9 +165,9 @@ export function messageForCode(
           key: 'details.zipTooLarge',
           values: {
             maxFiles: d.data.maxFiles,
-            maxBytes: formatBytes(d.data.maxBytes),
+            maxBytes: bytes(d.data.maxBytes),
             files: d.data.files,
-            bytes: formatBytes(d.data.bytes),
+            bytes: bytes(d.data.bytes),
           },
         };
       }
@@ -194,7 +203,7 @@ export function messageForCode(
         return {
           key: 'details.checkoutPending',
           values: {
-            time: new Intl.DateTimeFormat('th-TH', {
+            time: new Intl.DateTimeFormat(intl, {
               timeStyle: 'short',
               timeZone: TIME_ZONE,
             }).format(new Date(d.data.expiresAt)),
@@ -241,22 +250,19 @@ export function messageForCode(
 }
 
 /** The Thai text key of an informational billing notice (DOWNGRADE_EXCEEDS_QUOTA). */
-export function messageForNotice(notice: BillingNotice): ErrorMessage {
+export function messageForNotice(notice: BillingNotice, locale = 'th-TH'): ErrorMessage {
   return {
     key: `notices.${notice.code}`,
     values: {
-      quota: formatBytes(notice.details.quotaBytes),
-      used: formatBytes(notice.details.usedBytes + notice.details.reservedBytes),
-      over: formatBytes(notice.details.overBytes),
+      quota: formatBytes(notice.details.quotaBytes, locale),
+      used: formatBytes(notice.details.usedBytes + notice.details.reservedBytes, locale),
+      over: formatBytes(notice.details.overBytes, locale),
     },
   };
 }
 
 /** The message for anything thrown by the API client, the uploader or a local check. */
-export function describeError(
-  error: unknown,
-  labels?: { subscriptionStatus: (status: string) => string },
-): ErrorMessage {
+export function describeError(error: unknown, labels?: MessageLabels): ErrorMessage {
   if (error instanceof ApiError) return messageForCode(error.code, error.details, labels);
   if (error instanceof ClientError) return { key: error.key, values: error.values };
   if (error instanceof NetworkError) return { key: 'client.network' };

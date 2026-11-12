@@ -9,6 +9,14 @@ import { MESSAGES, TIME_ZONE } from '@/i18n/config';
 import { reloadPage } from '@/lib/browser/navigate';
 import { localeCookie } from '@/lib/i18n/locale-cookie';
 import { PublicTopBar } from './public-top-bar';
+import { DRIVE_ROOT } from '@shotx/shared';
+import { within } from '@testing-library/react';
+import { apiClientFor, renderWithProviders } from '../../../test/render';
+import { DriveBrowser } from '@/components/drive/drive-browser';
+import { AccountMenu } from '@/components/studio/account-menu';
+import { StorageMeter } from '@/components/studio/storage-meter';
+import { describeError } from '@/lib/errors/messages';
+import { ApiError } from '@/lib/api/errors';
 
 vi.mock('@/lib/browser/navigate', () => ({ reloadPage: vi.fn(), navigateTo: vi.fn() }));
 vi.mock('photoswipe', () => ({ default: class {} }));
@@ -90,5 +98,47 @@ describe('language switcher (ADR 0011)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Accept and start' }));
     expect(await screen.findByRole('button', { name: 'Take photo' })).toBeInTheDocument();
     expect(share.consentLocales).toEqual(['en']);
+  });
+
+  it('the studio is translated too: drive, menus and the storage meter in English and Chinese', async () => {
+    const fake = new FakeApi({ quotaBytes: null, usedBytes: 1.5 * 1024 ** 3 });
+    fake.addFolder('Event');
+    renderWithProviders(
+      <>
+        <DriveBrowser folderRef={DRIVE_ROOT} />
+        <StorageMeter />
+      </>,
+      { api: apiClientFor(fake.fetch), locale: 'en' },
+    );
+    expect(await screen.findByRole('button', { name: 'Options for Event' })).toBeInTheDocument();
+    expect(await screen.findByText('1.5 GB used')).toBeInTheDocument();
+  });
+
+  it('the studio account menu switches the language too', async () => {
+    const fake = new FakeApi();
+    renderWithProviders(<AccountMenu user={{ name: 'Somchai', email: null }} />, {
+      api: apiClientFor(fake.fetch),
+      locale: 'zh',
+    });
+    await userEvent.click(screen.getByRole('button', { name: '账号菜单' }));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByRole('menuitem', { name: '中文' })).toHaveAttribute(
+      'aria-current',
+      'true',
+    );
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'English' }));
+    expect(document.cookie).toContain(`${LOCALE_COOKIE}=en`);
+    expect(reloadPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('formats sizes and times in the UI language (Intl)', () => {
+    const error = new ApiError(422, 'FILE_TOO_LARGE', 'x', { maxBytes: 1.5 * 1024 ** 3 });
+    expect(describeError(error, { subscriptionStatus: (s) => s, locale: 'en-GB' }).values).toEqual({
+      max: '1.5 GB',
+    });
+    // German-style decimals would show a comma; Thai, English and Chinese all use a point.
+    expect(describeError(error, { subscriptionStatus: (s) => s, locale: 'de-DE' }).values).toEqual({
+      max: '1,5 GB',
+    });
   });
 });

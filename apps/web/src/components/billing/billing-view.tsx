@@ -23,7 +23,7 @@ import {
   useSubscription,
 } from '@/lib/billing/queries';
 import { useErrorMessage, useNoticeMessage } from '@/lib/errors/use-error-message';
-import { formatBytes, formatSatang } from '@/lib/format';
+import { useFormatBytes, useFormatSatang } from '@/lib/i18n/use-format';
 import { CheckoutFlow, PlanPicker } from './checkout-flow';
 import { SubscriptionStateBanner } from './subscription-banner';
 
@@ -110,6 +110,8 @@ function Billing({
 }
 
 function CurrentSubscription({ data }: { data: SubscriptionResponse }) {
+  const formatBytes = useFormatBytes();
+  const formatSatang = useFormatSatang();
   const tcur = useTranslations('billing.current');
   const tStatus = useTranslations('usage.subscriptionStatus');
   const describe = useErrorMessage();

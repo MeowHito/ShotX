@@ -240,7 +240,6 @@ export const zh: PublicMessages = {
   },
   downloads: {
     download: '下载',
-    downloadOne: '下载 {name}',
     downloadSelected: '下载 {count, number} 张',
     selected: '已选 {count, number} 张',
     clear: '取消选择',

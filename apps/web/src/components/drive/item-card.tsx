@@ -6,7 +6,7 @@ import { FileWarningIcon, FolderIcon, ImageIcon, LoaderIcon, PlayIcon } from 'lu
 import Link from 'next/link';
 import { useFormatter, useTranslations } from 'next-intl';
 import { type KeyboardEvent, type MouseEvent, type ReactNode, useEffect, useRef } from 'react';
-import { formatBytes } from '@/lib/format';
+import { useFormatBytes } from '@/lib/i18n/use-format';
 
 export type ItemLayout = 'grid' | 'list';
 
@@ -101,6 +101,7 @@ export function ItemCard({
   onPreview,
   selectable = true,
 }: ItemCardProps) {
+  const formatBytes = useFormatBytes();
   const t = useTranslations('drive');
   const format = useFormatter();
   const primary = useRef<HTMLAnchorElement & HTMLButtonElement>(null);

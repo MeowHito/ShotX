@@ -256,7 +256,6 @@ export const en: PublicMessages = {
   },
   downloads: {
     download: 'Download',
-    downloadOne: 'Download {name}',
     downloadSelected: '{count, plural, one {Download # photo} other {Download # photos}}',
     selected: '{count, plural, one {# photo selected} other {# photos selected}}',
     clear: 'Clear selection',

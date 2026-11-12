@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { BILLING_HREF } from '@/components/drive/paths';
 import { useDriveUsage } from '@/lib/drive/queries';
-import { formatBytes } from '@/lib/format';
+import { useFormatBytes } from '@/lib/i18n/use-format';
 import { useStudio } from './studio-context';
 
 /** Used share of the quota from which the meter turns amber, and red. */
@@ -29,6 +29,7 @@ export function storageLevel(used: number, quota: number): StorageLevel {
  * tablets (icon and bar only).
  */
 export function StorageMeter({ compact = false }: { compact?: boolean }) {
+  const formatBytes = useFormatBytes();
   const t = useTranslations('studio.storage');
   const { config } = useStudio();
   const usage = useDriveUsage();

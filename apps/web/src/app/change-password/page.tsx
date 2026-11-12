@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getTranslations } from 'next-intl/server';
 import { ChangePasswordScreen } from '@/components/auth/change-password-screen';
+import { LanguageSwitcher } from '@/components/site/language-switcher';
 import { AUTH_PATHS } from '@/lib/auth/handlers';
 import { afterPasswordChangePath, changePasswordPageHref } from '@/lib/auth/password-client';
 import { viewerState } from '@/lib/server/auth';
@@ -33,7 +34,10 @@ export default async function ChangePasswordPage({
   }
   const tc = await getTranslations('common');
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center bg-sidebar px-4 py-12">
+    <main className="relative flex min-h-dvh flex-col items-center justify-center bg-sidebar px-4 py-16">
+      <div className="absolute top-3 right-3">
+        <LanguageSwitcher />
+      </div>
       <Link
         href="/"
         className="mb-6 rounded-md px-1 text-xl font-bold tracking-[-0.015em] outline-none focus-visible:ring-2 focus-visible:ring-ring"

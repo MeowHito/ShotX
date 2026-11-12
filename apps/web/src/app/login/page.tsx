@@ -2,6 +2,7 @@ import { Alert } from '@shotx/ui';
 import Link from 'next/link';
 import { getTranslations } from 'next-intl/server';
 import { LoginButtons } from '@/components/auth/login-buttons';
+import { LanguageSwitcher } from '@/components/site/language-switcher';
 import { LOGIN_ERROR_CODES, LOGIN_ERROR_REASONS } from '@/lib/auth/handlers';
 import { safeNextPath } from '@/lib/auth/session';
 import { messageForCode } from '@/lib/errors/messages';
@@ -30,7 +31,10 @@ export default async function LoginPage({
   const options = await loginOptions();
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center bg-sidebar px-4 py-12">
+    <main className="relative flex min-h-dvh flex-col items-center justify-center bg-sidebar px-4 py-16">
+      <div className="absolute top-3 right-3">
+        <LanguageSwitcher />
+      </div>
       <Link
         href="/"
         className="mb-6 rounded-md px-1 text-xl font-bold tracking-[-0.015em] outline-none focus-visible:ring-2 focus-visible:ring-ring"

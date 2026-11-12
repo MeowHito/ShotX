@@ -2,10 +2,10 @@ import type { CONSENT_POLICY_VERSIONS } from '@shotx/shared';
 import type { Messages } from './th';
 
 /**
- * The messages of the public pages (ADR 0011: share page, gates, face search, consent, results,
- * downloads, and the errors a viewer can see), which exist in every SUPPORTED_LOCALES language.
- * The studio, login, home and pricing stay Thai: an `en` or `zh` bundle is the Thai one with these
- * namespaces replaced (withPublicMessages), so a missing translation can't silently fall back.
+ * Every message exists in every SUPPORTED_LOCALES language (Thai default). The messages are split
+ * in two parts per language: the public pages (ADR 0011: share page, gates, face search, consent,
+ * results, downloads, and the errors a viewer can see; messages/en.ts, zh.ts) and the rest
+ * (StudioMessages: home, pricing, login and the studio; messages/en-studio.ts, zh-studio.ts).
  *
  * Every key below is required by the type: a public key added to th.ts fails typecheck until
  * en.ts and zh.ts have it. Of the consent texts only the current version is translated (an older
@@ -51,8 +51,24 @@ export type PublicMessages = Widen<Omit<Pick<Messages, PublicNamespace>, 'consen
   errors: Widen<Pick<Messages['errors'], (typeof PUBLIC_ERROR_SECTIONS)[number]>>;
 };
 
-/** The Thai bundle with the public namespaces in another language. */
-export function withPublicMessages(base: Messages, pub: PublicMessages): Messages {
+/**
+ * Everything else: home, pricing, login, password, settings and the whole studio, plus the error
+ * sections only a photographer meets (billing, password policy, covers, notices).
+ */
+export type StudioMessages = Widen<Omit<Messages, PublicNamespace>> & {
+  errors: Widen<Omit<Messages['errors'], (typeof PUBLIC_ERROR_SECTIONS)[number]>>;
+};
+
+/**
+ * A complete bundle in another language. Of the consent texts only the translated versions
+ * replace the Thai ones; older versions (no longer offered by the API) stay Thai, the legal
+ * reference.
+ */
+export function withTranslation(
+  base: Messages,
+  pub: PublicMessages,
+  studio: StudioMessages,
+): Messages {
   const policies = Object.fromEntries(
     Object.entries(base.consent.policies).map(([purpose, versions]) => [
       purpose,
@@ -61,9 +77,10 @@ export function withPublicMessages(base: Messages, pub: PublicMessages): Message
   );
   const merged = {
     ...base,
+    ...studio,
     ...pub,
     consent: { ...pub.consent, policies },
-    errors: { ...base.errors, ...pub.errors },
+    errors: { ...base.errors, ...studio.errors, ...pub.errors },
   };
   // The keys are exactly Messages' (the types above); only the strings differ from the Thai
   // literal types next-intl infers its key checks from.

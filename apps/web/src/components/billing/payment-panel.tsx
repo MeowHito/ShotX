@@ -7,7 +7,7 @@ import { useFormatter, useTranslations } from 'next-intl';
 import { useEffect, useRef } from 'react';
 import { isPaymentFinal, useInvalidateBilling, usePayment } from '@/lib/billing/queries';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
-import { formatSatang } from '@/lib/format';
+import { useFormatSatang } from '@/lib/i18n/use-format';
 import { PromptPayQr } from './qr-code';
 
 /** The final outcome of a payment, as a message key under `billing.payment`. */
@@ -44,6 +44,7 @@ export function PaymentPanel({
   onStartOver: () => void;
   onDone: () => void;
 }) {
+  const formatSatang = useFormatSatang();
   const t = useTranslations('billing.payment');
   const describe = useErrorMessage();
   const format = useFormatter();

@@ -2,6 +2,7 @@ import { buttonVariants, cn } from '@shotx/ui';
 import Link from 'next/link';
 import { getTranslations } from 'next-intl/server';
 import { AUTH_PATHS } from '@/lib/auth/handlers';
+import { LanguageSwitcher } from './language-switcher';
 import { billingOffline } from '@/lib/server/config';
 
 /**
@@ -31,6 +32,7 @@ export async function SiteHeader() {
           </nav>
         )}
         <div className="ml-auto flex items-center gap-2">
+          <LanguageSwitcher />
           <Link
             href={AUTH_PATHS.loginPage}
             className={cn(buttonVariants({ size: 'sm' }), 'h-10 rounded-md')}

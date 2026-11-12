@@ -8,7 +8,7 @@ import { useFormatter, useTranslations } from 'next-intl';
 import { type FormEvent, useId, useState } from 'react';
 import { SHARES_HREF } from '@/components/drive/paths';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
-import { formatBytes } from '@/lib/format';
+import { useFormatBytes } from '@/lib/i18n/use-format';
 import { useMe, useShare, useShareStats, useUpdateShare } from '@/lib/studio/queries';
 import { ShareForm } from './share-form';
 import { ShareRow } from './share-row';
@@ -80,6 +80,7 @@ export function ShareDetails({ shareId }: { shareId: string }) {
 }
 
 function ShareStats({ shareId }: { shareId: string }) {
+  const formatBytes = useFormatBytes();
   const ts = useTranslations('shareStats');
   const format = useFormatter();
   const describe = useErrorMessage();
