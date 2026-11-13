@@ -1,11 +1,15 @@
 'use client';
 
 import type { DriveFile, DriveFolder, DriveItem } from '@shotx/shared';
-import { Button, Checkbox, cn } from '@shotx/ui';
+import { Button, buttonVariants, Checkbox, cn } from '@shotx/ui';
 import {
+  BarChart3Icon,
+  CalendarIcon,
+  CopyIcon,
   FileWarningIcon,
   FolderIcon,
   ImageIcon,
+  LinkIcon,
   LoaderIcon,
   PencilIcon,
   PlayIcon,
@@ -54,6 +58,15 @@ export interface EventActions {
   onEdit: () => void;
   /** Null while the event has no link (the QR button is disabled). */
   onQr: (() => void) | null;
+  /**
+   * ADR 0024: this event's numbers. Wide screens (`media`) show them in the inspector
+   * (`onInspect`); others open the link's page (`href`), or call `onInspect` without a link.
+   */
+  stats?: { href: string | null; media: string; onInspect: () => void };
+  /** ADR 0024: copy the event's link; null while it has none. */
+  onCopyLink?: (() => void) | null;
+  /** ADR 0024: the event shown in the inspector. */
+  inspected?: boolean;
 }
 
 /** The status of an event's link (ADR 0016): none, published, unpublished or expired. */
@@ -106,7 +119,7 @@ function EventButtons({
         type="button"
         size="icon"
         variant="ghost"
-        className="size-9"
+        className="size-9 max-sm:hidden"
         disabled={actions.onQr === null}
         onClick={() => actions.onQr?.()}
         aria-label={te('qrFor', { name })}
@@ -114,17 +127,46 @@ function EventButtons({
       >
         <QrCodeIcon aria-hidden />
       </Button>
+      {actions.stats !== undefined && actions.stats.href === null ? (
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="size-9 max-sm:hidden"
+          onClick={actions.stats.onInspect}
+          aria-label={te('statsFor', { name })}
+          title={te('stats')}
+        >
+          <BarChart3Icon aria-hidden />
+        </Button>
+      ) : actions.stats !== undefined && actions.stats.href !== null ? (
+        <Link
+          href={actions.stats.href}
+          onClick={(event) => {
+            const stats = actions.stats;
+            if (stats !== undefined && window.matchMedia(stats.media).matches) {
+              event.preventDefault();
+              stats.onInspect();
+            }
+          }}
+          className={cn(buttonVariants({ variant: 'ghost', size: 'icon' }), 'size-9 max-sm:hidden')}
+          aria-label={te('statsFor', { name })}
+          title={te('stats')}
+        >
+          <BarChart3Icon aria-hidden />
+        </Link>
+      ) : null}
       <Button
         type="button"
         size={labels === 'full' ? 'sm' : 'icon'}
         variant="outline"
-        className={labels === 'full' ? 'h-9' : 'size-9'}
+        className={labels === 'full' ? 'h-9 max-2xl:w-9 max-2xl:px-0' : 'size-9'}
         onClick={actions.onEdit}
         aria-label={`${te('edit')} ${name}`}
         title={te('editEvent')}
       >
         <PencilIcon aria-hidden />
-        {labels === 'full' ? <span className="max-sm:sr-only">{te('edit')}</span> : null}
+        {labels === 'full' ? <span className="max-2xl:sr-only">{te('edit')}</span> : null}
       </Button>
     </span>
   );
@@ -216,7 +258,7 @@ export function ItemCard({
         'relative flex shrink-0 items-center justify-center overflow-hidden bg-muted',
         list
           ? event !== null
-            ? 'size-12 rounded-lg'
+            ? 'aspect-[16/10] w-20 rounded-lg sm:w-28'
             : 'size-10 rounded-md'
           : event !== null
             ? 'aspect-[4/3] w-full rounded-lg'
@@ -272,12 +314,16 @@ export function ItemCard({
     list && event !== null ? (
       <>
         {visual}
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold" title={item.name}>
+        <span className="min-w-0 flex-1 space-y-1">
+          <span
+            className="block truncate font-display text-base font-semibold tracking-[-0.01em]"
+            title={item.name}
+          >
             {item.name}
           </span>
-          <span className="block truncate font-mono text-xs text-muted-foreground">
-            {event.event?.link?.path ?? te('status.none')}
+          <span className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+            <CalendarIcon className="size-3.5 shrink-0" aria-hidden />
+            {created}
           </span>
         </span>
       </>
@@ -354,21 +400,41 @@ export function ItemCard({
   );
 
   if (list && event !== null && eventActions !== undefined) {
-    // The event row (ADR 0016): name and link path, created date, status, QR, edit, menu.
+    // The event row (ADR 0016, restyled by ADR 0024): cover, name and date, status and link chip,
+    // then QR, stats, edit and the menu.
+    const link = event.event?.link ?? null;
     return (
       <div
         className={cn(
-          'group flex h-full items-center gap-1 rounded-xl border pr-1 transition-colors duration-150',
-          selected ? 'border-primary bg-accent' : 'border-border bg-surface hover:bg-muted',
+          'group flex h-full items-center gap-2 rounded-2xl border p-2 pr-1.5 transition-[border-color,background-color,box-shadow] duration-150',
+          selected
+            ? 'border-primary bg-accent'
+            : eventActions.inspected === true
+              ? 'border-indigo-400/40 bg-surface shadow-featured'
+              : 'border-white/5 bg-surface hover:border-indigo-400/30',
         )}
       >
         {checkbox}
         {primaryElement}
-        <span className="hidden w-32 shrink-0 text-sm text-muted-foreground tabular-nums md:block">
-          {created}
-        </span>
-        <span className="hidden w-36 shrink-0 sm:block">
+        <span className="hidden min-w-0 flex-col items-start gap-1.5 md:flex md:w-44 2xl:w-56">
           <EventStatusBadge folder={event} />
+          {link !== null ? (
+            <span className="flex max-w-full items-center gap-1 rounded-md bg-background/70 py-0.5 pr-0.5 pl-2 font-mono text-xs text-cyan-300">
+              <LinkIcon className="size-3 shrink-0" aria-hidden />
+              <span className="truncate">{link.path}</span>
+              {eventActions.onCopyLink != null ? (
+                <button
+                  type="button"
+                  onClick={eventActions.onCopyLink}
+                  className="rounded p-1 text-muted-foreground hover:bg-white/10 hover:text-foreground"
+                  aria-label={te('copyLinkOf', { name: item.name })}
+                  title={te('copyLink')}
+                >
+                  <CopyIcon className="size-3" aria-hidden />
+                </button>
+              ) : null}
+            </span>
+          ) : null}
         </span>
         <EventButtons name={item.name} actions={eventActions} labels="full" />
         {actions ? <div className="shrink-0">{actions}</div> : null}

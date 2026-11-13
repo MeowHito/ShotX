@@ -109,3 +109,57 @@
     }
   }
 }
+
+/*
+ * ADR 0024: the photographer studio wears a dark "obsidian" look (deep navy canvas, raised
+ * slate cards, electric indigo for actions, cyan for telemetry). It applies to the whole
+ * document while the studio shell is mounted, so dialogs and menus portalled to <body> wear it
+ * too; share pages and the landing page keep the default theme. Text contrast on the canvas
+ * (#0b1120) and cards (#111a2e): foreground 15:1, muted 7.4:1 / 6.9:1, primary 6.4:1 / 5.9:1.
+ */
+:root:has(.studio-theme) {
+  color-scheme: dark;
+  --background: #0b1120;
+  --foreground: #e7ecf8;
+  --surface: #111a2e;
+  --sidebar: #080d18;
+  --primary: #818cf8;
+  --primary-hover: #a5b4fc;
+  --primary-foreground: #0b1020;
+  --secondary: #16203a;
+  --secondary-foreground: #e7ecf8;
+  --muted: #16203a;
+  --muted-foreground: #9aa6bf;
+  --accent: #1b2643;
+  --accent-foreground: #c7d2fe;
+  --destructive: #fb7185;
+  --destructive-foreground: #0b1020;
+  --warning: #fbbf24;
+  --warning-foreground: #fcd34d;
+  --popover: #121b30;
+  --popover-foreground: #e7ecf8;
+  --border: #1f2a44;
+  /* Form-control outlines: 3.1:1 on the canvas. */
+  --input: #5d6b90;
+  --ring: #22d3ee;
+  --band: #060a14;
+  --band-foreground: #e7ecf8;
+  --elevation-card: 0 1px 0 0 rgb(255 255 255 / 0.03) inset, 0 12px 28px -24px rgb(0 0 0 / 0.9);
+  --elevation-featured: 0 0 24px -4px rgb(99 102 241 / 0.25);
+  --elevation-float: 0 16px 36px -20px rgb(0 0 0 / 0.8), 0 0 0 1px rgb(255 255 255 / 0.06);
+}
+
+/* Figures and headings of the studio (Latin and digits; Thai falls back to Noto Sans Thai). */
+@theme inline {
+  --font-display:
+    var(--font-space-grotesk, 'Space Grotesk'), var(--font-noto-thai, 'Noto Sans Thai'),
+    ui-sans-serif, system-ui, sans-serif;
+}
+
+/* A bento card of the studio: a raised slate surface with a ghost outline. */
+@utility studio-card {
+  border-radius: var(--radius-2xl);
+  background-color: var(--color-surface);
+  border: 1px solid rgb(255 255 255 / 0.06);
+  box-shadow: var(--shadow-card);
+}

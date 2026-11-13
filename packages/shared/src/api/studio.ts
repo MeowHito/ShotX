@@ -138,18 +138,29 @@ const statCount = z.number().int().nonnegative();
 /**
  * - `photos`: the caller's live (not trashed) image files that are `processing` or `ready`
  *   (copies included), counted from `files`; per day by the Bangkok day of `created_at`.
- * - `downloads`: share-page single-photo downloads (`daily_stats.downloads`, the hourly rollup of
- *   activity_events; it lags by up to about an hour). Never read from raw events.
+ * - `downloads`: share-page single-photo downloads (`daily_stats.downloads`).
+ * - `visitors` (ADR 0024): people who opened a share page (`daily_stats.visitors`; a person
+ *   counts once per day).
+ * Downloads and visitors come from the hourly rollup of activity_events (they lag by up to about
+ * an hour), never from raw events.
  */
+const driveStatsValuesSchema = z.object({
+  photos: statCount,
+  downloads: statCount,
+  visitors: statCount,
+});
+
 export const driveStatsResponseSchema = z.object({
   from: bangkokDateSchema,
   to: bangkokDateSchema,
-  /** All time: photos in the drive now, and downloads ever. */
-  totals: z.object({ photos: statCount, downloads: statCount }),
+  /** All time: photos in the drive now, downloads and visitors ever. */
+  totals: driveStatsValuesSchema,
   /** Within from..to. */
-  period: z.object({ photos: statCount, downloads: statCount }),
+  period: driveStatsValuesSchema,
+  /** The same number of days just before `from` (ADR 0024: the change shown on each tile). */
+  previous: driveStatsValuesSchema,
   /** Every day of from..to, ascending, zeros included. */
-  days: z.array(z.object({ date: bangkokDateSchema, photos: statCount, downloads: statCount })),
+  days: z.array(driveStatsValuesSchema.extend({ date: bangkokDateSchema })),
 });
 export type DriveStatsResponse = z.output<typeof driveStatsResponseSchema>;
 

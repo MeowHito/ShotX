@@ -47,7 +47,7 @@ export function ShareDetails({ shareId }: { shareId: string }) {
         <p role="status">{t('common.loading')}</p>
       ) : (
         <>
-          <h1 className="text-xl font-bold break-words">
+          <h1 className="font-display text-2xl font-bold tracking-[-0.02em] sm:text-3xl break-words">
             {t('shareStats.title', { name: share.data.target.name })}
           </h1>
           <ShareRow share={share.data} showTarget={false} />

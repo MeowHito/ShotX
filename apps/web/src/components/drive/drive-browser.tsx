@@ -8,8 +8,9 @@ import {
   type FolderRef,
   type OwnerShare,
 } from '@shotx/shared';
-import { Alert, Button, cn, Skeleton } from '@shotx/ui';
+import { Alert, Button, cn, Input, Skeleton } from '@shotx/ui';
 import {
+  CloudUploadIcon,
   CopyIcon,
   DownloadIcon,
   EyeIcon,
@@ -23,7 +24,9 @@ import {
   LinkIcon,
   ListIcon,
   PencilIcon,
+  PlusIcon,
   QrCodeIcon,
+  SearchIcon,
   Share2Icon,
   SquareArrowOutUpRightIcon,
   Trash2Icon,
@@ -41,7 +44,7 @@ import {
   useState,
 } from 'react';
 import { useApiClient } from '@/components/providers';
-import { useStudio } from '@/components/studio/studio-context';
+import { useMediaQuery, useStudio } from '@/components/studio/studio-context';
 import { useUploads } from '@/components/upload/upload-context';
 import { ShareDialog, type ShareTargetRef } from '@/components/shares/share-dialog';
 import {
@@ -80,7 +83,9 @@ import { MoveDialog } from './move-dialog';
 import { NameDialog } from './name-dialog';
 import { QrDialog, type QrTarget } from './qr-dialog';
 import { RenameFilesDialog } from './rename-files-dialog';
-import { DriveStatsCard } from './drive-stats-card';
+import { EventInspector } from './event-inspector';
+import { type EventCounts, EventsOverview } from './events-overview';
+import { eventStatusOf } from './item-card';
 import { folderHref, SHARES_HREF, shareHref } from './paths';
 
 type Notice = {
@@ -94,7 +99,14 @@ const isReadyFile = (item: DriveItem): item is DriveFile =>
   item.kind === 'file' && item.status === 'ready';
 
 /** Event cards (ADR 0016): a 4:3 cover over the name, created date, status and buttons. */
-const EVENT_CELL = { minCellPx: 220, cellAspect: 0.75, captionPx: 112, listRowPx: 72 } as const;
+const EVENT_CELL = { minCellPx: 220, cellAspect: 0.75, captionPx: 112, listRowPx: 96 } as const;
+
+/** ADR 0024: the event filter tabs (by link status). */
+const EVENT_TABS = ['all', 'active', 'paused', 'none'] as const;
+type EventTab = (typeof EVENT_TABS)[number];
+
+/** Screens where the event inspector sits beside the list (Tailwind `xl`). */
+const INSPECTOR_MEDIA = '(min-width: 1280px)';
 
 /** The QR target of an event, or null while it has no link. */
 function qrTargetOf(folder: DriveFolder): QrTarget | null {
@@ -154,10 +166,33 @@ export function DriveBrowser({
   const [fileColumns, setFileColumns] = useState(1);
   const [focusTarget, setFocusTarget] = useState<{ id: string; token: number } | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const [eventTab, setEventTab] = useState<EventTab>('all');
+  const [eventQuery, setEventQuery] = useState('');
+  const [inspectedId, setInspectedId] = useState<string | null>(null);
+  // ADR 0024: the inspector mounts only where it shows (no QR or stats requests on phones).
+  const wide = useMediaQuery(INSPECTOR_MEDIA);
 
   const items = listing.items;
   // Folders come first in every listing (drive cursor), so the two sections keep that order.
-  const events = items.filter((i): i is DriveFolder => i.kind === 'folder');
+  const allEvents = items.filter((i): i is DriveFolder => i.kind === 'folder');
+  // ADR 0024: the tabs and the name filter narrow the events shown (the loaded ones).
+  const eventCounts: EventCounts & { none: number } = {
+    total: allEvents.length,
+    published: allEvents.filter((e) => eventStatusOf(e) === 'active').length,
+    paused: allEvents.filter((e) => eventStatusOf(e) === 'paused').length,
+    none: allEvents.filter((e) => eventStatusOf(e) === 'none').length,
+  };
+  const needle = eventQuery.normalize('NFC').trim().toLowerCase();
+  const events = allEvents.filter(
+    (e) =>
+      (eventTab === 'all' || eventStatusOf(e) === eventTab) &&
+      (needle === '' || e.name.toLowerCase().includes(needle)),
+  );
+  const inspected =
+    allEvents.find((e) => e.id === inspectedId) ??
+    allEvents.find((e) => eventStatusOf(e) === 'active') ??
+    allEvents[0] ??
+    null;
   const fileItems = items.filter((i) => i.kind === 'file');
   const uploadsBlocked = usage.data?.uploadsBlockedBy ?? null;
   const selection = [...selected.values()];
@@ -311,13 +346,26 @@ export function DriveBrowser({
 
   function eventActionsFor(folder: DriveFolder): EventActions {
     const target = qrTargetOf(folder);
+    const link = folder.event?.link ?? null;
     return {
       onEdit: () => setEditingEvent(folder),
       onQr: target === null ? null : () => setQr(target),
+      // ADR 0024: wide screens show the numbers beside the list; others open the link's page
+      // (an event without a link opens its edit dialog, where the link is made).
+      stats: {
+        href: link === null ? null : shareHref(link.shareId),
+        media: INSPECTOR_MEDIA,
+        onInspect: () => {
+          setInspectedId(folder.id);
+          if (!window.matchMedia(INSPECTOR_MEDIA).matches) setEditingEvent(folder);
+        },
+      },
+      onCopyLink: link === null || link.status === 'revoked' ? null : () => void copyLink(link),
+      inspected: folderId === null && wide && inspected?.id === folder.id,
     };
   }
 
-  async function copyLink(share: OwnerShare) {
+  async function copyLink(share: Pick<OwnerShare, 'url'>) {
     try {
       await copyToClipboard(share.url);
       setNotice({ kind: 'info', text: t('itemMenu.linkCopied') });
@@ -707,6 +755,37 @@ export function DriveBrowser({
     );
   };
 
+  const viewToggle = (
+    <div
+      role="radiogroup"
+      aria-label={t('view.label')}
+      className="flex rounded-lg border bg-sidebar p-0.5"
+    >
+      {(
+        [
+          ['grid', LayoutGridIcon, t('view.grid')],
+          ['list', ListIcon, t('view.list')],
+        ] as const
+      ).map(([value, Icon, label]) => (
+        <button
+          key={value}
+          type="button"
+          role="radio"
+          aria-checked={layout === value}
+          aria-label={label}
+          title={label}
+          onClick={() => setLayout(value)}
+          className={cn(
+            'flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring sm:size-9',
+            layout === value && 'bg-background text-primary shadow-card ring-1 ring-border',
+          )}
+        >
+          <Icon className="size-4" aria-hidden />
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <ItemMenuProvider value={buildMenu}>
       <div
@@ -720,44 +799,56 @@ export function DriveBrowser({
         }}
         onDrop={onDrop}
       >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <Breadcrumbs ancestors={listing.ancestors} current={listing.folder} />
-          <div
-            role="radiogroup"
-            aria-label={t('view.label')}
-            className="flex rounded-lg border bg-sidebar p-0.5"
-          >
-            {(
-              [
-                ['grid', LayoutGridIcon, t('view.grid')],
-                ['list', ListIcon, t('view.list')],
-              ] as const
-            ).map(([value, Icon, label]) => (
-              <button
-                key={value}
+        {folderId === null ? (
+          // ADR 0024: the Events page header: title, what it is, and the two main actions.
+          <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <div className="space-y-1">
+              <h1 className="font-display text-3xl font-bold tracking-[-0.025em]">
+                {t('drive.root')}
+              </h1>
+              <p className="text-sm text-muted-foreground">{t('events.pageHint')}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
                 type="button"
-                role="radio"
-                aria-checked={layout === value}
-                aria-label={label}
-                title={label}
-                onClick={() => setLayout(value)}
-                className={cn(
-                  'flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring sm:size-9',
-                  layout === value && 'bg-background text-primary shadow-card ring-1 ring-border',
-                )}
+                variant="secondary"
+                className="h-11 sm:h-10"
+                disabled={uploadsBlocked !== null}
+                onClick={() => studio.run('uploadFiles')}
               >
-                <Icon className="size-4" aria-hidden />
-              </button>
-            ))}
+                <CloudUploadIcon className="text-cyan-300" aria-hidden />
+                {t('drive.uploadFiles')}
+              </Button>
+              <Button
+                type="button"
+                className="h-11 shadow-featured sm:h-10"
+                onClick={() => studio.run('newFolder')}
+              >
+                <PlusIcon aria-hidden />
+                {t('drive.newFolder')}
+              </Button>
+            </div>
+          </header>
+        ) : (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Breadcrumbs ancestors={listing.ancestors} current={listing.folder} />
+            {viewToggle}
           </div>
-        </div>
+        )}
+
+        {folderId === null ? (
+          <EventsOverview
+            events={{
+              total: eventCounts.total,
+              published: eventCounts.published,
+              paused: eventCounts.paused,
+            }}
+          />
+        ) : null}
 
         {uploadsBlocked !== null ? (
           <Alert variant="warning">{t(`usage.blocked.${uploadsBlocked}`)}</Alert>
         ) : null}
-
-        {/* ADR 0023: the photographer's numbers on the top level of Events (studio.drive). */}
-        {folderId === null ? <DriveStatsCard /> : null}
 
         {notice !== null ? (
           <Alert
@@ -879,34 +970,116 @@ export function DriveBrowser({
             onKeyDown={onGridKeyDown}
             className={cn(selection.length > 0 && 'pb-24 sm:pb-0')}
           >
-            {events.length > 0 ? (
-              <section aria-label={t('event.events')} className="space-y-2">
-                {fileItems.length > 0 ? (
+            {allEvents.length > 0 ? (
+              <section aria-label={t('event.events')} className="space-y-3">
+                {folderId === null ? (
+                  // ADR 0024: filter tabs by link status, a name filter and the view toggle.
+                  <div className="studio-card flex flex-col gap-2 p-2 lg:flex-row lg:items-center lg:justify-between">
+                    <div
+                      role="radiogroup"
+                      aria-label={t('events.filterLabel')}
+                      className="flex gap-1 overflow-x-auto"
+                    >
+                      {EVENT_TABS.map((tab) => {
+                        const count =
+                          tab === 'all'
+                            ? eventCounts.total
+                            : tab === 'active'
+                              ? eventCounts.published
+                              : tab === 'paused'
+                                ? eventCounts.paused
+                                : eventCounts.none;
+                        return (
+                          <button
+                            key={tab}
+                            type="button"
+                            role="radio"
+                            aria-checked={eventTab === tab}
+                            onClick={() => setEventTab(tab)}
+                            className={cn(
+                              'h-10 shrink-0 rounded-lg px-3.5 text-sm whitespace-nowrap transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                              eventTab === tab
+                                ? 'bg-accent font-semibold text-cyan-300'
+                                : 'text-muted-foreground hover:bg-white/5 hover:text-foreground',
+                            )}
+                          >
+                            {t(`events.tabs.${tab}`, { count })}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="relative min-w-0 flex-1 lg:w-64">
+                        <SearchIcon
+                          className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+                          aria-hidden
+                        />
+                        <Input
+                          value={eventQuery}
+                          onChange={(e) => setEventQuery(e.target.value)}
+                          placeholder={t('events.filterPlaceholder')}
+                          aria-label={t('events.filterPlaceholder')}
+                          className="h-10 rounded-lg border-white/5 bg-background/70 pl-9"
+                        />
+                      </div>
+                      {viewToggle}
+                    </div>
+                  </div>
+                ) : fileItems.length > 0 ? (
                   <h2 className="text-sm font-semibold text-muted-foreground">
                     {t('event.events')}
                   </h2>
                 ) : null}
-                <DriveGrid
-                  items={events}
-                  layout={layout}
-                  label={t('event.events')}
-                  loadingMoreLabel={t('drive.loadingMore')}
-                  hasNextPage={fileItems.length === 0 && listing.hasNextPage}
-                  isFetchingNextPage={fileItems.length === 0 && listing.isFetchingNextPage}
-                  fetchNextPage={listing.fetchNextPage}
-                  scrollToIndex={focusIndexIn(events)}
-                  onColumnsChange={setEventColumns}
-                  {...EVENT_CELL}
-                  renderItem={renderItem}
-                />
+                <div
+                  className={cn(
+                    folderId === null &&
+                      wide &&
+                      inspected !== null &&
+                      'grid grid-cols-[minmax(0,1fr)_21rem] items-start gap-5',
+                  )}
+                >
+                  <div className="min-w-0">
+                    {events.length > 0 ? (
+                      <DriveGrid
+                        items={events}
+                        layout={layout}
+                        label={t('event.events')}
+                        loadingMoreLabel={t('drive.loadingMore')}
+                        hasNextPage={fileItems.length === 0 && listing.hasNextPage}
+                        isFetchingNextPage={fileItems.length === 0 && listing.isFetchingNextPage}
+                        fetchNextPage={listing.fetchNextPage}
+                        scrollToIndex={focusIndexIn(events)}
+                        onColumnsChange={setEventColumns}
+                        {...EVENT_CELL}
+                        renderItem={renderItem}
+                      />
+                    ) : (
+                      <p className="studio-card px-4 py-10 text-center text-sm text-muted-foreground">
+                        {t('events.noMatch')}
+                      </p>
+                    )}
+                  </div>
+                  {folderId === null && wide && inspected !== null ? (
+                    <div className="sticky top-[5.5rem]">
+                      <EventInspector
+                        folder={inspected}
+                        onEdit={() => setEditingEvent(inspected)}
+                        onQr={() => {
+                          const target = qrTargetOf(inspected);
+                          if (target !== null) setQr(target);
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                </div>
               </section>
             ) : null}
             {fileItems.length > 0 ? (
               <section
                 aria-label={t('event.files')}
-                className={cn('space-y-2', events.length > 0 && 'mt-6')}
+                className={cn('space-y-2', allEvents.length > 0 && 'mt-6')}
               >
-                {events.length > 0 ? (
+                {allEvents.length > 0 ? (
                   <h2 className="text-sm font-semibold text-muted-foreground">
                     {t('event.files')}
                   </h2>

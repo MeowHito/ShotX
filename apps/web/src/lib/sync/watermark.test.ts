@@ -14,9 +14,9 @@ const settings = { position: 'bottom-right', sizePercent: 20, marginPercent: 3 }
 describe('watermarkBox (ADR 0021)', () => {
   it('sizes by the shorter side and keeps the margin from the chosen corner', () => {
     // 6000×4000 landscape, a 2:1 mark: 20% of 4000 = 800 wide, 400 high, 120 px margin.
-    expect(watermarkBox({ width: 6000, height: 4000 }, { width: 200, height: 100 }, settings)).toEqual(
-      { x: 6000 - 800 - 120, y: 4000 - 400 - 120, width: 800, height: 400 },
-    );
+    expect(
+      watermarkBox({ width: 6000, height: 4000 }, { width: 200, height: 100 }, settings),
+    ).toEqual({ x: 6000 - 800 - 120, y: 4000 - 400 - 120, width: 800, height: 400 });
     // The same mark on a portrait photo is just as big.
     expect(
       watermarkBox({ width: 4000, height: 6000 }, { width: 200, height: 100 }, settings).width,
@@ -63,7 +63,17 @@ function jpegWithExif(little: boolean, orientation = 6): Uint8Array {
   tiff.push(...u32(100));
   const payload = [0x45, 0x78, 0x69, 0x66, 0, 0, ...tiff];
   const length = payload.length + 2;
-  return new Uint8Array([0xff, 0xd8, 0xff, 0xe1, length >> 8, length & 0xff, ...payload, 0xff, 0xd9]);
+  return new Uint8Array([
+    0xff,
+    0xd8,
+    0xff,
+    0xe1,
+    length >> 8,
+    length & 0xff,
+    ...payload,
+    0xff,
+    0xd9,
+  ]);
 }
 
 function orientationOf(segment: Uint8Array, little: boolean): number {
@@ -119,7 +129,16 @@ describe('logo trim and frames (ADR 0022)', () => {
   }
 
   it('finds the visible part of a logo with a transparent border', () => {
-    expect(alphaBounds(pixels(10, 8, [[2, 3], [6, 5]]), 10, 8)).toEqual({
+    expect(
+      alphaBounds(
+        pixels(10, 8, [
+          [2, 3],
+          [6, 5],
+        ]),
+        10,
+        8,
+      ),
+    ).toEqual({
       x: 2,
       y: 3,
       width: 5,

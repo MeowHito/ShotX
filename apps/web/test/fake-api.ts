@@ -868,13 +868,14 @@ export class FakeApi {
           const date = new Date(Date.parse(`${from}T00:00:00Z`) + i * 86_400_000)
             .toISOString()
             .slice(0, 10);
-          return { date, photos: date === to ? photos.length : 0, downloads: 0 };
+          return { date, photos: date === to ? photos.length : 0, downloads: 0, visitors: 0 };
         });
         return {
           from,
           to,
-          totals: { photos: photos.length, downloads: this.options.downloads },
-          period: { photos: photos.length, downloads: 0 },
+          totals: { photos: photos.length, downloads: this.options.downloads, visitors: 0 },
+          period: { photos: photos.length, downloads: 0, visitors: 0 },
+          previous: { photos: 0, downloads: 0, visitors: 0 },
           days: list,
         };
       }

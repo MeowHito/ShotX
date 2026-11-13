@@ -107,7 +107,9 @@ export function DesignsList({ onOpen }: { onOpen: (designId: string) => void }) 
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
-          <h1 className="text-xl font-bold">{t('title')}</h1>
+          <h1 className="font-display text-2xl font-bold tracking-[-0.02em] sm:text-3xl">
+            {t('title')}
+          </h1>
           <p className="text-sm text-muted-foreground">{t('intro')}</p>
           <p className="text-xs text-muted-foreground">{t('defaultHint')}</p>
         </div>

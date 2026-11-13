@@ -17,7 +17,14 @@ describe('client IP', () => {
     expect(normalizeClientIp('[2001:db8::1]')).toBe('2001:db8::1');
     expect(normalizeClientIp('fe80::1%eth0')).toBe('fe80::1');
     expect(normalizeClientIp('::ffff:198.51.100.4')).toBe('198.51.100.4');
-    for (const bad of ['', 'unknown', '203.0.113.7:443', '999.1.1.1', '1.2.3.4\r\nx: y', '01.2.3.4']) {
+    for (const bad of [
+      '',
+      'unknown',
+      '203.0.113.7:443',
+      '999.1.1.1',
+      '1.2.3.4\r\nx: y',
+      '01.2.3.4',
+    ]) {
       expect(normalizeClientIp(bad), bad).toBeNull();
     }
   });
@@ -49,7 +56,10 @@ describe('client IP', () => {
     );
     expect(clientIpFromHeaders(cf('203.0.113.10'), 'cloudfront-viewer-address')).toBeNull();
     expect(
-      clientIpFromHeaders(new Headers({ 'x-forwarded-for': '6.6.6.6' }), 'cloudfront-viewer-address'),
+      clientIpFromHeaders(
+        new Headers({ 'x-forwarded-for': '6.6.6.6' }),
+        'cloudfront-viewer-address',
+      ),
     ).toBeNull();
   });
 

@@ -402,11 +402,16 @@ for (const backend of DATABASE_BACKENDS) {
         const yesterday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(
           new Date(now.getTime() - dayMs),
         );
+        const lastWeek = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(
+          new Date(now.getTime() - 8 * dayMs),
+        );
+        await file(me, 'week-ago.jpg', { createdAt: new Date(now.getTime() - 8 * dayMs) });
         await api.db.insert(dailyStats).values([
-          { date: today, photographerId: me.id, downloads: 4 },
-          { date: yesterday, photographerId: me.id, downloads: 2 },
+          { date: today, photographerId: me.id, downloads: 4, visitors: 7 },
+          { date: yesterday, photographerId: me.id, downloads: 2, visitors: 3 },
+          { date: lastWeek, photographerId: me.id, downloads: 1, visitors: 5 },
           { date: '2020-01-01', photographerId: me.id, downloads: 10 },
-          { date: today, photographerId: other.id, downloads: 99 },
+          { date: today, photographerId: other.id, downloads: 99, visitors: 99 },
         ]);
 
         const res = await get(me, `${apiPath(R.stats)}?days=7`);
@@ -414,10 +419,12 @@ for (const backend of DATABASE_BACKENDS) {
         const stats = driveStatsResponseSchema.parse(res.body);
         expect(stats.to).toBe(today);
         expect(stats.days).toHaveLength(7);
-        expect(stats.days.at(-1)).toEqual({ date: today, photos: 2, downloads: 4 });
-        expect(stats.days.at(-2)).toMatchObject({ date: yesterday, downloads: 2 });
-        expect(stats.period).toEqual({ photos: 2, downloads: 6 });
-        expect(stats.totals).toEqual({ photos: 3, downloads: 16 });
+        expect(stats.days.at(-1)).toEqual({ date: today, photos: 2, downloads: 4, visitors: 7 });
+        expect(stats.days.at(-2)).toMatchObject({ date: yesterday, downloads: 2, visitors: 3 });
+        expect(stats.period).toEqual({ photos: 2, downloads: 6, visitors: 10 });
+        // ADR 0024: the 7 days before the period.
+        expect(stats.previous).toEqual({ photos: 1, downloads: 1, visitors: 5 });
+        expect(stats.totals).toEqual({ photos: 4, downloads: 17, visitors: 15 });
 
         // Default 30 days; other lengths are refused.
         const month = driveStatsResponseSchema.parse((await get(me, apiPath(R.stats))).body);

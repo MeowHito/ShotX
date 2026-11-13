@@ -353,7 +353,9 @@ describe('FolderSyncEngine', () => {
     folder.put('IMG_2.jpg', 10);
     await engine.tick();
     await engine.tick();
-    expect([...uploads.queued.values()].find((q) => q.file.name === 'IMG_2.jpg')?.file.size).toBe(10);
+    expect([...uploads.queued.values()].find((q) => q.file.name === 'IMG_2.jpg')?.file.size).toBe(
+      10,
+    );
   });
 
   it('ADR 0021: a failing prepare step never sends the photo without its watermark; it retries', async () => {

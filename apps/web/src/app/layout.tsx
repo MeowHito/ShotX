@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter, Noto_Sans_Thai } from 'next/font/google';
+import { Inter, Noto_Sans_Thai, Space_Grotesk } from 'next/font/google';
 import { headers } from 'next/headers';
 import { connection } from 'next/server';
 import { NextIntlClientProvider } from 'next-intl';
@@ -21,6 +21,12 @@ const notoSansThai = Noto_Sans_Thai({
   display: 'swap',
 });
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
+/** ADR 0024: the studio's figures and Latin headings. */
+const spaceGrotesk = Space_Grotesk({
+  subsets: ['latin'],
+  variable: '--font-space-grotesk',
+  display: 'swap',
+});
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations('metadata');
@@ -40,7 +46,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   const analytics = processAnalyticsId();
   const nonce = analytics === null ? undefined : ((await headers()).get('x-nonce') ?? undefined);
   return (
-    <html lang={HTML_LANG[locale]} className={`${notoSansThai.variable} ${inter.variable}`}>
+    <html
+      lang={HTML_LANG[locale]}
+      className={`${notoSansThai.variable} ${inter.variable} ${spaceGrotesk.variable}`}
+    >
       <body className="min-h-dvh antialiased">
         <NextIntlClientProvider>
           <Providers>{children}</Providers>

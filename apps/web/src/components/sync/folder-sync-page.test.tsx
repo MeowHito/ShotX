@@ -149,9 +149,10 @@ describe('FolderSyncPage', () => {
     view.unmount();
     renderPage(true, { store, makePrepare });
     await screen.findByRole('region', { name: w.title });
-    expect(
-      await screen.findByRole('button', { name: w.positions['top-left'] }),
-    ).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByRole('button', { name: w.positions['top-left'] })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await user.click(screen.getByRole('button', { name: w.remove }));
     expect(await screen.findByText(w.removed)).toBeInTheDocument();
     expect(await store.loadWatermark()).toBeNull();

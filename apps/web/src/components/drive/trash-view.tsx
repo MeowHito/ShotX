@@ -78,7 +78,9 @@ export function TrashView() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">{t('trash.title')}</h1>
+          <h1 className="font-display text-2xl font-bold tracking-[-0.02em] sm:text-3xl">
+            {t('trash.title')}
+          </h1>
           <p className="text-sm text-muted-foreground">{t('trash.description')}</p>
         </div>
         <div className="flex gap-2">

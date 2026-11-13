@@ -81,7 +81,7 @@ export function SearchBar({
         aria-label={t('label')}
         aria-keyshortcuts="/"
         enterKeyHint="search"
-        className="h-11 rounded-full border-transparent bg-muted pr-12 pl-10 focus-visible:border-input focus-visible:bg-background"
+        className="h-11 rounded-xl border-white/5 bg-surface pr-12 pl-10 focus-visible:border-ring focus-visible:bg-surface"
       />
       <kbd
         aria-hidden

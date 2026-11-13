@@ -29,7 +29,9 @@ export function AccountSettings({
 
   return (
     <div className="mx-auto max-w-xl space-y-6">
-      <h1 className="text-2xl">{t('title')}</h1>
+      <h1 className="font-display text-2xl font-bold tracking-[-0.02em] sm:text-3xl">
+        {t('title')}
+      </h1>
       <section className="space-y-3 rounded-xl border p-4 sm:p-6">
         <h2 className="text-lg">{t('account')}</h2>
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">

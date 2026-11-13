@@ -13,7 +13,9 @@ export function SharesList() {
   const shares = useShares();
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-bold">{t('shares.title')}</h1>
+      <h1 className="font-display text-2xl font-bold tracking-[-0.02em] sm:text-3xl">
+        {t('shares.title')}
+      </h1>
       {shares.isError ? (
         <Alert variant="destructive">{describe(shares.error)}</Alert>
       ) : shares.isPending ? (

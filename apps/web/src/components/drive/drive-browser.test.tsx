@@ -116,19 +116,20 @@ describe('DriveBrowser', () => {
     });
   });
 
-  it('ADR 0023: shows photos uploaded and downloaded at the top level only', async () => {
+  it('ADR 0024: the Events overview shows published events and the numbers of the period', async () => {
     const user = userEvent.setup();
     const fake = new FakeApi({ downloads: 42 });
+    fake.addFolder('Run');
     fake.addFile('a.jpg');
     fake.addFile('b.jpg');
     renderDrive(fake);
-    const stats = await screen.findByRole('region', { name: th.driveStats.title });
-    expect(await within(stats).findByText('42')).toBeInTheDocument();
-    expect(within(stats).getByText(th.driveStats.photos.total)).toBeInTheDocument();
+    const overview = await screen.findByRole('region', { name: th.driveStats.title });
+    expect(within(overview).getByText(th.driveStats.events.total)).toBeInTheDocument();
+    expect(await within(overview).findByText('รวมทั้งหมด 42 รูป')).toBeInTheDocument();
     // The daily numbers are in a table for screen readers: 30 days by default.
-    expect(within(stats).getAllByRole('row')).toHaveLength(31);
-    await user.click(within(stats).getByRole('radio', { name: '7 วัน' }));
-    await waitFor(() => expect(within(stats).getAllByRole('row')).toHaveLength(8));
+    expect(within(overview).getAllByRole('row')).toHaveLength(31);
+    await user.click(within(overview).getByRole('radio', { name: '7 วัน' }));
+    await waitFor(() => expect(within(overview).getAllByRole('row')).toHaveLength(8));
   });
 
   it('ADR 0023: renames a file from its name without the extension, validated on the client', async () => {

@@ -84,8 +84,7 @@ export function sessionFromTokens(tokens: AuthTokens, now: number, previous?: Se
     expiresAt: now + tokens.expiresIn * 1000,
     user: {
       sub: str(id.sub) ?? str(access.sub) ?? previous?.user.sub ?? 'unknown',
-      email:
-        user !== undefined ? str(user.email) : (str(id.email) ?? previous?.user.email ?? null),
+      email: user !== undefined ? str(user.email) : (str(id.email) ?? previous?.user.email ?? null),
       name: user !== undefined ? str(user.name) : (str(id.name) ?? previous?.user.name ?? null),
     },
   };

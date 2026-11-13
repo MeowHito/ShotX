@@ -1,7 +1,7 @@
 'use client';
 
 import { Button, cn, Sheet, SheetContent, SheetTitle } from '@shotx/ui';
-import { MenuIcon, PanelLeftCloseIcon, PanelLeftOpenIcon } from 'lucide-react';
+import { ApertureIcon, MenuIcon, PanelLeftCloseIcon, PanelLeftOpenIcon } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
@@ -48,22 +48,37 @@ export function StudioShellView({
   const [railExpanded, setRailExpanded] = useState(false);
   const rail = !railExpanded;
 
+  // ADR 0024: the brand block, a gradient aperture over "Snap · Studio".
   const logo = (
     <Link
       href="/studio"
-      className="rounded-md px-1 text-lg font-bold tracking-[-0.015em] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="flex items-center gap-2.5 rounded-lg px-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      {t('common.appName')}
+      <span
+        className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-400 text-white shadow-[0_0_20px_-4px_rgb(99_102_241/0.6)]"
+        aria-hidden
+      >
+        <ApertureIcon className="size-5" />
+      </span>
+      <span className="leading-none">
+        <span className="block font-display text-lg font-bold tracking-[-0.02em]">
+          {t('common.appName')}
+        </span>
+        <span className="block text-[11px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+          {t('studio.brandTag')}
+        </span>
+      </span>
     </Link>
   );
 
   return (
     <StudioProvider config={config} nav={nav}>
-      <div className="flex min-h-dvh bg-background">
+      {/* studio-theme: the dark studio look (ADR 0024, globals.css). */}
+      <div className="studio-theme flex min-h-dvh bg-background">
         <aside
           data-expanded={railExpanded}
           className={cn(
-            'sticky top-0 hidden h-dvh shrink-0 flex-col gap-6 overflow-y-auto border-r bg-sidebar px-3 py-4 transition-[width] duration-200 md:flex lg:w-64',
+            'sticky top-0 hidden h-dvh shrink-0 flex-col gap-6 overflow-y-auto border-r border-white/5 bg-sidebar px-3 py-4 transition-[width] duration-200 md:flex lg:w-64',
             railExpanded ? 'md:w-64' : 'md:w-[4.75rem]',
           )}
         >
@@ -85,7 +100,7 @@ export function StudioShellView({
             </Button>
           </div>
           <SidebarNav pathname={pathname} rail={rail} />
-          <div className="mt-auto rounded-xl border bg-background p-3 shadow-card">
+          <div className="studio-card mt-auto p-3">
             {rail ? (
               <>
                 <div className="lg:hidden">
@@ -103,7 +118,7 @@ export function StudioShellView({
 
         <div className="flex min-w-0 flex-1 flex-col">
           <ActAsBanner />
-          <header className="sticky top-0 z-40 flex h-[4.25rem] items-center gap-2 border-b bg-background/90 px-3 backdrop-blur sm:gap-3 sm:px-5">
+          <header className="sticky top-0 z-40 flex h-[4.25rem] items-center gap-2 border-b border-white/5 bg-background/85 px-3 backdrop-blur-xl sm:gap-3 sm:px-5">
             <Button
               variant="ghost"
               size="icon"
@@ -139,7 +154,7 @@ export function StudioShellView({
             <div className="flex h-11 items-center">{logo}</div>
           </SheetTitle>
           <SidebarNav pathname={pathname} onNavigate={() => setDrawerOpen(false)} />
-          <div className="mt-auto rounded-xl border bg-sidebar p-3">
+          <div className="studio-card mt-auto p-3">
             <StorageMeter />
           </div>
         </SheetContent>

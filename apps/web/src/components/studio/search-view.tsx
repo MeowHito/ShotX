@@ -58,7 +58,7 @@ export function SearchView({ search }: { search: DriveSearch }) {
   return (
     <div className="space-y-4">
       <header className="space-y-2">
-        <h1 className="text-xl font-semibold break-words">
+        <h1 className="font-display text-2xl font-bold tracking-[-0.02em] sm:text-3xl break-words">
           {search.q !== '' ? t('search.titleQuery', { q: search.q }) : t('search.title')}
         </h1>
         <FilterChips search={search} />

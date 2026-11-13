@@ -64,9 +64,7 @@ export function LoginButtons({ options, next, fetch }: LoginButtonsProps) {
       ) : null}
       {options.oidc.length > 0 ? (
         <div className="grid gap-3">
-          {options.password ? (
-            <p className="text-sm text-muted-foreground">{t('legacy')}</p>
-          ) : null}
+          {options.password ? <p className="text-sm text-muted-foreground">{t('legacy')}</p> : null}
           {options.oidc.map((provider) => (
             <a key={provider} href={loginHref(provider, next)} className={styles[provider]}>
               {t(provider)}
@@ -75,7 +73,10 @@ export function LoginButtons({ options, next, fetch }: LoginButtonsProps) {
         </div>
       ) : null}
       {options.devLogin ? (
-        <section aria-labelledby="dev-login-title" className="grid gap-4 rounded-xl border bg-sidebar p-4">
+        <section
+          aria-labelledby="dev-login-title"
+          className="grid gap-4 rounded-xl border bg-sidebar p-4"
+        >
           <div className="space-y-1">
             <h2 id="dev-login-title" className="font-semibold">
               {t('dev.title')}

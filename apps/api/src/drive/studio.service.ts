@@ -665,6 +665,8 @@ export class StudioService {
     const length = query.days ?? DRIVE_STATS_DEFAULT_DAYS;
     const to = bangkokDate(this.clock.now());
     const from = addDays(to, -(length - 1));
+    // ADR 0024: the period before, for the change on each tile.
+    const before = addDays(from, -length);
     const tz = sql.raw(`'Asia/Bangkok'`);
     const day = sql`((${files.createdAt} AT TIME ZONE ${tz})::date)`;
     const livePhotos = and(
@@ -673,7 +675,7 @@ export class StudioService {
       inArray(files.status, [...SHOWN_STATUSES]),
       sql`${files.mime} LIKE 'image/%'`,
     );
-    const [photoTotal, photoDays, downloadTotal, downloadDays] = await Promise.all([
+    const [photoTotal, photoDays, rollupTotal, rollupDays] = await Promise.all([
       this.db
         .select({ n: sql<number>`count(*)`.mapWith(Number) })
         .from(files)
@@ -684,33 +686,53 @@ export class StudioService {
         .where(
           and(
             livePhotos,
-            sql`${files.createdAt} >= (${from}::date::timestamp AT TIME ZONE ${tz})`,
+            sql`${files.createdAt} >= (${before}::date::timestamp AT TIME ZONE ${tz})`,
           ),
         )
         .groupBy(day),
       this.db
-        .select({ n: sql<number>`coalesce(sum(${dailyStats.downloads}), 0)`.mapWith(Number) })
+        .select({
+          downloads: sql<number>`coalesce(sum(${dailyStats.downloads}), 0)`.mapWith(Number),
+          visitors: sql<number>`coalesce(sum(${dailyStats.visitors}), 0)`.mapWith(Number),
+        })
         .from(dailyStats)
         .where(eq(dailyStats.photographerId, ownerId)),
       this.db
-        .select({ date: dailyStats.date, n: dailyStats.downloads })
+        .select({
+          date: dailyStats.date,
+          downloads: dailyStats.downloads,
+          visitors: dailyStats.visitors,
+        })
         .from(dailyStats)
-        .where(and(eq(dailyStats.photographerId, ownerId), gte(dailyStats.date, from))),
+        .where(and(eq(dailyStats.photographerId, ownerId), gte(dailyStats.date, before))),
     ]);
     const photosOn = new Map(photoDays.map((r) => [r.date, r.n]));
-    const downloadsOn = new Map(downloadDays.map((r) => [r.date, r.n]));
+    const rollupOn = new Map(rollupDays.map((r) => [r.date, r]));
+    const valuesOn = (date: string) => ({
+      photos: photosOn.get(date) ?? 0,
+      downloads: rollupOn.get(date)?.downloads ?? 0,
+      visitors: rollupOn.get(date)?.visitors ?? 0,
+    });
+    const sum = (list: { photos: number; downloads: number; visitors: number }[]) => ({
+      photos: list.reduce((n, d) => n + d.photos, 0),
+      downloads: list.reduce((n, d) => n + d.downloads, 0),
+      visitors: list.reduce((n, d) => n + d.visitors, 0),
+    });
     const days = Array.from({ length }, (_, i) => {
       const date = addDays(from, i);
-      return { date, photos: photosOn.get(date) ?? 0, downloads: downloadsOn.get(date) ?? 0 };
+      return { date, ...valuesOn(date) };
     });
+    const previousDays = Array.from({ length }, (_, i) => valuesOn(addDays(before, i)));
     return {
       from,
       to,
-      totals: { photos: photoTotal[0]?.n ?? 0, downloads: downloadTotal[0]?.n ?? 0 },
-      period: {
-        photos: days.reduce((sum, d) => sum + d.photos, 0),
-        downloads: days.reduce((sum, d) => sum + d.downloads, 0),
+      totals: {
+        photos: photoTotal[0]?.n ?? 0,
+        downloads: rollupTotal[0]?.downloads ?? 0,
+        visitors: rollupTotal[0]?.visitors ?? 0,
       },
+      period: sum(days),
+      previous: sum(previousDays),
       days,
     };
   }

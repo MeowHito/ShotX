@@ -105,7 +105,9 @@ export function RecentView() {
     <div className={cn('space-y-4', selection.length > 0 && 'pb-24 sm:pb-0')}>
       <header className="flex flex-wrap items-end justify-between gap-2">
         <div className="space-y-1">
-          <h1 className="text-xl font-semibold">{t('recent.title')}</h1>
+          <h1 className="font-display text-2xl font-bold tracking-[-0.02em] sm:text-3xl">
+            {t('recent.title')}
+          </h1>
           <p className="text-sm text-muted-foreground">{t('recent.description')}</p>
         </div>
         {recent.items.length > 0 ? (

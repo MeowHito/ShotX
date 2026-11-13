@@ -75,6 +75,7 @@ export function StorageMeter({ compact = false }: { compact?: boolean }) {
         data-level={level}
         className="h-1.5"
         indicatorClassName={cn(
+          level === 'ok' && 'bg-gradient-to-r from-indigo-500 to-cyan-400',
           level === 'warn' && 'bg-warning',
           level === 'full' && 'bg-destructive',
         )}
