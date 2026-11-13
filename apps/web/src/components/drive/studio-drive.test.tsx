@@ -169,10 +169,11 @@ describe('item menus', () => {
       );
     }
     await user.click(await kebab('IMG_0001.jpg'));
-    // Two items: no rename, info or share; a ZIP of a selection waits for its endpoint.
+    // Two files: rename them together (ADR 0023), no info or share; a ZIP of a selection waits
+    // for its endpoint.
     expect(item(th.itemMenu.downloadZip)).toHaveAttribute('aria-disabled', 'true');
     expect(item(th.itemMenu.downloadZip)).toHaveTextContent(th.itemMenu.soon);
-    expect(screen.queryByRole('menuitem', { name: th.itemMenu.rename })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: th.itemMenu.rename })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: th.itemMenu.fileInfo })).not.toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: th.itemMenu.share })).not.toBeInTheDocument();
     await user.click(item(th.itemMenu.trash));
@@ -253,8 +254,8 @@ describe('keyboard shortcuts and selection', () => {
 
     primary('IMG_0001.jpg').focus();
     await user.keyboard('{Control>}{Alt>}e{/Alt}{/Control}');
-    const dialog = await screen.findByRole('dialog', { name: th.rename.title });
-    const input = within(dialog).getByLabelText(th.rename.nameLabel);
+    const dialog = await screen.findByRole('dialog', { name: th.renameFiles.titleOne });
+    const input = within(dialog).getByLabelText(th.renameFiles.label);
     await user.type(input, '{Delete}{Backspace}');
     expect(fake.callsTo(DRIVE_ROUTES.trashItems)).toHaveLength(0);
     await user.keyboard('{Escape}');
@@ -470,7 +471,7 @@ describe('copy, folder ZIP and details', () => {
     await user.click(item(th.itemMenu.folderInfo));
     const panel = await screen.findByRole('dialog', { name: 'Day 1' });
     expect(await within(panel).findByText('2 ไฟล์ (รูปภาพ 1 · วิดีโอ 1)')).toBeInTheDocument();
-    expect(within(panel).getByText('ไดรฟ์ของฉัน › Event')).toBeInTheDocument();
+    expect(within(panel).getByText('อีเวนต์ › Event')).toBeInTheDocument();
     expect(within(panel).getByText('3.9 KB')).toBeInTheDocument();
   });
 });
@@ -520,6 +521,8 @@ describe('touch', () => {
     expect(rename.className).toContain('min-h-12');
     expect(within(sheet).getByRole('group', { name: th.itemMenu.share })).toBeInTheDocument();
     await user.click(rename);
-    expect(await screen.findByRole('dialog', { name: th.rename.title })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('dialog', { name: th.renameFiles.titleOne }),
+    ).toBeInTheDocument();
   });
 });

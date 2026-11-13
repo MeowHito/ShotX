@@ -65,6 +65,8 @@ export interface FakeApiOptions {
   quotaBytes?: number | null;
   usedBytes?: number;
   uploadsBlockedBy?: DriveUsageResponse['uploadsBlockedBy'];
+  /** ADR 0023: all-time share downloads in GET /drive/stats. */
+  downloads?: number;
   partBytes?: number;
   initPresignedParts?: number;
   /** Return a different part size than the client expects (plan mismatch test). */
@@ -159,6 +161,7 @@ export class FakeApi {
       quotaBytes: 10 * 1024 ** 3,
       usedBytes: 0,
       uploadsBlockedBy: null,
+      downloads: 0,
       partBytes: 16 * 1024 * 1024,
       initPresignedParts: 2,
       role: 'photographer',
@@ -852,6 +855,27 @@ export class FakeApi {
               f.id !== folder.id && f.parentId !== null && this.isDescendant(f.parentId, folder.id),
           ).length,
           totalBytes: files.reduce((sum, f) => sum + f.sizeBytes, 0),
+        };
+      }
+      case DRIVE_ROUTES.stats: {
+        const days = (query as { days?: number }).days ?? 30;
+        const photos = this.live(this.files.values()).filter((f) => f.mime.startsWith('image/'));
+        const to = NOW.slice(0, 10);
+        const from = new Date(Date.parse(`${to}T00:00:00Z`) - (days - 1) * 86_400_000)
+          .toISOString()
+          .slice(0, 10);
+        const list = Array.from({ length: days }, (_, i) => {
+          const date = new Date(Date.parse(`${from}T00:00:00Z`) + i * 86_400_000)
+            .toISOString()
+            .slice(0, 10);
+          return { date, photos: date === to ? photos.length : 0, downloads: 0 };
+        });
+        return {
+          from,
+          to,
+          totals: { photos: photos.length, downloads: this.options.downloads },
+          period: { photos: photos.length, downloads: 0 },
+          days: list,
         };
       }
       case DRIVE_ROUTES.usage: {

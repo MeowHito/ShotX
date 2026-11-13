@@ -7,6 +7,7 @@ import { MEDIA_KINDS } from '../media-types';
 import { byteCountSchema, idSchema, isoDateTimeSchema } from './common';
 import { driveFileSchema, driveFolderSchema, driveItemSchema, folderAncestorSchema } from './drive';
 import { zipJobViewSchema } from './share-page';
+import { bangkokDateSchema } from './shares';
 import { UPLOAD_NAME_CONFLICT_MODES } from './uploads';
 
 // Drive-style studio (Wave 7): copy, folder zip for the owner, recent, search and item info. Every
@@ -110,6 +111,47 @@ export const listRecentResponseSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 export type ListRecentResponse = z.output<typeof listRecentResponseSchema>;
+
+// --- GET /drive/stats --------------------------------------------------------------------------
+
+/** Days a studio stats chart can cover (ADR 0023). */
+export const DRIVE_STATS_DAYS = [7, 30, 90] as const;
+export const DRIVE_STATS_DEFAULT_DAYS = 30;
+
+/**
+ * ADR 0023: the photographer's own numbers on the Events page (studio.drive). `days` (7, 30 or 90; default
+ * DRIVE_STATS_DEFAULT_DAYS) Bangkok calendar days ending today.
+ */
+export const driveStatsQuerySchema = z.object({
+  days: z.coerce
+    .number()
+    .int()
+    .refine((d) => (DRIVE_STATS_DAYS as readonly number[]).includes(d), {
+      error: 'days must be 7, 30 or 90',
+    })
+    .optional(),
+});
+export type DriveStatsQuery = z.input<typeof driveStatsQuerySchema>;
+
+const statCount = z.number().int().nonnegative();
+
+/**
+ * - `photos`: the caller's live (not trashed) image files that are `processing` or `ready`
+ *   (copies included), counted from `files`; per day by the Bangkok day of `created_at`.
+ * - `downloads`: share-page single-photo downloads (`daily_stats.downloads`, the hourly rollup of
+ *   activity_events; it lags by up to about an hour). Never read from raw events.
+ */
+export const driveStatsResponseSchema = z.object({
+  from: bangkokDateSchema,
+  to: bangkokDateSchema,
+  /** All time: photos in the drive now, and downloads ever. */
+  totals: z.object({ photos: statCount, downloads: statCount }),
+  /** Within from..to. */
+  period: z.object({ photos: statCount, downloads: statCount }),
+  /** Every day of from..to, ascending, zeros included. */
+  days: z.array(z.object({ date: bangkokDateSchema, photos: statCount, downloads: statCount })),
+});
+export type DriveStatsResponse = z.output<typeof driveStatsResponseSchema>;
 
 // --- GET /drive/search -------------------------------------------------------------------------
 

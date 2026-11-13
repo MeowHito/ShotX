@@ -79,6 +79,8 @@ import { type BuildItemMenu, ItemMenuProvider, ItemMenus, type MenuEntry } from 
 import { MoveDialog } from './move-dialog';
 import { NameDialog } from './name-dialog';
 import { QrDialog, type QrTarget } from './qr-dialog';
+import { RenameFilesDialog } from './rename-files-dialog';
+import { DriveStatsCard } from './drive-stats-card';
 import { folderHref, SHARES_HREF, shareHref } from './paths';
 
 type Notice = {
@@ -142,7 +144,8 @@ export function DriveBrowser({
   const [sharing, setSharing] = useState<ShareTargetRef | null>(null);
   const [selected, setSelected] = useState<ReadonlyMap<string, DriveItem>>(new Map());
   const [anchorId, setAnchorId] = useState<string | null>(null);
-  const [renaming, setRenaming] = useState<DriveItem | null>(null);
+  const [renaming, setRenaming] = useState<DriveFolder | null>(null);
+  const [renamingFiles, setRenamingFiles] = useState<DriveFile[] | null>(null);
   const [moving, setMoving] = useState<DriveItem[] | null>(null);
   const [details, setDetails] = useState<DriveItem | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
@@ -190,6 +193,13 @@ export function DriveBrowser({
     setSelected(new Map());
     setAnchorId(null);
   }, []);
+
+  /** ADR 0023: files get the rename dialog with numbering; folders keep the name dialog. */
+  function startRename(targets: readonly DriveItem[]) {
+    const single = targets.length === 1 ? targets[0] : undefined;
+    if (single?.kind === 'folder') setRenaming(single);
+    else if (targets.every((i) => i.kind === 'file')) setRenamingFiles(targets as DriveFile[]);
+  }
 
   /** Every trash path (menu, shortcut, selection bar) comes here, so each one can be undone. */
   async function trash(targets: DriveItem[]) {
@@ -425,14 +435,14 @@ export function DriveBrowser({
         onSelect: () => undefined,
       });
     }
-    if (single !== undefined) {
+    if (single !== undefined || targets.every((i) => i.kind === 'file')) {
       entries.push({
         type: 'item',
         id: 'rename',
         label: t('itemMenu.rename'),
         icon: PencilIcon,
         hint: shortcutHint('rename', apple),
-        onSelect: () => setRenaming(single),
+        onSelect: () => startRename(targets),
       });
     }
     if (targets.every((i) => i.kind === 'file')) {
@@ -583,9 +593,12 @@ export function DriveBrowser({
     } else if (matches('clearSelection', event, apple) && selection.length > 0) {
       event.preventDefault();
       clearSelection();
-    } else if (matches('rename', event, apple) && single !== undefined) {
+    } else if (
+      matches('rename', event, apple) &&
+      (single !== undefined || (targets.length > 1 && targets.every((i) => i.kind === 'file')))
+    ) {
       event.preventDefault();
-      setRenaming(single);
+      startRename(targets);
     } else if (matches('trash', event, apple) && targets.length > 0) {
       event.preventDefault();
       void trash(targets);
@@ -743,6 +756,9 @@ export function DriveBrowser({
           <Alert variant="warning">{t(`usage.blocked.${uploadsBlocked}`)}</Alert>
         ) : null}
 
+        {/* ADR 0023: the photographer's numbers on the top level of Events (studio.drive). */}
+        {folderId === null ? <DriveStatsCard /> : null}
+
         {notice !== null ? (
           <Alert
             variant={notice.kind === 'error' ? 'destructive' : 'default'}
@@ -795,12 +811,12 @@ export function DriveBrowser({
               {t('drive.selectedCount', { count: selection.length })}
             </span>
             <div className="ml-auto flex gap-1 sm:gap-2">
-              {selection.length === 1 ? (
+              {selection.length === 1 || selection.every((i) => i.kind === 'file') ? (
                 <Button
                   size="sm"
                   variant="outline"
                   className="h-11 sm:h-9"
-                  onClick={() => setRenaming(selection[0] ?? null)}
+                  onClick={() => startRename(selection)}
                 >
                   <PencilIcon className="sm:hidden" aria-hidden />
                   <span className="max-sm:sr-only">{t('drive.rename')}</span>
@@ -928,11 +944,17 @@ export function DriveBrowser({
           label={t('rename.nameLabel')}
           submitLabel={t('rename.submit')}
           initialName={renaming?.name}
-          fileMime={renaming?.kind === 'file' ? renaming.mime : undefined}
           onSubmit={async (name) => {
             if (renaming === null) return;
             await renameItem.mutateAsync({ item: itemRef(renaming), name });
             clearSelection();
+          }}
+        />
+        <RenameFilesDialog
+          files={renamingFiles}
+          onOpenChange={(open) => !open && setRenamingFiles(null)}
+          onDone={(result) => {
+            if (result.failures.length === 0) clearSelection();
           }}
         />
         <ShareDialog

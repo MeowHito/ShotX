@@ -7,6 +7,10 @@ import type { WatermarkPosition, WatermarkSettings } from './store';
  * orders the share page), with the orientation reset to 1 because the pixels are drawn upright
  * and the embedded EXIF thumbnail dropped (it would be an unwatermarked copy). Videos and other
  * types go up unchanged.
+ *
+ * ADR 0022: the logo is trimmed to its visible pixels (a transparent border in the PNG used to
+ * make it look smaller than the size set), and the frame mode stretches the landscape or
+ * portrait frame over the whole photo, picked by the photo's own orientation.
  */
 
 /** Types the browser can decode and encode again. */
@@ -139,6 +143,72 @@ export function withExifSegment(jpeg: Uint8Array, segment: Uint8Array): Uint8Arr
   return result;
 }
 
+// --- Logo trim and frames (ADR 0022) ---------------------------------------------------------
+
+/** Alpha at or below this counts as empty when trimming a logo's border. */
+const TRIM_ALPHA = 8;
+
+/**
+ * The smallest box holding every visible pixel of RGBA `data` (alpha > TRIM_ALPHA), or null
+ * when nothing is visible.
+ */
+export function alphaBounds(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+): WatermarkBox | null {
+  let top = height;
+  let bottom = -1;
+  let left = width;
+  let right = -1;
+  for (let y = 0; y < height; y++) {
+    const row = y * width * 4;
+    for (let x = 0; x < width; x++) {
+      if ((data[row + x * 4 + 3] ?? 0) > TRIM_ALPHA) {
+        if (y < top) top = y;
+        if (y > bottom) bottom = y;
+        if (x < left) left = x;
+        if (x > right) right = x;
+      }
+    }
+  }
+  if (bottom < 0) return null;
+  return { x: left, y: top, width: right - left + 1, height: bottom - top + 1 };
+}
+
+/** The logo without its transparent border (unchanged when it has none or can't be read). */
+export async function trimmedMark(image: Blob): Promise<ImageBitmap> {
+  const mark = await createImageBitmap(image);
+  try {
+    const canvas = new OffscreenCanvas(mark.width, mark.height);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (ctx === null) return mark;
+    ctx.drawImage(mark, 0, 0);
+    const box = alphaBounds(
+      ctx.getImageData(0, 0, mark.width, mark.height).data,
+      mark.width,
+      mark.height,
+    );
+    if (box === null || (box.width === mark.width && box.height === mark.height)) return mark;
+    const trimmed = await createImageBitmap(mark, box.x, box.y, box.width, box.height);
+    mark.close();
+    return trimmed;
+  } catch {
+    return mark;
+  }
+}
+
+/**
+ * Which frame a photo gets: landscape for photos at least as wide as tall, portrait otherwise.
+ * A photo whose orientation has no frame gets none.
+ */
+export function frameFor<T>(
+  photo: { width: number; height: number },
+  frames: { landscape: T | null; portrait: T | null },
+): T | null {
+  return photo.width >= photo.height ? frames.landscape : frames.portrait;
+}
+
 // --- Composition -------------------------------------------------------------------------------
 
 export interface WatermarkerOptions {
@@ -147,25 +217,43 @@ export interface WatermarkerOptions {
 }
 
 /**
- * The folder sync's prepare step for these settings: decodes the mark once, then draws each
- * photo upright with the mark on top (globalAlpha = opacity) and encodes it in its own type.
+ * The folder sync's prepare step for these settings: decodes the logo (trimmed) or the frames
+ * once, then draws each photo upright with the mark on top and encodes it in its own type. In
+ * logo mode the logo goes where the settings place it (globalAlpha = opacity); in frame mode the
+ * frame for the photo's orientation covers the whole photo, and a photo with no frame for its
+ * orientation is uploaded as it is.
  */
 export async function createWatermarker(
   settings: WatermarkSettings,
   options: WatermarkerOptions,
 ): Promise<SyncPrepare> {
-  const mark = await createImageBitmap(settings.image);
+  const frameMode = settings.mode === 'frame';
+  const decode = (blob: Blob | null) => (blob === null ? null : createImageBitmap(blob));
+  const [logo, landscape, portrait] = await Promise.all([
+    !frameMode && settings.image !== null ? trimmedMark(settings.image) : null,
+    frameMode ? decode(settings.frameLandscape) : null,
+    frameMode ? decode(settings.framePortrait) : null,
+  ]);
+  if (frameMode ? landscape === null && portrait === null : logo === null) {
+    throw new Error('watermark has no image');
+  }
   return async (file) => {
     if (!WATERMARKABLE.has(file.type)) return file;
     const photo = await createImageBitmap(file, { imageOrientation: 'from-image' });
     try {
+      const frame = frameMode ? frameFor(photo, { landscape, portrait }) : null;
+      if (frameMode && frame === null) return file;
       const canvas = new OffscreenCanvas(photo.width, photo.height);
       const ctx = canvas.getContext('2d');
       if (ctx === null) throw new Error('no 2d canvas');
       ctx.drawImage(photo, 0, 0);
-      const box = watermarkBox(photo, mark, settings);
-      ctx.globalAlpha = Math.min(1, Math.max(0, settings.opacityPercent / 100));
-      ctx.drawImage(mark, box.x, box.y, box.width, box.height);
+      if (frame !== null) {
+        ctx.drawImage(frame, 0, 0, photo.width, photo.height);
+      } else if (logo !== null) {
+        const box = watermarkBox(photo, logo, settings);
+        ctx.globalAlpha = Math.min(1, Math.max(0, settings.opacityPercent / 100));
+        ctx.drawImage(logo, box.x, box.y, box.width, box.height);
+      }
       const encoded = await canvas.convertToBlob({ type: file.type, quality: options.quality });
       if (encoded.type !== file.type) throw new Error(`browser can't encode ${file.type}`);
       let parts: BlobPart[] = [encoded];

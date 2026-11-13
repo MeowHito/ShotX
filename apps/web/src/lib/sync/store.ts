@@ -45,19 +45,48 @@ export interface LedgerEntry {
 
 /**
  * ADR 0021: the photographer's watermark for synced photos, kept in this browser like the job
- * (and kept when the sync is stopped or set up again).
+ * (and kept when the sync is stopped or set up again). ADR 0022 adds the frame mode: a full-photo
+ * overlay, one image for landscape photos and one for portrait photos.
  */
 export interface WatermarkSettings {
   enabled: boolean;
-  /** The mark: PNG (with transparency), JPEG or WebP. */
-  image: Blob;
+  /** `logo`: `image` placed by position/size; `frame`: the frame for the photo's orientation. */
+  mode: WatermarkMode;
+  /** The logo: PNG (with transparency), JPEG or WebP. */
+  image: Blob | null;
+  /** ADR 0022: frames stretched over the whole photo (PNG with a transparent middle). */
+  frameLandscape: Blob | null;
+  framePortrait: Blob | null;
   position: WatermarkPosition;
-  /** Width of the mark as a percentage of the photo's shorter side. */
+  /** Width of the logo as a percentage of the photo's shorter side. */
   sizePercent: number;
-  /** 0–100. */
+  /** 0–100 (logo only; a frame is drawn as designed). */
   opacityPercent: number;
   /** Gap to the photo's edges, as a percentage of its shorter side. */
   marginPercent: number;
+}
+
+export const WATERMARK_MODES = ['logo', 'frame'] as const;
+export type WatermarkMode = (typeof WATERMARK_MODES)[number];
+
+/** Settings as saved by any version (ADR 0021 saved a logo only), in today's shape. */
+export function normalizeWatermark(value: unknown): WatermarkSettings | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const v = value as Partial<WatermarkSettings>;
+  const blob = (b: unknown) => (b instanceof Blob ? b : null);
+  return {
+    enabled: v.enabled === true,
+    mode: v.mode === 'frame' ? 'frame' : 'logo',
+    image: blob(v.image),
+    frameLandscape: blob(v.frameLandscape),
+    framePortrait: blob(v.framePortrait),
+    position: WATERMARK_POSITIONS.includes(v.position as WatermarkPosition)
+      ? (v.position as WatermarkPosition)
+      : 'bottom-right',
+    sizePercent: typeof v.sizePercent === 'number' ? v.sizePercent : 20,
+    opacityPercent: typeof v.opacityPercent === 'number' ? v.opacityPercent : 80,
+    marginPercent: typeof v.marginPercent === 'number' ? v.marginPercent : 3,
+  };
 }
 
 export const WATERMARK_POSITIONS = [
@@ -171,7 +200,7 @@ export function indexedDbSyncStore(factory: IDBFactory = indexedDB): SyncStore {
     async loadWatermark() {
       const tx = (await db()).transaction(JOBS, 'readonly');
       const value: unknown = await request(tx.objectStore(JOBS).get(WATERMARK));
-      return (value as WatermarkSettings | undefined) ?? null;
+      return normalizeWatermark(value);
     },
     async saveWatermark(settings) {
       const tx = (await db()).transaction(JOBS, 'readwrite');

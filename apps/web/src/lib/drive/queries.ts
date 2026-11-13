@@ -27,6 +27,7 @@ export const driveKeys = {
   trash: ['drive', 'trash'] as const,
   usage: ['drive', 'usage'] as const,
   recent: ['drive', 'recent'] as const,
+  stats: (days: number) => ['drive', 'stats', days] as const,
   search: (query: SearchDriveQuery | null) => ['drive', 'search', query] as const,
   file: (id: string) => ['drive', 'file', id] as const,
   folderSummary: (id: string) => ['drive', 'folder-summary', id] as const,
@@ -129,6 +130,50 @@ export function useRenameItem() {
         ? api.call(DRIVE_ROUTES.updateFolder, { params: { id: item.id }, body: { name } })
         : api.call(DRIVE_ROUTES.updateFile, { params: { id: item.id }, body: { name } }),
     onSuccess: invalidate,
+  });
+}
+
+export interface RenameFilesResult {
+  renamed: number;
+  failures: { id: string; error: unknown }[];
+}
+
+/**
+ * ADR 0023: renames files one PATCH each, in the order of `steps` (renameSteps: temporary names
+ * first when the batch swaps names). A file whose step fails is reported and skipped after that.
+ */
+export function useRenameFiles() {
+  const api = useApiClient();
+  const invalidate = useInvalidateDrive();
+  return useMutation({
+    mutationFn: async ({
+      steps,
+      onProgress,
+    }: {
+      steps: readonly { id: string; name: string; final: boolean }[];
+      onProgress?: (done: number, total: number) => void;
+    }): Promise<RenameFilesResult> => {
+      const failed = new Map<string, unknown>();
+      const total = steps.filter((s) => s.final).length;
+      let renamed = 0;
+      for (const step of steps) {
+        if (failed.has(step.id)) continue;
+        try {
+          await api.call(DRIVE_ROUTES.updateFile, {
+            params: { id: step.id },
+            body: { name: step.name },
+          });
+          if (step.final) {
+            renamed += 1;
+            onProgress?.(renamed, total);
+          }
+        } catch (error) {
+          failed.set(step.id, error);
+        }
+      }
+      return { renamed, failures: [...failed].map(([id, error]) => ({ id, error })) };
+    },
+    onSettled: invalidate,
   });
 }
 
@@ -300,6 +345,16 @@ export function useRecent(options: { processingPollMs?: number } = {}) {
   });
   const items: DriveFile[] = query.data?.pages.flatMap((p) => p.items) ?? [];
   return { ...query, items };
+}
+
+/** ADR 0023: GET /drive/stats, photos uploaded and downloaded per day. */
+export function useDriveStats(days: number) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: driveKeys.stats(days),
+    queryFn: ({ signal }) => api.call(DRIVE_ROUTES.stats, { query: { days }, signal }),
+    staleTime: 60_000,
+  });
 }
 
 /** GET /drive/search, page by page; disabled while `query` is null (no criterion yet). */

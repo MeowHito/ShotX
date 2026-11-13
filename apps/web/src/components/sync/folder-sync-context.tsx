@@ -166,7 +166,13 @@ export function FolderSyncProvider({
   const quality = config.watermarkQuality;
   useEffect(() => {
     if (watermark === undefined) return;
-    if (watermark === null || !watermark.enabled) {
+    // ADR 0022: settings without the image their mode needs (a frame mode with no frame) add nothing.
+    const usable =
+      watermark !== null &&
+      (watermark.mode === 'frame'
+        ? watermark.frameLandscape !== null || watermark.framePortrait !== null
+        : watermark.image !== null);
+    if (watermark === null || !watermark.enabled || !usable) {
       engine.setPrepare(null);
       return;
     }

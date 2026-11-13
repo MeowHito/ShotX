@@ -156,4 +156,44 @@ describe('FolderSyncPage', () => {
     expect(await screen.findByText(w.removed)).toBeInTheDocument();
     expect(await store.loadWatermark()).toBeNull();
   });
+
+  it('ADR 0022: the frame mode saves a landscape and a portrait frame', async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    const store = memorySyncStore();
+    const prepared: WatermarkSettings[] = [];
+    const makePrepare = (settings: WatermarkSettings) => {
+      prepared.push(settings);
+      return Promise.resolve<SyncPrepare>((file) => Promise.resolve(file));
+    };
+    renderPage(true, { store, makePrepare });
+    const w = t.watermark;
+    await screen.findByRole('region', { name: w.title });
+
+    await user.click(screen.getByRole('radio', { name: w.modes.frame }));
+    expect(screen.getByRole('radio', { name: w.modes.frame })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    // No frame yet: nothing to save.
+    expect(screen.queryByRole('button', { name: w.save })).not.toBeInTheDocument();
+
+    await user.upload(
+      screen.getByLabelText(w.frames.framePortrait, { selector: 'input' }),
+      new File(['png'], 'portrait.png', { type: 'image/png' }),
+    );
+    // The logo controls don't apply to a frame.
+    expect(screen.queryByLabelText(w.size)).not.toBeInTheDocument();
+    await user.upload(
+      screen.getByLabelText(w.frames.frameLandscape, { selector: 'input' }),
+      new File(['png'], 'landscape.png', { type: 'image/png' }),
+    );
+    await user.click(screen.getByRole('button', { name: w.save }));
+    expect(await screen.findByText(w.saved)).toBeInTheDocument();
+
+    const saved = await store.loadWatermark();
+    expect(saved).toMatchObject({ enabled: true, mode: 'frame', image: null });
+    expect(saved?.frameLandscape).toBeInstanceOf(Blob);
+    expect(saved?.framePortrait).toBeInstanceOf(Blob);
+    await waitFor(() => expect(prepared.at(-1)).toMatchObject({ mode: 'frame' }));
+  });
 });

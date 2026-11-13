@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { jpegExifSegment, uprightExif, watermarkBox, withExifSegment } from './watermark';
+import { normalizeWatermark } from './store';
+import {
+  alphaBounds,
+  frameFor,
+  jpegExifSegment,
+  uprightExif,
+  watermarkBox,
+  withExifSegment,
+} from './watermark';
 
 const settings = { position: 'bottom-right', sizePercent: 20, marginPercent: 3 } as const;
 
@@ -99,5 +107,62 @@ describe('JPEG EXIF (ADR 0021)', () => {
   it('finds no EXIF in a JPEG without one, or in something else', () => {
     expect(jpegExifSegment(new Uint8Array([0xff, 0xd8, 0xff, 0xda, 0, 2, 0xff, 0xd9]))).toBeNull();
     expect(jpegExifSegment(new Uint8Array([0x89, 0x50, 0x4e, 0x47]))).toBeNull();
+  });
+});
+
+describe('logo trim and frames (ADR 0022)', () => {
+  /** RGBA pixels, transparent except the listed [x, y]. */
+  function pixels(width: number, height: number, opaque: [number, number][]): Uint8ClampedArray {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (const [x, y] of opaque) data[(y * width + x) * 4 + 3] = 255;
+    return data;
+  }
+
+  it('finds the visible part of a logo with a transparent border', () => {
+    expect(alphaBounds(pixels(10, 8, [[2, 3], [6, 5]]), 10, 8)).toEqual({
+      x: 2,
+      y: 3,
+      width: 5,
+      height: 3,
+    });
+    // Nothing visible: nothing to trim to.
+    expect(alphaBounds(pixels(4, 4, []), 4, 4)).toBeNull();
+    // Nearly transparent pixels (anti-aliasing haze) don't count.
+    const haze = pixels(4, 4, [[1, 1]]);
+    haze[3] = 5;
+    expect(alphaBounds(haze, 4, 4)).toEqual({ x: 1, y: 1, width: 1, height: 1 });
+  });
+
+  it('picks the frame by the photo orientation, none when that one is missing', () => {
+    const frames = { landscape: 'L', portrait: 'P' };
+    expect(frameFor({ width: 6000, height: 4000 }, frames)).toBe('L');
+    expect(frameFor({ width: 4000, height: 6000 }, frames)).toBe('P');
+    expect(frameFor({ width: 3000, height: 3000 }, frames)).toBe('L');
+    expect(frameFor({ width: 4000, height: 6000 }, { landscape: 'L', portrait: null })).toBeNull();
+  });
+
+  it('reads settings saved before frames existed as the logo mode', () => {
+    const image = new Blob(['png'], { type: 'image/png' });
+    expect(
+      normalizeWatermark({
+        enabled: true,
+        image,
+        position: 'top-left',
+        sizePercent: 30,
+        opacityPercent: 70,
+        marginPercent: 2,
+      }),
+    ).toEqual({
+      enabled: true,
+      mode: 'logo',
+      image,
+      frameLandscape: null,
+      framePortrait: null,
+      position: 'top-left',
+      sizePercent: 30,
+      opacityPercent: 70,
+      marginPercent: 2,
+    });
+    expect(normalizeWatermark(undefined)).toBeNull();
   });
 });

@@ -2,11 +2,10 @@
 
 import { cn } from '@shotx/ui';
 import {
+  CalendarDaysIcon,
   ClockIcon,
   CreditCardIcon,
   FolderSyncIcon,
-  HardDriveIcon,
-  LinkIcon,
   type LucideIcon,
   PaletteIcon,
   Trash2Icon,
@@ -24,12 +23,11 @@ import {
 import { useOptionalFolderSync } from '@/components/sync/folder-sync-context';
 import { useStudio } from './studio-context';
 
-export type StudioNavId = 'drive' | 'recent' | 'shares' | 'designs' | 'sync' | 'trash' | 'billing';
+export type StudioNavId = 'drive' | 'recent' | 'designs' | 'sync' | 'trash' | 'billing';
 
 const NAV: { id: StudioNavId; href: string; icon: LucideIcon }[] = [
-  { id: 'drive', href: '/studio', icon: HardDriveIcon },
+  { id: 'drive', href: '/studio', icon: CalendarDaysIcon },
   { id: 'recent', href: RECENT_HREF, icon: ClockIcon },
-  { id: 'shares', href: SHARES_HREF, icon: LinkIcon },
   { id: 'designs', href: DESIGNS_HREF, icon: PaletteIcon },
   { id: 'sync', href: SYNC_HREF, icon: FolderSyncIcon },
   { id: 'trash', href: TRASH_HREF, icon: Trash2Icon },
@@ -39,9 +37,9 @@ const NAV: { id: StudioNavId; href: string; icon: LucideIcon }[] = [
 /** Which aside item a studio path belongs to (search belongs to none). */
 export function activeNav(pathname: string): StudioNavId | null {
   const under = (base: string) => pathname === base || pathname.startsWith(`${base}/`);
-  if (pathname === '/studio' || under('/studio/folders')) return 'drive';
+  // ADR 0023: links are managed from the events, so the links page belongs to them.
+  if (pathname === '/studio' || under('/studio/folders') || under(SHARES_HREF)) return 'drive';
   if (under(RECENT_HREF)) return 'recent';
-  if (under(SHARES_HREF)) return 'shares';
   if (under(DESIGNS_HREF)) return 'designs';
   if (under(SYNC_HREF)) return 'sync';
   if (under(TRASH_HREF)) return 'trash';

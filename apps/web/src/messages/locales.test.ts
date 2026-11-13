@@ -104,8 +104,8 @@ describe('every page in th, en and zh (ADR 0011)', () => {
         th.consent.policies.face_search['2026-10-29'],
       );
     }
-    expect(MESSAGES.en.studio.drive).toBe('My Drive');
-    expect(MESSAGES.zh.studio.drive).toBe('我的云盘');
+    expect(MESSAGES.en.studio.drive).toBe('Events');
+    expect(MESSAGES.zh.studio.drive).toBe('活动');
     expect(MESSAGES.en.shares.copyDeletionLink).toBe('Copy face deletion link');
   });
 

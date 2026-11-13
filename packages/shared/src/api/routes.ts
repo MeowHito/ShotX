@@ -87,6 +87,8 @@ import {
   downloadFolderResponseSchema,
   folderSummaryResponseSchema,
   getFileResponseSchema,
+  driveStatsQuerySchema,
+  driveStatsResponseSchema,
   listRecentQuerySchema,
   listRecentResponseSchema,
   ownerZipJobResponseSchema,
@@ -453,6 +455,16 @@ export const DRIVE_ROUTES = {
     auth: 'photographer',
     query: listRecentQuerySchema,
     response: listRecentResponseSchema,
+    errors: signedIn(),
+  },
+  /** ADR 0023: photos uploaded and downloaded, for the Events page chart. */
+  stats: {
+    method: 'GET',
+    path: '/drive/stats',
+    status: 200,
+    auth: 'photographer',
+    query: driveStatsQuerySchema,
+    response: driveStatsResponseSchema,
     errors: signedIn(),
   },
   search: {

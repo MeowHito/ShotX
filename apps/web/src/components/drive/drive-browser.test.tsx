@@ -116,7 +116,22 @@ describe('DriveBrowser', () => {
     });
   });
 
-  it('validates names on the client before calling the API', async () => {
+  it('ADR 0023: shows photos uploaded and downloaded at the top level only', async () => {
+    const user = userEvent.setup();
+    const fake = new FakeApi({ downloads: 42 });
+    fake.addFile('a.jpg');
+    fake.addFile('b.jpg');
+    renderDrive(fake);
+    const stats = await screen.findByRole('region', { name: th.driveStats.title });
+    expect(await within(stats).findByText('42')).toBeInTheDocument();
+    expect(within(stats).getByText(th.driveStats.photos.total)).toBeInTheDocument();
+    // The daily numbers are in a table for screen readers: 30 days by default.
+    expect(within(stats).getAllByRole('row')).toHaveLength(31);
+    await user.click(within(stats).getByRole('radio', { name: '7 วัน' }));
+    await waitFor(() => expect(within(stats).getAllByRole('row')).toHaveLength(8));
+  });
+
+  it('ADR 0023: renames a file from its name without the extension, validated on the client', async () => {
     const user = userEvent.setup();
     const fake = new FakeApi();
     fake.addFile('IMG_0001.jpg');
@@ -127,25 +142,22 @@ describe('DriveBrowser', () => {
       }),
     );
     await user.click(await screen.findByRole('menuitem', { name: th.drive.rename }));
-    const dialog = await screen.findByRole('dialog', { name: th.rename.title });
-    const input = within(dialog).getByLabelText(th.rename.nameLabel);
-    expect(input).toHaveValue('IMG_0001.jpg');
+    const dialog = await screen.findByRole('dialog', { name: th.renameFiles.titleOne });
+    const input = within(dialog).getByLabelText(th.renameFiles.label);
+    // The extension is kept for the photographer, so it can't change the file's type.
+    expect(input).toHaveValue('IMG_0001');
 
     await user.clear(input);
-    await user.type(input, 'a/b.jpg');
-    await user.click(within(dialog).getByRole('button', { name: th.rename.submit }));
-    expect(within(dialog).getByRole('alert')).toHaveTextContent(th.validation.invalidName);
-
-    await user.clear(input);
-    await user.type(input, 'IMG_0001.png');
-    await user.click(within(dialog).getByRole('button', { name: th.rename.submit }));
-    expect(within(dialog).getByRole('alert')).toHaveTextContent(th.validation.extensionChanged);
+    await user.type(input, 'a/b');
+    await user.click(within(dialog).getByRole('button', { name: th.renameFiles.submit }));
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(th.renameFiles.invalid);
     expect(fake.callsTo(DRIVE_ROUTES.updateFile)).toHaveLength(0);
 
     await user.clear(input);
-    await user.type(input, 'ปก.jpeg');
-    await user.click(within(dialog).getByRole('button', { name: th.rename.submit }));
-    expect(await screen.findByText('ปก.jpeg')).toBeInTheDocument();
+    await user.type(input, 'ปก');
+    expect(within(dialog).getByText('ปก.jpg')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: th.renameFiles.submit }));
+    expect(await screen.findByTitle('ปก.jpg')).toBeInTheDocument();
   });
 
   it('multi-selects items and moves them to the trash in one request', async () => {

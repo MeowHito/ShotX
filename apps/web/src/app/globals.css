@@ -10,7 +10,8 @@
  * close (owner, 2026-11-13). photoswipe/style.css comes with the share page's chunk, after this
  * file, so each rule is one class more specific than PhotoSwipe's own: the arrows beat
  * `.pswp--touch .pswp__button--arrow { visibility: hidden }`, the download button beats
- * `.pswp__button` (50x60, no padding, hidden overflow).
+ * `.pswp__button` (50x60, no padding, hidden overflow). ADR 0022: on phones the download button
+ * moves to the bottom centre.
  */
 .pswp.pswp--touch .pswp__button--arrow {
   visibility: visible;
@@ -37,4 +38,74 @@
 .pswp .pswp__button.pswp__download:focus-visible {
   outline: 2px solid white;
   outline-offset: 2px;
+}
+/*
+ * Phones (owner, 2026-11-13): the same button sits at the bottom centre, within thumb reach.
+ * `fixed` keeps it on the visible viewport (above the browser's toolbar and the home
+ * indicator); the top bar has no transform, so it isn't the containing block.
+ */
+@media (max-width: 767.98px) {
+  .pswp .pswp__button.pswp__download {
+    position: fixed;
+    left: 50%;
+    bottom: max(1.5rem, calc(env(safe-area-inset-bottom) + 0.75rem));
+    transform: translateX(-50%);
+    height: 3rem;
+    margin: 0;
+    padding: 0 1.75rem;
+  }
+}
+
+/* ADR 0023: the rename dialog's mascot (a bouncing pencil, twinkling sparkles, a happy check). */
+@theme {
+  --animate-snap-bob: snap-bob 1.6s ease-in-out infinite;
+  --animate-snap-twinkle: snap-twinkle 1.4s ease-in-out infinite;
+  --animate-snap-pop: snap-pop 520ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  --animate-snap-wiggle: snap-wiggle 420ms ease-in-out;
+
+  @keyframes snap-bob {
+    0%,
+    100% {
+      transform: translateY(0) rotate(-8deg);
+    }
+    50% {
+      transform: translateY(-6px) rotate(8deg);
+    }
+  }
+  @keyframes snap-twinkle {
+    0%,
+    100% {
+      opacity: 0.25;
+      transform: scale(0.6) rotate(0deg);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.1) rotate(20deg);
+    }
+  }
+  @keyframes snap-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.4);
+    }
+    70% {
+      opacity: 1;
+      transform: scale(1.12);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  @keyframes snap-wiggle {
+    0%,
+    100% {
+      transform: translateX(0);
+    }
+    25% {
+      transform: translateX(-6px);
+    }
+    75% {
+      transform: translateX(6px);
+    }
+  }
 }

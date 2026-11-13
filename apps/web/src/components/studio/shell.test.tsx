@@ -54,9 +54,9 @@ describe('aside', () => {
     );
     // BILLING_MODE=offline (the default, ADR 0010): no plans and payment.
     expect(links.map((l) => l.textContent)).toEqual([
-      'ไดรฟ์ของฉัน',
+      // ADR 0023: "อีเวนต์" (was ไดรฟ์ของฉัน); the links page left the menu.
+      'อีเวนต์',
       'ล่าสุด',
-      'ลิงก์ที่แชร์',
       // ADR 0013: the share page designer.
       'ออกแบบหน้าแชร์',
       // ADR 0014: folder sync.
@@ -65,7 +65,7 @@ describe('aside', () => {
     ]);
     expect(links[0]).toHaveAttribute('aria-current', 'page');
     expect(links.filter((l) => l.hasAttribute('aria-current'))).toHaveLength(1);
-    expect(activeNav('/studio/shares/123')).toBe('shares');
+    expect(activeNav('/studio/shares/123')).toBe('drive');
     expect(activeNav('/studio/billing/return')).toBe('billing');
     expect(activeNav('/studio/recent')).toBe('recent');
     expect(activeNav('/studio/designs')).toBe('designs');
@@ -272,13 +272,62 @@ describe('recent and search pages', () => {
         .getAllByTitle(/\.jpg$/)
         .map((e) => e.textContent),
     ).toEqual(['new.jpg', 'old.jpg']);
-    expect(within(list).queryAllByRole('checkbox')).toHaveLength(0);
+    // Nothing selected: a tap opens the details.
     await user.click(
       within(list).getByRole('button', { name: th.drive.select.replace('{name}', 'new.jpg') }),
     );
     const panel = await screen.findByRole('dialog', { name: 'new.jpg' });
-    expect(await within(panel).findByText('ไดรฟ์ของฉัน › Event')).toBeInTheDocument();
+    expect(await within(panel).findByText('อีเวนต์ › Event')).toBeInTheDocument();
     expect(fake.callsTo(DRIVE_ROUTES.recent)[0]?.prefix).toBe('/bff');
+  });
+
+  it('ADR 0023: ล่าสุด selects all, renames them name(1), name(2)… newest first, and deletes', async () => {
+    const user = userEvent.setup();
+    const fake = new FakeApi();
+    const event = fake.addFolder('Event');
+    const old = fake.addFile('old.jpg', event.id);
+    const mid = fake.addFile('mid.png', event.id, { mime: 'image/png' });
+    const fresh = fake.addFile('new.jpg', event.id);
+    renderWithProviders(<RecentView />, { api: apiClientFor(fake.fetch) });
+    const list = await screen.findByRole('list', { name: th.recent.title });
+    expect(within(list).getAllByRole('checkbox')).toHaveLength(3);
+
+    await user.click(screen.getByRole('button', { name: th.recent.selectAll }));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      th.drive.selectedCount.replace('{count, number}', '3'),
+    );
+    await user.click(screen.getByRole('button', { name: th.drive.rename }));
+    const dialog = await screen.findByRole('dialog', {
+      name: th.renameFiles.titleMany.replace('{count, number}', '3'),
+    });
+    // An empty name shakes the field and says so.
+    await user.click(within(dialog).getByRole('button', { name: th.renameFiles.submit }));
+    expect(await within(dialog).findByText(th.renameFiles.empty)).toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText(th.renameFiles.label), 'A');
+    expect(within(dialog).getByText('A(1).jpg')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: th.renameFiles.submit }));
+    expect(
+      await screen.findByText(th.renameFiles.doneTitle.replace('{count, number}', '3')),
+    ).toBeInTheDocument();
+    // Newest first, each keeping its own extension.
+    expect([fresh, mid, old].map((f) => fake.files.get(f.id)?.name)).toEqual([
+      'A(1).jpg',
+      'A(2).png',
+      'A(3).jpg',
+    ]);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    // Select one and delete it (to the trash, with undo).
+    await user.click(
+      await within(list).findByRole('checkbox', {
+        name: th.drive.select.replace('{name}', 'A(3).jpg'),
+      }),
+    );
+    await user.click(screen.getByRole('button', { name: th.recent.delete }));
+    expect(
+      await screen.findByText(th.drive.trashed.replace('{count, number}', '1')),
+    ).toBeInTheDocument();
+    expect(fake.files.get(old.id)?.deletedAt).not.toBeNull();
   });
 
   it('search shows each result with its location, and asks for a criterion first', async () => {
@@ -304,9 +353,7 @@ describe('recent and search pages', () => {
       'href',
       `/studio/folders/${event.id}`,
     );
-    expect(
-      within(rows[1] as HTMLElement).getByText('ไดรฟ์ของฉัน › งานวิ่ง 2569'),
-    ).toBeInTheDocument();
+    expect(within(rows[1] as HTMLElement).getByText('อีเวนต์ › งานวิ่ง 2569')).toBeInTheDocument();
     expect(fake.calls.find((c) => c.path === '/drive/search')).toBeDefined();
     view.unmount();
 

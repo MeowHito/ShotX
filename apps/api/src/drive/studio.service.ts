@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
+  dailyStats,
   type DriveFile as DriveFileRow,
   driveNameKeySql,
   files,
@@ -16,6 +17,8 @@ import {
   downloadObject,
   type DriveCursor,
   driveNameKey,
+  DRIVE_STATS_DEFAULT_DAYS,
+  type DriveStatsResponse,
   driveSearchPattern,
   encodeDriveCursor,
   fileCopyMessageSchema,
@@ -45,6 +48,7 @@ import { type ApiConfig, apiSendsMediaJobs } from '../config';
 import { type Db, isUniqueViolation, rows, type Tx } from '../db/db';
 import { ApiError, notFound } from '../http/api-error';
 import { validationError } from '../http/zod';
+import { addDays, bangkokDate } from '../share/shares.service';
 import type { EventLog } from '../infra/events';
 import { SignedUrls } from '../media/signed-urls';
 import { type ZipJobRow, zipJobView } from '../public/downloads.service';
@@ -652,6 +656,62 @@ export class StudioService {
               id: last.id,
             })
           : null,
+    };
+  }
+
+  // --- GET /drive/stats (ADR 0023) ----------------------------------------------------------------
+
+  async stats(ownerId: string, query: { days?: number | undefined }): Promise<DriveStatsResponse> {
+    const length = query.days ?? DRIVE_STATS_DEFAULT_DAYS;
+    const to = bangkokDate(this.clock.now());
+    const from = addDays(to, -(length - 1));
+    const tz = sql.raw(`'Asia/Bangkok'`);
+    const day = sql`((${files.createdAt} AT TIME ZONE ${tz})::date)`;
+    const livePhotos = and(
+      eq(files.ownerId, ownerId),
+      isNull(files.deletedAt),
+      inArray(files.status, [...SHOWN_STATUSES]),
+      sql`${files.mime} LIKE 'image/%'`,
+    );
+    const [photoTotal, photoDays, downloadTotal, downloadDays] = await Promise.all([
+      this.db
+        .select({ n: sql<number>`count(*)`.mapWith(Number) })
+        .from(files)
+        .where(livePhotos),
+      this.db
+        .select({ date: sql<string>`${day}::text`, n: sql<number>`count(*)`.mapWith(Number) })
+        .from(files)
+        .where(
+          and(
+            livePhotos,
+            sql`${files.createdAt} >= (${from}::date::timestamp AT TIME ZONE ${tz})`,
+          ),
+        )
+        .groupBy(day),
+      this.db
+        .select({ n: sql<number>`coalesce(sum(${dailyStats.downloads}), 0)`.mapWith(Number) })
+        .from(dailyStats)
+        .where(eq(dailyStats.photographerId, ownerId)),
+      this.db
+        .select({ date: dailyStats.date, n: dailyStats.downloads })
+        .from(dailyStats)
+        .where(and(eq(dailyStats.photographerId, ownerId), gte(dailyStats.date, from))),
+    ]);
+    const photosOn = new Map(photoDays.map((r) => [r.date, r.n]));
+    const downloadsOn = new Map(downloadDays.map((r) => [r.date, r.n]));
+    const days = Array.from({ length }, (_, i) => {
+      const date = addDays(from, i);
+      return { date, photos: photosOn.get(date) ?? 0, downloads: downloadsOn.get(date) ?? 0 };
+    });
+    return {
+      from,
+      to,
+      totals: { photos: photoTotal[0]?.n ?? 0, downloads: downloadTotal[0]?.n ?? 0 },
+      period: {
+        photos: days.reduce((sum, d) => sum + d.photos, 0),
+        downloads: days.reduce((sum, d) => sum + d.downloads, 0),
+      },
+      days,
     };
   }
 

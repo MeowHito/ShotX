@@ -63,7 +63,8 @@ export function localizeLightbox(
  * swipe left/right (PhotoSwipe's own gestures), previous/next arrows that stay visible on touch
  * screens too (globals.css), and, when `onDownload` is given, a clear download button for the
  * current photo in the top bar, before zoom and close (owner, 2026-11-13: it used to sit at the
- * bottom, where PhotoSwipe's button styles pushed it under the browser's toolbar).
+ * bottom, where PhotoSwipe's button styles pushed it under the browser's toolbar). ADR 0022: on
+ * phones globals.css moves the same button to the bottom centre (fixed, above the safe area).
  */
 export function useLightbox(onDownload?: (item: ShareItem) => void) {
   const t = useTranslations('lightbox');

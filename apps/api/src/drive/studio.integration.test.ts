@@ -1,10 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { activityEvents, files, folders, storageUsage, zipJobEntries, zipJobs } from '@shotx/db';
+import {
+  activityEvents,
+  dailyStats,
+  files,
+  folders,
+  storageUsage,
+  zipJobEntries,
+  zipJobs,
+} from '@shotx/db';
 import {
   apiPath,
   copyFileResponseSchema,
   DRIVE_ROUTES as R,
   downloadFolderResponseSchema,
+  driveStatsResponseSchema,
   folderSummaryResponseSchema,
   getFileResponseSchema,
   IDEMPOTENCY_KEY_HEADER,
@@ -372,6 +381,48 @@ for (const backend of DATABASE_BACKENDS) {
         expect(
           listRecentResponseSchema.parse((await get(stranger, apiPath(R.recent))).body).items,
         ).toEqual([]);
+      });
+    });
+
+    describe('GET /drive/stats (ADR 0023)', () => {
+      it('counts live photos per Bangkok day and share downloads from the rollup, own only', async () => {
+        const me = await api.photographer();
+        const now = api.clock.now();
+        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(now);
+        const dayMs = 86_400_000;
+        const longAgo = new Date(now.getTime() - 100 * dayMs);
+        await file(me, 'a.jpg', { createdAt: now });
+        await file(me, 'b.jpg', { createdAt: now, status: 'processing' });
+        await file(me, 'old.jpg', { createdAt: longAgo });
+        await file(me, 'clip.mp4', { createdAt: now, mime: 'video/mp4' });
+        await file(me, 'gone.jpg', { createdAt: now, deletedAt: now });
+        await file(me, 'up.jpg', { createdAt: now, status: 'uploading' });
+        const other = await api.photographer();
+        await file(other, 'x.jpg', { createdAt: now });
+        const yesterday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(
+          new Date(now.getTime() - dayMs),
+        );
+        await api.db.insert(dailyStats).values([
+          { date: today, photographerId: me.id, downloads: 4 },
+          { date: yesterday, photographerId: me.id, downloads: 2 },
+          { date: '2020-01-01', photographerId: me.id, downloads: 10 },
+          { date: today, photographerId: other.id, downloads: 99 },
+        ]);
+
+        const res = await get(me, `${apiPath(R.stats)}?days=7`);
+        expect(res.status).toBe(200);
+        const stats = driveStatsResponseSchema.parse(res.body);
+        expect(stats.to).toBe(today);
+        expect(stats.days).toHaveLength(7);
+        expect(stats.days.at(-1)).toEqual({ date: today, photos: 2, downloads: 4 });
+        expect(stats.days.at(-2)).toMatchObject({ date: yesterday, downloads: 2 });
+        expect(stats.period).toEqual({ photos: 2, downloads: 6 });
+        expect(stats.totals).toEqual({ photos: 3, downloads: 16 });
+
+        // Default 30 days; other lengths are refused.
+        const month = driveStatsResponseSchema.parse((await get(me, apiPath(R.stats))).body);
+        expect(month.days).toHaveLength(30);
+        expect((await get(me, `${apiPath(R.stats)}?days=8`)).status).toBe(400);
       });
     });
 

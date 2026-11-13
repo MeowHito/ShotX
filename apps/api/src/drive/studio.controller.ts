@@ -81,6 +81,15 @@ export class StudioController {
     return respond(R.recent.response, await this.studio.recent(me.id, query));
   }
 
+  @Get(R.stats.path)
+  @HttpCode(R.stats.status)
+  async stats(
+    @CurrentPhotographer() me: Photographer,
+    @Query(new ZodPipe(R.stats.query, 'query')) query: Out<typeof R.stats.query>,
+  ) {
+    return respond(R.stats.response, await this.studio.stats(me.id, query));
+  }
+
   @Get(R.search.path)
   @HttpCode(R.search.status)
   async search(

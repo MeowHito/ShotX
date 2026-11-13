@@ -236,6 +236,7 @@ describe('route table', () => {
       'POST /drive/folders/:id/download',
       'GET /drive/zip-jobs/:id',
       'GET /drive/recent',
+      'GET /drive/stats',
       'GET /drive/search',
       'GET /drive/files/:id',
       'GET /drive/folders/:id/summary',
