@@ -96,6 +96,7 @@ export const zh: TranslatedMessages = {
       storage: '已用空间',
       lastSignIn: '最近登录',
       created: '创建时间',
+      photos: '照片数',
       actions: '操作',
     },
     never: '从未',

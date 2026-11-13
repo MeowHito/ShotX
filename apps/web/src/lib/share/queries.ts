@@ -141,16 +141,6 @@ export function useGiveConsent(token: string, purpose: ConsentPurpose, locale: S
   });
 }
 
-/** Withdraw consent: always allowed; the server also deletes this viewer's results. */
-export function useWithdrawConsent(token: string) {
-  const { api } = useShareApi();
-  const invalidate = useInvalidateShare(token);
-  return useMutation({
-    mutationFn: () => api.call(PUBLIC_SHARE_ROUTES.withdrawConsent, { params: { token } }),
-    onSuccess: invalidate,
-  });
-}
-
 /** The multipart body of face search and face deletion: one `selfie` part per photo. */
 export function selfieForm(selfies: readonly Blob[]): FormData {
   const form = new FormData();
@@ -198,4 +188,3 @@ export function useFaceDeletion(token: string) {
       }),
   });
 }
-

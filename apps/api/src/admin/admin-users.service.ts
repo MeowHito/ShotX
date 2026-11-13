@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { adminCredentials, storageUsage, userPasswordCredentials, users } from '@shotx/db';
+import { adminCredentials, files, storageUsage, userPasswordCredentials, users } from '@shotx/db';
 import {
   type AccountRole,
   type AccountStatus,
@@ -52,6 +52,14 @@ const userColumns = {
   photographerMustChange: userPasswordCredentials.mustChangePassword,
   photographerLockedUntil: userPasswordCredentials.lockedUntil,
   usedBytes: storageUsage.usedBytes,
+  // adminUserSchema.photoCount; files_trash_idx (owner_id, deleted_at, id) serves the count.
+  photoCount: sql<number>`(
+    select count(*)::int from ${files}
+    where ${files.ownerId} = ${users.id}
+      and ${files.deletedAt} is null
+      and ${files.status} in ('processing', 'ready')
+      and ${files.mime} like 'image/%'
+  )`,
 };
 
 function selectUsers(q: Queryable) {
@@ -97,6 +105,7 @@ function toAdminUser(row: UserRow, now: Date): AdminUser {
     disabledAt: row.disabledAt?.toISOString() ?? null,
     lastSignInAt: row.lastSignInAt?.toISOString() ?? null,
     usedBytes: accountRole === 'photographer' ? (row.usedBytes ?? 0) : null,
+    photoCount: accountRole === 'photographer' ? Number(row.photoCount) : null,
     // Only ShotX admins (`admin:` subjects, admin_credentials) enrol TOTP here; Cognito admins
     // have MFA in their pool and no credentials row.
     totpEnrolled:

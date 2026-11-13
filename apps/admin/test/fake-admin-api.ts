@@ -62,6 +62,7 @@ export function makeUser(overrides: Partial<AdminUser> = {}): AdminUser {
     disabledAt: null,
     lastSignInAt: null,
     usedBytes: 0,
+    photoCount: 0,
     ...overrides,
   };
 }
@@ -96,6 +97,7 @@ export class FakeAdminApi {
         role: 'admin',
         createdById: null,
         usedBytes: null,
+        photoCount: null,
         createdAt: '2026-10-01T00:00:00.000Z',
       }),
       ...users,
@@ -220,6 +222,7 @@ export class FakeAdminApi {
           // A UI-created admin enrols TOTP at their first sign-in (ADMIN_SIGN_IN_STEPS).
           totpEnrolled: b.role === 'admin' ? false : null,
           usedBytes: b.role === 'photographer' ? 0 : null,
+          photoCount: b.role === 'photographer' ? 0 : null,
           createdAt: '2026-11-10T05:00:00.000Z',
         });
         this.users.unshift(user);

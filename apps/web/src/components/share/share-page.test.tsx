@@ -294,7 +294,7 @@ describe('share page: states', () => {
     renderSharePage(fake, share.token);
     await screen.findByRole('list', { name: th.share.galleryLabel });
     expect(screen.queryByRole('button', { name: th.share.scan })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: th.share.withdraw })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /ถอนความยินยอม/ })).toBeNull();
     expect(document.querySelector('a[href*="delete-my-face"]')).toBeNull();
     // face_only without face search can't show anything; it says so instead of offering a scan.
     const faceOnly = fake.addPublicShare({ mode: 'face_only', faceSearchAvailable: false });

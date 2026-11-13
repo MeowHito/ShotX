@@ -96,7 +96,7 @@ describe('consent', () => {
     await takeLiveSelfie();
     expect(await screen.findByRole('region', { name: th.results.strong })).toBeInTheDocument();
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)).toHaveLength(0);
-    expect(screen.queryByRole('button', { name: th.share.withdraw })).toBeNull();
+    expect(screen.queryByRole('button', { name: /ถอนความยินยอม/ })).toBeNull();
   });
 });
 

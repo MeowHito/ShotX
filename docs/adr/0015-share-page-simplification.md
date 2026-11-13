@@ -41,6 +41,9 @@ Owner feedback after the first live events (2026-11-13):
 - **Create link:** the dialog copies the new link and closes, and the drive shows "สร้างลิงก์และ
   คัดลอกแล้ว". The copy starts in the submit handler (a `ClipboardItem` from a promise) so Safari
   allows it; if the browser still refuses, the dialog stays open with the link and its copy button.
+- **Admin users page:** the "สร้างเมื่อ" column becomes "จำนวนรูป", the photographer's uploaded
+  photos (`adminUserSchema.photoCount`: image files that finished uploading and are not in the
+  trash; videos not counted; null for admins). The creation date stays on the user's detail page.
 - **Temporary passwords:** `TEMPORARY_PASSWORD_MIN_LENGTH` (4–128, default 4) is the only rule
   for passwords an admin sets (create, reset; `temporaryPasswordViolation`). The first sign-in
   still requires a new password under the pool's full policy (`ADMIN_PASSWORD_MIN_LENGTH`,
@@ -54,8 +57,9 @@ Owner feedback after the first live events (2026-11-13):
   scan button rests on the organiser informing attendees beforehand; the operator should keep
   that notice (registration terms or on-site signage) on file per event. With the withdraw link
   gone, withdrawal and deletion go through the photographer or the company, who send the
-  "delete my face" link. The consent texts still say consent can be withdrawn "from this link's
-  page"; they need a new policy version once the DPO approves the wording.
+  "delete my face" link. On the owner's decision (2026-11-13) the 2026-11-12 texts were edited in
+  place: the face-search text no longer says consent can be withdrawn "from this link's page", and
+  the deletion text drops its withdraw point (the face-search text is no longer shown anyway).
 - A 4-character temporary password is weak until its first use. Sign-in lockout
   (`*_LOGIN_LOCKOUT_*`) and rate limits apply; admins should hand it over in person and the owner
   should sign in soon after.

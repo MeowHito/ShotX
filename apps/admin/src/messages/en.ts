@@ -100,6 +100,7 @@ export const en: TranslatedMessages = {
       storage: 'Storage used',
       lastSignIn: 'Last sign-in',
       created: 'Created',
+      photos: 'Photos',
       actions: 'Actions',
     },
     never: 'Never',

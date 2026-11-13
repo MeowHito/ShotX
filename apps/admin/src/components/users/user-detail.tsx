@@ -171,6 +171,9 @@ export function UserDetail({
           <Row label={tu('columns.storage')}>
             {user.usedBytes !== null ? format.gigabytes(user.usedBytes) : tc('none')}
           </Row>
+          {user.photoCount !== null ? (
+            <Row label={tu('columns.photos')}>{format.count(user.photoCount)}</Row>
+          ) : null}
         </dl>
       </section>
 

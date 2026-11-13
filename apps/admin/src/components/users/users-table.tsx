@@ -101,8 +101,8 @@ export function UsersTable({
             <th scope="col" className="px-4 py-3 font-medium">
               {t('columns.lastSignIn')}
             </th>
-            <th scope="col" className="px-4 py-3 font-medium">
-              {t('columns.created')}
+            <th scope="col" className="px-4 py-3 text-right font-medium">
+              {t('columns.photos')}
             </th>
             <th scope="col" className="px-4 py-3 font-medium">
               <span className="sr-only">{t('columns.actions')}</span>
@@ -159,8 +159,8 @@ export function UsersTable({
                 <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
                   {user.lastSignInAt !== null ? format.dateTime(user.lastSignInAt) : t('never')}
                 </td>
-                <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
-                  {format.dateTime(user.createdAt)}
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {user.photoCount !== null ? format.count(user.photoCount) : tc('none')}
                 </td>
                 <td className="px-2 py-2 text-right">
                   <DropdownMenu modal={false}>

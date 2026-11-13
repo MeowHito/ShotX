@@ -46,7 +46,7 @@ export const enStudio: StudioMessages = {
       },
       privacy: {
         title: 'Built with privacy in mind',
-        body: 'Consent is asked before every scan, and selfies are never saved.',
+        body: 'Guests are told before they use it, and selfies are never saved.',
       },
       pricing: {
         title: 'Prices in Thai baht',
@@ -57,7 +57,7 @@ export const enStudio: StudioMessages = {
     privacyTitle: 'We designed face search to respect every guest',
     privacy: {
       consent:
-        'Guests read and accept the terms before scanning their face, and can withdraw consent at any time.',
+        'Organisers tell guests about face search before the event; a tap on scan starts the search.',
       noSelfie:
         'A selfie is used for that one search only and is never saved on the device or in our system.',
       delete:

@@ -194,6 +194,7 @@ export const th = {
       storage: 'พื้นที่ที่ใช้',
       lastSignIn: 'เข้าสู่ระบบล่าสุด',
       created: 'สร้างเมื่อ',
+      photos: 'จำนวนรูป',
       actions: 'จัดการ',
     },
     never: 'ยังไม่เคย',

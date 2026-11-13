@@ -46,7 +46,7 @@ export const zhStudio: StudioMessages = {
       },
       privacy: {
         title: '重视个人隐私',
-        body: '每次扫描前都征求同意，自拍照不会保存在系统中。',
+        body: '来宾在使用前已获告知，自拍照不会保存在系统中。',
       },
       pricing: {
         title: '以泰铢计价',
@@ -56,7 +56,7 @@ export const zhStudio: StudioMessages = {
     privacyEyebrow: '人脸属于敏感数据',
     privacyTitle: '我们设计的人脸搜索尊重每一位来宾',
     privacy: {
-      consent: '来宾在扫描人脸前需阅读并同意条款，并可随时撤回同意。',
+      consent: '主办方在活动前告知来宾人脸搜索功能，点击扫描即可开始搜索。',
       noSelfie: '自拍照只用于当次搜索，不会保存在设备或系统中。',
       delete: '任何人都可以联系摄影师或主办方，要求从搜索系统中删除自己的人脸。',
     },

@@ -39,6 +39,7 @@ import { ShotxTokenIssuer } from '../auth/shotx-tokens';
 import type { AdminOpsContext } from '../cli/admin-ops';
 import { challengeStep, changePasswordChallenge, createTotpAdmin } from '../testing/admins';
 import { DATABASE_BACKENDS, type TestDatabase } from '../testing/database';
+import { insertReadyFile } from '../testing/seed';
 import { OFFLINE_ACCOUNTS_ENV } from '../testing/fakes';
 import { TestApi, type TestResponse } from '../testing/harness';
 import { bffKeyFor, shotxEnv, TEST_ADMIN_BFF_KEY, TEST_BFF_KEY } from '../testing/shotx-auth';
@@ -384,6 +385,30 @@ for (const backend of DATABASE_BACKENDS) {
           });
           expect(res.status, password).toBe(201);
         }
+      });
+
+      it("counts each photographer's uploaded photos: images, not trashed, not failed", async () => {
+        const p = await h.createPhotographer(boss.token, 'photos');
+        for (const values of [
+          { name: 'a.jpg' },
+          { name: 'b.jpg', status: 'processing' as const },
+          { name: 'c.webp', mime: 'image/webp' },
+          { name: 'clip.mp4', mime: 'video/mp4' },
+          { name: 'old.jpg', deletedAt: new Date() },
+          { name: 'bad.jpg', status: 'failed' as const },
+          { name: 'half.jpg', status: 'uploading' as const },
+        ]) {
+          await insertReadyFile(api.db, p.id, values);
+        }
+        const got = adminUserSchema.parse(
+          (await h.admin(boss.token, 'GET', apiPath(A.getUser, { id: p.id }))).body,
+        );
+        expect(got.photoCount).toBe(3);
+        const list = listAdminUsersResponseSchema.parse(
+          (await h.admin(boss.token, 'GET', `${apiPath(A.listUsers)}?limit=200`)).body,
+        );
+        expect(list.items.find((u) => u.id === p.id)?.photoCount).toBe(3);
+        expect(list.items.find((u) => u.id === boss.id)?.photoCount).toBeNull();
       });
 
       it('lists and gets accounts (never viewers), with filters and cursor pages', async () => {

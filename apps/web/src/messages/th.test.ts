@@ -211,9 +211,11 @@ describe('Thai messages', () => {
     expect(LATEST_CONSENT_POLICY_VERSION).toBe('2026-11-12');
     const current = th.consent.policies.face_search['2026-11-12'];
     const previous = th.consent.policies.face_search['2026-11-11b'];
+    // ADR 0015: no withdraw link on the share page, so the text doesn't promise one.
     expect(current.details.rights).toBe(
-      'คุณถอนความยินยอมได้ทุกเมื่อจากหน้าลิงก์นี้ และขอให้ลบข้อมูลใบหน้าของคุณได้โดยติดต่อช่างภาพหรือผู้จัดงาน',
+      'คุณขอให้ลบข้อมูลใบหน้าของคุณได้โดยติดต่อช่างภาพหรือผู้จัดงาน',
     );
+    expect(th.consent.policies.face_deletion['2026-11-12'].points).not.toHaveProperty('withdraw');
     // ADR 0011 decision 1: indexing is automatic on upload; nobody "turns it on" or sets the expiry.
     expect(current.details.index).toBe(
       'เพื่อให้ค้นหาได้ ระบบจัดทำดัชนีใบหน้าของผู้ที่อยู่ในรูปของลิงก์นี้โดยอัตโนมัติเมื่อช่างภาพอัปโหลดรูป ดัชนีใบหน้านี้หมดอายุเมื่อไม่มีการอัปโหลดรูปใหม่ในงานนี้ครบระยะเวลาที่ระบบกำหนด แล้วถูกลบอัตโนมัติ',
@@ -225,9 +227,15 @@ describe('Thai messages', () => {
     for (const purpose of CONSENT_PURPOSES) {
       expect(fullText(purpose, '2026-11-12'), purpose).not.toMatch(/ช่างภาพเปิดให้|ช่างภาพตั้ง/);
     }
-    expect(th.consent.policies.face_deletion['2026-11-12']).toEqual(
-      th.consent.policies.face_deletion['2026-11-11b'],
-    );
+    // ADR 0015: the deletion text is 2026-11-11b without the withdraw point.
+    const previousDeletionPoints: Record<string, string> = {
+      ...th.consent.policies.face_deletion['2026-11-11b'].points,
+    };
+    delete previousDeletionPoints.withdraw;
+    expect(th.consent.policies.face_deletion['2026-11-12']).toEqual({
+      ...th.consent.policies.face_deletion['2026-11-11b'],
+      points: previousDeletionPoints,
+    });
     for (const purpose of CONSENT_PURPOSES) {
       expect(fullText(purpose, '2026-11-12'), purpose).not.toContain('ขอลบใบหน้าของฉัน');
     }

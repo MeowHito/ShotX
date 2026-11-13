@@ -12,6 +12,7 @@ const photographer = makeUser({
   name: 'ช่างภาพ เอ',
   role: 'photographer',
   usedBytes: 2.5 * GB,
+  photoCount: 1234,
   lastSignInAt: '2026-11-09T02:30:00.000Z',
   mustChangePassword: true,
 });
@@ -22,7 +23,13 @@ const disabled = makeUser({
   lockedUntil: '2099-01-01T00:00:00.000Z',
 });
 const lineUser = makeUser({ email: null, name: 'LINE user', passwordAccount: false });
-const self = makeUser({ id: SELF_ID, email: 'me@example.com', role: 'admin', usedBytes: null });
+const self = makeUser({
+  id: SELF_ID,
+  email: 'me@example.com',
+  role: 'admin',
+  usedBytes: null,
+  photoCount: null,
+});
 const pendingAdmin = makeUser({
   email: 'pending.admin@example.test',
   role: 'admin',
@@ -36,7 +43,7 @@ function rowOf(text: string) {
 }
 
 describe('UsersTable', () => {
-  it('shows each account with role, status, storage in GB and sign-in dates', () => {
+  it('shows each account with role, status, storage in GB, photo count and sign-in', () => {
     renderWithProviders(
       <UsersTable
         users={[photographer, disabled, lineUser, self]}
@@ -54,7 +61,7 @@ describe('UsersTable', () => {
       'สถานะ',
       'พื้นที่ที่ใช้',
       'เข้าสู่ระบบล่าสุด',
-      'สร้างเมื่อ',
+      'จำนวนรูป',
       'จัดการ',
     ]);
 
@@ -63,6 +70,7 @@ describe('UsersTable', () => {
     expect(p.getByText('ใช้งานอยู่')).toBeInTheDocument();
     expect(p.getByText('รหัสชั่วคราว')).toBeInTheDocument();
     expect(p.getByText('2.5 GB')).toBeInTheDocument();
+    expect(p.getByText('1,234')).toBeInTheDocument();
     expect(p.getByText(/9 พ\.ย\. 2569/)).toBeInTheDocument();
 
     const d = within(rowOf('gone@example.com'));
@@ -76,7 +84,8 @@ describe('UsersTable', () => {
     const me = within(rowOf('me@example.com'));
     expect(me.getByText('แอดมิน')).toBeInTheDocument();
     expect(me.getByText('คุณ')).toBeInTheDocument();
-    expect(me.getByText('–')).toBeInTheDocument();
+    // Admins have no storage or photos.
+    expect(me.getAllByText('–')).toHaveLength(2);
   });
 
   it('offers rename, reset and disable, but never disable or reset of oneself', async () => {

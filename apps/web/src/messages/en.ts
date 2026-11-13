@@ -86,8 +86,6 @@ export const en: PublicMessages = {
     },
     scan: 'Find me by face',
     scanAgain: 'Search by face again',
-    withdraw: 'Withdraw consent to use my face data',
-    withdrawn: 'Consent withdrawn and your search results deleted.',
   },
   consent: {
     version: 'Version {version}',
@@ -155,7 +153,7 @@ export const en: PublicMessages = {
             backups:
               'Backups we make ourselves do not include face data and are encrypted. The server provider may keep backup copies of the whole server on its own schedule.',
             rights:
-              'You can withdraw your consent at any time from this link’s page, and you can ask for your face data to be deleted by contacting the photographer or the event organiser.',
+              'You can ask for your face data to be deleted by contacting the photographer or the event organiser.',
             contact:
               'If you have questions about the photos or data in this link, please contact the photographer or the event organiser.',
           },
@@ -201,8 +199,6 @@ export const en: PublicMessages = {
               'Faces are compared on our own servers, rented from a server provider and located in Kuala Lumpur, Malaysia. No face image is sent to an outside face analysis service.',
             transfer:
               'This means face data is sent to and stored outside Thailand, in Malaysia: a transfer of personal data abroad under section 28 of Thailand’s Personal Data Protection Act B.E. 2562 (2019). Your selfie is sent for comparison and deleted immediately; the face index of this photographer’s photos is stored there until it is deleted or expires. Backups we make ourselves do not include face data and are encrypted. The server provider may keep backup copies of the whole server on its own schedule.',
-            withdraw:
-              'You can withdraw your consent at any time. Withdrawing does not bring deleted faces back into the search system.',
           },
           checkbox:
             'I have read the above and agree to the use of my face photo to find and delete my face',

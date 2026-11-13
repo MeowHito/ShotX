@@ -64,6 +64,12 @@ export const adminUserSchema = z.object({
    * only (0 when they have no row yet); null for admins.
    */
   usedBytes: byteCountSchema.nullable(),
+  /**
+   * Photos the photographer has uploaded: their image files (`image/*`) that finished uploading
+   * (`processing` or `ready`) and are not in the trash. Videos are not counted. Photographers
+   * only; null for admins.
+   */
+  photoCount: z.number().int().nonnegative().nullable(),
 });
 export type AdminUser = z.output<typeof adminUserSchema>;
 

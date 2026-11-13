@@ -12,6 +12,8 @@ export interface Formatters {
   dateTime: (iso: string) => string;
   date: (iso: string) => string;
   satang: (satang: number) => string;
+  /** A count with grouping separators (1,234). */
+  count: (n: number) => string;
 }
 
 /**
@@ -27,6 +29,7 @@ export function useFormat(): Formatters {
       dateTime: (iso) => formatDateTime(iso, locale),
       date: (iso) => formatDate(iso, locale),
       satang: (satang) => formatSatang(satang, locale),
+      count: (n) => new Intl.NumberFormat(locale).format(n),
     }),
     [locale],
   );
