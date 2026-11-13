@@ -53,7 +53,7 @@ export function QrDialog({
   return (
     <Dialog open={target !== null} onOpenChange={onOpenChange}>
       {target !== null ? (
-        <DialogContent closeLabel={t('common.close')} className="sm:max-w-sm">
+        <DialogContent closeLabel={t('common.close')} className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{t('event.qrFor', { name: target.name })}</DialogTitle>
             <DialogDescription className="break-all">{target.url}</DialogDescription>
@@ -79,7 +79,15 @@ function QrBody({ target }: { target: QrTarget }) {
       margin: 2,
       width: QR_SIZE_PX,
       color: { dark: '#000000', light: '#ffffff' },
-    }).catch(() => setFailed(true));
+    }).then(
+      () => {
+        // The library sizes the canvas element to `width` px inline (1024): drop that so it
+        // scales to its box; the bitmap stays 1024 px for "save as PNG".
+        element.style.removeProperty('width');
+        element.style.removeProperty('height');
+      },
+      () => setFailed(true),
+    );
   }, [target.url]);
 
   function save() {
@@ -109,7 +117,7 @@ function QrBody({ target }: { target: QrTarget }) {
 
   return (
     <div className="grid gap-4">
-      <div className="mx-auto w-full max-w-64 rounded-xl bg-white p-2 shadow-card">
+      <div className="mx-auto w-full max-w-72 rounded-xl bg-white p-2 shadow-card">
         <canvas
           ref={canvas}
           role="img"

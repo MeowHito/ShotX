@@ -11,7 +11,16 @@ import { Alert, Button, cn } from '@shotx/ui';
 import { useQuery } from '@tanstack/react-query';
 import { CheckCheckIcon, ChevronDownIcon, RotateCcwIcon, ScanFaceIcon } from 'lucide-react';
 import { useFormatter, useTranslations } from 'next-intl';
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { DesignCanvas, type DesignCanvasActions } from '@/components/design/design-canvas';
 import { HowToSheet } from '@/components/design/how-to-sheet';
 import { PublicTopBar } from '@/components/site/public-top-bar';
@@ -65,19 +74,27 @@ export interface SharePageProps {
  */
 export function SharePage({ testing, ...props }: SharePageProps) {
   const runtime = useMemo(() => ({ ...defaultShareRuntime, ...testing?.runtime }), [testing]);
+  // A designed first screen on view: the top bar floats over it (the SSR meta says so up front,
+  // so the first paint doesn't shift).
+  const [overlay, setOverlay] = useState(props.initialMeta?.design != null);
   return (
     <ShareApiProvider signedIn={props.signedIn} publicApi={testing?.publicApi}>
       <ShareRuntimeContext.Provider value={runtime}>
         <FaceToolsProvider config={props.faceConfig} overrides={testing?.faceTools}>
-          <PublicTopBar />
-          <main className="pb-36 sm:pb-48">
-            <ShareGate {...props} />
-          </main>
+          <TopBarOverlayContext.Provider value={setOverlay}>
+            <PublicTopBar overlay={overlay} />
+            <main className="pb-36 sm:pb-48">
+              <ShareGate {...props} />
+            </main>
+          </TopBarOverlayContext.Provider>
         </FaceToolsProvider>
       </ShareRuntimeContext.Provider>
     </ShareApiProvider>
   );
 }
+
+/** Lets the designed card float the top bar over itself while it is shown. */
+const TopBarOverlayContext = createContext<(overlay: boolean) => void>(() => undefined);
 
 /** The page's centred column (everything but a design's full-bleed card). */
 function Column({ children }: { children: ReactNode }) {
@@ -231,6 +248,11 @@ function DesignedCard({
   );
   const photosBelow = meta.mode === 'gallery';
   const cardRef = useRef<HTMLDivElement>(null);
+  const setOverlay = useContext(TopBarOverlayContext);
+  useEffect(() => {
+    setOverlay(true);
+    return () => setOverlay(false);
+  }, [setOverlay]);
   return (
     <div ref={cardRef}>
       <DesignCanvas
@@ -242,31 +264,34 @@ function DesignedCard({
         scanAvailable={meta.faceSearch.available}
         scanButtonsRef={scanButtonsRef}
         label={tDesign('label')}
-        // The first screen: the viewport below the top bar (h-14 plus the safe area), less the
-        // 3rem strip when photos follow. The artboard fits both the width and the height on every
-        // screen, so the whole card (its scan buttons included) is visible without scrolling, also
-        // between a phone browser's bars (svh).
+        // The first screen is the whole viewport: the background runs under the transparent top
+        // bar, the artboard sits below it (padding = the bar's 3.5rem plus the safe area), less
+        // the 3.5rem "all photos" row when photos follow. The artboard fits both the width and
+        // the height on every screen, so the whole card (its scan buttons included) is visible
+        // without scrolling, also between a phone browser's bars (svh).
         className={
           photosBelow
-            ? 'min-h-[calc(100svh-6.5rem-env(safe-area-inset-top))] [--design-cap:min(480px,calc((100svh_-_6.5rem_-_env(safe-area-inset-top))_*_390_/_844))]'
-            : 'min-h-[calc(100svh-3.5rem-env(safe-area-inset-top))] [--design-cap:min(480px,calc((100svh_-_3.5rem_-_env(safe-area-inset-top))_*_390_/_844))]'
+            ? 'min-h-[calc(100svh-3.5rem)] pt-[calc(3.5rem+env(safe-area-inset-top))] [--design-cap:min(480px,calc((100svh_-_7rem_-_env(safe-area-inset-top))_*_390_/_844))]'
+            : 'min-h-svh pt-[calc(3.5rem+env(safe-area-inset-top))] [--design-cap:min(480px,calc((100svh_-_3.5rem_-_env(safe-area-inset-top))_*_390_/_844))]'
         }
       />
       {photosBelow ? (
-        <button
-          type="button"
-          disabled={actions === undefined}
-          onClick={() =>
-            window.scrollTo({
-              top: (cardRef.current?.getBoundingClientRect().bottom ?? 0) + window.scrollY - 56,
-              behavior: 'smooth',
-            })
-          }
-          className="flex h-12 w-full items-center justify-center gap-1.5 text-sm font-medium text-muted-foreground"
-        >
-          {tDesign('seeAll')}
-          <ChevronDownIcon className="size-4 motion-safe:animate-bounce" aria-hidden />
-        </button>
+        <div className="flex h-14 items-center justify-center">
+          <button
+            type="button"
+            disabled={actions === undefined}
+            onClick={() =>
+              window.scrollTo({
+                top: (cardRef.current?.getBoundingClientRect().bottom ?? 0) + window.scrollY - 56,
+                behavior: 'smooth',
+              })
+            }
+            className="inline-flex h-10 items-center gap-1.5 rounded-full border-2 border-primary bg-background px-5 text-sm font-semibold text-primary shadow-card transition-colors hover:bg-primary hover:text-primary-foreground"
+          >
+            {tDesign('seeAll')}
+            <ChevronDownIcon className="size-4 motion-safe:animate-bounce" aria-hidden />
+          </button>
+        </div>
       ) : null}
     </div>
   );

@@ -124,7 +124,10 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     expect(card.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // Full-screen first screen: the viewport under the top bar, less the "scroll down for all
     // photos" strip that tells viewers the photos are below (ADR 0019).
-    expect(card.className).toContain('min-h-[calc(100svh-6.5rem');
+    expect(card.className).toContain('min-h-[calc(100svh-3.5rem)]');
+    // The top bar floats over the design, transparent (owner, 2026-11-13: it hid the logo).
+    expect(nav.closest('header')).toHaveAttribute('data-overlay', 'clear');
+    expect(nav.closest('header')).toHaveClass('fixed', 'bg-transparent');
     const seeAll = screen.getByRole('button', { name: th.share.design.seeAll });
     expect(card.compareDocumentPosition(seeAll) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(seeAll.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -191,7 +194,7 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     // No photos below (a face_only share, or a design with "show photos" off, ADR 0019): no
     // "scroll down" strip, and the card fills the screen.
     expect(screen.queryByRole('button', { name: th.share.design.seeAll })).toBeNull();
-    expect(card.className).toContain('min-h-[calc(100svh-3.5rem');
+    expect(card.className).toContain('min-h-svh');
   });
 
   it('after a scan the card is hidden and the found photos come first', async () => {
@@ -204,6 +207,10 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     await userEvent.click(take);
     expect(await screen.findByRole('heading', { name: 'พบรูปของคุณ 2 รูป' })).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: th.share.design.label })).toBeNull();
+    // No card any more: the top bar is the normal solid, sticky one again.
+    const header = screen.getByRole('navigation', { name: th.publicNav.label }).closest('header');
+    expect(header).not.toHaveAttribute('data-overlay');
+    expect(header).toHaveClass('sticky');
     // The sticky button scans again.
     expect(screen.getByRole('button', { name: th.share.scanAgain })).toBeInTheDocument();
   });
