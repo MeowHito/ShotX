@@ -1,7 +1,10 @@
 import { shareDailyStats, shares, subscriptions, users } from '@shotx/db';
 import {
   apiPath,
+  DRIVE_ROUTES,
+  listChildrenResponseSchema,
   listSharesResponseSchema,
+  PUBLIC_SHARE_ROUTES,
   ME_ROUTES,
   meResponseSchema,
   ownerShareSchema,
@@ -245,6 +248,91 @@ for (const backend of DATABASE_BACKENDS) {
         ).toMatchObject({
           code: 'CONFLICT',
         });
+      });
+
+      it('unpublishes and publishes again with the same link (ADR 0016)', async () => {
+        const owner = await api.photographer();
+        const folder = await api.folder(owner.id, { name: 'Paused Run' });
+        await api.file(owner.id, folder.id);
+        const created = ownerShareSchema.parse(
+          (await create(owner.token, { target: { type: 'folder', folderId: folder.id } })).body,
+        );
+        const meta = () =>
+          api.request('GET', apiPath(PUBLIC_SHARE_ROUTES.meta, { token: created.token }));
+        expect((await meta()).status).toBe(200);
+
+        const paused = await api.request('PATCH', apiPath(R.update, { id: created.id }), {
+          token: owner.token,
+          body: { paused: true },
+        });
+        expect(paused.status).toBe(200);
+        expect(ownerShareSchema.parse(paused.body)).toMatchObject({
+          status: 'paused',
+          url: created.url,
+          token: created.token,
+        });
+        const closed = await meta();
+        expect(closed.status).toBe(410);
+        expect(closed.body).toMatchObject({ code: 'SHARE_EXPIRED', details: { reason: 'paused' } });
+        // Pausing twice keeps the first time.
+        const [first] = await api.db.select().from(shares).where(eq(shares.id, created.id));
+        await api.request('PATCH', apiPath(R.update, { id: created.id }), {
+          token: owner.token,
+          body: { paused: true },
+        });
+        const [again] = await api.db.select().from(shares).where(eq(shares.id, created.id));
+        expect(again?.pausedAt?.getTime()).toBe(first?.pausedAt?.getTime());
+
+        const reopened = await api.request('PATCH', apiPath(R.update, { id: created.id }), {
+          token: owner.token,
+          body: { paused: false },
+        });
+        expect(ownerShareSchema.parse(reopened.body)).toMatchObject({
+          status: 'active',
+          url: created.url,
+        });
+        expect((await meta()).status).toBe(200);
+      });
+
+      it('lists folders as events with their cover and link status (ADR 0016)', async () => {
+        const owner = await api.photographer();
+        const live = await api.folder(owner.id, { name: 'Live' });
+        const inner = await api.folder(owner.id, { name: 'Day 1', parent: live });
+        await api.file(owner.id, inner.id);
+        const empty = await api.folder(owner.id, { name: 'Empty' });
+        const revokedOnly = await api.folder(owner.id, { name: 'Revoked' });
+        const share = ownerShareSchema.parse(
+          (await create(owner.token, { target: { type: 'folder', folderId: live.id } })).body,
+        );
+        const gone = ownerShareSchema.parse(
+          (await create(owner.token, { target: { type: 'folder', folderId: revokedOnly.id } }))
+            .body,
+        );
+        await api.request('DELETE', apiPath(R.revoke, { id: gone.id }), { token: owner.token });
+        await api.request('PATCH', apiPath(R.update, { id: share.id }), {
+          token: owner.token,
+          body: { paused: true },
+        });
+        const res = await api.request('GET', apiPath(DRIVE_ROUTES.listChildren, { id: 'root' }), {
+          token: owner.token,
+        });
+        expect(res.status).toBe(200);
+        const listing = listChildrenResponseSchema.parse(res.body);
+        const byName = new Map(
+          listing.items.map((i) => [i.name, i.kind === 'folder' ? i.event : undefined]),
+        );
+        // The cover comes from the subtree (a photo in Day 1).
+        expect(byName.get('Live')?.coverThumbUrl).toMatch(/^https?:/);
+        expect(byName.get('Live')?.link).toEqual({
+          shareId: share.id,
+          status: 'paused',
+          path: share.path,
+          url: share.url,
+        });
+        expect(byName.get('Empty')).toEqual({ coverThumbUrl: null, link: null });
+        // A revoked link doesn't count: the event has no link.
+        expect(byName.get('Revoked')?.link).toBeNull();
+        expect(empty.id).toBeTruthy();
       });
 
       it('reports trashed targets as unavailable and passed expiries as expired', async () => {

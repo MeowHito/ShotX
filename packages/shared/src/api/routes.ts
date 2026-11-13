@@ -2,6 +2,7 @@ import type { z } from 'zod';
 import type { ActivityType } from '../domain';
 import { ErrorCode } from '../errors';
 import {
+  adminSystemResponseSchema,
   adminUserSchema,
   cashPaymentSchema,
   createAdminUserBodySchema,
@@ -1318,6 +1319,16 @@ export const ADMIN_ROUTES = {
       ErrorCode.CONFLICT,
       ErrorCode.PASSWORD_TOO_WEAK,
     ),
+  },
+  /** ADR 0016: the overview tab (storage, the R2 bucket, the server). Read-only, not audited. */
+  system: {
+    method: 'GET',
+    path: '/admin/system',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    response: adminSystemResponseSchema,
+    errors: adminErrors(),
   },
   listCashPayments: {
     method: 'GET',

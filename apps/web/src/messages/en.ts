@@ -55,9 +55,11 @@ export const en: PublicMessages = {
     allPhotos: 'All photos',
     unavailable: {
       title: 'This link has expired',
+      pausedTitle: 'This link isn’t open yet',
       body: 'Ask the photographer for a new link.',
       reasons: {
         revoked: 'The photographer has turned this link off.',
+        paused: 'The photographer hasn’t opened this event for viewing right now. Try again later.',
         expired: 'This link is past its expiry date.',
         unavailable: 'The photos in this link are no longer available.',
       },
@@ -368,6 +370,7 @@ export const en: PublicMessages = {
       subscriptionNone: 'No plan yet.',
       subscriptionStatus: 'The plan is “{status}”.',
       shareRevoked: 'This link has expired. The photographer has turned it off.',
+      sharePaused: 'The photographer hasn’t opened this event for viewing right now.',
       shareExpired: 'This link has expired',
       shareUnavailable: 'This link has expired. Its photos are no longer available.',
       zipTooLarge:

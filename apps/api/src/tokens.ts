@@ -71,6 +71,18 @@ export interface ObjectStorage {
   abortMultipartUpload(input: { key: string; uploadId: string }): Promise<void>;
   /** HeadObject; null when the object doesn't exist. */
   headObject(key: string): Promise<{ size: number } | null>;
+  /**
+   * Counts the whole bucket with ListObjectsV2 (admin overview, ADR 0016), by top-level prefix.
+   * Optional: storages that can't list leave it out, and the overview shows no bucket.
+   */
+  bucketUsage?(): Promise<BucketUsage>;
+}
+
+export interface BucketUsage {
+  bucket: string;
+  objectCount: number;
+  totalBytes: number;
+  prefixes: { prefix: string; objectCount: number; bytes: number }[];
 }
 
 /** CloudFront signed URLs for media keys. Never S3 URLs. */

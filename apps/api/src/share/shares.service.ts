@@ -353,6 +353,10 @@ export class SharesService {
           ...(passwordHash === undefined ? {} : { passwordHash }),
           ...(expiresAt === undefined ? {} : { expiresAt }),
           ...(body.designId === undefined ? {} : { designId: body.designId }),
+          // ADR 0016: unpublish keeps the first pause time; publish clears it. Same link either way.
+          ...(body.paused === undefined
+            ? {}
+            : { pausedAt: body.paused ? (share.pausedAt ?? this.clock.now()) : null }),
         })
         .where(and(eq(shares.id, id), eq(shares.ownerId, ownerId)));
       return this.ownerShare(tx, ownerId, id);

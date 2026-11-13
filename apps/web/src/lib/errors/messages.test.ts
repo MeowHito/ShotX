@@ -95,7 +95,9 @@ describe('error message map', () => {
   it('says "ลิงก์นี้หมดอายุ" for every SHARE_EXPIRED reason', () => {
     for (const reason of SHARE_UNAVAILABLE_REASONS) {
       const text = render(messageForCode(ErrorCode.SHARE_EXPIRED, { reason }));
-      expect(text, reason).toContain('ลิงก์นี้หมดอายุ');
+      // ADR 0016: an unpublished event isn't expired; the same link opens again later.
+      if (reason === 'paused') expect(text).toContain('ลิงก์นี้ยังไม่เปิดให้ดู');
+      else expect(text, reason).toContain('ลิงก์นี้หมดอายุ');
     }
     expect(render(messageForCode(ErrorCode.SHARE_EXPIRED, undefined))).toBe('ลิงก์นี้หมดอายุ');
   });

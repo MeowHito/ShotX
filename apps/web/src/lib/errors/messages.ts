@@ -153,6 +153,7 @@ export function messageForCode(
       if (d.success) {
         const keys = {
           revoked: 'details.shareRevoked',
+          paused: 'details.sharePaused',
           expired: 'details.shareExpired',
           unavailable: 'details.shareUnavailable',
         } as const;

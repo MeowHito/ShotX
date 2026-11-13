@@ -300,6 +300,7 @@ describe('route table', () => {
       'GET /admin/users/:id',
       'PATCH /admin/users/:id',
       'POST /admin/users/:id/reset-password',
+      'GET /admin/system',
       'GET /admin/cash-payments',
       'POST /admin/cash-payments',
     ]);

@@ -126,7 +126,7 @@ export class FakeApi {
   me: MeResponse;
   /** A viewer session exists (POST /me/viewer-session went through the BFF). */
   viewerSession = false;
-  ownerShares = new Map<string, { share: OwnerShare; password: string | null }>();
+  ownerShares = new Map<string, { share: OwnerShare; password: string | null; paused?: boolean }>();
   publicShares = new Map<string, PublicShareFixture>();
   /** How each public share route call named its share (ADR 0011: slug once, then the token). */
   refKinds: ('token' | 'slug')[] = [];
@@ -398,6 +398,30 @@ export class FakeApi {
     return [...items].filter((i) => i.deletedAt === null);
   }
 
+  /** The event view of a folder in a listing (ADR 0016), as the api computes it. */
+  eventOf(folder: DriveFolder): NonNullable<DriveFolder['event']> {
+    const images = this.live(this.files.values()).filter(
+      (f) =>
+        f.status === 'ready' &&
+        f.mediaKind === 'image' &&
+        f.folderId !== null &&
+        this.isDescendant(f.folderId, folder.id),
+    );
+    const cover = images.find((f) => f.id === folder.coverFileId) ?? images[0];
+    const link = [...this.ownerShares.values()]
+      .map((e) => e.share)
+      .filter((s) => s.target.type === 'folder' && s.target.id === folder.id)
+      .filter((s) => s.status !== 'revoked')
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))[0];
+    return {
+      coverThumbUrl: cover?.thumbUrl ?? null,
+      link:
+        link === undefined
+          ? null
+          : { shareId: link.id, status: link.status, path: link.path, url: link.url },
+    };
+  }
+
   folderOrFail(id: string | null) {
     if (id === null) return null;
     const folder = this.folders.get(id);
@@ -514,7 +538,14 @@ export class FakeApi {
             .sort((a, b) => a.name.localeCompare(b.name)),
         ];
         const { slice, next } = this.page(items, q.cursor, q.limit);
-        return { folder, ancestors: this.ancestors(folder), items: slice, nextCursor: next };
+        return {
+          folder,
+          ancestors: this.ancestors(folder),
+          items: slice.map((item) =>
+            item.kind === 'folder' ? { ...item, event: this.eventOf(item) } : item,
+          ),
+          nextCursor: next,
+        };
       }
       case DRIVE_ROUTES.createFolder: {
         const b = body as { parentId: string | null; name: string };

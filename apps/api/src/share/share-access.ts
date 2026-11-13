@@ -189,6 +189,7 @@ export class ShareAccess {
     const availability = shareAvailability(
       {
         isActive: share.isActive,
+        pausedAt: share.pausedAt,
         expiresAt: share.expiresAt,
         targetLive: share.targetLive,
         ownerStatus: share.ownerStatus,

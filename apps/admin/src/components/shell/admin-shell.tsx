@@ -1,7 +1,7 @@
 'use client';
 
 import { Button, cn, Sheet, SheetContent, SheetTitle } from '@shotx/ui';
-import { LogOutIcon, type LucideIcon, MenuIcon, UsersIcon } from 'lucide-react';
+import { GaugeIcon, LogOutIcon, type LucideIcon, MenuIcon, UsersIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { type ReactNode, useState } from 'react';
@@ -9,13 +9,15 @@ import { LanguageSwitcher } from '@/components/language-switcher';
 import type { SessionUser } from '@/lib/auth/session';
 import { SIGN_IN_PATHS } from '@/lib/sign-in/protocol';
 
-type NavId = 'users';
+type NavId = 'overview' | 'users';
 
 const NAV: { id: NavId; href: string; icon: LucideIcon }[] = [
+  { id: 'overview', href: '/overview', icon: GaugeIcon },
   { id: 'users', href: '/users', icon: UsersIcon },
 ];
 
 export function activeNav(pathname: string): NavId | null {
+  if (pathname === '/overview') return 'overview';
   return pathname === '/users' || pathname.startsWith('/users/') ? 'users' : null;
 }
 

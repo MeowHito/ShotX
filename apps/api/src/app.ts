@@ -18,6 +18,8 @@ import type { EmailProvider, PaymentGatewayAdapter } from '@shotx/shared';
 import { AdminController } from './admin/admin.controller';
 import { AdminUsersService } from './admin/admin-users.service';
 import { CashPaymentsService } from './admin/cash-payments.service';
+import { type MetricsSource, nodeMetricsSource } from './admin/server-metrics';
+import { AdminSystemService, METRICS_SOURCE } from './admin/system.service';
 import { AdminGuard } from './auth/admin.guard';
 import { AdminSignIn } from './auth/admin-sign-in';
 import { AuthController } from './auth/auth.controller';
@@ -91,6 +93,8 @@ export interface ApiDeps {
   config: ApiConfig;
   db: Db;
   storage: ObjectStorage;
+  /** Kernel files of GET /admin/system (tests: fixed values). */
+  metricsSource?: MetricsSource;
   signer: MediaUrlSigner;
   rateLimiter: RateLimiter;
   tokenVerifier: TokenVerifier;
@@ -169,6 +173,7 @@ export class AppModule {
         { provide: API_CONFIG, useValue: deps.config },
         { provide: DATABASE, useValue: deps.db },
         { provide: OBJECT_STORAGE, useValue: deps.storage },
+        { provide: METRICS_SOURCE, useValue: deps.metricsSource ?? nodeMetricsSource },
         { provide: MEDIA_URL_SIGNER, useValue: deps.signer },
         { provide: RATE_LIMITER, useValue: deps.rateLimiter },
         { provide: TOKEN_VERIFIER, useValue: deps.tokenVerifier },
@@ -237,6 +242,7 @@ export class AppModule {
         PhotographerSignIn,
         AdminUsersService,
         CashPaymentsService,
+        AdminSystemService,
       ],
     };
   }

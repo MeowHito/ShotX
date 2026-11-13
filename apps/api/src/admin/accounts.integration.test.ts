@@ -11,6 +11,7 @@ import {
 } from '@shotx/db';
 import {
   ADMIN_ROUTES as A,
+  adminSystemResponseSchema,
   adminUserSchema,
   apiPath,
   AUTH_ROUTES as AR,
@@ -385,6 +386,38 @@ for (const backend of DATABASE_BACKENDS) {
           });
           expect(res.status, password).toBe(201);
         }
+      });
+
+      it('reports the system overview: storage, the bucket and the server (ADR 0016)', async () => {
+        const p = await h.createPhotographer(boss.token, 'overview');
+        await insertReadyFile(api.db, p.id, { name: 'a.jpg', sizeBytes: 2000 });
+        api.storage.objects.set(`originals/${p.id}/x/a.jpg`, {
+          size: 2000,
+          contentType: 'image/jpeg',
+        });
+        api.storage.objects.set(`derived/${p.id}/x/thumb.webp`, {
+          size: 300,
+          contentType: 'image/webp',
+        });
+        const scansBefore = api.storage.bucketScans;
+        const res = await h.admin(boss.token, 'GET', apiPath(A.system));
+        expect(res.status).toBe(200);
+        const body = adminSystemResponseSchema.parse(res.body);
+        expect(body.storage.photoCount).toBeGreaterThanOrEqual(1);
+        expect(body.storage.originalsBytes).toBeGreaterThanOrEqual(2000);
+        expect(body.bucket).toMatchObject({ name: 'fake-media' });
+        expect(body.bucket?.prefixes).toEqual(
+          expect.arrayContaining([expect.objectContaining({ prefix: 'derived/' })]),
+        );
+        expect(body.server.cpuCount).toBeGreaterThan(0);
+        expect(body.server.memory.totalBytes).toBeGreaterThan(0);
+        // The bucket count is reused until ADMIN_STORAGE_SCAN_TTL_SECONDS passes.
+        await h.admin(boss.token, 'GET', apiPath(A.system));
+        expect(api.storage.bucketScans - scansBefore).toBeLessThanOrEqual(1);
+        // Photographers can't read it.
+        const photographer = await api.photographer();
+        const refused = await api.request('GET', apiPath(A.system), { token: photographer.token });
+        expect(refused.status).not.toBe(200);
       });
 
       it("counts each photographer's uploaded photos: images, not trashed, not failed", async () => {

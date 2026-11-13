@@ -1,8 +1,16 @@
 'use client';
 
-import type { DriveFile, DriveItem } from '@shotx/shared';
-import { Checkbox, cn } from '@shotx/ui';
-import { FileWarningIcon, FolderIcon, ImageIcon, LoaderIcon, PlayIcon } from 'lucide-react';
+import type { DriveFile, DriveFolder, DriveItem } from '@shotx/shared';
+import { Button, Checkbox, cn } from '@shotx/ui';
+import {
+  FileWarningIcon,
+  FolderIcon,
+  ImageIcon,
+  LoaderIcon,
+  PencilIcon,
+  PlayIcon,
+  QrCodeIcon,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useFormatter, useTranslations } from 'next-intl';
 import { type KeyboardEvent, type MouseEvent, type ReactNode, useEffect, useRef } from 'react';
@@ -35,6 +43,91 @@ export interface ItemCardProps {
   onPreview?: () => void;
   /** Show the selection checkbox (false on search and recent lists). */
   selectable?: boolean;
+  /**
+   * Folders as events (ADR 0016): cover, created date, link status, QR and edit. Without it a
+   * folder is a plain folder tile (search, recent, move).
+   */
+  eventActions?: EventActions;
+}
+
+export interface EventActions {
+  onEdit: () => void;
+  /** Null while the event has no link (the QR button is disabled). */
+  onQr: (() => void) | null;
+}
+
+/** The status of an event's link (ADR 0016): none, published, unpublished or expired. */
+export type EventStatus = 'none' | 'active' | 'paused' | 'expired';
+
+export function eventStatusOf(folder: DriveFolder): EventStatus {
+  const status = folder.event?.link?.status;
+  return status === undefined || status === 'revoked' ? 'none' : status;
+}
+
+const STATUS_DOT: Record<EventStatus, string> = {
+  none: 'bg-muted-foreground/40',
+  active: 'bg-emerald-500',
+  paused: 'bg-amber-500',
+  expired: 'bg-destructive',
+};
+
+/** A coloured dot and the status label. */
+export function EventStatusBadge({ folder }: { folder: DriveFolder }) {
+  const ts = useTranslations('event.status');
+  const status = eventStatusOf(folder);
+  return (
+    <span
+      className={cn(
+        'inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap',
+        status === 'active' ? 'text-foreground' : 'text-muted-foreground',
+      )}
+      data-status={status}
+    >
+      <span className={cn('size-2 shrink-0 rounded-full', STATUS_DOT[status])} aria-hidden />
+      <span className="truncate">{ts(status)}</span>
+    </span>
+  );
+}
+
+/** The QR and edit buttons of an event (the menu keeps everything else). */
+function EventButtons({
+  name,
+  actions,
+  labels,
+}: {
+  name: string;
+  actions: EventActions;
+  labels: 'icon' | 'full';
+}) {
+  const te = useTranslations('event');
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        className="size-9"
+        disabled={actions.onQr === null}
+        onClick={() => actions.onQr?.()}
+        aria-label={te('qrFor', { name })}
+        title={actions.onQr === null ? te('noLink') : te('qr')}
+      >
+        <QrCodeIcon aria-hidden />
+      </Button>
+      <Button
+        type="button"
+        size={labels === 'full' ? 'sm' : 'icon'}
+        variant="outline"
+        className={labels === 'full' ? 'h-9' : 'size-9'}
+        onClick={actions.onEdit}
+        aria-label={`${te('edit')} ${name}`}
+        title={te('editEvent')}
+      >
+        <PencilIcon aria-hidden />
+        {labels === 'full' ? <span className="max-sm:sr-only">{te('edit')}</span> : null}
+      </Button>
+    </span>
+  );
 }
 
 function Thumbnail({ file, small }: { file: DriveFile; small?: boolean }) {
@@ -100,9 +193,13 @@ export function ItemCard({
   onPrimaryClick,
   onPreview,
   selectable = true,
+  eventActions,
 }: ItemCardProps) {
   const formatBytes = useFormatBytes();
   const t = useTranslations('drive');
+  const te = useTranslations('event');
+  const event = item.kind === 'folder' && eventActions !== undefined ? item : null;
+  const cover = event?.event?.coverThumbUrl ?? null;
   const format = useFormatter();
   const primary = useRef<HTMLAnchorElement & HTMLButtonElement>(null);
   const statusLine =
@@ -117,10 +214,27 @@ export function ItemCard({
     <div
       className={cn(
         'relative flex shrink-0 items-center justify-center overflow-hidden bg-muted',
-        list ? 'size-10 rounded-md' : 'aspect-square w-full rounded-lg',
+        list
+          ? event !== null
+            ? 'size-12 rounded-lg'
+            : 'size-10 rounded-md'
+          : event !== null
+            ? 'aspect-[4/3] w-full rounded-lg'
+            : 'aspect-square w-full rounded-lg',
       )}
     >
-      {item.kind === 'folder' ? (
+      {cover !== null ? (
+        // The cover's signed thumbnail (CDN), as for files.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={cover}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          className="absolute inset-0 size-full object-cover"
+        />
+      ) : item.kind === 'folder' ? (
         <FolderIcon
           className={cn('fill-primary/15 text-primary', list ? 'size-5' : 'size-14')}
           strokeWidth={1.5}
@@ -153,29 +267,43 @@ export function ItemCard({
     focusRing,
     list ? 'flex flex-1 items-center gap-3 rounded-md py-1' : 'w-full rounded-lg',
   );
-  const content = list ? (
-    <>
-      {visual}
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium" title={item.name}>
-          {item.name}
-        </span>
-        {(subtitle ?? statusLine) ? (
-          <span className="block truncate text-xs text-muted-foreground">
-            {subtitle ?? statusLine}
+  const created = format.dateTime(new Date(item.createdAt), { dateStyle: 'medium' });
+  const content =
+    list && event !== null ? (
+      <>
+        {visual}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-semibold" title={item.name}>
+            {item.name}
           </span>
-        ) : null}
-      </span>
-      <span className="hidden w-28 shrink-0 text-xs text-muted-foreground md:block">
-        {format.dateTime(new Date(item.createdAt), { dateStyle: 'medium' })}
-      </span>
-      <span className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground tabular-nums sm:block">
-        {item.kind === 'file' ? formatBytes(item.sizeBytes) : '—'}
-      </span>
-    </>
-  ) : (
-    visual
-  );
+          <span className="block truncate font-mono text-xs text-muted-foreground">
+            {event.event?.link?.path ?? te('status.none')}
+          </span>
+        </span>
+      </>
+    ) : list ? (
+      <>
+        {visual}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium" title={item.name}>
+            {item.name}
+          </span>
+          {(subtitle ?? statusLine) ? (
+            <span className="block truncate text-xs text-muted-foreground">
+              {subtitle ?? statusLine}
+            </span>
+          ) : null}
+        </span>
+        <span className="hidden w-28 shrink-0 text-xs text-muted-foreground md:block">
+          {format.dateTime(new Date(item.createdAt), { dateStyle: 'medium' })}
+        </span>
+        <span className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground tabular-nums sm:block">
+          {item.kind === 'file' ? formatBytes(item.sizeBytes) : '—'}
+        </span>
+      </>
+    ) : (
+      visual
+    );
 
   const primaryElement =
     href !== null ? (
@@ -225,6 +353,29 @@ export function ItemCard({
     </label>
   );
 
+  if (list && event !== null && eventActions !== undefined) {
+    // The event row (ADR 0016): name and link path, created date, status, QR, edit, menu.
+    return (
+      <div
+        className={cn(
+          'group flex h-full items-center gap-1 rounded-xl border pr-1 transition-colors duration-150',
+          selected ? 'border-primary bg-accent' : 'border-border bg-surface hover:bg-muted',
+        )}
+      >
+        {checkbox}
+        {primaryElement}
+        <span className="hidden w-32 shrink-0 text-sm text-muted-foreground tabular-nums md:block">
+          {created}
+        </span>
+        <span className="hidden w-36 shrink-0 sm:block">
+          <EventStatusBadge folder={event} />
+        </span>
+        <EventButtons name={item.name} actions={eventActions} labels="full" />
+        {actions ? <div className="shrink-0">{actions}</div> : null}
+      </div>
+    );
+  }
+
   if (list) {
     return (
       <div
@@ -252,12 +403,30 @@ export function ItemCard({
       {primaryElement}
       {checkbox}
       {actions ? <div className="absolute top-1 right-1">{actions}</div> : null}
-      <div className="px-1 pt-2 pb-0.5">
-        <p className="truncate text-sm font-medium" title={item.name}>
-          {item.name}
-        </p>
-        <p className="truncate text-xs text-muted-foreground">{subtitle ?? statusLine ?? ' '}</p>
-      </div>
+      {event !== null && eventActions !== undefined ? (
+        // The event card (ADR 0016): name, created date, link status, QR and edit.
+        <div className="space-y-1.5 px-1 pt-2 pb-0.5">
+          <p className="truncate text-sm font-semibold" title={item.name}>
+            {item.name}
+          </p>
+          <p className="truncate text-xs text-muted-foreground">
+            {te('created', { date: created })}
+          </p>
+          <div className="flex items-center justify-between gap-1">
+            <span className="min-w-0">
+              <EventStatusBadge folder={event} />
+            </span>
+            <EventButtons name={item.name} actions={eventActions} labels="icon" />
+          </div>
+        </div>
+      ) : (
+        <div className="px-1 pt-2 pb-0.5">
+          <p className="truncate text-sm font-medium" title={item.name}>
+            {item.name}
+          </p>
+          <p className="truncate text-xs text-muted-foreground">{subtitle ?? statusLine ?? ' '}</p>
+        </div>
+      )}
     </div>
   );
 }

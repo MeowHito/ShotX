@@ -11,7 +11,7 @@ import {
 import { CognitoTokenVerifier } from '../auth/cognito-verifier';
 import { API_QUEUES, type ApiConfig, type ApiLimits, loadApiConfig } from '../config';
 import { BullMqQueueSender, createBullMqConnection } from '../infra/bullmq-queue';
-import type { Clock, ObjectStorage, UploadedPart } from '../tokens';
+import type { BucketUsage, Clock, ObjectStorage, UploadedPart } from '../tokens';
 
 /** The CloudFront signing config of a test config (MEDIA_URL_SIGNER=cloudfront). */
 export function requireCloudFront(config: ApiConfig): NonNullable<ApiConfig['cloudFront']> {
@@ -179,6 +179,29 @@ export class FakeObjectStorage implements ObjectStorage {
   readonly calls: string[] = [];
   /** Make the next CompleteMultipartUpload succeed in S3 but throw (a lost response). */
   failAfterNextComplete = false;
+  /** Make bucketUsage fail (an R2 token without list permission). */
+  failBucketUsage = false;
+  bucketScans = 0;
+
+  bucketUsage(): Promise<BucketUsage> {
+    this.bucketScans += 1;
+    if (this.failBucketUsage) return Promise.reject(new Error('AccessDenied'));
+    const byPrefix = new Map<string, { objectCount: number; bytes: number }>();
+    for (const [key, { size }] of this.objects) {
+      const prefix = key.includes('/') ? key.slice(0, key.indexOf('/') + 1) : '';
+      const entry = byPrefix.get(prefix) ?? { objectCount: 0, bytes: 0 };
+      entry.objectCount += 1;
+      entry.bytes += size;
+      byPrefix.set(prefix, entry);
+    }
+    const prefixes = [...byPrefix].map(([prefix, v]) => ({ prefix, ...v }));
+    return Promise.resolve({
+      bucket: 'fake-media',
+      objectCount: this.objects.size,
+      totalBytes: prefixes.reduce((sum, p) => sum + p.bytes, 0),
+      prefixes: prefixes.sort((a, b) => b.bytes - a.bytes),
+    });
+  }
 
   createMultipartUpload(input: { key: string; contentType: string }): Promise<string> {
     this.calls.push(`create ${input.key}`);

@@ -56,14 +56,20 @@ describe('DriveBrowser', () => {
       `/studio/folders/${event.id}`,
     );
 
+    // ADR 0016: folders are events, in their own section above the files.
+    const events = within(screen.getByRole('list', { name: th.event.events })).getAllByRole(
+      'listitem',
+    );
+    expect(events.map((i) => within(i).getByTitle('จุดเช็คอิน').textContent)).toEqual([
+      'จุดเช็คอิน',
+    ]);
     const items = within(screen.getByRole('list', { name: 'วันที่ 1' })).getAllByRole('listitem');
     expect(items.map((i) => within(i).getByTitle(/./).textContent)).toEqual([
-      'จุดเช็คอิน',
       'clip.mp4',
       'IMG_0001.jpg',
     ]);
     expect(screen.getByText(th.drive.fileStatus.processing)).toBeInTheDocument();
-    const thumb = items[2]?.querySelector('img');
+    const thumb = items[1]?.querySelector('img');
     expect(thumb?.getAttribute('src')).toMatch(/^https:\/\/photos\.example\.com\/media\//);
   });
 
@@ -95,7 +101,7 @@ describe('DriveBrowser', () => {
     await user.type(within(dialog).getByLabelText(th.createFolder.nameLabel), 'day 1');
     await user.click(within(dialog).getByRole('button', { name: th.createFolder.submit }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-      'มีโฟลเดอร์ชื่อ “day 1” อยู่แล้วที่นี่',
+      'มีอีเวนต์ชื่อ “day 1” อยู่แล้วที่นี่',
     );
 
     const input = within(dialog).getByLabelText(th.createFolder.nameLabel);
@@ -180,12 +186,10 @@ describe('DriveBrowser', () => {
     const dialog = await screen.findByRole('dialog', { name: 'ย้าย 2 รายการไปที่' });
 
     // The folder being moved can't be opened; moving to where they are now is disabled.
-    expect(
-      await within(dialog).findByRole('button', { name: 'เปิดโฟลเดอร์ Event' }),
-    ).toBeDisabled();
+    expect(await within(dialog).findByRole('button', { name: 'เปิดอีเวนต์ Event' })).toBeDisabled();
     expect(within(dialog).getByRole('button', { name: th.move.here })).toBeDisabled();
 
-    await user.click(within(dialog).getByRole('button', { name: 'เปิดโฟลเดอร์ Archive' }));
+    await user.click(within(dialog).getByRole('button', { name: 'เปิดอีเวนต์ Archive' }));
     expect(await within(dialog).findByText(th.move.noSubfolders)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: th.move.here }));
 

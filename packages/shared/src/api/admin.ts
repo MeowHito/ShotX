@@ -169,6 +169,56 @@ export type UpdateAdminUserBody = z.input<typeof updateAdminUserBodySchema>;
 export const resetAdminUserPasswordBodySchema = z.strictObject({ password: newPasswordSchema });
 export type ResetAdminUserPasswordBody = z.input<typeof resetAdminUserPasswordBodySchema>;
 
+// --- System overview (ADR 0016) --------------------------------------------------------------
+
+const bytes = z.number().int().nonnegative();
+
+/**
+ * GET /admin/system: the overview tab. Every part is measured on the server; a part that can't
+ * be measured is null (never a guess).
+ * - `storage`: what the database records: originals of all photographers (storage_usage, trash
+ *   included, as quota counts them), their uploaded photos and videos, and the database's size.
+ * - `bucket`: the media bucket (Cloudflare R2) counted by listing it, originals and every
+ *   derivative included, by top-level prefix; reused for ADMIN_STORAGE_SCAN_TTL_SECONDS
+ *   (`measuredAt`). Null when listing isn't allowed or failed. R2 has no capacity limit.
+ * - `server`: the VPS the api runs on, read from the kernel (/proc, statfs): CPU use over a short
+ *   sample, load averages, memory, the disk at ADMIN_SYSTEM_DISK_PATH, uptime, and the hottest
+ *   thermal sensor in °C (null on a virtual machine without sensors).
+ */
+export const adminSystemResponseSchema = z.object({
+  generatedAt: isoDateTimeSchema,
+  storage: z.object({
+    originalsBytes: bytes,
+    photoCount: z.number().int().nonnegative(),
+    videoCount: z.number().int().nonnegative(),
+    photographerCount: z.number().int().nonnegative(),
+    databaseBytes: bytes.nullable(),
+  }),
+  bucket: z
+    .object({
+      name: z.string(),
+      objectCount: z.number().int().nonnegative(),
+      totalBytes: bytes,
+      prefixes: z.array(
+        z.object({ prefix: z.string(), objectCount: z.number().int().nonnegative(), bytes }),
+      ),
+      measuredAt: isoDateTimeSchema,
+    })
+    .nullable(),
+  server: z.object({
+    hostname: z.string(),
+    cpuCount: z.number().int().positive(),
+    /** Busy share of all CPUs over the sample, 0–100. */
+    cpuPercent: z.number().min(0).max(100).nullable(),
+    loadAverage: z.tuple([z.number(), z.number(), z.number()]),
+    memory: z.object({ totalBytes: bytes, usedBytes: bytes }),
+    disk: z.object({ path: z.string(), totalBytes: bytes, usedBytes: bytes }).nullable(),
+    uptimeSeconds: z.number().nonnegative(),
+    temperatureC: z.number().nullable(),
+  }),
+});
+export type AdminSystemResponse = z.output<typeof adminSystemResponseSchema>;
+
 // --- Audit metas (ADR 0010) -------------------------------------------------------------------
 
 /**

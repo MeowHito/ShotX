@@ -152,14 +152,15 @@ describe('share page: states', () => {
       arrowPrevTitle: th.lightbox.prev,
       arrowNextTitle: th.lightbox.next,
     });
-    const button = photoswipe.elements.find((e) => e.name === 'bottomDownload') as {
+    const button = photoswipe.elements.find((e) => e.name === 'download') as {
       appendTo: string;
+      order: number;
       className: string;
       html: string;
       onClick: () => void;
     };
-    expect(button.appendTo).toBe('root');
-    expect(button.className).toBe('pswp__download-bottom');
+    // The top bar, before zoom and close (owner, 2026-11-13).
+    expect(button).toMatchObject({ appendTo: 'bar', order: 9, className: 'pswp__download' });
     expect(button.html).toContain(th.lightbox.downloadShort);
     button.onClick();
     await waitFor(() => expect(startDownload).toHaveBeenCalledTimes(1));
@@ -336,7 +337,7 @@ describe('lightbox (ADR 0011, owner feedback 2026-11-12)', () => {
     // The group's photos only, so swiping and the arrows stay within the results.
     expect(options.dataSource.map((x) => x.src)).toEqual([a?.previewUrl, b?.previewUrl]);
     expect(options).toMatchObject({ index: 1, arrowPrev: true, arrowNext: true });
-    const button = photoswipe.elements.find((e) => e.name === 'bottomDownload') as {
+    const button = photoswipe.elements.find((e) => e.name === 'download') as {
       onClick: () => void;
     };
     button.onClick();
@@ -351,7 +352,7 @@ describe('lightbox (ADR 0011, owner feedback 2026-11-12)', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'เปิดดู IMG_0001.jpg' }));
     await waitFor(() => expect(photoswipe.instances).toHaveLength(1));
     expect(photoswipe.instances[0]).toMatchObject({ arrowPrev: true, arrowNext: true });
-    expect(photoswipe.elements.find((e) => e.name === 'bottomDownload')).toBeUndefined();
+    expect(photoswipe.elements.find((e) => e.name === 'download')).toBeUndefined();
   });
 
   it.each(['en', 'zh'] as const)(
@@ -374,7 +375,7 @@ describe('lightbox (ADR 0011, owner feedback 2026-11-12)', () => {
         arrowNextTitle: m.lightbox.next,
         errorMsg: m.lightbox.loadError,
       });
-      const button = photoswipe.elements.find((e) => e.name === 'bottomDownload') as {
+      const button = photoswipe.elements.find((e) => e.name === 'download') as {
         title: string;
         ariaLabel: string;
         html: string;

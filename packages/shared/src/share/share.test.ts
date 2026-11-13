@@ -237,6 +237,7 @@ describe('share availability and gates', () => {
   const now = new Date('2026-10-25T05:00:00Z');
   const live = {
     isActive: true,
+    pausedAt: null,
     expiresAt: null,
     targetLive: true,
     ownerStatus: 'active',
@@ -266,6 +267,27 @@ describe('share availability and gates', () => {
     expect(
       shareAvailability({ ...live, subscriptionStatus: 'trial', targetLive: false }, now),
     ).toMatchObject({ reason: 'unavailable' });
+  });
+
+  it('pauses an unpublished share, after revoked and before expired (ADR 0016)', () => {
+    expect(shareAvailability({ ...live, pausedAt: now }, now)).toEqual({
+      ok: false,
+      code: 'SHARE_EXPIRED',
+      reason: 'paused',
+    });
+    expect(shareAvailability({ ...live, pausedAt: now, isActive: false }, now)).toMatchObject({
+      reason: 'revoked',
+    });
+    expect(shareAvailability({ ...live, pausedAt: now, expiresAt: now }, now)).toMatchObject({
+      reason: 'paused',
+    });
+    expect(ownerShareStatus({ isActive: true, pausedAt: now, expiresAt: now }, now)).toBe('paused');
+    expect(ownerShareStatus({ isActive: false, pausedAt: now, expiresAt: null }, now)).toBe(
+      'revoked',
+    );
+    expect(ownerShareStatus({ isActive: true, pausedAt: null, expiresAt: null }, now)).toBe(
+      'active',
+    );
   });
 
   it('makes a disabled owner unavailable, after revoked and expired (ADR 0010)', () => {
@@ -300,9 +322,15 @@ describe('share availability and gates', () => {
   });
 
   it('derives the owner-facing status', () => {
-    expect(ownerShareStatus({ isActive: true, expiresAt: null }, now)).toBe('active');
-    expect(ownerShareStatus({ isActive: true, expiresAt: now }, now)).toBe('expired');
-    expect(ownerShareStatus({ isActive: false, expiresAt: null }, now)).toBe('revoked');
+    expect(ownerShareStatus({ isActive: true, pausedAt: null, expiresAt: null }, now)).toBe(
+      'active',
+    );
+    expect(ownerShareStatus({ isActive: true, pausedAt: null, expiresAt: now }, now)).toBe(
+      'expired',
+    );
+    expect(ownerShareStatus({ isActive: false, pausedAt: null, expiresAt: null }, now)).toBe(
+      'revoked',
+    );
   });
 
   it('asks for login before the password', () => {

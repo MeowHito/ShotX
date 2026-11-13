@@ -278,8 +278,9 @@ function signedDownload(fileId: string, name: string) {
   };
 }
 
-function shareStatus(share: OwnerShare): OwnerShare['status'] {
+function shareStatus(share: OwnerShare, paused = false): OwnerShare['status'] {
   if (share.status === 'revoked') return 'revoked';
+  if (paused) return 'paused';
   return share.expiresAt !== null && share.expiresAt < NOW ? 'expired' : 'active';
 }
 
@@ -378,7 +379,8 @@ export function handlePhase3(
     case SHARE_ROUTES.update: {
       const entry = ownerShareOrFail(api, params.id);
       if (entry.share.status === 'revoked') throw new Fail('CONFLICT');
-      const { password, ...settings } = body as UpdateShareBody;
+      const { password, paused, ...settings } = body as UpdateShareBody;
+      if (paused !== undefined) entry.paused = paused;
       if (settings.mode === 'face_only' && !api.options.faceSearch) {
         throw new Fail('FEATURE_DISABLED', FEATURE_OFF);
       }
@@ -401,7 +403,7 @@ export function handlePhase3(
         entry.password = password;
         entry.share.passwordProtected = password !== null;
       }
-      entry.share.status = shareStatus(entry.share);
+      entry.share.status = shareStatus(entry.share, entry.paused);
       return entry.share;
     }
     case SHARE_ROUTES.revoke: {

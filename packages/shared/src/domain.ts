@@ -99,16 +99,17 @@ export type ActivitySource = (typeof ACTIVITY_SOURCES)[number];
 /**
  * Why a share link no longer serves anything (SHARE_EXPIRED details):
  * - `revoked`: the owner revoked it (`is_active = false`), or an admin took it down;
+ * - `paused`: the owner unpublished it for now (`paused_at`, ADR 0016); publishing brings it back;
  * - `expired`: `expires_at` has passed;
  * - `unavailable`: the target was trashed or purged, the owner's account is `disabled` (ADR 0010),
  *   or the owner's subscription is `expired` or `purged` (the spec's "ลิงก์นี้หมดอายุ"; only while
  *   BILLING_MODE=gateway).
  */
-export const SHARE_UNAVAILABLE_REASONS = ['revoked', 'expired', 'unavailable'] as const;
+export const SHARE_UNAVAILABLE_REASONS = ['revoked', 'paused', 'expired', 'unavailable'] as const;
 export type ShareUnavailableReason = (typeof SHARE_UNAVAILABLE_REASONS)[number];
 
-/** Owner-facing state of a share, derived from `is_active` and `expires_at`. */
-export const SHARE_STATUSES = ['active', 'expired', 'revoked'] as const;
+/** Owner-facing state of a share, derived from `is_active`, `paused_at` and `expires_at`. */
+export const SHARE_STATUSES = ['active', 'paused', 'expired', 'revoked'] as const;
 export type ShareStatus = (typeof SHARE_STATUSES)[number];
 
 /** Similarity groups of a face search: "ใช่คุณ" (≥ FACE_STRONG) and "อาจจะเป็นคุณ" (≥ FACE_MAYBE). */

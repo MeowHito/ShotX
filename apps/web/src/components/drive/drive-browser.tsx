@@ -12,6 +12,8 @@ import { Alert, Button, cn, Skeleton } from '@shotx/ui';
 import {
   CopyIcon,
   DownloadIcon,
+  EyeIcon,
+  EyeOffIcon,
   FolderInputIcon,
   FolderKanbanIcon,
   ImageIcon,
@@ -21,6 +23,7 @@ import {
   LinkIcon,
   ListIcon,
   PencilIcon,
+  QrCodeIcon,
   Share2Icon,
   SquareArrowOutUpRightIcon,
   Trash2Icon,
@@ -57,7 +60,7 @@ import {
 import { pollOwnerZipJob, startBrowserDownload } from '@/lib/downloads/downloads';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { copyToClipboard } from '@/lib/studio/clipboard';
-import { useOwnerDownload } from '@/lib/studio/queries';
+import { useOwnerDownload, useUpdateShare } from '@/lib/studio/queries';
 import {
   arrowStep,
   clickModifier,
@@ -70,10 +73,12 @@ import { filesFromDataTransfer } from '@/lib/upload/dropped-files';
 import { Breadcrumbs } from './breadcrumbs';
 import { DetailsPanel } from './details-panel';
 import { DriveGrid } from './drive-grid';
-import { ItemCard } from './item-card';
+import { EventDialog } from './event-dialog';
+import { type EventActions, ItemCard } from './item-card';
 import { type BuildItemMenu, ItemMenuProvider, ItemMenus, type MenuEntry } from './item-menu';
 import { MoveDialog } from './move-dialog';
 import { NameDialog } from './name-dialog';
+import { QrDialog, type QrTarget } from './qr-dialog';
 import { folderHref, SHARES_HREF, shareHref } from './paths';
 
 type Notice = {
@@ -85,6 +90,16 @@ type Notice = {
 
 const isReadyFile = (item: DriveItem): item is DriveFile =>
   item.kind === 'file' && item.status === 'ready';
+
+/** Event cards (ADR 0016): a 4:3 cover over the name, created date, status and buttons. */
+const EVENT_CELL = { minCellPx: 220, cellAspect: 0.75, captionPx: 112, listRowPx: 72 } as const;
+
+/** The QR target of an event, or null while it has no link. */
+function qrTargetOf(folder: DriveFolder): QrTarget | null {
+  const link = folder.event?.link;
+  if (link == null || link.status === 'revoked') return null;
+  return { name: folder.name, url: link.url, paused: link.status === 'paused' };
+}
 
 /**
  * The studio drive: one folder's contents with rename, move, trash, share, details and download,
@@ -119,7 +134,10 @@ export function DriveBrowser({
   const trashItems = useTrashItems();
   const restoreItems = useRestoreItems();
   const ownerDownload = useOwnerDownload();
+  const updateShare = useUpdateShare();
   const [layout, setLayout] = useLayoutPreference();
+  const [editingEvent, setEditingEvent] = useState<DriveFolder | null>(null);
+  const [qr, setQr] = useState<QrTarget | null>(null);
 
   const [sharing, setSharing] = useState<ShareTargetRef | null>(null);
   const [selected, setSelected] = useState<ReadonlyMap<string, DriveItem>>(new Map());
@@ -129,11 +147,15 @@ export function DriveBrowser({
   const [details, setDetails] = useState<DriveItem | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [dragging, setDragging] = useState(false);
-  const [columns, setColumns] = useState(1);
+  const [eventColumns, setEventColumns] = useState(1);
+  const [fileColumns, setFileColumns] = useState(1);
   const [focusTarget, setFocusTarget] = useState<{ id: string; token: number } | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
 
   const items = listing.items;
+  // Folders come first in every listing (drive cursor), so the two sections keep that order.
+  const events = items.filter((i): i is DriveFolder => i.kind === 'folder');
+  const fileItems = items.filter((i) => i.kind === 'file');
   const uploadsBlocked = usage.data?.uploadsBlockedBy ?? null;
   const selection = [...selected.values()];
   const location = listing.folder?.name ?? t('drive.root');
@@ -262,6 +284,29 @@ export function DriveBrowser({
     }
   }
 
+  /** Unpublish or publish an event's link again (the same URL, ADR 0016). */
+  async function setPublished(folder: DriveFolder, published: boolean) {
+    const link = folder.event?.link;
+    if (link == null) return;
+    try {
+      await updateShare.mutateAsync({ id: link.shareId, body: { paused: !published } });
+      setNotice({
+        kind: 'info',
+        text: t(published ? 'event.published' : 'event.unpublished', { name: folder.name }),
+      });
+    } catch (error) {
+      setNotice({ kind: 'error', text: describe(error) });
+    }
+  }
+
+  function eventActionsFor(folder: DriveFolder): EventActions {
+    const target = qrTargetOf(folder);
+    return {
+      onEdit: () => setEditingEvent(folder),
+      onQr: target === null ? null : () => setQr(target),
+    };
+  }
+
   async function copyLink(share: OwnerShare) {
     try {
       await copyToClipboard(share.url);
@@ -307,6 +352,39 @@ export function DriveBrowser({
     const single = targets.length === 1 ? targets[0] : undefined;
     const soon = t('itemMenu.soon');
     const entries: MenuEntry[] = [];
+    if (single?.kind === 'folder') {
+      // ADR 0016: the event's own actions first.
+      const link = single.event?.link ?? null;
+      const target = qrTargetOf(single);
+      entries.push({
+        type: 'item',
+        id: 'edit-event',
+        label: t('event.editEvent'),
+        icon: PencilIcon,
+        onSelect: () => setEditingEvent(single),
+      });
+      entries.push({
+        type: 'item',
+        id: 'event-qr',
+        label: t('event.qr'),
+        icon: QrCodeIcon,
+        disabled: target === null,
+        onSelect: () => {
+          if (target !== null) setQr(target);
+        },
+      });
+      if (link !== null && link.status !== 'revoked') {
+        const paused = link.status === 'paused';
+        entries.push({
+          type: 'item',
+          id: 'event-publish',
+          label: paused ? t('event.publish') : t('event.unpublish'),
+          icon: paused ? EyeIcon : EyeOffIcon,
+          onSelect: () => void setPublished(single, paused),
+        });
+      }
+      entries.push({ type: 'separator', id: 'sep-event' });
+    }
     if (single?.kind === 'file' && single.status === 'ready') {
       entries.push({
         type: 'item',
@@ -552,8 +630,8 @@ export function DriveBrowser({
   // Arrow keys move focus between items; with Shift they extend the selection.
   function onGridKeyDown(event: KeyboardEvent) {
     if (shouldIgnoreKey(event.nativeEvent)) return;
-    const step = arrowStep(event, columns);
     const current = focusedItem();
+    const step = arrowStep(event, current?.kind === 'folder' ? eventColumns : fileColumns);
     if (step === null || current === undefined) return;
     const index = items.findIndex((i) => i.id === current.id);
     const nextIndex = Math.min(items.length - 1, Math.max(0, index + step));
@@ -581,7 +659,40 @@ export function DriveBrowser({
 
   const targetsFor = (item: DriveItem) =>
     selected.has(item.id) && selected.size > 1 ? selection : [item];
-  const focusIndex = focusTarget === null ? null : items.findIndex((i) => i.id === focusTarget.id);
+  const focusIndexIn = (section: readonly DriveItem[]) =>
+    focusTarget === null ? null : section.findIndex((i) => i.id === focusTarget.id);
+
+  const renderItem = (item: DriveItem) => {
+    const targets = targetsFor(item);
+    return (
+      <ItemMenus
+        targets={targets}
+        label={t('drive.itemActions', { name: item.name })}
+        title={targets.length > 1 ? t('itemMenu.selection', { count: targets.length }) : item.name}
+      >
+        {(kebab) => (
+          <ItemCard
+            item={item}
+            layout={layout}
+            selected={selected.has(item.id)}
+            selectionMode={selected.size > 0}
+            onToggleSelect={() => toggle(item)}
+            onPrimaryClick={(event) => onItemClick(item, event)}
+            onPreview={() => setDetails(item)}
+            focusRequest={focusTarget?.id === item.id ? focusTarget.token : undefined}
+            href={item.kind === 'folder' ? folderHref(item.id) : null}
+            subtitle={
+              item.kind === 'file' && listing.folder?.coverFileId === item.id
+                ? t('itemMenu.coverBadge')
+                : undefined
+            }
+            eventActions={item.kind === 'folder' ? eventActionsFor(item) : undefined}
+            actions={kebab}
+          />
+        )}
+      </ItemMenus>
+    );
+  };
 
   return (
     <ItemMenuProvider value={buildMenu}>
@@ -752,51 +863,52 @@ export function DriveBrowser({
             onKeyDown={onGridKeyDown}
             className={cn(selection.length > 0 && 'pb-24 sm:pb-0')}
           >
-            <DriveGrid
-              items={items}
-              layout={layout}
-              label={listing.folder?.name ?? t('drive.root')}
-              loadingMoreLabel={t('drive.loadingMore')}
-              hasNextPage={listing.hasNextPage}
-              isFetchingNextPage={listing.isFetchingNextPage}
-              fetchNextPage={listing.fetchNextPage}
-              scrollToIndex={focusIndex}
-              onColumnsChange={setColumns}
-              renderItem={(item) => {
-                const targets = targetsFor(item);
-                return (
-                  <ItemMenus
-                    targets={targets}
-                    label={t('drive.itemActions', { name: item.name })}
-                    title={
-                      targets.length > 1
-                        ? t('itemMenu.selection', { count: targets.length })
-                        : item.name
-                    }
-                  >
-                    {(kebab) => (
-                      <ItemCard
-                        item={item}
-                        layout={layout}
-                        selected={selected.has(item.id)}
-                        selectionMode={selected.size > 0}
-                        onToggleSelect={() => toggle(item)}
-                        onPrimaryClick={(event) => onItemClick(item, event)}
-                        onPreview={() => setDetails(item)}
-                        focusRequest={focusTarget?.id === item.id ? focusTarget.token : undefined}
-                        href={item.kind === 'folder' ? folderHref(item.id) : null}
-                        subtitle={
-                          item.kind === 'file' && listing.folder?.coverFileId === item.id
-                            ? t('itemMenu.coverBadge')
-                            : undefined
-                        }
-                        actions={kebab}
-                      />
-                    )}
-                  </ItemMenus>
-                );
-              }}
-            />
+            {events.length > 0 ? (
+              <section aria-label={t('event.events')} className="space-y-2">
+                {fileItems.length > 0 ? (
+                  <h2 className="text-sm font-semibold text-muted-foreground">
+                    {t('event.events')}
+                  </h2>
+                ) : null}
+                <DriveGrid
+                  items={events}
+                  layout={layout}
+                  label={t('event.events')}
+                  loadingMoreLabel={t('drive.loadingMore')}
+                  hasNextPage={fileItems.length === 0 && listing.hasNextPage}
+                  isFetchingNextPage={fileItems.length === 0 && listing.isFetchingNextPage}
+                  fetchNextPage={listing.fetchNextPage}
+                  scrollToIndex={focusIndexIn(events)}
+                  onColumnsChange={setEventColumns}
+                  {...EVENT_CELL}
+                  renderItem={renderItem}
+                />
+              </section>
+            ) : null}
+            {fileItems.length > 0 ? (
+              <section
+                aria-label={t('event.files')}
+                className={cn('space-y-2', events.length > 0 && 'mt-6')}
+              >
+                {events.length > 0 ? (
+                  <h2 className="text-sm font-semibold text-muted-foreground">
+                    {t('event.files')}
+                  </h2>
+                ) : null}
+                <DriveGrid
+                  items={fileItems}
+                  layout={layout}
+                  label={listing.folder?.name ?? t('drive.root')}
+                  loadingMoreLabel={t('drive.loadingMore')}
+                  hasNextPage={listing.hasNextPage}
+                  isFetchingNextPage={listing.isFetchingNextPage}
+                  fetchNextPage={listing.fetchNextPage}
+                  scrollToIndex={focusIndexIn(fileItems)}
+                  onColumnsChange={setFileColumns}
+                  renderItem={renderItem}
+                />
+              </section>
+            ) : null}
           </div>
         )}
 
@@ -838,6 +950,17 @@ export function DriveBrowser({
           sourceFolderId={folderId}
           onMove={move}
         />
+        <EventDialog
+          folder={editingEvent}
+          onOpenChange={(open) => !open && setEditingEvent(null)}
+          onPublishedChange={(published, name) =>
+            setNotice({
+              kind: 'info',
+              text: t(published ? 'event.published' : 'event.unpublished', { name }),
+            })
+          }
+        />
+        <QrDialog target={qr} onOpenChange={(open) => !open && setQr(null)} />
         <DetailsPanel
           item={details}
           location={location}

@@ -165,6 +165,11 @@ export const updateShareBodySchema = z
     password: settings.password.optional(),
     expiresAt: settings.expiresAt.optional(),
     designId: settings.designId.optional(),
+    /**
+     * Unpublish (`true`, sets `paused_at`) or publish again (`false`, clears it) without changing
+     * the link (ADR 0016). Idempotent.
+     */
+    paused: z.boolean().optional(),
   })
   .refine((b) => Object.values(b).some((v) => v !== undefined), {
     error: 'at least one setting is required',

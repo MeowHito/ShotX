@@ -77,6 +77,12 @@ export const shares = pgTable(
     passwordHash: text('password_hash'),
     expiresAt: timestamptz('expires_at'),
     isActive: boolean('is_active').notNull().default(true),
+    /**
+     * Set while the owner has unpublished the share ("ปิดไม่เผยแพร่", ADR 0016, migration 0014):
+     * public routes answer SHARE_EXPIRED `paused`; clearing it publishes the same link again.
+     * Unlike `is_active = false` (revoked, final), pausing is reversible.
+     */
+    pausedAt: timestamptz('paused_at'),
     createdAt: createdAt(),
     /**
      * The share page design (ADR 0013, migration 0013); null: the owner's default design at view

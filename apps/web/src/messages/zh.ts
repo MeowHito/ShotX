@@ -55,9 +55,11 @@ export const zh: PublicMessages = {
     allPhotos: '全部照片',
     unavailable: {
       title: '此链接已过期',
+      pausedTitle: '此链接暂未开放',
       body: '如需新链接，请联系摄影师。',
       reasons: {
         revoked: '摄影师已关闭此链接。',
+        paused: '摄影师目前尚未开放查看此活动，请稍后再试。',
         expired: '此链接已超过有效期。',
         unavailable: '此链接中的照片已不再开放查看。',
       },
@@ -348,6 +350,7 @@ export const zh: PublicMessages = {
       subscriptionNone: '还没有套餐。',
       subscriptionStatus: '套餐状态为“{status}”。',
       shareRevoked: '此链接已过期，摄影师已关闭此链接。',
+      sharePaused: '摄影师目前尚未开放查看此活动。',
       shareExpired: '此链接已过期',
       shareUnavailable: '此链接已过期，其中的照片已不再开放查看。',
       zipTooLarge:

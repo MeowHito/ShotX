@@ -106,6 +106,8 @@ export const subscriptionAllowsSharing = subscriptionServesShares;
 
 export interface ShareAvailabilityInput {
   isActive: boolean;
+  /** Unpublished by the owner (ADR 0016); null while published. */
+  pausedAt: Date | null;
   expiresAt: Date | null;
   /** The target file or folder exists, is not in the trash and is not being purged. */
   targetLive: boolean;
@@ -128,11 +130,12 @@ export type ShareAvailability =
 
 /**
  * Whether a share serves anything at `now`, checked first by every public route after the token
- * lookup (unknown token: NOT_FOUND). Order: revoked, expired, then unavailable (target not live,
+ * lookup (unknown token: NOT_FOUND). Order: revoked, paused, expired, then unavailable (target not live,
  * owner disabled, or, only when `subscriptionGates`, a subscription that doesn't serve shares).
  */
 export function shareAvailability(share: ShareAvailabilityInput, now: Date): ShareAvailability {
   if (!share.isActive) return { ok: false, code: 'SHARE_EXPIRED', reason: 'revoked' };
+  if (share.pausedAt !== null) return { ok: false, code: 'SHARE_EXPIRED', reason: 'paused' };
   if (share.expiresAt !== null && share.expiresAt.getTime() <= now.getTime()) {
     return { ok: false, code: 'SHARE_EXPIRED', reason: 'expired' };
   }
@@ -148,10 +151,11 @@ export function shareAvailability(share: ShareAvailabilityInput, now: Date): Sha
 
 /** Owner-facing status of a share (`GET /shares`). */
 export function ownerShareStatus(
-  share: { isActive: boolean; expiresAt: Date | null },
+  share: { isActive: boolean; pausedAt: Date | null; expiresAt: Date | null },
   now: Date,
 ): ShareStatus {
   if (!share.isActive) return 'revoked';
+  if (share.pausedAt !== null) return 'paused';
   if (share.expiresAt !== null && share.expiresAt.getTime() <= now.getTime()) return 'expired';
   return 'active';
 }

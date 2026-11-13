@@ -23,9 +23,12 @@ export function ShareUnavailable({ reason }: { reason: ShareUnavailableReason | 
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-3 py-16 text-center">
       <TimerOffIcon className="size-12 text-muted-foreground" aria-hidden />
-      <h1 className="text-2xl font-bold">{tu('title')}</h1>
+      {/* ADR 0016: an unpublished event comes back with the same link; no "ask for a new one". */}
+      <h1 className="text-2xl font-bold">
+        {reason === 'paused' ? tu('pausedTitle') : tu('title')}
+      </h1>
       {reason !== null ? <p className="text-muted-foreground">{tu(`reasons.${reason}`)}</p> : null}
-      <p className="text-sm text-muted-foreground">{tu('body')}</p>
+      {reason === 'paused' ? null : <p className="text-sm text-muted-foreground">{tu('body')}</p>}
     </div>
   );
 }

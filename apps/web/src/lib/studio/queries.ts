@@ -11,6 +11,7 @@ import {
 } from '@shotx/shared';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApiClient } from '@/components/providers';
+import { driveKeys } from '@/lib/drive/queries';
 
 export const studioKeys = {
   me: ['me'] as const,
@@ -71,9 +72,14 @@ export function useShareStats(id: string, range: ShareStatsQuery) {
   });
 }
 
+/** Shares changed: their lists, and the drive (each event shows its link's status, ADR 0016). */
 function useInvalidateShares() {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: studioKeys.shares });
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: studioKeys.shares }),
+      queryClient.invalidateQueries({ queryKey: driveKeys.all }),
+    ]);
 }
 
 export function useCreateShare() {

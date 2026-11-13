@@ -281,6 +281,7 @@ describe('admin users schemas', () => {
     disabledAt: null,
     lastSignInAt: null,
     usedBytes: 0,
+    photoCount: 12,
   };
 
   it('describes an account', () => {
@@ -551,8 +552,21 @@ describe('account config', () => {
   });
 
   it('reads the admin list page size', () => {
-    expect(loadAdminConsoleConfig({})).toEqual({ listPageSize: 50 });
-    expect(loadAdminConsoleConfig({ ADMIN_LIST_PAGE_SIZE: '100' })).toEqual({ listPageSize: 100 });
+    const defaults = { listPageSize: 50, storageScanTtlSeconds: 600, systemDiskPath: '/' };
+    expect(loadAdminConsoleConfig({})).toEqual(defaults);
+    expect(loadAdminConsoleConfig({ ADMIN_LIST_PAGE_SIZE: '100' })).toEqual({
+      ...defaults,
+      listPageSize: 100,
+    });
+    expect(
+      loadAdminConsoleConfig({
+        ADMIN_STORAGE_SCAN_TTL_SECONDS: '3600',
+        ADMIN_SYSTEM_DISK_PATH: '/host',
+      }),
+    ).toMatchObject({ storageScanTtlSeconds: 3600, systemDiskPath: '/host' });
+    expect(() => loadAdminConsoleConfig({ ADMIN_STORAGE_SCAN_TTL_SECONDS: '10' })).toThrow(
+      /ADMIN_STORAGE_SCAN_TTL_SECONDS/,
+    );
     expect(() => loadAdminConsoleConfig({ ADMIN_LIST_PAGE_SIZE: '201' })).toThrow(
       /ADMIN_LIST_PAGE_SIZE/,
     );

@@ -9,16 +9,33 @@ export const ADMIN_LIST_PAGE_SIZE_LIMIT = 200;
 const adminConsoleEnvSchema = z.object({
   /** Default page size of GET /admin/users and GET /admin/cash-payments (ADR 0010). */
   ADMIN_LIST_PAGE_SIZE: int(1, ADMIN_LIST_PAGE_SIZE_LIMIT).default(50),
+  /**
+   * How long GET /admin/system reuses its count of the media bucket (R2 ListObjectsV2 pages are
+   * billed requests and take a while on a big bucket). ADR 0016.
+   */
+  ADMIN_STORAGE_SCAN_TTL_SECONDS: int(60, 86_400).default(600),
+  /**
+   * Where GET /admin/system reads the server's disk usage (statfs). In the api container `/` is
+   * the host disk's overlay; point it at a bind mount to measure another disk.
+   */
+  ADMIN_SYSTEM_DISK_PATH: z.string().min(1).default('/'),
 });
 
 export interface AdminConsoleConfig {
   listPageSize: number;
+  /** ADMIN_STORAGE_SCAN_TTL_SECONDS. */
+  storageScanTtlSeconds: number;
+  /** ADMIN_SYSTEM_DISK_PATH. */
+  systemDiskPath: string;
 }
 
 /** Reads ADMIN_LIST_PAGE_SIZE (api; default 50). */
 export function loadAdminConsoleConfig(env: Env): AdminConsoleConfig {
+  const e = parseEnv(adminConsoleEnvSchema, env, 'admin console');
   return {
-    listPageSize: parseEnv(adminConsoleEnvSchema, env, 'admin console').ADMIN_LIST_PAGE_SIZE,
+    listPageSize: e.ADMIN_LIST_PAGE_SIZE,
+    storageScanTtlSeconds: e.ADMIN_STORAGE_SCAN_TTL_SECONDS,
+    systemDiskPath: e.ADMIN_SYSTEM_DISK_PATH,
   };
 }
 

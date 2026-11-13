@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { DRIVE_ITEMS_BATCH_MAX, DRIVE_PAGE_SIZE_LIMIT } from '../config/drive';
-import { DOWNLOAD_SIZES, FILE_STATUSES, SUBSCRIPTION_STATUSES } from '../domain';
+import { DOWNLOAD_SIZES, FILE_STATUSES, SHARE_STATUSES, SUBSCRIPTION_STATUSES } from '../domain';
 import { DRIVE_CURSOR_MAX_LENGTH, DRIVE_SORTS, SORT_ORDERS } from '../drive/cursor';
 import { driveNameSchema } from '../drive/names';
 import { MEDIA_KINDS } from '../media-types';
@@ -56,6 +56,29 @@ export const driveFolderSchema = z.object({
    * the file is no longer a live, ready image inside the folder's subtree.
    */
   coverFileId: idSchema.nullable(),
+  /**
+   * The folder as an event (ADR 0016: every folder is an "Event" in the studio). Only in
+   * `GET /drive/folders/:id/children`; absent from other responses.
+   */
+  event: z
+    .object({
+      /**
+       * Signed thumb.webp URL of the cover: the chosen cover while it is a live, ready image in
+       * the folder's subtree, else its first ready image (share-page order). Null: no image yet.
+       */
+      coverThumbUrl: signedUrlSchema.nullable(),
+      /** The newest share of the folder that isn't revoked; null when there is none. */
+      link: z
+        .object({
+          shareId: idSchema,
+          /** `active` (published), `paused` (unpublished), `expired`. Never `revoked`. */
+          status: z.enum(SHARE_STATUSES),
+          path: z.string().startsWith('/'),
+          url: z.url(),
+        })
+        .nullable(),
+    })
+    .optional(),
 });
 export type DriveFolder = z.output<typeof driveFolderSchema>;
 

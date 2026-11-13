@@ -57,8 +57,12 @@ export interface DriveGridProps<T extends { id: string }> {
   loadingMoreLabel: string;
   /** Narrowest cell before another column is added (default 160 px). */
   minCellPx?: number;
-  /** Height under each square cell (default 52 px for name and status; 0 for photos only). */
+  /** Height under each cell's picture (default 64 px for name and status; 0 for photos only). */
   captionPx?: number;
+  /** Height of each cell's picture as a share of its width (default 1, square; 0.75 for 4:3). */
+  cellAspect?: number;
+  /** Height of a row in the list layout (default 56 px). */
+  listRowPx?: number;
   gapPx?: number;
   layout?: 'grid' | 'list';
   /** Scroll this item index into view (keyboard focus). */
@@ -77,6 +81,8 @@ export function DriveGrid<T extends { id: string }>({
   loadingMoreLabel,
   minCellPx = MIN_CELL_PX,
   captionPx = CAPTION_PX,
+  cellAspect = 1,
+  listRowPx = LIST_ROW_PX,
   gapPx = GAP_PX,
   layout = 'grid',
   scrollToIndex = null,
@@ -88,7 +94,7 @@ export function DriveGrid<T extends { id: string }>({
   const { width, top } = useBox(containerRef);
   const columns = list ? 1 : columnsFor(width || 360, minCellPx, GAP);
   const cellWidth = ((width || 360) - GAP * (columns - 1)) / columns;
-  const rowHeight = list ? LIST_ROW_PX + GAP : Math.round(cellWidth + captionPx + GAP);
+  const rowHeight = list ? listRowPx + GAP : Math.round(cellWidth * cellAspect + captionPx + GAP);
   const rowCount = Math.ceil(items.length / columns);
 
   const virtualizer = useWindowVirtualizer({

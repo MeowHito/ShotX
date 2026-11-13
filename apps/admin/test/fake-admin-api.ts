@@ -2,6 +2,7 @@ import {
   type AccountRole,
   ADMIN_ROUTES,
   type AdminCashPayment,
+  type AdminSystemResponse,
   type AdminUser,
   createAdminUserBodySchema,
   createCashPaymentBodySchema,
@@ -86,6 +87,37 @@ export class FakeAdminApi {
   minLength: Record<AccountRole, number> = { admin: 4, photographer: 4 };
   /** Fail the next calls of a route with this error instead (consumed in order). */
   readonly failures = new Map<RouteContract, Fail[]>();
+  /** GET /admin/system (ADR 0016). */
+  system: AdminSystemResponse = {
+    generatedAt: '2026-11-13T05:00:00.000Z',
+    storage: {
+      originalsBytes: 120 * 1024 ** 3,
+      photoCount: 54_321,
+      videoCount: 12,
+      photographerCount: 7,
+      databaseBytes: 2 * 1024 ** 3,
+    },
+    bucket: {
+      name: 'snap-media',
+      objectCount: 160_000,
+      totalBytes: 150 * 1024 ** 3,
+      prefixes: [
+        { prefix: 'originals/', objectCount: 54_000, bytes: 120 * 1024 ** 3 },
+        { prefix: 'derived/', objectCount: 106_000, bytes: 30 * 1024 ** 3 },
+      ],
+      measuredAt: '2026-11-13T04:55:00.000Z',
+    },
+    server: {
+      hostname: 'vps',
+      cpuCount: 8,
+      cpuPercent: 12.5,
+      loadAverage: [0.8, 0.6, 0.5],
+      memory: { totalBytes: 32 * 1024 ** 3, usedBytes: 24 * 1024 ** 3 },
+      disk: { path: '/', totalBytes: 400 * 1024 ** 3, usedBytes: 380 * 1024 ** 3 },
+      uptimeSeconds: 2 * 86_400 + 5 * 3600,
+      temperatureC: null,
+    },
+  };
   private readonly idempotency = new Map<string, { body: string; payment: AdminCashPayment }>();
 
   constructor(users: AdminUser[] = []) {
@@ -259,6 +291,8 @@ export class FakeAdminApi {
         user.lockedUntil = null;
         return { status: 200, value: user };
       }
+      case ADMIN_ROUTES.system:
+        return { status: 200, value: this.system };
       case ADMIN_ROUTES.listCashPayments: {
         const q = listCashPaymentsQuerySchema.parse(Object.fromEntries(search));
         const items = this.payments.filter(

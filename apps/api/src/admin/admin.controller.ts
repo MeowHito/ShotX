@@ -20,6 +20,7 @@ import type { AppUser } from '../auth/users';
 import { parseRequestPart, respond, ZodPipe } from '../http/zod';
 import { AdminUsersService } from './admin-users.service';
 import { CashPaymentsService } from './cash-payments.service';
+import { AdminSystemService } from './system.service';
 
 const R = ADMIN_ROUTES;
 type Out<T extends z.ZodType> = z.output<T>;
@@ -36,7 +37,15 @@ export class AdminController {
   constructor(
     @Inject(AdminUsersService) private readonly users: AdminUsersService,
     @Inject(CashPaymentsService) private readonly cash: CashPaymentsService,
+    @Inject(AdminSystemService) private readonly system: AdminSystemService,
   ) {}
+
+  /** ADR 0016: the overview tab. Read-only, so not audited. */
+  @Get(R.system.path)
+  @HttpCode(R.system.status)
+  async getSystem() {
+    return respond(R.system.response, await this.system.overview());
+  }
 
   @Get(R.listUsers.path)
   @HttpCode(R.listUsers.status)

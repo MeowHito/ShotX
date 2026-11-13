@@ -54,6 +54,7 @@ import { validationError } from '../http/zod';
 import { SignedUrls } from '../media/signed-urls';
 import { API_CONFIG, CLOCK, type Clock, DATABASE, QUEUE_SENDER, type QueueSender } from '../tokens';
 import { currentSubscription, storageCounters, uploadGate, uploadsBlockedUnder } from './account';
+import { eventsOf } from './events';
 import { ancestorsOf, insertFolder, liveFolder, subtreeMaxDepth } from './folders';
 import { DriveFileMapper, mediaKindOf, toDriveFolder } from './media-urls';
 import { fileFolderIs, folderParentIs, withFreeName } from './names';
@@ -188,10 +189,26 @@ export class DriveService {
             id: last.row.id,
           })
         : null;
+    // ADR 0016: every folder is an event; its cover and link come along in two queries.
+    const events = await eventsOf(
+      this.db,
+      ownerId,
+      shown.filter((r) => r.kind === 'folder').map((r) => r.row.id),
+      {
+        urls: this.urls,
+        publicBaseUrl: this.config.app.publicBaseUrl,
+        now: this.clock.now(),
+        expiresAt: this.urls.viewExpiry(),
+      },
+    );
     return {
       folder: folder === null ? null : toDriveFolder(folder),
       ancestors,
-      items: shown.map((r) => this.item(r)),
+      items: shown.map((r) => {
+        const item = this.item(r);
+        const event = item.kind === 'folder' ? events.get(item.id) : undefined;
+        return event === undefined ? item : { ...item, event };
+      }),
       nextCursor,
     };
   }

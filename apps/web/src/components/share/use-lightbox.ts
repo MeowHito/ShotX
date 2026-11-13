@@ -31,8 +31,8 @@ export function slideFor(item: ShareItem) {
   return { src: item.previewUrl, msrc: item.thumbUrl, width, height, alt: item.name };
 }
 
-/** HTML of the bottom download button: the label is escaped (it comes from the messages). */
-export function bottomDownloadHtml(label: string): string {
+/** HTML of the download button: the label is escaped (it comes from the messages). */
+export function downloadButtonHtml(label: string): string {
   return `<svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${escapeAttribute(label)}</span>`;
 }
 
@@ -61,8 +61,9 @@ export function localizeLightbox(
 /**
  * Opens PhotoSwipe on a list of share items (loaded on first open, its own chunk). ADR 0011:
  * swipe left/right (PhotoSwipe's own gestures), previous/next arrows that stay visible on touch
- * screens too (globals.css), and, when `onDownload` is given, a clear download button at the
- * bottom for the current photo.
+ * screens too (globals.css), and, when `onDownload` is given, a clear download button for the
+ * current photo in the top bar, before zoom and close (owner, 2026-11-13: it used to sit at the
+ * bottom, where PhotoSwipe's button styles pushed it under the browser's toolbar).
  */
 export function useLightbox(onDownload?: (item: ShareItem) => void) {
   const t = useTranslations('lightbox');
@@ -92,14 +93,14 @@ export function useLightbox(onDownload?: (item: ShareItem) => void) {
       if (downloadRef.current !== undefined) {
         pswp.on('uiRegister', () => {
           pswp.ui?.registerElement({
-            name: 'bottomDownload',
+            name: 'download',
             title: t('download'),
             ariaLabel: t('download'),
             order: 9,
             isButton: true,
-            appendTo: 'root',
-            className: 'pswp__download-bottom',
-            html: bottomDownloadHtml(t('downloadShort')),
+            appendTo: 'bar',
+            className: 'pswp__download',
+            html: downloadButtonHtml(t('downloadShort')),
             onClick: () => {
               const item = items[pswp.currIndex];
               if (item !== undefined) downloadRef.current?.(item);

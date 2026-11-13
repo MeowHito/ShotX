@@ -6,24 +6,26 @@
 
 /*
  * Share page lightbox (ADR 0011): previous/next arrows on touch screens too (PhotoSwipe hides
- * them until a mouse is used), and a clear download button at the bottom, thumb-reachable and
- * above the home indicator. The arrow rule is one class more specific than PhotoSwipe's own
- * `.pswp--touch .pswp__button--arrow { visibility: hidden }`: photoswipe/style.css comes with
- * the share page's chunk, after this file, so an equal selector would lose.
+ * them until a mouse is used), and a clear download button in the top bar, left of zoom and
+ * close (owner, 2026-11-13). photoswipe/style.css comes with the share page's chunk, after this
+ * file, so each rule is one class more specific than PhotoSwipe's own: the arrows beat
+ * `.pswp--touch .pswp__button--arrow { visibility: hidden }`, the download button beats
+ * `.pswp__button` (50x60, no padding, hidden overflow).
  */
 .pswp.pswp--touch .pswp__button--arrow {
   visibility: visible;
 }
-.pswp__download-bottom {
-  position: absolute;
-  left: 50%;
-  bottom: max(1rem, env(safe-area-inset-bottom));
-  transform: translateX(-50%);
+.pswp .pswp__button.pswp__download {
   display: inline-flex;
   align-items: center;
+  align-self: center;
   gap: 0.5rem;
-  height: 3rem;
-  padding: 0 1.5rem;
+  width: auto;
+  height: 2.5rem;
+  margin: 0 0.5rem 0 0;
+  padding: 0 1.1rem;
+  overflow: visible;
+  opacity: 1;
   border-radius: 9999px;
   background: var(--color-primary);
   color: var(--color-primary-foreground);
@@ -32,7 +34,7 @@
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
   cursor: pointer;
 }
-.pswp__download-bottom:focus-visible {
+.pswp .pswp__button.pswp__download:focus-visible {
   outline: 2px solid white;
   outline-offset: 2px;
 }
