@@ -91,21 +91,26 @@ describe('admin language switcher', () => {
     await expect(config()).resolves.toMatchObject({ locale: 'th', messages: MESSAGES.th });
   });
 
-  it('is in the signed-in frame, next to sign out, in the current language', async () => {
+  it('is a flag menu in the top bar of the signed-in frame, not in the account box', async () => {
     withLocale(
       'zh',
       <AdminShell pathname="/users" user={{ id: 'x', email: 'me@example.com', name: null }}>
         <p>content</p>
       </AdminShell>,
     );
-    const group = screen.getByRole('group', { name: '语言' });
-    expect(within(group).getByRole('button', { name: '中文' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
+    // Owner, 2026-11-13: top right, out of the account box (no pill group there any more).
+    expect(screen.queryByRole('group', { name: '语言' })).toBeNull();
+    const banner = screen.getByRole('banner');
+    const trigger = within(banner).getByRole('button', { name: '语言 中文' });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
     expect(screen.getByRole('button', { name: '退出登录' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '用户' })).toHaveAttribute('href', '/users');
-    await userEvent.click(within(group).getByRole('button', { name: 'ไทย' }));
+    await userEvent.click(trigger);
+    expect(await screen.findByRole('menuitemradio', { name: '中文' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    await userEvent.click(screen.getByRole('menuitemradio', { name: 'ไทย' }));
     expect(document.cookie).toContain(`${LOCALE_COOKIE}=th`);
     expect(reloadPage).toHaveBeenCalledTimes(1);
   });

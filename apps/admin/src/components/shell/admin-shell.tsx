@@ -5,7 +5,7 @@ import { GaugeIcon, LogOutIcon, type LucideIcon, MenuIcon, UsersIcon } from 'luc
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { type ReactNode, useState } from 'react';
-import { LanguageSwitcher } from '@/components/language-switcher';
+import { LanguageMenu } from '@/components/language-switcher';
 import type { SessionUser } from '@/lib/auth/session';
 import { SIGN_IN_PATHS } from '@/lib/sign-in/protocol';
 
@@ -100,7 +100,6 @@ export function AdminShell({
           {t('shell.signedInAs', { name: who })}
         </p>
       ) : null}
-      <LanguageSwitcher className="px-1" />
       <LogoutButton />
     </div>
   );
@@ -114,18 +113,21 @@ export function AdminShell({
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-background/90 px-3 backdrop-blur md:hidden">
+        {/* The top bar: menu and logo on phones (the aside has them on wider screens), and the
+            language at the top right on every screen (owner, 2026-11-13). */}
+        <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-background/90 px-3 backdrop-blur sm:px-6">
           <Button
             variant="ghost"
             size="icon"
-            className="size-11"
+            className="size-11 md:hidden"
             aria-label={t('shell.openMenu')}
             aria-expanded={drawerOpen}
             onClick={() => setDrawerOpen(true)}
           >
             <MenuIcon aria-hidden />
           </Button>
-          {logo}
+          <div className="md:hidden">{logo}</div>
+          <LanguageMenu className="ml-auto" />
         </header>
         <main className="mx-auto w-full max-w-7xl flex-1 px-3 pt-4 pb-24 sm:px-6 sm:pt-8">
           {children}
