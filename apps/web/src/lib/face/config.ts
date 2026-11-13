@@ -44,4 +44,9 @@ export interface ClientShareConfig {
   photoPrefetchConcurrency: number;
   /** Pause between the separate downloads of a selection. */
   downloadGapMs: number;
+  /**
+   * ADR 0020: how often an open share page asks GET /s/:token/changes, to show new photos without
+   * a reload (quietly: no spinner). 0 turns it off.
+   */
+  livePollMs: number;
 }

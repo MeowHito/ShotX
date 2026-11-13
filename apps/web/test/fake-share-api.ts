@@ -480,6 +480,13 @@ export function handlePhase3(
       const { slice, next } = api.page(visibleItems(share), iq.cursor, iq.limit);
       return { items: slice, nextCursor: next };
     }
+    case PUBLIC_SHARE_ROUTES.changes: {
+      // ADR 0020: moves with the items the share shows (and its mode).
+      const share = publicShareOrFail(api, params.token);
+      gate(api, share);
+      const shown = visibleItems(share);
+      return { version: `${share.mode}:${shown.length}:${shown[0]?.id ?? '-'}` };
+    }
     case PUBLIC_SHARE_ROUTES.unlock: {
       const share = publicShareOrFail(api, params.token);
       gate(api, share, 'login');

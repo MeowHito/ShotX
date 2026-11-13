@@ -154,6 +154,7 @@ describe('loadShareConfig', () => {
       signedUrlTtlSeconds: { view: 3600, download: 600 },
       signedUrlExpiryBucketSeconds: 300,
       pageSize: 100,
+      changesCacheSeconds: 5,
       faceOnlyGrantTtlSeconds: 86_400,
       unlockTtlSeconds: 86_400,
       anonIdMaxAgeDays: 365,

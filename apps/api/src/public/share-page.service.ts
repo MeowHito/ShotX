@@ -84,6 +84,9 @@ export function consentOf(shareId: string, viewer: Viewer): SQL {
  */
 @Injectable()
 export class SharePageService {
+  /** GET /s/:token/changes answers by share id, reused for SHARE_CHANGES_CACHE_SECONDS. */
+  private readonly changesCache = new Map<string, { version: string; at: number }>();
+
   constructor(
     @Inject(DATABASE) private readonly db: Db,
     @Inject(API_CONFIG) private readonly config: ApiConfig,
@@ -281,6 +284,37 @@ export class SharePageService {
             })
           : null,
     };
+  }
+
+  // --- GET /s/:token/changes ----------------------------------------------------------------------
+
+  /**
+   * ADR 0020: an opaque version of what the share page shows, so an open page can pick up new
+   * photos without a reload. It covers the mode, the design and the ready, live files in scope
+   * (their count and newest id, uuidv7), never per-viewer data: face_only pages don't poll and
+   * their grant isn't read. Same gates as items; no activity event (polling must not flood
+   * activity_events); answers are reused per share for SHARE_CHANGES_CACHE_SECONDS.
+   */
+  async changes(token: string, ctx: PublicContext): Promise<{ version: string }> {
+    const share = await this.access.open(token, ctx);
+    const now = this.clock.now().getTime();
+    const ttlMs = this.config.share.changesCacheSeconds * 1000;
+    const cached = this.changesCache.get(share.id);
+    if (cached !== undefined && now - cached.at < ttlMs) return { version: cached.version };
+    const [row] = await this.db
+      .select({
+        n: sql<number>`count(*)`.mapWith(Number),
+        newest: sql<string | null>`max(${files.id}::text)`,
+      })
+      .from(files)
+      .where(shareItemsScope(share));
+    const version = sha256Hex(
+      [share.mode, share.designId ?? '-', row?.n ?? 0, row?.newest ?? '-'].join(':'),
+    ).slice(0, 16);
+    // Bounded: entries of shares nobody polls any more are dropped wholesale now and then.
+    if (this.changesCache.size >= 10_000) this.changesCache.clear();
+    this.changesCache.set(share.id, { version, at: now });
+    return { version };
   }
 
   private pageRows(

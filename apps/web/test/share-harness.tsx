@@ -41,6 +41,7 @@ export const SHARE_CONFIG: ClientShareConfig = {
   iosShareMaxFiles: 20,
   photoPrefetchConcurrency: 3,
   downloadGapMs: 0,
+  livePollMs: 0,
 };
 
 /** A frontal face filling a good part of the frame. */
@@ -170,6 +171,7 @@ export function renderSharePage(
     loadTurnstile?: TurnstileLoader;
     viewerLogin?: ViewerLoginOptions;
     locale?: Locale;
+    shareConfig?: Partial<ClientShareConfig>;
   } = {},
 ) {
   const { scenario, canvas, detect, loadDetector, rendered, toJpeg } = faceHarness(
@@ -186,7 +188,7 @@ export function renderSharePage(
       signedIn={options.signedIn ?? false}
       viewerLogin={options.viewerLogin}
       faceConfig={options.faceConfig ?? FACE_CONFIG}
-      shareConfig={SHARE_CONFIG}
+      shareConfig={{ ...SHARE_CONFIG, ...options.shareConfig }}
       testing={{
         publicApi: createPublicApiClient({ fetch: fake.fetch }),
         faceTools: {

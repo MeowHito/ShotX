@@ -188,6 +188,12 @@ const webShareEnvSchema = z
     WEB_PHOTO_PREFETCH_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(3),
     /** Pause between the separate downloads of a selection (browsers that can't share files). */
     WEB_DOWNLOAD_GAP_MS: z.coerce.number().int().min(0).max(5000).default(400),
+    /** ADR 0020: how often an open share page checks for new photos (0: never). */
+    WEB_SHARE_LIVE_POLL_MS: z.coerce
+      .number()
+      .int()
+      .refine((v) => v === 0 || (v >= 3000 && v <= 10 * 60_000), 'must be 0 or 3000–600000')
+      .default(15_000),
     /** How often the studio polls GET /billing/payments/:id while a payment is pending. */
     WEB_BILLING_POLL_INTERVAL_MS: z.coerce.number().int().min(500).max(60_000).default(3000),
     /**
@@ -276,6 +282,7 @@ export function clientShareConfig(env: Env = process.env): ClientShareConfig {
     iosShareMaxFiles: e.WEB_IOS_SHARE_MAX_FILES,
     photoPrefetchConcurrency: e.WEB_PHOTO_PREFETCH_CONCURRENCY,
     downloadGapMs: e.WEB_DOWNLOAD_GAP_MS,
+    livePollMs: e.WEB_SHARE_LIVE_POLL_MS,
   };
 }
 

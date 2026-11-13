@@ -179,6 +179,7 @@ describe('client config', () => {
       iosShareMaxFiles: 20,
       photoPrefetchConcurrency: 3,
       downloadGapMs: 400,
+      livePollMs: 15_000,
     });
   });
 

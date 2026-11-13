@@ -102,6 +102,25 @@ describe('share page: states', () => {
     }
   });
 
+  it('ADR 0020: new photos appear at the top on their own, with no reload or spinner', async () => {
+    const fake = new FakeApi();
+    const share = fake.addPublicShare({ itemCount: 3 });
+    renderSharePage(fake, share.token, { shareConfig: { livePollMs: 40 } });
+    const grid = await screen.findByRole('list', { name: th.share.galleryLabel });
+    await waitFor(() => expect(within(grid).getAllByRole('listitem')).toHaveLength(3));
+    // Unchanged: the page only asks for the version, it doesn't refetch the photos.
+    await waitFor(() =>
+      expect(fake.callsTo(PUBLIC_SHARE_ROUTES.changes).length).toBeGreaterThanOrEqual(2),
+    );
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.items)).toHaveLength(1);
+
+    // The photographer uploads during the event: newest first, so it lands at the top.
+    share.items.unshift(shareItem('new.jpg'));
+    await waitFor(() => expect(within(grid).getAllByRole('listitem')).toHaveLength(4));
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByText(th.share.loadingMore)).toBeNull();
+  });
+
   it('opens by slug, then makes every other call with the token and shows the slug URL', async () => {
     const fake = new FakeApi();
     const share = fake.addPublicShare({ title: 'งานวิ่ง กรุงเทพ 2026', itemCount: 2 });

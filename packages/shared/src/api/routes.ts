@@ -107,6 +107,7 @@ import {
   SELFIE_FIELD_NAME,
   SELFIE_MIME_TYPES,
   shareItemsQuerySchema,
+  shareChangesResponseSchema,
   shareItemsResponseSchema,
   shareMetaResponseSchema,
   shareTokenParamsSchema,
@@ -848,6 +849,15 @@ export const PUBLIC_SHARE_ROUTES = {
     response: shareItemsResponseSchema,
     errors: errors(...SHARE_GATE_ERRORS),
   },
+  changes: {
+    method: 'GET',
+    path: '/s/:token/changes',
+    status: 200,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    response: shareChangesResponseSchema,
+    errors: errors(...SHARE_GATE_ERRORS),
+  },
   /** Sets the share's unlock cookie. */
   unlock: {
     method: 'POST',
@@ -991,6 +1001,7 @@ export const PUBLIC_SHARE_ROUTES = {
 export const PUBLIC_SHARE_ROUTE_ACTIVITY = {
   meta: [],
   items: ['view'],
+  changes: [],
   unlock: [],
   giveConsent: [],
   withdrawConsent: [],

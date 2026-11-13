@@ -57,6 +57,12 @@ export class PublicShareController {
     return respond(R.items.response, await this.page.items(token, ctx, query));
   }
 
+  @Get(R.changes.path)
+  @HttpCode(R.changes.status)
+  async changes(@CurrentPublic() ctx: PublicContext, @Param('token') token: string) {
+    return respond(R.changes.response, await this.page.changes(token, ctx));
+  }
+
   @Post(R.unlock.path)
   @HttpCode(R.unlock.status)
   async unlock(

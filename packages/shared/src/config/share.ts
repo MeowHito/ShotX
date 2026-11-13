@@ -66,6 +66,11 @@ const shareEnvSchema = z
     /** Items per page on the share page (spec: ~100). */
     SHARE_PAGE_SIZE: int(1, SHARE_PAGE_SIZE_LIMIT).default(100),
     /**
+     * How long GET /s/:token/changes reuses a share's answer (ADR 0020): open share pages poll it,
+     * so many viewers of one event cost one count query per this many seconds.
+     */
+    SHARE_CHANGES_CACHE_SECONDS: int(1, 300).default(5),
+    /**
      * Lifetime of a viewer's face-search result in Redis (spec: 24 h). In face_only mode it is the
      * grant of matched files; in every mode it backs "ไม่ใช่ฉัน" feedback. Refreshed by each scan.
      */
@@ -149,6 +154,8 @@ export interface ShareConfig {
   /** Expiries are rounded up to a multiple of this (bucketedExpiry). */
   signedUrlExpiryBucketSeconds: number;
   pageSize: number;
+  /** SHARE_CHANGES_CACHE_SECONDS. */
+  changesCacheSeconds: number;
   /** Lifetime of a face-search result (the face_only grant). */
   faceOnlyGrantTtlSeconds: number;
   unlockTtlSeconds: number;
@@ -179,6 +186,7 @@ export function loadShareConfig(env: Env): ShareConfig {
     },
     signedUrlExpiryBucketSeconds: e.SIGNED_URL_EXPIRY_BUCKET_SECONDS,
     pageSize: e.SHARE_PAGE_SIZE,
+    changesCacheSeconds: e.SHARE_CHANGES_CACHE_SECONDS,
     faceOnlyGrantTtlSeconds: e.SHARE_FACE_ONLY_GRANT_TTL_SECONDS,
     unlockTtlSeconds: e.SHARE_UNLOCK_TTL_SECONDS,
     anonIdMaxAgeDays: e.ANON_ID_MAX_AGE_DAYS,

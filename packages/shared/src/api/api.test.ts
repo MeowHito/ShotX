@@ -268,6 +268,7 @@ describe('route table', () => {
       'DELETE /designs/:id/default',
       'GET /s/:token',
       'GET /s/:token/items',
+      'GET /s/:token/changes',
       'POST /s/:token/unlock',
       'POST /s/:token/consent',
       'DELETE /s/:token/consent',

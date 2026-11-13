@@ -5,6 +5,7 @@ import {
   ME_ROUTES,
   PUBLIC_SHARE_ROUTES as P,
   SHARE_UNLOCK_COOKIE,
+  shareChangesResponseSchema,
   shareItemsResponseSchema,
   shareMetaResponseSchema,
   VIEWER_SESSION_COOKIE,
@@ -18,6 +19,7 @@ const meta = (token: string) => apiPath(P.meta, { token });
 const items = (token: string, q = '') => `${apiPath(P.items, { token })}${q}`;
 const unlock = (token: string) => apiPath(P.unlock, { token });
 const consent = (token: string) => apiPath(P.giveConsent, { token });
+const changes = (token: string) => apiPath(P.changes, { token });
 
 for (const backend of DATABASE_BACKENDS) {
   describe.skipIf(!backend.enabled)(`share page on ${backend.name}`, () => {
@@ -300,6 +302,39 @@ for (const backend of DATABASE_BACKENDS) {
         expect(body.details?.cover?.previewUrl).toMatch(
           /^https:\/\/photos\.example\.com\/media\/derived\//,
         );
+      });
+
+      it('ADR 0020: changes moves when photos arrive, is cached briefly and logs nothing', async () => {
+        const { owner, root, share } = await gallery();
+        const b = api.browser();
+        const read = async () => {
+          const res = await b.request('GET', changes(share.token));
+          expect(res.status).toBe(200);
+          return shareChangesResponseSchema.parse(res.body).version;
+        };
+        const eventsBefore = (
+          await api.db.select().from(activityEvents).where(eq(activityEvents.shareId, share.id))
+        ).length;
+        const v1 = await read();
+        expect(await read()).toBe(v1);
+        // A new photo: the cached answer holds for SHARE_CHANGES_CACHE_SECONDS, then moves.
+        await api.file(owner.id, root.id, 'd.jpg');
+        expect(await read()).toBe(v1);
+        api.clock.advance(5_000);
+        const v2 = await read();
+        expect(v2).not.toBe(v1);
+        api.clock.advance(5_000);
+        expect(await read()).toBe(v2);
+        // Polling writes no activity event.
+        const eventsAfter = (
+          await api.db.select().from(activityEvents).where(eq(activityEvents.shareId, share.id))
+        ).length;
+        expect(eventsAfter).toBe(eventsBefore);
+        // Same gates as items: a revoked share answers SHARE_EXPIRED.
+        const revoked = await api.share(owner.id, { folderId: root.id }, { isActive: false });
+        expect((await b.request('GET', changes(revoked.token))).body).toMatchObject({
+          code: 'SHARE_EXPIRED',
+        });
       });
 
       it('pages items newest first by (taken_at, created_at, id) with signed, cacheable URLs', async () => {

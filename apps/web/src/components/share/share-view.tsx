@@ -20,7 +20,13 @@ import { isApiError } from '@/lib/api/errors';
 import type { ViewerLoginOptions } from '@/lib/auth/viewer-login';
 import type { ClientFaceConfig, ClientShareConfig } from '@/lib/face/config';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
-import { shareKeys, useInvalidateShare, useShareItems, useShareMeta } from '@/lib/share/queries';
+import {
+  shareKeys,
+  useInvalidateShare,
+  useShareItems,
+  useShareLiveUpdates,
+  useShareMeta,
+} from '@/lib/share/queries';
 import { ShareApiProvider, useShareApi } from '@/lib/share/share-api';
 import { DownloadBar, useSingleDownload } from './download-bar';
 import { JustifiedGrid } from './justified-grid';
@@ -315,6 +321,8 @@ function ShareContent({
   const [selected, setSelected] = useState<ReadonlyMap<string, ShareItem>>(new Map());
   const resultsRef = useRef<HTMLDivElement>(null);
   const single = useSingleDownload(token);
+  // ADR 0020: new photos appear on their own, without a reload or a spinner.
+  useShareLiveUpdates(token, shareConfig.livePollMs);
 
   const onLightboxDownload = useCallback(
     (item: ShareItem) => {

@@ -236,6 +236,17 @@ export const shareItemsResponseSchema = z.object({
 });
 export type ShareItemsResponse = z.output<typeof shareItemsResponseSchema>;
 
+// --- GET /s/:token/changes ----------------------------------------------------------------------
+
+/**
+ * ADR 0020: what an open share page polls to show new photos without a reload. `version` is
+ * opaque and changes when the share's items (ready, live, in scope) or its mode or design change;
+ * the page then refetches meta and items quietly. Behind the same gates as items; writes no
+ * activity event; reused per share for SHARE_CHANGES_CACHE_SECONDS.
+ */
+export const shareChangesResponseSchema = z.object({ version: z.string() });
+export type ShareChangesResponse = z.output<typeof shareChangesResponseSchema>;
+
 // --- POST /s/:token/unlock ----------------------------------------------------------------------
 
 /**

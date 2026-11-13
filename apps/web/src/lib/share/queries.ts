@@ -13,7 +13,7 @@ import {
   type SupportedLocale,
 } from '@shotx/shared';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useShareApi } from './share-api';
 
 /**
@@ -77,6 +77,36 @@ export function useShareItems(token: string, enabled: boolean) {
     return () => clearTimeout(timer);
   }, [firstExpiry, refetch]);
   return { ...query, items };
+}
+
+/**
+ * ADR 0020: keeps an open share page current without a reload. Every `intervalMs` (while the tab
+ * is visible) it asks GET /s/:token/changes; when the version moves it refetches the page's meta
+ * and items in the background. Nothing is shown while it works: the old photos stay until the
+ * new list arrives, newest first, so new photos simply appear at the top.
+ */
+export function useShareLiveUpdates(token: string, intervalMs: number) {
+  const { api } = useShareApi();
+  const queryClient = useQueryClient();
+  const changes = useQuery({
+    // Not under shareKeys.page: refetching the page must not re-trigger this check.
+    queryKey: ['share-changes', token],
+    queryFn: ({ signal }) => api.call(PUBLIC_SHARE_ROUTES.changes, { params: { token }, signal }),
+    enabled: intervalMs > 0,
+    refetchInterval: intervalMs,
+    refetchIntervalInBackground: false,
+    retry: false,
+    staleTime: 0,
+  });
+  const version = changes.data?.version;
+  const seen = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (version === undefined) return;
+    if (seen.current !== undefined && seen.current !== version) {
+      void queryClient.invalidateQueries({ queryKey: shareKeys.page });
+    }
+    seen.current = version;
+  }, [version, queryClient]);
 }
 
 /** Refetches the page's share (meta by its ref, items by token); `token` is kept for callers. */
