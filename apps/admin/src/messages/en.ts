@@ -77,6 +77,9 @@ export const en: TranslatedMessages = {
     refresh: 'Refresh',
     loadError: 'Couldn’t load the overview',
     notAvailable: 'Not available',
+    perMonth: '{amount}/month',
+    approx: '≈ {amount}',
+    totalCost: 'Estimated total {thb}/month (≈ {usd})',
     storage: {
       title: 'Recorded in the system',
       originals: 'All original files',
@@ -88,6 +91,9 @@ export const en: TranslatedMessages = {
     bucket: {
       title: 'Cloudflare R2',
       total: 'Total used',
+      cost: 'Estimated cost',
+      costHint:
+        'Storage only (first {free, number} GB free), requests not included · egress is free',
       objects: '{count, number} files',
       noLimit: 'R2 has no capacity limit; you pay for what you use.',
       measuredAt: 'Last counted {time} (recounted about every 10 minutes)',
@@ -113,6 +119,8 @@ export const en: TranslatedMessages = {
       uptimeValue: '{days, number} d {hours, number} h',
       temperature: 'Temperature',
       noSensor: 'No sensor (virtual machines don’t report temperature)',
+      diskHint: 'Photos and videos aren’t stored on the server; uploads go straight to R2.',
+      cost: 'Server rent',
     },
   },
   shell: {

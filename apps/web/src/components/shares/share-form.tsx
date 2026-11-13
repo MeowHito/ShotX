@@ -44,6 +44,8 @@ export type ShareFormProps =
       share: OwnerShare;
       faceSearchEnabled: boolean;
       onSubmit: (changes: UpdateShareBody) => Promise<unknown>;
+      /** False when the page shows the link's design picker elsewhere (the event dialog). */
+      showDesign?: boolean;
     };
 
 function Row({ children }: { children: ReactNode }) {
@@ -258,7 +260,13 @@ export function ShareForm(props: ShareFormProps) {
         </div>
       ) : null}
 
-      <DesignPicker value={designId} onChange={setDesignId} preselectDefault={existing === null} />
+      {props.kind === 'edit' && props.showDesign === false ? null : (
+        <DesignPicker
+          value={designId}
+          onChange={setDesignId}
+          preselectDefault={existing === null}
+        />
+      )}
 
       {error !== null ? <Alert variant="destructive">{error}</Alert> : null}
       <Button type="submit" disabled={busy}>

@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { loadCostConfig } from './cost';
+import { estimateR2StorageUsdMonth, loadCostConfig } from './cost';
 import * as shared from '../index';
 import { loadFaceConfig, loadFaceSearchUploadConfig, TILING_MODES, type TilingMode } from './face';
 
@@ -386,8 +386,21 @@ describe('loadCostConfig', () => {
       rekognitionCall: 0.001,
       rekognitionFaceMonth: 0.00001,
       cloudfrontPlanMonth: 200,
+      r2StorageGbMonth: 0.015,
+      r2FreeStorageGb: 10,
+      vpsMonthThb: 1529,
       usdThb: 33,
     });
     expect(loadCostConfig({ USD_THB: '36.5' }).usdThb).toBe(36.5);
+    expect(loadCostConfig({ VPS_MONTH_THB: '0' }).vpsMonthThb).toBe(0);
+    expect(() => loadCostConfig({ R2_STORAGE_GB_MONTH: '-1' })).toThrow();
+  });
+
+  it('estimates R2 storage above the free GB-months', () => {
+    const cost = loadCostConfig({});
+    const gb = 1024 ** 3;
+    expect(estimateR2StorageUsdMonth(0, cost)).toBe(0);
+    expect(estimateR2StorageUsdMonth(10 * gb, cost)).toBe(0);
+    expect(estimateR2StorageUsdMonth(110 * gb, cost)).toBeCloseTo(1.5, 10);
   });
 });

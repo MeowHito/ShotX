@@ -135,6 +135,7 @@ function makeEngine(
     supported?: boolean;
     maxQueued?: number;
     retryDelaysMs?: number[];
+    settleMs?: number;
   } = {},
 ) {
   const clock = { now: 10_000 };
@@ -152,6 +153,7 @@ function makeEngine(
     supported: options.supported ?? true,
     config: {
       intervalMs: 5000,
+      settleMs: options.settleMs ?? 0,
       maxQueued: options.maxQueued ?? 20,
       maxDepth: 3,
       retryDelaysMs: options.retryDelaysMs ?? [1000, 5000],
@@ -234,6 +236,27 @@ describe('FolderSyncEngine', () => {
     expect(engine.getSnapshot().stats.waiting).toBe(1);
     await engine.tick(); // unchanged since the previous scan
     expect(uploads.names()).toEqual(['IMG_1.jpg']);
+  });
+
+  it('waits settleMs after the last write, so a watermark plugin’s rewrite is what uploads', async () => {
+    const folder = fakeFolder('Export');
+    const { engine, uploads, clock } = makeEngine({ settleMs: 20_000 });
+    await setUp(engine, folder);
+    // Lightroom writes the export…
+    folder.put('IMG_1.jpg', 10, clock.now);
+    await engine.tick();
+    clock.now += 5000;
+    await engine.tick(); // unchanged for one scan, but written only 5 s ago
+    expect(uploads.names()).toEqual([]);
+    // …and the watermark plugin rewrites it a few seconds later.
+    folder.put('IMG_1.jpg', 12, clock.now);
+    await engine.tick();
+    clock.now += 19_000;
+    await engine.tick();
+    expect(uploads.names()).toEqual([]);
+    clock.now += 1000;
+    await engine.tick(); // untouched for 20 s: the watermarked version goes up
+    expect([...uploads.queued.values()].map((q) => q.file.size)).toEqual([12]);
   });
 
   it('keeps subfolders as the relative path, and skips them when asked', async () => {

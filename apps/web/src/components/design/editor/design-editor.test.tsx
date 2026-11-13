@@ -126,6 +126,19 @@ describe('design editor', () => {
     await waitFor(() => expect(screen.getByText(te.status.saved)).toBeInTheDocument());
   });
 
+  it('ADR 0019: the "show all photos" box is on by default and saves showPhotos', async () => {
+    const fake = new FakeApi();
+    const design = fake.designs.add('Event');
+    renderEditor(fake, design.id);
+    const box = await screen.findByRole('checkbox', { name: te.showPhotos });
+    expect(box).toBeChecked();
+    await userEvent.click(box);
+    expect(box).not.toBeChecked();
+    await waitFor(() => expect(fake.designs.designs.get(design.id)?.doc.showPhotos).toBe(false));
+    await userEvent.click(box);
+    await waitFor(() => expect(fake.designs.designs.get(design.id)?.doc.showPhotos).toBe(true));
+  });
+
   it('keyboard shortcuts edit the design, and are off while typing', async () => {
     const fake = new FakeApi();
     const design = fake.designs.add('Event');

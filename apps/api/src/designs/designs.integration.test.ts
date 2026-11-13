@@ -17,12 +17,14 @@ import {
   ownerShareSchema,
   PUBLIC_SHARE_ROUTES as P,
   SHARE_ROUTES as S,
+  shareItemsResponseSchema,
   shareMetaResponseSchema,
 } from '@shotx/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DATABASE_BACKENDS, type TestDatabase } from '../testing/database';
 import { OFFLINE_ACCOUNTS_ENV } from '../testing/fakes';
+import { insertReadyFile } from '../testing/seed';
 import { TestApi } from '../testing/harness';
 
 // --- documents ----------------------------------------------------------------------------------
@@ -727,6 +729,59 @@ for (const backend of DATABASE_BACKENDS) {
 
     describe('public share meta: design', () => {
       const meta = (token: string) => apiPath(P.meta, { token });
+
+      it('ADR 0019: a design with "show photos" off serves a gallery folder share as face_only', async () => {
+        const owner = await api.photographer();
+        const folder = await api.folder(owner.id);
+        await insertReadyFile(api.db, owner.id, { name: 'a.jpg', folderId: folder.id });
+        const share = await api.share(owner.id, { folderId: folder.id });
+        const browser = api.browser();
+        const read = async () => {
+          const m = shareMetaResponseSchema.parse(
+            (await browser.request('GET', meta(share.token))).body,
+          );
+          const page = shareItemsResponseSchema.parse(
+            (await browser.request('GET', apiPath(P.items, { token: share.token }))).body,
+          );
+          return { mode: m.mode, items: page.items.length, design: m.design };
+        };
+        expect(await read()).toMatchObject({ mode: 'gallery', items: 1, design: null });
+
+        // Show photos on (absent or true): unchanged, the photos are browsable under the card.
+        const shown = await newDesign(owner.token, { doc: docWith() });
+        const patch = (body: unknown) =>
+          api.request('PATCH', apiPath(S.update, { id: share.id }), { token: owner.token, body });
+        expect((await patch({ designId: shown.id })).status).toBe(200);
+        expect(await read()).toMatchObject({ mode: 'gallery', items: 1 });
+        const explicit = await putDesign(owner.token, shown.id, {
+          name: shown.name,
+          revision: shown.revision,
+          doc: { ...docWith(), showPhotos: true },
+        });
+        expect(explicit.status, JSON.stringify(explicit.body)).toBe(200);
+        expect(await read()).toMatchObject({ mode: 'gallery', items: 1 });
+
+        // Off: face scan only, enforced by the api (no items without a scan result).
+        const hidden = await newDesign(owner.token, {
+          name: 'Scan only',
+          doc: { ...docWith(), showPhotos: false },
+        });
+        expect((await patch({ designId: hidden.id })).status).toBe(200);
+        const off = await read();
+        expect(off).toMatchObject({ mode: 'face_only', items: 0 });
+        expect(off.design?.doc.showPhotos).toBe(false);
+        // The share row keeps its own mode; the owner still sees gallery.
+        const [row] = await api.db.select().from(shares).where(eq(shares.id, share.id));
+        expect(row?.mode).toBe('gallery');
+
+        // The same link back to the plain layout (or another design) shows the photos again.
+        expect((await patch({ designId: null })).status).toBe(200);
+        expect(await read()).toMatchObject({ mode: 'gallery', items: 1, design: null });
+
+        // A default design that hides photos is never applied at view time (ADR 0013).
+        await api.request('POST', apiPath(D.setDefault, { id: hidden.id }), { token: owner.token });
+        expect(await read()).toMatchObject({ mode: 'gallery', items: 1 });
+      });
 
       it('uses the share’s own design only: a default set later never changes existing shares', async () => {
         const owner = await api.photographer();

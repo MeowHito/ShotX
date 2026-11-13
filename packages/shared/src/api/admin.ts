@@ -184,6 +184,9 @@ const bytes = z.number().int().nonnegative();
  * - `server`: the VPS the api runs on, read from the kernel (/proc, statfs): CPU use over a short
  *   sample, load averages, memory, the disk at ADMIN_SYSTEM_DISK_PATH, uptime, and the hottest
  *   thermal sensor in °C (null on a virtual machine without sensors).
+ * - `cost`: a monthly estimate from the cost config (shared config/cost.ts): R2 storage above the
+ *   free GB at the bucket's current size (null when the bucket couldn't be counted; operations
+ *   not included, egress is free), the VPS rent (VPS_MONTH_THB), and USD_THB to convert.
  */
 export const adminSystemResponseSchema = z.object({
   generatedAt: isoDateTimeSchema,
@@ -215,6 +218,12 @@ export const adminSystemResponseSchema = z.object({
     disk: z.object({ path: z.string(), totalBytes: bytes, usedBytes: bytes }).nullable(),
     uptimeSeconds: z.number().nonnegative(),
     temperatureC: z.number().nullable(),
+  }),
+  cost: z.object({
+    usdThb: z.number().positive(),
+    r2StorageUsdMonth: z.number().nonnegative().nullable(),
+    r2FreeStorageGb: z.number().nonnegative(),
+    vpsThbMonth: z.number().nonnegative(),
   }),
 });
 export type AdminSystemResponse = z.output<typeof adminSystemResponseSchema>;

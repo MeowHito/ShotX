@@ -8,8 +8,9 @@ import {
   type DesignAssetView,
   type DesignLimits,
   designDocAssetIds,
+  designShowsPhotos,
 } from '@shotx/shared';
-import { Alert, Button, cn } from '@shotx/ui';
+import { Alert, Button, Checkbox, cn } from '@shotx/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeftIcon,
@@ -405,6 +406,17 @@ export function DesignEditor({
           onReload={() => void reload()}
           reloading={reloading}
         />
+        {/* ADR 0019: off = viewers see no photos and must scan their face. */}
+        <label
+          className="ml-2 flex shrink-0 cursor-pointer items-center gap-2 rounded-md border px-2 py-1.5 text-sm"
+          title={t('showPhotosHint')}
+        >
+          <Checkbox
+            checked={designShowsPhotos(state.doc)}
+            onCheckedChange={(v) => dispatch({ type: 'showPhotos', value: v === true })}
+          />
+          {t('showPhotos')}
+        </label>
         <div className="ml-auto flex items-center gap-1">
           <Button
             variant="ghost"

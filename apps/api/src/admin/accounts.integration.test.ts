@@ -412,6 +412,13 @@ for (const backend of DATABASE_BACKENDS) {
         );
         expect(body.server.cpuCount).toBeGreaterThan(0);
         expect(body.server.memory.totalBytes).toBeGreaterThan(0);
+        // A tiny bucket is inside R2's free GB; the VPS rent comes from VPS_MONTH_THB.
+        expect(body.cost).toEqual({
+          usdThb: 33,
+          r2StorageUsdMonth: 0,
+          r2FreeStorageGb: 10,
+          vpsThbMonth: 1529,
+        });
         // The bucket count is reused until ADMIN_STORAGE_SCAN_TTL_SECONDS passes.
         await h.admin(boss.token, 'GET', apiPath(A.system));
         expect(api.storage.bucketScans - scansBefore).toBeLessThanOrEqual(1);

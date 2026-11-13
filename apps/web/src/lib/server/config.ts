@@ -204,6 +204,16 @@ const webShareEnvSchema = z
       .min(1000)
       .max(5 * 60_000)
       .default(5000),
+    /**
+     * Folder sync: how long a file must be untouched before it is uploaded, so a watermark
+     * plugin that rewrites Lightroom's export right after it is written gets its version in.
+     */
+    WEB_FOLDER_SYNC_SETTLE_MS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(5 * 60_000)
+      .default(20_000),
     /** Folder sync: files in the upload queue at once (the rest wait for later scans). */
     WEB_FOLDER_SYNC_MAX_QUEUED: z.coerce.number().int().min(1).max(200).default(20),
     /** Folder sync: subfolder levels under the watched folder that are synced too. */
@@ -342,6 +352,8 @@ export function clientPricingConfig(env: Env = process.env): {
 /** Folder sync tunables (ADR 0014; SyncEngineConfig without the UI's recent-list length). */
 export interface ClientFolderSyncConfig {
   intervalMs: number;
+  /** WEB_FOLDER_SYNC_SETTLE_MS. */
+  settleMs: number;
   maxQueued: number;
   maxDepth: number;
   retryDelaysMs: number[];
@@ -351,6 +363,7 @@ export function clientFolderSyncConfig(env: Env = process.env): ClientFolderSync
   const e = parseEnv(webShareEnvSchema, env, 'web share');
   return {
     intervalMs: e.WEB_FOLDER_SYNC_INTERVAL_MS,
+    settleMs: e.WEB_FOLDER_SYNC_SETTLE_MS,
     maxQueued: e.WEB_FOLDER_SYNC_MAX_QUEUED,
     maxDepth: e.WEB_FOLDER_SYNC_MAX_DEPTH,
     retryDelaysMs: e.WEB_FOLDER_SYNC_RETRY_DELAYS_MS,

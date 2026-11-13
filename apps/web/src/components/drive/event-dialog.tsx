@@ -1,10 +1,9 @@
 'use client';
 
-import { type DriveFile, type DriveFolder, driveNameSchema, type OwnerShare } from '@shotx/shared';
+import { type DriveFolder, driveNameSchema, type OwnerShare } from '@shotx/shared';
 import {
   Alert,
   Button,
-  cn,
   Dialog,
   DialogContent,
   DialogHeader,
@@ -12,11 +11,11 @@ import {
   Input,
   Label,
 } from '@shotx/ui';
-import { CheckIcon, ImageIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { type FormEvent, useId, useState } from 'react';
+import { LinkDesignPicker } from '@/components/shares/link-design-picker';
 import { ShareForm } from '@/components/shares/share-form';
-import { useFolderChildren, useRenameItem, useSetFolderCover } from '@/lib/drive/queries';
+import { useRenameItem } from '@/lib/drive/queries';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useCreateShare, useMe, useShares, useUpdateShare } from '@/lib/studio/queries';
 import { EventStatusBadge } from './item-card';
@@ -27,8 +26,9 @@ export function eventLink(shares: readonly OwnerShare[]): OwnerShare | null {
 }
 
 /**
- * The event editor (ADR 0016): the event's name and cover, then its link: publish / unpublish (the
- * same link either way) and the link settings, or "create link and publish" when it has none.
+ * The event editor (ADR 0016): the event's name, then its link: publish / unpublish (the same link
+ * either way), the link's page design (changed in place, ADR 0019; it replaced the cover picker,
+ * owner 2026-11-13) and the link settings, or "create link and publish" when it has none.
  */
 export function EventDialog({
   folder,
@@ -62,25 +62,15 @@ export function EventDialog({
   );
 }
 
-const isCoverCandidate = (item: { kind: string }): item is DriveFile =>
-  item.kind === 'file' &&
-  (item as DriveFile).mediaKind === 'image' &&
-  (item as DriveFile).status === 'ready' &&
-  (item as DriveFile).thumbUrl !== undefined;
-
 function DetailsSection({ folder }: { folder: DriveFolder }) {
   const td = useTranslations('event.dialog');
   const tv = useTranslations('validation');
   const describe = useErrorMessage();
   const id = useId();
   const rename = useRenameItem();
-  const setCover = useSetFolderCover();
-  const children = useFolderChildren(folder.id);
-  const photos = children.items.filter(isCoverCandidate);
   const [name, setName] = useState(folder.name);
-  const [cover, setCoverChoice] = useState<string | null>(folder.coverFileId);
   const [message, setMessage] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
-  const busy = rename.isPending || setCover.isPending;
+  const busy = rename.isPending;
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -94,17 +84,12 @@ function DetailsSection({ folder }: { folder: DriveFolder }) {
       if (parsed.data !== folder.name) {
         await rename.mutateAsync({ item: { kind: 'folder', id: folder.id }, name: parsed.data });
       }
-      if (cover !== folder.coverFileId) {
-        await setCover.mutateAsync({ folderId: folder.id, fileId: cover });
-      }
       setMessage({ kind: 'info', text: td('saved') });
     } catch (err) {
       setMessage({ kind: 'error', text: describe(err) });
     }
   }
 
-  const tile =
-    'relative aspect-square overflow-hidden rounded-lg border-2 outline-none focus-visible:ring-2 focus-visible:ring-ring';
   return (
     <form onSubmit={(e) => void save(e)} className="grid gap-4" noValidate>
       <h3 className="text-sm font-semibold">{td('details')}</h3>
@@ -117,53 +102,6 @@ function DetailsSection({ folder }: { folder: DriveFolder }) {
           onChange={(e) => setName(e.target.value)}
         />
       </div>
-      <fieldset className="grid gap-2">
-        <legend className="mb-1 text-sm font-medium">{td('cover')}</legend>
-        <p className="text-xs text-muted-foreground">{td('coverHint')}</p>
-        {children.isPending ? null : photos.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{td('coverEmpty')}</p>
-        ) : (
-          <div className="grid max-h-64 grid-cols-4 gap-2 overflow-y-auto p-0.5 sm:grid-cols-5">
-            <button
-              type="button"
-              aria-pressed={cover === null}
-              onClick={() => setCoverChoice(null)}
-              className={cn(
-                tile,
-                'flex items-center justify-center bg-muted p-1 text-center text-xs text-muted-foreground',
-                cover === null ? 'border-primary' : 'border-transparent',
-              )}
-            >
-              <ImageIcon className="absolute top-1 left-1 size-3.5 opacity-60" aria-hidden />
-              {td('coverAuto')}
-            </button>
-            {photos.map((photo) => (
-              <button
-                key={photo.id}
-                type="button"
-                aria-pressed={cover === photo.id}
-                aria-label={td('coverChoose', { name: photo.name })}
-                onClick={() => setCoverChoice(photo.id)}
-                className={cn(tile, cover === photo.id ? 'border-primary' : 'border-transparent')}
-              >
-                {/* A signed thumbnail (CDN). */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={photo.thumbUrl}
-                  alt=""
-                  loading="lazy"
-                  className="absolute inset-0 size-full object-cover"
-                />
-                {cover === photo.id ? (
-                  <span className="absolute top-1 right-1 rounded-full bg-primary p-0.5 text-primary-foreground">
-                    <CheckIcon className="size-3" aria-hidden />
-                  </span>
-                ) : null}
-              </button>
-            ))}
-          </div>
-        )}
-      </fieldset>
       {message !== null ? (
         <Alert variant={message.kind === 'error' ? 'destructive' : 'default'} role="status">
           {message.text}
@@ -264,9 +202,14 @@ function LinkSection({
               </Button>
             )}
           </div>
+          <section className="grid gap-2">
+            <h4 className="text-sm font-medium">{te('dialog.design')}</h4>
+            <LinkDesignPicker share={link} />
+          </section>
           <ShareForm
             key={`${link.id}-${shares.dataUpdatedAt}`}
             kind="edit"
+            showDesign={false}
             share={link}
             faceSearchEnabled={faceSearchEnabled}
             onSubmit={async (changes) => {

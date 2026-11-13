@@ -1,6 +1,8 @@
 'use client';
 
-import { cn } from '@shotx/ui';
+import { designShowsPhotos } from '@shotx/shared';
+import { Button, cn } from '@shotx/ui';
+import { PaletteIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { type ReactNode, useEffect, useId, useMemo, useRef } from 'react';
@@ -93,17 +95,40 @@ export function DesignPicker({
             d.id,
             d.id,
             d.name,
-            d.isDefault ? (
-              <span className="text-xs text-muted-foreground">{t('designIsDefault')}</span>
+            d.isDefault || !designShowsPhotos(d.doc) ? (
+              <span className="text-xs text-muted-foreground">
+                {[
+                  d.isDefault ? t('designIsDefault') : null,
+                  designShowsPhotos(d.doc) ? null : t('designHidesPhotos'),
+                ]
+                  .filter((x) => x !== null)
+                  .join(' · ')}
+              </span>
             ) : null,
             <DesignPreview doc={d.doc} assets={assets} width={PREVIEW_WIDTH} />,
           ),
         )}
       </div>
       {designs.isError ? <p className="text-xs text-destructive">{t('designLoadError')}</p> : null}
-      <Link href={DESIGNS_HREF} className="text-xs text-primary underline-offset-4 hover:underline">
-        {t('designManage')}
-      </Link>
+      {designs.data !== undefined && items.length === 0 ? (
+        // No designs yet: straight to the designer (owner, 2026-11-13).
+        <div className="grid justify-items-start gap-2 rounded-lg border border-dashed p-3">
+          <p className="text-xs text-muted-foreground">{t('designEmpty')}</p>
+          <Button asChild size="sm" variant="outline">
+            <Link href={DESIGNS_HREF}>
+              <PaletteIcon aria-hidden />
+              {t('designCreate')}
+            </Link>
+          </Button>
+        </div>
+      ) : (
+        <Link
+          href={DESIGNS_HREF}
+          className="text-xs text-primary underline-offset-4 hover:underline"
+        >
+          {t('designManage')}
+        </Link>
+      )}
     </fieldset>
   );
 }

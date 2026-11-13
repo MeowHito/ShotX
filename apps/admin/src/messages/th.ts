@@ -171,6 +171,9 @@ export const th = {
     refresh: 'รีเฟรช',
     loadError: 'โหลดภาพรวมไม่สำเร็จ',
     notAvailable: 'ไม่มีข้อมูล',
+    perMonth: '{amount}/เดือน',
+    approx: '≈ {amount}',
+    totalCost: 'ค่าใช้จ่ายรวมโดยประมาณ {thb}/เดือน (≈ {usd})',
     storage: {
       title: 'ข้อมูลในระบบ',
       originals: 'ไฟล์ต้นฉบับทั้งหมด',
@@ -182,6 +185,9 @@ export const th = {
     bucket: {
       title: 'Cloudflare R2',
       total: 'ใช้พื้นที่ทั้งหมด',
+      cost: 'ค่าใช้จ่ายโดยประมาณ',
+      costHint:
+        'ค่าพื้นที่ (ฟรี {free, number} GB แรก) ไม่รวมค่า request · ดาวน์โหลดออกไม่เสียเงิน',
       objects: '{count, number} ไฟล์',
       noLimit: 'R2 ไม่มีเพดานพื้นที่ คิดเงินตามที่ใช้จริง',
       measuredAt: 'นับล่าสุดเมื่อ {time} (นับใหม่ทุก ~10 นาที)',
@@ -206,6 +212,8 @@ export const th = {
       uptimeValue: '{days, number} วัน {hours, number} ชม.',
       temperature: 'อุณหภูมิ',
       noSensor: 'ไม่มีเซ็นเซอร์ (เครื่องเสมือนไม่รายงานอุณหภูมิ)',
+      diskHint: 'รูปและวิดีโอไม่ได้เก็บบนเซิร์ฟเวอร์ อัปโหลดตรงขึ้น R2',
+      cost: 'ค่าเช่าเซิร์ฟเวอร์',
     },
   },
   shell: {

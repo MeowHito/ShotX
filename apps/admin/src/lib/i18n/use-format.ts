@@ -14,6 +14,8 @@ export interface Formatters {
   satang: (satang: number) => string;
   /** A count with grouping separators (1,234). */
   count: (n: number) => string;
+  /** An estimate in USD (2 decimals: $0.66) or THB (whole baht: ฿1,529). */
+  money: (amount: number, currency: 'USD' | 'THB') => string;
 }
 
 /**
@@ -30,6 +32,14 @@ export function useFormat(): Formatters {
       date: (iso) => formatDate(iso, locale),
       satang: (satang) => formatSatang(satang, locale),
       count: (n) => new Intl.NumberFormat(locale).format(n),
+      money: (amount, currency) =>
+        new Intl.NumberFormat(locale, {
+          style: 'currency',
+          currency,
+          currencyDisplay: 'narrowSymbol',
+          minimumFractionDigits: currency === 'USD' ? 2 : 0,
+          maximumFractionDigits: currency === 'USD' ? 2 : 0,
+        }).format(amount),
     }),
     [locale],
   );

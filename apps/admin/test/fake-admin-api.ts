@@ -117,6 +117,8 @@ export class FakeAdminApi {
       uptimeSeconds: 2 * 86_400 + 5 * 3600,
       temperatureC: null,
     },
+    // 150 GB in R2: (150 − 10) × $0.015 = $2.10; the VPS 1,529 THB.
+    cost: { usdThb: 33, r2StorageUsdMonth: 2.1, r2FreeStorageGb: 10, vpsThbMonth: 1529 },
   };
   private readonly idempotency = new Map<string, { body: string; payment: AdminCashPayment }>();
 

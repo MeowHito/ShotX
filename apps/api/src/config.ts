@@ -12,6 +12,7 @@ import {
   type CloudFrontSigningConfig,
   type CognitoPoolConfig,
   type ConsentConfig,
+  type CostConfig,
   type DesignConfig,
   type DriveConfig,
   type EmailConfig,
@@ -34,6 +35,7 @@ import {
   loadCloudFrontSigningConfig,
   loadCognitoConfig,
   loadConsentConfig,
+  loadCostConfig,
   loadDesignConfig,
   loadDriveConfig,
   loadEmailConfig,
@@ -204,6 +206,8 @@ export interface ApiConfig {
   storageQuota: StorageQuotaConfig;
   /** ADMIN_LIST_PAGE_SIZE: default page size of the admin users and cash-payment lists. */
   adminConsole: AdminConsoleConfig;
+  /** Price constants for the admin overview's monthly cost estimate (R2, VPS, USD_THB). */
+  cost: CostConfig;
   /** `fake` is refused in production by the loader. */
   email: EmailConfig;
   /**
@@ -252,6 +256,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     paymentGateway: loadPaymentGatewayConfig(env),
     storageQuota: loadStorageQuotaConfig(env),
     adminConsole: loadAdminConsoleConfig(env),
+    cost: loadCostConfig(env),
     email: loadEmailConfig(env),
     design: loadDesignConfig(env),
   };

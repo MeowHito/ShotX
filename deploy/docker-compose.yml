@@ -5,9 +5,12 @@
 #
 # Only the proxy publishes ports (Docker-published ports bypass ufw). Every other service is on
 # private networks:
-#   edge   proxy, web, admin, api        the proxy has a fixed address: api trusts X-Forwarded-For
-#                                        only from it (TRUSTED_PROXY_ADDRESSES); web and admin
-#                                        pass the client IP with the BFF key instead
+#   edge   proxy, web, admin, api        the proxy has fixed addresses (IPv4 and IPv6): api trusts
+#                                        X-Forwarded-For only from them (TRUSTED_PROXY_ADDRESSES);
+#                                        web and admin pass the client IP with the BFF key instead.
+#                                        IPv6 is on so IPv6 visitors reach the proxy with their own
+#                                        address (Docker NATs them; without it docker-proxy relayed
+#                                        them and they all looked like the network's gateway)
 #   data   postgres, redis and their     internal: no route out
 #          clients
 #   egress worker, backup, monitor       outbound only (R2, Rekognition, SES, the alert webhook)
@@ -59,6 +62,7 @@ services:
     networks:
       edge:
         ipv4_address: ${SHOTX_PROXY_IP:-172.30.0.10}
+        ipv6_address: ${SHOTX_PROXY_IP6:-fd30:0:0:1::10}
     # Not on admin: the main site must not wait for (or fail with) the admin app. Until admin is
     # healthy, only the admin site answers 502.
     depends_on:
@@ -196,9 +200,9 @@ services:
       PGHOST: postgres
       PGPORT: '5432'
       PGSSLMODE: disable
-      # Exactly the proxy's address on the edge network (one address, never a range: web and
-      # admin share the network, and their calls must not count as the proxy's).
-      TRUSTED_PROXY_ADDRESSES: ${SHOTX_PROXY_IP:-172.30.0.10}
+      # Exactly the proxy's addresses on the edge network (single addresses, never a range: web
+      # and admin share the network, and their calls must not count as the proxy's).
+      TRUSTED_PROXY_ADDRESSES: ${SHOTX_PROXY_IP:-172.30.0.10},${SHOTX_PROXY_IP6:-fd30:0:0:1::10}
     networks:
       - edge
       - data
@@ -480,11 +484,18 @@ services:
 
 networks:
   edge:
+    # IPv6 (with Docker's default ip6tables) makes published ports NAT IPv6 clients to the proxy,
+    # keeping their address; the host's IPv6 route is static (accept_ra 0), so the forwarding
+    # Docker turns on doesn't affect it.
+    enable_ipv6: true
     ipam:
       config:
         - subnet: ${SHOTX_EDGE_SUBNET:-172.30.0.0/24}
           # Docker hands out dynamic addresses only from here, so SHOTX_PROXY_IP (.10) stays free.
           ip_range: ${SHOTX_EDGE_IP_RANGE:-172.30.0.128/25}
+        - subnet: ${SHOTX_EDGE_SUBNET6:-fd30:0:0:1::/64}
+          # Likewise for SHOTX_PROXY_IP6 (::10).
+          ip_range: ${SHOTX_EDGE_IP_RANGE6:-fd30:0:0:1::1:0/112}
   data:
     internal: true
     ipam:

@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { files, folders, shares, users } from '@shotx/db';
+import { files, folders, shareDesigns, shares, users } from '@shotx/db';
 import {
   type AccountStatus,
   faceScanResultKey,
@@ -55,6 +55,12 @@ export interface LoadedShare extends ShareRow {
    * does); null for file shares or the default cover.
    */
   coverFileId: string | null;
+  /**
+   * The share's own design (`shares.design_id`; the owner's default is never applied at view
+   * time, ADR 0013) has "show photos" off (`doc.showPhotos === false`). A folder share in `gallery` mode is then
+   * served as `face_only` (`mode` above already says so): no browsing, scan only. ADR 0019.
+   */
+  designHidesPhotos: boolean;
 }
 
 /** RATE_LIMITED with Retry-After unless the window allows the request. */
@@ -91,6 +97,13 @@ async function loadShare(
       folderLive: sql<boolean>`(${folders.id} IS NOT NULL AND ${folders.deletedAt} IS NULL AND ${folders.purgeRequestedAt} IS NULL)`,
       ownerName: users.name,
       ownerStatus: users.status,
+      // ADR 0019: the share's own design (the only one meta shows, ADR 0013) hides photos.
+      designHidesPhotos: sql<boolean>`coalesce((
+        SELECT (${shareDesigns.doc} ->> 'showPhotos') = 'false'
+        FROM ${shareDesigns}
+        WHERE ${shareDesigns.id} = ${shares.designId}
+          AND ${shareDesigns.ownerId} = ${shares.ownerId}
+      ), false)`,
     })
     .from(shares)
     .innerJoin(users, eq(users.id, shares.ownerId))
@@ -104,8 +117,12 @@ async function loadShare(
   if (row === undefined) return null;
   const subscription = withSubscription ? await currentSubscription(q, row.share.ownerId) : null;
   const isFile = row.share.targetType === 'file';
+  // face_only needs a folder (shareModeAllowedForTarget); a file share keeps its own mode.
+  const designHidesPhotos = !isFile && row.designHidesPhotos === true;
   return {
     ...row.share,
+    mode: designHidesPhotos ? 'face_only' : row.share.mode,
+    designHidesPhotos,
     targetName: (isFile ? row.fileName : row.folderName) ?? '',
     rootPath: isFile ? null : row.folderPath,
     targetLive: isFile ? row.fileLive : row.folderLive,

@@ -95,6 +95,37 @@ describe('logout', () => {
 });
 
 describe('share management', () => {
+  it('ADR 0019: a live link changes its design in place; a new link is behind a button', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const fake = new FakeApi();
+    const design = fake.designs.add('Pocari');
+    const folder = fake.addFolder('Pocari Trail');
+    renderWithProviders(<DriveBrowser folderRef={DRIVE_ROOT} />, { api: apiClientFor(fake.fetch) });
+    await choose(folder.name, th.itemMenu.share, th.itemMenu.createShare);
+    let dialog = await screen.findByRole('dialog', { name: `แชร์ “${folder.name}”` });
+    // Not the default design: the new link starts without one.
+    expect(
+      await within(dialog).findByRole('radio', { name: new RegExp(th.shareForm.designNone) }),
+    ).toBeChecked();
+    await userEvent.click(within(dialog).getByRole('button', { name: th.shareForm.create }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+
+    // Published without a design; later the photographer wants one on the same link.
+    await choose(folder.name, th.itemMenu.share, th.itemMenu.createShare);
+    dialog = await screen.findByRole('dialog', { name: `แชร์ “${folder.name}”` });
+    expect(await within(dialog).findByText(th.shareDialog.anotherLinkHint)).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: th.shareForm.create })).toBeNull();
+    await userEvent.click(within(dialog).getByText(th.shareDialog.linkDesign));
+    await userEvent.click(within(dialog).getByRole('radio', { name: /Pocari/ }));
+    expect(await within(dialog).findByText(th.shareDialog.designSaved)).toBeInTheDocument();
+    expect(fake.callsTo(SHARE_ROUTES.update).map((c) => c.body)).toEqual([{ designId: design.id }]);
+    expect(fake.callsTo(SHARE_ROUTES.create)).toHaveLength(1);
+    // Another link is still possible, on purpose.
+    await userEvent.click(within(dialog).getByRole('button', { name: th.shareDialog.anotherLink }));
+    expect(within(dialog).getByRole('button', { name: th.shareForm.create })).toBeInTheDocument();
+  });
+
   it('creates a folder share with password and expiry, lists it, copies and revokes it', async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });

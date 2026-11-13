@@ -9,8 +9,10 @@ import type { LedgerEntry, LedgerOutcome, SyncDestination, SyncJob, SyncStore } 
  * folder) and uploads every new photo into a drive folder, from the browser alone.
  *
  * Every `intervalMs` it scans the folder. A file is uploaded once two scans in a row saw the same
- * size and modification time (the exporting app has finished writing it), and only if the ledger
- * hasn't handled that version yet. Uploads go through the studio's normal upload queue with
+ * size and modification time and it was last written at least `settleMs` ago (the exporting app
+ * has finished writing it, and a post-processor such as a Lightroom watermark plugin, which
+ * rewrites the file right after export, is done too), and only if the ledger hasn't handled that
+ * version yet. Uploads go through the studio's normal upload queue with
  * `onNameConflict: 'fail'`, so a name already in the drive folder is NAME_TAKEN, recorded as
  * `exists` and never uploaded twice, from this browser or any other. At most `maxQueued` files
  * are in the queue at once; the rest wait for the next scans.
@@ -98,6 +100,11 @@ export interface SyncLock {
 
 export interface SyncEngineConfig {
   intervalMs: number;
+  /**
+   * How long a file must be untouched (now − lastModified) before it is uploaded. A version
+   * uploaded too early can't be replaced: the rewritten file is then NAME_TAKEN (`exists`).
+   */
+  settleMs: number;
   maxQueued: number;
   maxDepth: number;
   /** Waits before the retries of a failed upload; after the last one it counts as failed. */
@@ -448,9 +455,11 @@ export class FolderSyncEngine {
           failure.count > this.deps.config.retryDelaysMs.length
         );
       });
-      // Oldest first, and only files that didn't change since the previous scan.
+      // Oldest first, and only files that didn't change since the previous scan and have been
+      // left alone for settleMs (a watermark plugin may still rewrite a fresh export).
+      const settled = (f: ScannedFile) => now - f.lastModified >= this.deps.config.settleMs;
       const ready = pending
-        .filter((f) => previous?.get(f.path) === fileSignature(f) && !retryLater(f))
+        .filter((f) => previous?.get(f.path) === fileSignature(f) && settled(f) && !retryLater(f))
         .sort((a, b) => a.lastModified - b.lastModified || a.path.localeCompare(b.path));
 
       const skipped: { path: string; entry: LedgerEntry }[] = [];

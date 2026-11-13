@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { files, storageUsage, users } from '@shotx/db';
-import type { AdminSystemResponse } from '@shotx/shared';
+import { type AdminSystemResponse, estimateR2StorageUsdMonth } from '@shotx/shared';
 import { and, eq, inArray, isNull, like, sql } from 'drizzle-orm';
 import type { ApiConfig } from '../config';
 import { type Db, rows } from '../db/db';
@@ -21,7 +21,7 @@ export const METRICS_SOURCE = Symbol('METRICS_SOURCE');
 /**
  * GET /admin/system (ADR 0016): what the database records, the media bucket counted by listing
  * it (cached for ADMIN_STORAGE_SCAN_TTL_SECONDS; one scan at a time), and the server's CPU,
- * memory, disk and temperature.
+ * memory, disk and temperature, and a monthly cost estimate (R2 storage, VPS rent).
  */
 @Injectable()
 export class AdminSystemService {
@@ -43,6 +43,7 @@ export class AdminSystemService {
       this.bucketUsage(),
       readServerMetrics({ diskPath: this.config.adminConsole.systemDiskPath }, this.metrics),
     ]);
+    const cost = this.config.cost;
     return {
       generatedAt: this.clock.now().toISOString(),
       storage,
@@ -57,6 +58,13 @@ export class AdminSystemService {
               measuredAt: bucket.measuredAt.toISOString(),
             },
       server,
+      cost: {
+        usdThb: cost.usdThb,
+        r2StorageUsdMonth:
+          bucket?.usage == null ? null : estimateR2StorageUsdMonth(bucket.usage.totalBytes, cost),
+        r2FreeStorageGb: cost.r2FreeStorageGb,
+        vpsThbMonth: cost.vpsMonthThb,
+      },
     };
   }
 

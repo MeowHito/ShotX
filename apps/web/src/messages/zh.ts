@@ -34,6 +34,7 @@ export const zh: PublicMessages = {
       camera: '拍摄自拍',
       choosePhoto: '使用照片',
       help: '查找方法',
+      seeAll: '向下滑动查看全部照片',
       howTo: {
         title: '如何找到你的照片',
         camera: '点击“拍摄自拍”，并同意人脸数据使用条款。',

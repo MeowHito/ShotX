@@ -3,6 +3,7 @@ import {
   type DesignDoc,
   type DesignElement,
   designDocSchema,
+  designShowsPhotos,
   designTemplateDoc,
 } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
@@ -31,6 +32,20 @@ const ids = (s: EditorState) => s.doc.elements.map((e) => e.id);
 const valid = (s: EditorState) => expect(designDocSchema.safeParse(s.doc).success).toBe(true);
 
 describe('editor reducer (ADR 0013)', () => {
+  it('ADR 0019: "show all photos" is one undo step, valid, and a no-op when unchanged', () => {
+    const s0 = start();
+    expect(designShowsPhotos(s0.doc)).toBe(true);
+    const off = run(s0, { type: 'showPhotos', value: false });
+    expect(off.doc.showPhotos).toBe(false);
+    expect(designShowsPhotos(off.doc)).toBe(false);
+    expect(off.version).toBe(s0.version + 1);
+    valid(off);
+    expect(run(off, { type: 'showPhotos', value: false })).toBe(off);
+    const undone = run(off, { type: 'undo' });
+    expect(designShowsPhotos(undone.doc)).toBe(true);
+    expect(designDocSchema.safeParse({ ...s0.doc, showPhotos: 'no' }).success).toBe(false);
+  });
+
   it('adds an element on top, selects it, and keeps the document valid', () => {
     const rect = makeShape('rect');
     const s = run(start(), { type: 'add', element: rect });

@@ -9,7 +9,7 @@ import {
 } from '@shotx/shared';
 import { Alert, Button, cn } from '@shotx/ui';
 import { useQuery } from '@tanstack/react-query';
-import { CheckCheckIcon, RotateCcwIcon, ScanFaceIcon } from 'lucide-react';
+import { CheckCheckIcon, ChevronDownIcon, RotateCcwIcon, ScanFaceIcon } from 'lucide-react';
 import { useFormatter, useTranslations } from 'next-intl';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DesignCanvas, type DesignCanvasActions } from '@/components/design/design-canvas';
@@ -203,7 +203,9 @@ function ShareHeader({ meta }: { meta: ShareMetaResponse }) {
 
 /**
  * The share's design (ADR 0013) as the full-screen first screen under the top bar: the background
- * fills the screen, the artboard is centred. Without `actions` its buttons are inert.
+ * fills the screen, the artboard is centred. Without `actions` its buttons are inert. When photos
+ * follow (a gallery share, ADR 0019) a "scroll down for all photos" strip closes the first screen,
+ * so viewers know the photos are there; the card shrinks by the strip's height to keep it in view.
  */
 function DesignedCard({
   meta,
@@ -221,21 +223,46 @@ function DesignedCard({
     () => Object.fromEntries(Object.entries(design.assets).map(([id, a]) => [id, a.url])),
     [design.assets],
   );
+  const photosBelow = meta.mode === 'gallery';
+  const cardRef = useRef<HTMLDivElement>(null);
   return (
-    <DesignCanvas
-      doc={design.doc}
-      assets={assets}
-      mode={meta.mode}
-      layout={{ kind: 'fill' }}
-      actions={actions}
-      scanAvailable={meta.faceSearch.available}
-      scanButtonsRef={scanButtonsRef}
-      label={tDesign('label')}
-      // The first screen: the viewport below the top bar (h-14 plus the safe area). The artboard
-      // fits both the width and the height on every screen, so the whole card (its scan buttons
-      // included) is visible without scrolling, also between a phone browser's bars (svh).
-      className="min-h-[calc(100svh-3.5rem-env(safe-area-inset-top))] [--design-cap:min(480px,calc((100svh_-_3.5rem_-_env(safe-area-inset-top))_*_390_/_844))]"
-    />
+    <div ref={cardRef}>
+      <DesignCanvas
+        doc={design.doc}
+        assets={assets}
+        mode={meta.mode}
+        layout={{ kind: 'fill' }}
+        actions={actions}
+        scanAvailable={meta.faceSearch.available}
+        scanButtonsRef={scanButtonsRef}
+        label={tDesign('label')}
+        // The first screen: the viewport below the top bar (h-14 plus the safe area), less the
+        // 3rem strip when photos follow. The artboard fits both the width and the height on every
+        // screen, so the whole card (its scan buttons included) is visible without scrolling, also
+        // between a phone browser's bars (svh).
+        className={
+          photosBelow
+            ? 'min-h-[calc(100svh-6.5rem-env(safe-area-inset-top))] [--design-cap:min(480px,calc((100svh_-_6.5rem_-_env(safe-area-inset-top))_*_390_/_844))]'
+            : 'min-h-[calc(100svh-3.5rem-env(safe-area-inset-top))] [--design-cap:min(480px,calc((100svh_-_3.5rem_-_env(safe-area-inset-top))_*_390_/_844))]'
+        }
+      />
+      {photosBelow ? (
+        <button
+          type="button"
+          disabled={actions === undefined}
+          onClick={() =>
+            window.scrollTo({
+              top: (cardRef.current?.getBoundingClientRect().bottom ?? 0) + window.scrollY - 56,
+              behavior: 'smooth',
+            })
+          }
+          className="flex h-12 w-full items-center justify-center gap-1.5 text-sm font-medium text-muted-foreground"
+        >
+          {tDesign('seeAll')}
+          <ChevronDownIcon className="size-4 motion-safe:animate-bounce" aria-hidden />
+        </button>
+      ) : null}
+    </div>
   );
 }
 

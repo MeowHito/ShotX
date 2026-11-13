@@ -84,7 +84,7 @@ function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: 
 
 /**
  * The overview tab (ADR 0016): what the database records, the R2 bucket by prefix, and the VPS
- * (CPU, memory, disk, uptime, temperature). Refetched every OVERVIEW_REFRESH_MS while open.
+ * (CPU, memory, disk, uptime, temperature), with a monthly cost estimate (R2 storage, VPS rent). Refetched every OVERVIEW_REFRESH_MS while open.
  */
 export function OverviewPage() {
   const t = useTranslations('overview');
@@ -108,6 +108,7 @@ export function OverviewPage() {
               ? ` · ${t('updatedAt', { time: format.dateTime(query.data.generatedAt) })}`
               : null}
           </p>
+          {query.data !== undefined ? <TotalCost cost={query.data.cost} /> : null}
         </div>
         <Button variant="outline" onClick={() => void query.refetch()} disabled={query.isFetching}>
           <RefreshCwIcon className={cn(query.isFetching && 'animate-spin')} aria-hidden />
@@ -134,10 +135,29 @@ export function OverviewPage() {
   );
 }
 
+type Cost = AdminSystemResponse['cost'];
+
+/** R2 storage plus VPS rent a month in THB and USD; R2 counts as 0 when the bucket wasn't counted. */
+export function monthlyTotal(cost: Cost): { thb: number; usd: number } {
+  const thb = (cost.r2StorageUsdMonth ?? 0) * cost.usdThb + cost.vpsThbMonth;
+  return { thb, usd: thb / cost.usdThb };
+}
+
+function TotalCost({ cost }: { cost: Cost }) {
+  const t = useTranslations('overview');
+  const format = useFormat();
+  const total = monthlyTotal(cost);
+  return (
+    <p className="mt-1 text-sm font-medium tabular-nums">
+      {t('totalCost', { thb: format.money(total.thb, 'THB'), usd: format.money(total.usd, 'USD') })}
+    </p>
+  );
+}
+
 function OverviewCards({ data }: { data: AdminSystemResponse }) {
   const t = useTranslations('overview');
   const format = useFormat();
-  const { storage, bucket, server } = data;
+  const { storage, bucket, server, cost } = data;
   const memoryPercent = percentOf(server.memory.usedBytes, server.memory.totalBytes);
   const diskPercent =
     server.disk === null ? null : percentOf(server.disk.usedBytes, server.disk.totalBytes);
@@ -216,8 +236,9 @@ function OverviewCards({ data }: { data: AdminSystemResponse }) {
                 })}
               </p>
             ) : null}
+            <p className="text-xs text-muted-foreground">{t('server.diskHint')}</p>
           </div>
-          <div className="grid grid-cols-2 gap-4 border-t pt-4">
+          <div className="grid grid-cols-2 gap-4 border-t pt-4 sm:grid-cols-3">
             <Stat
               label={t('server.uptime')}
               value={
@@ -237,6 +258,13 @@ function OverviewCards({ data }: { data: AdminSystemResponse }) {
               }
               hint={server.temperatureC === null ? t('server.noSensor') : undefined}
             />
+            {cost.vpsThbMonth > 0 ? (
+              <Stat
+                label={t('server.cost')}
+                value={t('perMonth', { amount: format.money(cost.vpsThbMonth, 'THB') })}
+                hint={t('approx', { amount: format.money(cost.vpsThbMonth / cost.usdThb, 'USD') })}
+              />
+            ) : null}
           </div>
         </div>
       </Card>
@@ -249,11 +277,22 @@ function OverviewCards({ data }: { data: AdminSystemResponse }) {
           <Alert variant="warning">{t('bucket.unavailable')}</Alert>
         ) : (
           <div className="space-y-4">
-            <Stat
-              label={t('bucket.total')}
-              value={format.gigabytes(bucket.totalBytes)}
-              hint={t('bucket.objects', { count: bucket.objectCount })}
-            />
+            <div className="grid grid-cols-2 gap-4">
+              <Stat
+                label={t('bucket.total')}
+                value={format.gigabytes(bucket.totalBytes)}
+                hint={t('bucket.objects', { count: bucket.objectCount })}
+              />
+              {cost.r2StorageUsdMonth !== null ? (
+                <Stat
+                  label={t('bucket.cost')}
+                  value={t('perMonth', { amount: format.money(cost.r2StorageUsdMonth, 'USD') })}
+                  hint={t('approx', {
+                    amount: format.money(cost.r2StorageUsdMonth * cost.usdThb, 'THB'),
+                  })}
+                />
+              ) : null}
+            </div>
             <ul className="space-y-2.5">
               {bucket.prefixes.map((p) => {
                 const percent = percentOf(p.bytes, bucket.totalBytes);
@@ -279,6 +318,8 @@ function OverviewCards({ data }: { data: AdminSystemResponse }) {
               })}
             </ul>
             <p className="text-xs text-muted-foreground">
+              {t('bucket.costHint', { free: cost.r2FreeStorageGb })}
+              <br />
               {t('bucket.noLimit')}
               <br />
               {t('bucket.measuredAt', { time: format.dateTime(bucket.measuredAt) })}

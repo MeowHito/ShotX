@@ -63,6 +63,8 @@ export type EditorAction =
   | { type: 'toggleHidden'; id: string }
   | { type: 'background'; background: DesignBackground; coalesce?: string }
   | { type: 'replaceDoc'; doc: DesignDoc }
+  /** ADR 0019: the design's "show all photos" switch (`doc.showPhotos`). */
+  | { type: 'showPhotos'; value: boolean }
   | { type: 'rename'; name: string }
   | { type: 'endGesture' }
   | { type: 'undo' }
@@ -355,6 +357,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'replaceDoc':
       return commit(state, action.doc, []);
+
+    case 'showPhotos':
+      return state.doc.showPhotos === action.value
+        ? state
+        : commit(state, { ...state.doc, showPhotos: action.value });
 
     case 'rename':
       return action.name === state.name

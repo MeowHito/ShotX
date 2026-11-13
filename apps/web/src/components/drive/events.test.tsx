@@ -117,12 +117,12 @@ describe('events (ADR 0016)', () => {
     expect(fake.ownerShares.get(share.id)?.share.url).toBe(share.url);
   });
 
-  it('edits the name and cover, and creates the link from the edit dialog', async () => {
+  it('edits the name and creates the link from the edit dialog; no cover picker', async () => {
     const user = userEvent.setup();
     const fake = new FakeApi();
     const folder = fake.addFolder('Draft');
     fake.addFile('a.jpg', folder.id);
-    const b = fake.addFile('b.jpg', folder.id);
+    fake.addFile('b.jpg', folder.id);
     renderDrive(fake);
     await screen.findByRole('list', { name: th.event.events });
 
@@ -131,13 +131,17 @@ describe('events (ADR 0016)', () => {
     const name = within(dialog).getByLabelText(th.event.dialog.name);
     await user.clear(name);
     await user.type(name, 'Bangkok Run');
-    await user.click(await within(dialog).findByRole('button', { name: 'ใช้ b.jpg เป็นรูปปก' }));
+    // The cover picker is gone (owner, 2026-11-13): the event's look is its design.
+    expect(within(dialog).queryByRole('button', { name: 'ใช้ b.jpg เป็นรูปปก' })).toBeNull();
     await user.click(within(dialog).getByRole('button', { name: th.event.dialog.save }));
     expect(await within(dialog).findByText(th.event.dialog.saved)).toBeInTheDocument();
     expect(fake.callsTo(DRIVE_ROUTES.updateFolder).map((c) => c.body)).toEqual([
       { name: 'Bangkok Run' },
-      { coverFileId: b.id },
     ]);
+    // No designs yet: a shortcut to the designer.
+    expect(
+      await within(dialog).findByRole('link', { name: th.shareForm.designCreate }),
+    ).toHaveAttribute('href', '/studio/designs');
 
     // No link yet: the share form creates one.
     await user.click(within(dialog).getByRole('button', { name: th.shareForm.create }));
@@ -145,5 +149,30 @@ describe('events (ADR 0016)', () => {
     expect(
       await within(dialog).findByRole('button', { name: th.event.unpublish }),
     ).toBeInTheDocument();
+  });
+
+  it('changes the design of the published link in place: same link, no new share', async () => {
+    const user = userEvent.setup();
+    const fake = new FakeApi();
+    const design = fake.designs.add('Pocari');
+    const folder = fake.addFolder('Trail');
+    fake.addFile('a.jpg', folder.id);
+    renderDrive(fake);
+    await screen.findByRole('list', { name: th.event.events });
+    await user.click(within(cardOf('Trail')).getByRole('button', { name: 'แก้ไข Trail' }));
+    const dialog = await screen.findByRole('dialog', { name: th.event.dialog.title });
+    await user.click(await within(dialog).findByRole('button', { name: th.shareForm.create }));
+    await within(dialog).findByRole('button', { name: th.event.unpublish });
+    const created = fake.callsTo(SHARE_ROUTES.create).at(-1)?.body as { designId?: unknown };
+    expect(created.designId ?? null).toBeNull();
+
+    const section = within(dialog).getByRole('heading', { name: th.event.dialog.design })
+      .parentElement as HTMLElement;
+    await user.click(within(section).getByRole('radio', { name: /Pocari/ }));
+    expect(await within(dialog).findByText(th.shareDialog.designSaved)).toBeInTheDocument();
+    expect(fake.callsTo(SHARE_ROUTES.update).map((c) => c.body)).toEqual([{ designId: design.id }]);
+    expect(fake.callsTo(SHARE_ROUTES.create)).toHaveLength(1);
+    // The link settings below don't repeat the design picker.
+    expect(within(dialog).getAllByRole('radio', { name: /Pocari/ })).toHaveLength(1);
   });
 });

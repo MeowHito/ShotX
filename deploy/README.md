@@ -119,6 +119,20 @@ docker compose --env-file .env.production exec -T postgres \
   psql -U shotx_admin -d shotx -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS vector'
 ```
 
+## Disk use on the VPS
+
+Photos and videos never land on the VPS disk: browsers upload straight to R2 with presigned
+URLs, and the worker's scratch folders (derivatives, face indexing) are deleted after each job.
+What grows is Docker's **build cache**: every `docker compose build` adds layers, and after a
+few dozen deploys it was ~53 GB of the 54 GB used (2026-11-13). After each deploy, once
+`up -d --wait` is healthy, trim it (running containers, images in use and volumes are not
+touched; the next build only re-downloads what was dropped):
+
+```sh
+docker builder prune -f --max-used-space 8gb
+docker system df        # Build Cache should now be ~8 GB or less
+```
+
 ## Services
 
 | service  | image                  | networks                      | notes                                                              |

@@ -13,6 +13,7 @@ import { FolderSyncPage } from './folder-sync-page';
 
 const CONFIG: ClientFolderSyncConfig = {
   intervalMs: 60_000,
+  settleMs: 0,
   maxQueued: 5,
   maxDepth: 3,
   retryDelaysMs: [],

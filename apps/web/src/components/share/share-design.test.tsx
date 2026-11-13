@@ -122,8 +122,12 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     expect(nav.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const grid = await screen.findByRole('list', { name: th.share.galleryLabel });
     expect(card.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // Full-screen first screen: fills the viewport under the top bar.
-    expect(card.className).toContain('min-h-[calc(100svh-3.5rem');
+    // Full-screen first screen: the viewport under the top bar, less the "scroll down for all
+    // photos" strip that tells viewers the photos are below (ADR 0019).
+    expect(card.className).toContain('min-h-[calc(100svh-6.5rem');
+    const seeAll = screen.getByRole('button', { name: th.share.design.seeAll });
+    expect(card.compareDocumentPosition(seeAll) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(seeAll.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('hides the sticky face-search button while the card’s buttons are on screen', async () => {
@@ -184,6 +188,10 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     expect(within(card).queryByRole('button', { name: th.share.design.choosePhoto })).toBeNull();
     expect(screen.queryByText(th.share.faceOnly.body)).toBeNull();
     expect(screen.queryByRole('list', { name: th.share.galleryLabel })).toBeNull();
+    // No photos below (a face_only share, or a design with "show photos" off, ADR 0019): no
+    // "scroll down" strip, and the card fills the screen.
+    expect(screen.queryByRole('button', { name: th.share.design.seeAll })).toBeNull();
+    expect(card.className).toContain('min-h-[calc(100svh-3.5rem');
   });
 
   it('after a scan the card is hidden and the found photos come first', async () => {

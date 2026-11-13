@@ -74,6 +74,9 @@ export const zh: TranslatedMessages = {
     refresh: '刷新',
     loadError: '无法加载概览',
     notAvailable: '无数据',
+    perMonth: '{amount}/月',
+    approx: '≈ {amount}',
+    totalCost: '预估总费用 {thb}/月（≈ {usd}）',
     storage: {
       title: '系统记录',
       originals: '全部原始文件',
@@ -85,6 +88,8 @@ export const zh: TranslatedMessages = {
     bucket: {
       title: 'Cloudflare R2',
       total: '已用空间',
+      cost: '预估费用',
+      costHint: '仅存储费用（前 {free, number} GB 免费），不含请求费用 · 出站流量免费',
       objects: '{count, number} 个文件',
       noLimit: 'R2 没有容量上限，按实际用量计费。',
       measuredAt: '最近统计于 {time}（约每 10 分钟重新统计）',
@@ -109,6 +114,8 @@ export const zh: TranslatedMessages = {
       uptimeValue: '{days, number} 天 {hours, number} 小时',
       temperature: '温度',
       noSensor: '无传感器（虚拟机不报告温度）',
+      diskHint: '照片和视频不存储在服务器上，直接上传到 R2。',
+      cost: '服务器租金',
     },
   },
   shell: {

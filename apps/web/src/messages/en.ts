@@ -34,6 +34,7 @@ export const en: PublicMessages = {
       camera: 'Take a selfie',
       choosePhoto: 'Use a photo',
       help: 'How it works',
+      seeAll: 'Scroll down for all photos',
       howTo: {
         title: 'How to find your photos',
         camera: 'Tap “Take a selfie” and accept the face data terms.',

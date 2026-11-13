@@ -405,6 +405,12 @@ export const designDocSchema = z
     background: designBackgroundSchema,
     /** Bottom to top. */
     elements: z.array(designElementSchema).max(DESIGN_MAX_ELEMENTS_LIMIT),
+    /**
+     * ADR 0019: whether viewers can browse all photos under the designed card. Absent (older
+     * documents) or true: yes, as the share's mode allows. False: no photos, scan only; the api
+     * serves a gallery folder share using this design as face_only.
+     */
+    showPhotos: z.boolean().optional(),
   })
   .superRefine((doc, ctx) => {
     const counts = new Map<DesignElementType, number>();
@@ -466,6 +472,11 @@ export const designDocSchema = z
     }
   });
 export type DesignDoc = z.output<typeof designDocSchema>;
+
+/** ADR 0019: a design shows the photos unless its document turns `showPhotos` off. */
+export function designShowsPhotos(doc: Pick<DesignDoc, 'showPhotos'>): boolean {
+  return doc.showPhotos !== false;
+}
 
 /** Which configured limit a document breaks (DESIGN_DOC_TOO_LARGE details). */
 export const DESIGN_DOC_LIMIT_REASONS = ['elements', 'bytes'] as const;
