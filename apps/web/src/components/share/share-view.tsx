@@ -37,7 +37,7 @@ import {
   useShareMeta,
 } from '@/lib/share/queries';
 import { ShareApiProvider, useShareApi } from '@/lib/share/share-api';
-import { DownloadBar, useSingleDownload } from './download-bar';
+import { DownloadBar, useLightboxDownload } from './download-bar';
 import { JustifiedGrid } from './justified-grid';
 import { FaceToolsProvider, type FaceTools } from './scan/face-tools';
 import { ScanFlow, type ScanSource } from './scan/scan-flow';
@@ -345,17 +345,15 @@ function ShareContent({
   const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const [selected, setSelected] = useState<ReadonlyMap<string, ShareItem>>(new Map());
   const resultsRef = useRef<HTMLDivElement>(null);
-  const single = useSingleDownload(token);
   // ADR 0020: new photos appear on their own, without a reload or a spinner.
   useShareLiveUpdates(token, shareConfig.livePollMs);
 
-  const onLightboxDownload = useCallback(
-    (item: ShareItem) => {
-      single(item).catch((err: unknown) => setNotice({ kind: 'error', text: describe(err) }));
-    },
-    [single, describe],
+  const onLightboxError = useCallback(
+    (err: unknown) => setNotice({ kind: 'error', text: describe(err) }),
+    [describe],
   );
-  const openLightbox = useLightbox(meta.allowDownload ? onLightboxDownload : undefined);
+  const lightboxDownload = useLightboxDownload(token, onLightboxError);
+  const openLightbox = useLightbox(meta.allowDownload ? lightboxDownload : undefined);
 
   const toggle = useCallback((item: ShareItem) => {
     setSelected((prev) => {

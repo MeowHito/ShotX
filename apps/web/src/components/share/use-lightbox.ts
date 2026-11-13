@@ -59,6 +59,20 @@ export function localizeLightbox(
 }
 
 /**
+ * The lightbox's download button. `label`/`title` replace the "download" text (e.g. "save to Photos" on
+ * iOS); `onShow` hears which photo is on screen (on open and after each swipe) so it can be
+ * fetched ahead of the tap; `onClick` gets the photo and a setter for the button's text, which
+ * goes back to `label` on the next swipe; `onClose` runs when the lightbox closes.
+ */
+export interface LightboxDownload {
+  onClick: (item: ShareItem, setLabel: (label: string) => void) => void;
+  onShow?: (item: ShareItem) => void;
+  onClose?: () => void;
+  label?: string;
+  title?: string;
+}
+
+/**
  * Opens PhotoSwipe on a list of share items (loaded on first open, its own chunk). ADR 0011:
  * swipe left/right (PhotoSwipe's own gestures), previous/next arrows that stay visible on touch
  * screens too (globals.css), and, when `onDownload` is given, a clear download button for the
@@ -66,13 +80,13 @@ export function localizeLightbox(
  * bottom, where PhotoSwipe's button styles pushed it under the browser's toolbar). ADR 0022: on
  * phones globals.css moves the same button to the bottom centre (fixed, above the safe area).
  */
-export function useLightbox(onDownload?: (item: ShareItem) => void) {
+export function useLightbox(download?: LightboxDownload) {
   const t = useTranslations('lightbox');
   const current = useRef<{ destroy: () => void } | null>(null);
-  const downloadRef = useRef(onDownload);
+  const downloadRef = useRef(download);
   useEffect(() => {
-    downloadRef.current = onDownload;
-  }, [onDownload]);
+    downloadRef.current = download;
+  }, [download]);
   useEffect(() => () => current.current?.destroy(), []);
 
   return useCallback(
@@ -91,26 +105,43 @@ export function useLightbox(onDownload?: (item: ShareItem) => void) {
         arrowNext: true,
         bgOpacity: 0.95,
       });
-      if (downloadRef.current !== undefined) {
+      const opened = downloadRef.current;
+      if (opened !== undefined) {
+        const label = opened.label ?? t('downloadShort');
+        const title = opened.title ?? t('download');
+        let button: HTMLElement | null = null;
+        const setLabel = (text: string) => {
+          if (button !== null) button.innerHTML = downloadButtonHtml(text);
+        };
         pswp.on('uiRegister', () => {
           pswp.ui?.registerElement({
             name: 'download',
-            title: t('download'),
-            ariaLabel: t('download'),
+            title,
+            ariaLabel: title,
             order: 9,
             isButton: true,
             appendTo: 'bar',
             className: 'pswp__download',
-            html: downloadButtonHtml(t('downloadShort')),
+            html: downloadButtonHtml(label),
+            onInit: (el) => {
+              button = el;
+            },
             onClick: () => {
               const item = items[pswp.currIndex];
-              if (item !== undefined) downloadRef.current?.(item);
+              if (item !== undefined) downloadRef.current?.onClick(item, setLabel);
             },
           });
+        });
+        // `change` fires after each swipe; the first photo is announced after init() below.
+        pswp.on('change', () => {
+          setLabel(label);
+          const item = items[pswp.currIndex];
+          if (item !== undefined) downloadRef.current?.onShow?.(item);
         });
       }
       pswp.on('destroy', () => {
         if (current.current === pswp) current.current = null;
+        downloadRef.current?.onClose?.();
       });
       current.current = pswp;
       pswp.init();
@@ -120,6 +151,8 @@ export function useLightbox(onDownload?: (item: ShareItem) => void) {
         carousel: t('carousel'),
         slide: t('slide'),
       });
+      const first = items[index];
+      if (first !== undefined) downloadRef.current?.onShow?.(first);
     },
     [t],
   );

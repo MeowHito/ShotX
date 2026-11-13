@@ -6,7 +6,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeApi, shareItem } from '../../../test/fake-api';
-import { renderSharePage } from '../../../test/share-harness';
+import { fakeNavigator, renderSharePage } from '../../../test/share-harness';
 import { MESSAGES } from '@/i18n/config';
 import { th } from '@/messages/th';
 
@@ -188,6 +188,60 @@ describe('share page: states', () => {
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.downloads)[0]?.body).toEqual({
       fileIds: [share.items[1]?.id],
     });
+  });
+
+  it('lightbox on iOS: "save to Photos" opens the share sheet with the photo fetched ahead', async () => {
+    const fake = new FakeApi();
+    const share = fake.addPublicShare({ itemCount: 3 });
+    resetPhotoswipe();
+    const ios = fakeNavigator({ share: true });
+    const view = renderSharePage(fake, share.token, { nav: ios.nav });
+    await userEvent.click(await screen.findByRole('button', { name: 'เปิดดู IMG_0002.jpg' }));
+    await waitFor(() => expect(photoswipe.instances).toHaveLength(1));
+    // The photo on screen is fetched as soon as it shows, before any tap.
+    await waitFor(() => expect(view.mediaFetch).toHaveBeenCalledTimes(1));
+    const button = photoswipe.elements.find((e) => e.name === 'download') as {
+      title: string;
+      html: string;
+      onInit: (el: HTMLElement) => void;
+      onClick: () => void;
+    };
+    expect(button.title).toBe(th.lightbox.save);
+    expect(button.html).toContain(th.lightbox.saveShort);
+    const el = document.createElement('button');
+    button.onInit(el);
+    button.onClick();
+    expect(ios.share).toHaveBeenCalledTimes(1);
+    const files = ios.share.mock.calls[0]?.[0].files ?? [];
+    expect(files.map((f) => f.name)).toEqual(['IMG_0002.jpg']);
+    await waitFor(() => expect(el.textContent).toBe(th.lightbox.saved));
+    // Never a plain download, which on iOS only reaches the Files app.
+    expect(view.startDownload).not.toHaveBeenCalled();
+  });
+
+  it('lightbox on iOS: a tap Safari let expire asks for one more tap', async () => {
+    const fake = new FakeApi();
+    const share = fake.addPublicShare({ itemCount: 1 });
+    resetPhotoswipe();
+    const ios = fakeNavigator({ share: true });
+    ios.share.mockRejectedValueOnce(
+      Object.assign(new Error('gesture'), { name: 'NotAllowedError' }),
+    );
+    const view = renderSharePage(fake, share.token, { nav: ios.nav });
+    await userEvent.click(await screen.findByRole('button', { name: 'เปิดดู IMG_0001.jpg' }));
+    await waitFor(() => expect(view.mediaFetch).toHaveBeenCalledTimes(1));
+    const button = photoswipe.elements.find((e) => e.name === 'download') as {
+      onInit: (el: HTMLElement) => void;
+      onClick: () => void;
+    };
+    const el = document.createElement('button');
+    button.onInit(el);
+    button.onClick();
+    await waitFor(() => expect(el.textContent).toBe(th.lightbox.tapAgain));
+    button.onClick();
+    await waitFor(() => expect(el.textContent).toBe(th.lightbox.saved));
+    expect(ios.share).toHaveBeenCalledTimes(2);
+    expect(view.mediaFetch).toHaveBeenCalledTimes(1);
   });
 
   it('shows photos in their own aspect ratio (justified rows, no square crop)', async () => {
