@@ -223,6 +223,18 @@ describe('scan', () => {
     expect(await screen.findByText(/ไม่พบใบหน้าในรูปที่ส่ง \(1 รูป\)/)).toBeInTheDocument();
   });
 
+  it('a scan that finds nothing shows the page from the very top', async () => {
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    const fake = new FakeApi({ faceSearch: true });
+    const share = scanShare(fake, { consented: true });
+    share.faceMatches = { strong: [], maybe: [] };
+    renderSharePage(fake, share.token);
+    await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
+    await takeLiveSelfie();
+    expect(await screen.findByText(th.results.none)).toBeInTheDocument();
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 0 }));
+  });
+
   it('after a scan the event title is gone; the found photos come first', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = scanShare(fake, { consented: true });

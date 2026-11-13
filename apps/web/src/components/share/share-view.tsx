@@ -344,7 +344,6 @@ function ShareContent({
   const [results, setResults] = useState<FaceSearchResponse | null>(null);
   const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const [selected, setSelected] = useState<ReadonlyMap<string, ShareItem>>(new Map());
-  const resultsRef = useRef<HTMLDivElement>(null);
   // ADR 0020: new photos appear on their own, without a reload or a spinner.
   useShareLiveUpdates(token, shareConfig.livePollMs);
 
@@ -432,7 +431,7 @@ function ShareContent({
           ) : null}
 
           {results !== null ? (
-            <div ref={resultsRef}>
+            <div>
               <ScanResults
                 results={results}
                 tile={tile}
@@ -509,10 +508,10 @@ function ShareContent({
                   setResults(r);
                   setScanning(null);
                   setNotice(null);
-                  // Show the results, which sit under the header.
-                  requestAnimationFrame(() =>
-                    resultsRef.current?.scrollIntoView({ block: 'start' }),
-                  );
+                  // The results come first on the page: show them from the very top, top bar
+                  // included, found or not (owner, 2026-11-13: scrolling to the results left
+                  // the page a little way down).
+                  requestAnimationFrame(() => window.scrollTo({ top: 0 }));
                 }}
                 onClose={() => setScanning(null)}
               />
