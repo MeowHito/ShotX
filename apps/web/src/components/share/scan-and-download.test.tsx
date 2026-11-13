@@ -172,15 +172,15 @@ describe('scan', () => {
     // No tips before the photo, no "add another angle", no second search button.
     expect(screen.queryByText(/หันหน้าตรง/)).not.toBeInTheDocument();
     await takeLiveSelfie();
-    expect(
-      await screen.findByRole('progressbar', { name: th.capture.searching }),
-    ).toBeInTheDocument();
+    // The digging cat while it searches (owner, 2026-11-13).
+    expect(await screen.findByRole('status', { name: th.capture.searching })).toBeInTheDocument();
+    expect(screen.getByTestId('search-cat')).toHaveClass('motion-safe:animate-snap-dig');
     expect(screen.queryByRole('button', { name: /มุม/ })).not.toBeInTheDocument();
     release();
     await screen.findByRole('region', { name: th.results.strong });
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.faceSearch)).toHaveLength(1);
     expect(fake.selfieUploads[0]?.types).toEqual(['image/jpeg']);
-    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('search-cat')).not.toBeInTheDocument();
   });
 
   it('falls back to <input capture="user"> in the LINE in-app browser; gallery pick only in gallery mode', async () => {

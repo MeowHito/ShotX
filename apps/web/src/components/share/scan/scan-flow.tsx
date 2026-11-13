@@ -8,7 +8,7 @@ import {
   isSupportedLocale,
   rateLimitedDetailsSchema,
 } from '@shotx/shared';
-import { Alert, Button, Progress } from '@shotx/ui';
+import { Alert, Button } from '@shotx/ui';
 import { XIcon } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -27,6 +27,10 @@ import { CaptchaChallenge, type CaptchaFailure } from './captcha-challenge';
 import { ConsentScreen, knownPolicyVersion } from './consent-screen';
 import { useFaceTools } from './face-tools';
 import { SelfieCapture } from './selfie-capture';
+import catDig from './assets/cat-dig.webp';
+
+/** Next gives a static image import as `{ src }`, Vitest as the URL itself. */
+const CAT_DIG_URL: string = typeof catDig === 'string' ? catDig : catDig.src;
 
 export type ScanPurpose = 'search' | 'delete';
 
@@ -466,19 +470,25 @@ function AutoConsent({
 }
 
 /**
- * The bar shown while the photo is checked and searched. The API gives no progress, so it moves
- * quickly at first and slows down towards 90% until the answer arrives.
+ * Shown while the photo is checked and searched: the mascot cat digging through a box of photos
+ * (owner, 2026-11-13), in place of a progress bar the API could not feed anyway. One 30 KB
+ * sprite of three frames, stepped by CSS; a hashed static file, cached for good. Reduced motion
+ * keeps the first frame still.
  */
 export function SearchProgress({ label }: { label: string }) {
-  const [value, setValue] = useState(8);
-  useEffect(() => {
-    const timer = setInterval(() => setValue((v) => v + (90 - v) * 0.12), 250);
-    return () => clearInterval(timer);
-  }, []);
   return (
-    <div className="space-y-3 py-6 text-center" role="status">
+    <div
+      className="flex flex-col items-center gap-2 py-4 text-center"
+      role="status"
+      aria-label={label}
+    >
+      <div
+        aria-hidden
+        data-testid="search-cat"
+        className="size-24 bg-no-repeat motion-safe:animate-snap-dig"
+        style={{ backgroundImage: `url(${CAT_DIG_URL})`, backgroundSize: '300% 100%' }}
+      />
       <p className="font-medium">{label}</p>
-      <Progress value={value} aria-label={label} className="h-2.5" />
     </div>
   );
 }
