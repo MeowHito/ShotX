@@ -19,6 +19,10 @@ const adminConsoleEnvSchema = z.object({
    * the host disk's overlay; point it at a bind mount to measure another disk.
    */
   ADMIN_SYSTEM_DISK_PATH: z.string().min(1).default('/'),
+  /** ADR 0018: how long an admin's act-as session in a photographer's studio lasts (no renewal). */
+  ADMIN_ACT_AS_SESSION_SECONDS: int(300, 14_400).default(3600),
+  /** ADR 0018: how long an act-as link can be opened (once). */
+  ADMIN_ACT_AS_CODE_SECONDS: int(15, 600).default(120),
 });
 
 export interface AdminConsoleConfig {
@@ -27,6 +31,10 @@ export interface AdminConsoleConfig {
   storageScanTtlSeconds: number;
   /** ADMIN_SYSTEM_DISK_PATH. */
   systemDiskPath: string;
+  /** ADMIN_ACT_AS_SESSION_SECONDS. */
+  actAsSessionSeconds: number;
+  /** ADMIN_ACT_AS_CODE_SECONDS. */
+  actAsCodeSeconds: number;
 }
 
 /** Reads ADMIN_LIST_PAGE_SIZE (api; default 50). */
@@ -36,6 +44,8 @@ export function loadAdminConsoleConfig(env: Env): AdminConsoleConfig {
     listPageSize: e.ADMIN_LIST_PAGE_SIZE,
     storageScanTtlSeconds: e.ADMIN_STORAGE_SCAN_TTL_SECONDS,
     systemDiskPath: e.ADMIN_SYSTEM_DISK_PATH,
+    actAsSessionSeconds: e.ADMIN_ACT_AS_SESSION_SECONDS,
+    actAsCodeSeconds: e.ADMIN_ACT_AS_CODE_SECONDS,
   };
 }
 

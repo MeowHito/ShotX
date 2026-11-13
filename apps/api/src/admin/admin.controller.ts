@@ -20,6 +20,7 @@ import type { AppUser } from '../auth/users';
 import { parseRequestPart, respond, ZodPipe } from '../http/zod';
 import { AdminUsersService } from './admin-users.service';
 import { CashPaymentsService } from './cash-payments.service';
+import { ActAsService } from './act-as.service';
 import { AdminSystemService } from './system.service';
 
 const R = ADMIN_ROUTES;
@@ -38,7 +39,18 @@ export class AdminController {
     @Inject(AdminUsersService) private readonly users: AdminUsersService,
     @Inject(CashPaymentsService) private readonly cash: CashPaymentsService,
     @Inject(AdminSystemService) private readonly system: AdminSystemService,
+    @Inject(ActAsService) private readonly actAs: ActAsService,
   ) {}
+
+  /** ADR 0018: a one-time link that opens the photographer's studio as them. Audited. */
+  @Post(R.actAs.path)
+  @HttpCode(R.actAs.status)
+  async startActAs(
+    @CurrentAdmin() admin: AppUser,
+    @Param(new ZodPipe(R.actAs.params, 'params')) params: Out<typeof R.actAs.params>,
+  ) {
+    return respond(R.actAs.response, await this.actAs.start(admin.id, params.id));
+  }
 
   /** ADR 0016: the overview tab. Read-only, so not audited. */
   @Get(R.system.path)

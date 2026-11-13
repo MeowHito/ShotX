@@ -358,6 +358,7 @@ describe('me', () => {
       },
       features: { faceSearch: false },
       passwordChangeRequired: false,
+      actingAdmin: null,
     };
     expect(meResponseSchema.parse(me)).toEqual(me);
     expect(

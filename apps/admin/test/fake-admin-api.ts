@@ -291,6 +291,18 @@ export class FakeAdminApi {
         user.lockedUntil = null;
         return { status: 200, value: user };
       }
+      case ADMIN_ROUTES.actAs: {
+        const user = this.find(id);
+        if (user.role !== 'photographer') throw new Fail(ErrorCode.NOT_FOUND);
+        if (user.status !== 'active') throw new Fail(ErrorCode.CONFLICT);
+        return {
+          status: 200,
+          value: {
+            url: `https://photos.example.test/auth/act-as?code=${'c'.repeat(43)}`,
+            expiresAt: '2026-11-13T05:02:00.000Z',
+          },
+        };
+      }
       case ADMIN_ROUTES.system:
         return { status: 200, value: this.system };
       case ADMIN_ROUTES.listCashPayments: {

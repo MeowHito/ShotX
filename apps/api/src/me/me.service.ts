@@ -22,11 +22,15 @@ export class MeService {
     @Inject(KEY_VALUE_STORE) private readonly store: KeyValueStore,
   ) {}
 
-  /** `passwordChangeRequired`: the session is restricted (PASSWORD_CHANGE_CLAIM, ADR 0010). */
+  /**
+   * `passwordChangeRequired`: the session is restricted (PASSWORD_CHANGE_CLAIM, ADR 0010).
+   * `actingAdminId`: the admin of an act-as session (ADR 0018), named in the studio's banner.
+   */
   async me(
     userId: string,
     passwordChangeRequired: boolean,
     q: Queryable = this.db,
+    actingAdminId: string | null = null,
   ): Promise<MeResponse> {
     const [user] = await q.select().from(users).where(eq(users.id, userId));
     if (user === undefined || user.role === 'admin') throw new Error('Guarded user vanished');
@@ -53,6 +57,14 @@ export class MeService {
         };
       }
     }
+    let actingAdmin: MeResponse['actingAdmin'] = null;
+    if (actingAdminId !== null) {
+      const [admin] = await q
+        .select({ id: users.id, name: users.name, email: users.email })
+        .from(users)
+        .where(eq(users.id, actingAdminId));
+      actingAdmin = admin ?? null;
+    }
     return {
       id: user.id,
       role: user.role,
@@ -62,6 +74,7 @@ export class MeService {
       subscription,
       features: { faceSearch: this.config.features.faceSearch },
       passwordChangeRequired,
+      actingAdmin,
     };
   }
 

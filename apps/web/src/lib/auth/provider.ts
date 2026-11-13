@@ -35,7 +35,10 @@ export interface LoginStart {
 }
 
 export interface AuthProvider {
-  startLogin: (input: { identityProvider: OidcProvider; redirectUri: string }) => Promise<LoginStart>;
+  startLogin: (input: {
+    identityProvider: OidcProvider;
+    redirectUri: string;
+  }) => Promise<LoginStart>;
   /** Finishes the sign-in with what the identity provider sent to the callback. */
   completeLogin: (input: {
     code: string;
@@ -48,6 +51,11 @@ export interface AuthProvider {
   revoke: (refreshToken: string) => Promise<void>;
   /** Where to send the browser to end the provider's own session, then come back. */
   logoutUrl: (returnTo: string) => string;
+  /**
+   * ADR 0018: exchanges an admin's one-time act-as code for a session of the photographer (API-
+   * issued tokens only; absent with Cognito).
+   */
+  actAs?: (code: string) => Promise<AuthTokens>;
   /** The development sign-in (AUTH_PROVIDER=local only); absent everywhere else. */
   devLogin?: (identity: { email: string; name: string }) => Promise<AuthTokens>;
   /**

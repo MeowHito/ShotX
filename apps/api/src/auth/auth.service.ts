@@ -300,7 +300,11 @@ export class AuthService {
       // them from the subject as before.
       amr = result.issued.amr ?? amrForSubject(result.user.authSubject);
       return await tokenResponse(auth, pool, result.user, result.issued, amr, now, {
-        passwordChange: pool === 'users' && state.mustChangePassword === true,
+        // ADR 0018: an admin acting in the account isn't held to its temporary password.
+        passwordChange:
+          pool === 'users' &&
+          state.mustChangePassword === true &&
+          (result.issued.actingAdminId ?? null) === null,
       });
     } catch (error) {
       // A session the issuer may no longer serve (e.g. a dev-login session after leaving

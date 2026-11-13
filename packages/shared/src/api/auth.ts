@@ -136,6 +136,10 @@ export type OidcCallbackBody = z.input<typeof oidcCallbackBodySchema>;
  * Development sign-in (AUTH_PROVIDER=local, APP_STAGE=local only; NOT_FOUND anywhere else): any
  * email, users pool only, subject localDevSubject(email). Never an admin.
  */
+/** POST /auth/act-as (ADR 0018): the one-time code of an admin's act-as link. */
+export const actAsBodySchema = z.strictObject({ code: opaqueTokenSchema });
+export type ActAsBody = z.input<typeof actAsBodySchema>;
+
 export const devLoginBodySchema = z.strictObject({
   email: z.email().max(254),
   name: z.string().trim().min(1).max(200),

@@ -292,6 +292,7 @@ describe('route table', () => {
       'POST /auth/admin/login',
       'POST /auth/admin/password',
       'POST /auth/admin/mfa',
+      'POST /auth/act-as',
       'POST /auth/photographer/sign-in',
       // ADR 0010: photographer account and the admin app.
       'POST /auth/photographer/password',
@@ -300,6 +301,7 @@ describe('route table', () => {
       'GET /admin/users/:id',
       'PATCH /admin/users/:id',
       'POST /admin/users/:id/reset-password',
+      'POST /admin/users/:id/act-as',
       'GET /admin/system',
       'GET /admin/cash-payments',
       'POST /admin/cash-payments',

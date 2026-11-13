@@ -33,6 +33,13 @@ export const meResponseSchema = z.object({
    * so a reloaded studio can show the change form. Always false for viewers.
    */
   passwordChangeRequired: z.boolean(),
+  /**
+   * ADR 0018: set while an admin works in this account through an act-as session (the studio
+   * shows a banner with a way out); null otherwise.
+   */
+  actingAdmin: z
+    .object({ id: idSchema, name: z.string().nullable(), email: z.string().nullable() })
+    .nullable(),
 });
 export type MeResponse = z.output<typeof meResponseSchema>;
 

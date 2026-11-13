@@ -4,6 +4,7 @@ import type { AdminUser } from '@shotx/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useState } from 'react';
 import { applyUserUpdate } from '@/lib/users/queries';
+import { ActAsDialog } from './act-as-dialog';
 import { RenameDialog } from './rename-dialog';
 import { ResetPasswordDialog } from './reset-password-dialog';
 import { StatusDialog } from './status-dialog';
@@ -45,6 +46,14 @@ export function UserActionDialogs({
     <>
       <RenameDialog user={userFor('rename')} onOpenChange={close} onDone={done} />
       <StatusDialog user={userFor('toggleStatus')} onOpenChange={close} onDone={done} />
+      <ActAsDialog
+        user={userFor('actAs')}
+        onOpenChange={close}
+        onOpened={(message) => {
+          setMessage(message);
+          setTarget(null);
+        }}
+      />
       <ResetPasswordDialog
         user={userFor('resetPassword')}
         onOpenChange={close}

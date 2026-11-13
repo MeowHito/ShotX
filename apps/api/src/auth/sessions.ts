@@ -34,6 +34,8 @@ export interface IssuedRefreshToken {
    * more). Null for a family from before 0012 (then derived from the subject, as before).
    */
   amr: AuthMethod[] | null;
+  /** ADR 0018: the admin acting in this photographer's account, or null (their own session). */
+  actingAdminId?: string | null;
 }
 
 /**
@@ -48,6 +50,8 @@ export async function startSession(
     now: Date;
     ttlSeconds: number;
     amr: readonly AuthMethod[];
+    /** ADR 0018: an admin's act-as session of this photographer. */
+    actingAdminId?: string;
   },
 ): Promise<IssuedRefreshToken> {
   const id = await newId(q);
@@ -63,8 +67,15 @@ export async function startSession(
     createdAt: input.now,
     lastUsedAt: input.now,
     amr: [...input.amr],
+    actingAdminId: input.actingAdminId ?? null,
   });
-  return { refreshToken, familyId: id, expiresAt, amr: [...input.amr] };
+  return {
+    refreshToken,
+    familyId: id,
+    expiresAt,
+    amr: [...input.amr],
+    actingAdminId: input.actingAdminId ?? null,
+  };
 }
 
 /** The user a session belongs to, as the token response needs it. */
@@ -177,6 +188,7 @@ export async function rotateSession(
         familyId: row.familyId,
         expiresAt: row.expiresAt,
         amr: sessionAmr(row.amr),
+        actingAdminId: row.actingAdminId,
       },
     } as const;
   });
@@ -209,8 +221,9 @@ async function insertSuccessor(
     expiresAt: row.expiresAt,
     createdAt: input.now,
     lastUsedAt: input.now,
-    // The family keeps its sign-in's methods (migration 0012).
+    // The family keeps its sign-in's methods (migration 0012) and its acting admin (0015).
     amr: row.amr,
+    actingAdminId: row.actingAdminId,
   });
   await tx
     .update(authSessions)
@@ -262,6 +275,7 @@ async function graceSuccessor(
       familyId: row.familyId,
       expiresAt: row.expiresAt,
       amr: sessionAmr(successor.amr),
+      actingAdminId: successor.actingAdminId,
     },
   };
 }

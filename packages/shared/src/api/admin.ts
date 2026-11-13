@@ -219,6 +219,17 @@ export const adminSystemResponseSchema = z.object({
 });
 export type AdminSystemResponse = z.output<typeof adminSystemResponseSchema>;
 
+// --- Act as a photographer (ADR 0018) ------------------------------------------------------
+
+/**
+ * POST /admin/users/:id/act-as: a one-time link that opens the photographer's studio as them, for
+ * ADMIN_ACT_AS_SESSION_SECONDS. Open it in a new tab; it works once, within
+ * ADMIN_ACT_AS_CODE_SECONDS (`expiresAt`). Photographers only, active accounts only (else
+ * CONFLICT); audited (`admin.user.act_as`), and so is every change made in that session.
+ */
+export const actAsResponseSchema = z.object({ url: z.url(), expiresAt: isoDateTimeSchema });
+export type ActAsResponse = z.output<typeof actAsResponseSchema>;
+
 // --- Audit metas (ADR 0010) -------------------------------------------------------------------
 
 /**
@@ -246,6 +257,13 @@ export const ADMIN_AUDIT_META_SCHEMAS = {
     photographerId: idSchema,
     amountSatang: z.number().int().positive().max(2_147_483_647),
     paidAt: isoDateTimeSchema,
+  }),
+  'admin.user.act_as': z.object({ expiresAt: isoDateTimeSchema }),
+  'admin.act_as.request': z.object({
+    method: z.enum(['POST', 'PUT', 'PATCH', 'DELETE']),
+    /** The route's path pattern (e.g. `/drive/files/:id`), never ids from the body. */
+    route: z.string(),
+    sessionId: idSchema,
   }),
 } as const satisfies Record<AdminAuditAction, z.ZodType>;
 

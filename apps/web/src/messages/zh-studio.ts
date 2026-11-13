@@ -278,6 +278,11 @@ export const zhStudio: StudioMessages = {
     body: '摄影师账号只能由管理员开通。新摄影师请联系管理员开通账号，然后用收到的邮箱和密码登录。',
   },
   studio: {
+    actAs: {
+      banner: '管理员模式：{admin} 正在管理 {owner} 的账户',
+      audited: '所有更改都会以管理员名义记录。',
+      exit: '退出管理员模式',
+    },
     drive: '我的云盘',
     recent: '最近',
     trash: '回收站',

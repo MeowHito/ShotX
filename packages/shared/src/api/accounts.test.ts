@@ -102,6 +102,8 @@ describe('account domain (ADR 0010)', () => {
       'admin.user.enabled',
       'admin.user.password_reset',
       'admin.cash_payment.created',
+      'admin.user.act_as',
+      'admin.act_as.request',
     ]);
     // Admin actions always have an actor: they must not use the actor-less `auth.` prefix.
     for (const action of ADMIN_AUDIT_ACTIONS) {
@@ -552,7 +554,13 @@ describe('account config', () => {
   });
 
   it('reads the admin list page size', () => {
-    const defaults = { listPageSize: 50, storageScanTtlSeconds: 600, systemDiskPath: '/' };
+    const defaults = {
+      listPageSize: 50,
+      storageScanTtlSeconds: 600,
+      systemDiskPath: '/',
+      actAsSessionSeconds: 3600,
+      actAsCodeSeconds: 120,
+    };
     expect(loadAdminConsoleConfig({})).toEqual(defaults);
     expect(loadAdminConsoleConfig({ ADMIN_LIST_PAGE_SIZE: '100' })).toEqual({
       ...defaults,
@@ -606,6 +614,16 @@ describe('contract change requests (wave 9)', () => {
     expect(m['admin.user.updated'].safeParse({ changed: [] }).success).toBe(false);
     expect(m['admin.user.updated'].safeParse({ changed: ['status'] }).success).toBe(true);
     expect(m['admin.user.password_reset'].safeParse({}).success).toBe(true);
+    expect(
+      m['admin.act_as.request'].safeParse({
+        method: 'DELETE',
+        route: '/drive/trash',
+        sessionId: '0196a0b2-6e3e-7c4a-9d2f-3b5a8c7d6e1f',
+      }).success,
+    ).toBe(true);
+    expect(
+      m['admin.act_as.request'].safeParse({ method: 'GET', route: '/me', sessionId: 'x' }).success,
+    ).toBe(false);
     expect(m['admin.user.disabled'].safeParse({ revokedSessions: 2 }).success).toBe(true);
     expect(
       m['admin.user.created'].safeParse({ role: 'photographer', email: 'p@example.test' }).success,
@@ -746,6 +764,7 @@ describe('separate admin BFF key (wave 9 round 2)', () => {
       adminLogin: 'admins',
       adminChangePassword: 'admins',
       adminMfa: 'admins',
+      actAs: 'users',
       photographerSignIn: 'users',
     });
   });

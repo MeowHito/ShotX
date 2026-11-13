@@ -93,6 +93,9 @@ export function UserDetail({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            {available.includes('actAs') ? (
+              <Button onClick={() => actions.open('actAs', user)}>{tu('actions.actAs')}</Button>
+            ) : null}
             {available.includes('rename') ? (
               <Button variant="outline" onClick={() => actions.open('rename', user)}>
                 {tu('actions.rename')}

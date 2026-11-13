@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createCognitoAuthProvider } from './cognito';
 import {
   type AuthDeps,
+  handleActAs,
   handleCallback,
   handleDevLogin,
   handleLogin,
@@ -247,9 +248,7 @@ describe('login and callback', () => {
   it('sends API errors to the login page by code, keeping the next path', async () => {
     const provider = fakeProvider({
       startLogin: () =>
-        Promise.reject(
-          new AuthProviderError('no', 404, ErrorCode.AUTH_PROVIDER_UNAVAILABLE),
-        ),
+        Promise.reject(new AuthProviderError('no', 404, ErrorCode.AUTH_PROVIDER_UNAVAILABLE)),
     });
     const response = await handleLogin(
       new Request(`${BASE}/auth/login?provider=google&next=/s/tok`),
@@ -262,7 +261,10 @@ describe('login and callback', () => {
     const unknown = fakeProvider({
       startLogin: () => Promise.reject(new AuthProviderError('x', 400, ErrorCode.NOT_FOUND)),
     });
-    const failed = await handleLogin(new Request(`${BASE}/auth/login?provider=line`), deps(unknown));
+    const failed = await handleLogin(
+      new Request(`${BASE}/auth/login?provider=line`),
+      deps(unknown),
+    );
     expect(failed.headers.get('location')).toBe(`${BASE}/login?error=failed`);
   });
 
@@ -319,9 +321,7 @@ describe('login and callback', () => {
       }),
       deps(provider),
     );
-    expect(cancelled.headers.get('location')).toBe(
-      `${BASE}/login?error=cancelled&next=%2Fs%2Ftok`,
-    );
+    expect(cancelled.headers.get('location')).toBe(`${BASE}/login?error=cancelled&next=%2Fs%2Ftok`);
     // The API was never asked: a login-CSRF code from another browser can't sign this one in.
     expect(provider.completeLogin).not.toHaveBeenCalled();
     for (const response of [mismatch, missing, cancelled]) {
@@ -455,7 +455,10 @@ describe('sessions', () => {
       const provider = fakeProvider({
         refresh: () => Promise.reject(new AuthProviderError('refused', 401, code)),
       });
-      const result = await resolveSession(cookie({ ...session, expiresAt: 0 }, 'r'), deps(provider));
+      const result = await resolveSession(
+        cookie({ ...session, expiresAt: 0 }, 'r'),
+        deps(provider),
+      );
       expect(result.session).toBeNull();
       expect(result.unavailable).toBeUndefined();
       expect(result.setCookies).toHaveLength(2);
@@ -466,7 +469,10 @@ describe('sessions', () => {
   it('keeps the cookies when the provider is unreachable, so a later request can retry', async () => {
     for (const error of [new AuthProviderError('down'), new AuthProviderError('5xx', 503)]) {
       const provider = fakeProvider({ refresh: () => Promise.reject(error) });
-      const result = await resolveSession(cookie({ ...session, expiresAt: 0 }, 'r'), deps(provider));
+      const result = await resolveSession(
+        cookie({ ...session, expiresAt: 0 }, 'r'),
+        deps(provider),
+      );
       expect(result).toEqual({ session: null, setCookies: [], unavailable: true });
     }
   });
@@ -511,5 +517,43 @@ describe('sessions', () => {
     expect(response.headers.get('location')).toBe(
       `https://auth.example.com/logout?client_id=c&logout_uri=${encodeURIComponent(`${BASE}/`)}`,
     );
+  });
+});
+
+describe('act as a photographer (ADR 0018)', () => {
+  const code = 'c'.repeat(43);
+  const tokens: AuthTokens = {
+    accessToken: jwt({ sub: 'password:p1' }),
+    refreshToken: 'a'.repeat(43),
+    expiresIn: 900,
+    refreshExpiresIn: 3600,
+    user: { email: 'studio@example.com', name: 'Studio' },
+  };
+  const get = (query: string, cookie?: string) =>
+    new Request(`${BASE}/auth/act-as${query}`, cookie ? { headers: { cookie } } : undefined);
+
+  it('exchanges the code once, ends the previous session, and opens the studio', async () => {
+    const actAs = vi.fn(() => Promise.resolve(tokens));
+    const provider = fakeProvider({ actAs });
+    const response = await handleActAs(
+      get(`?code=${code}`, `${names.refresh}=old-refresh`),
+      deps(provider),
+    );
+    expect(actAs).toHaveBeenCalledWith(code);
+    expect(provider.revoke).toHaveBeenCalledWith('old-refresh');
+    expect(response.headers.get('location')).toBe(`${BASE}/studio`);
+    expect(setCookies(response).get(names.refresh)).toBe('a'.repeat(43));
+    expect(rawCookie(response, names.refresh)).toContain('Max-Age=3600');
+  });
+
+  it('sends a missing, malformed, used or expired code to the sign-in page', async () => {
+    const actAs = vi.fn(() => Promise.reject(new AuthProviderError('UNAUTHENTICATED', 401)));
+    for (const query of ['', '?code=short', `?code=${code}`]) {
+      const response = await handleActAs(get(query), deps(fakeProvider({ actAs })));
+      expect(response.headers.get('location'), query).toBe(`${BASE}/login?error=expired`);
+      expect(response.headers.getSetCookie()).toEqual([]);
+    }
+    expect(actAs).toHaveBeenCalledTimes(1);
+    expect((await handleActAs(get(`?code=${code}`), deps())).status).toBe(404);
   });
 });

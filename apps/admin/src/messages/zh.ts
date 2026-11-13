@@ -160,6 +160,7 @@ export const zh: TranslatedMessages = {
       details: '查看详情和收款记录',
       rename: '修改名称',
       resetPassword: '重置密码',
+      actAs: '进入此账户管理',
       disable: '停用',
       enable: '启用',
     },
@@ -204,6 +205,16 @@ export const zh: TranslatedMessages = {
       '为 {email} 设置新的临时密码。该用户将在所有设备上退出登录，并须在下次登录时设置新密码。',
     adminNote: '管理员原有的身份验证器应用仍可使用，无需重新设置。',
     submit: '重置密码',
+  },
+  actAsDialog: {
+    title: '进入 {email} 的账户管理？',
+    description:
+      '将在新标签页打开该摄影师的工作室，可代为执行所有操作：查看活动和照片、编辑、删除、创建和复制链接、设计分享页，修改密码除外。',
+    audited: '仅限临时使用，之后自动失效。所有更改都会以你的名义记录。',
+    confirm: '打开工作室',
+    opened: '已在新标签页打开 {email} 的工作室',
+    blocked: '浏览器拦截了新标签页。请点击此链接打开工作室（2 分钟内仅可使用一次）。',
+    openLink: '打开 {email} 的工作室',
   },
   statusDialog: {
     disableTitle: '停用账号 {email}？',

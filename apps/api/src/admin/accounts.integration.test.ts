@@ -11,6 +11,7 @@ import {
 } from '@shotx/db';
 import {
   ADMIN_ROUTES as A,
+  actAsResponseSchema,
   adminSystemResponseSchema,
   adminUserSchema,
   apiPath,
@@ -1163,6 +1164,105 @@ for (const backend of DATABASE_BACKENDS) {
             })
           ).body,
         ).toMatchObject({ code: 'INVALID_CREDENTIALS' });
+      });
+    });
+
+    describe('act as a photographer (ADR 0018)', () => {
+      it('opens the studio once, audits every change, and refuses the password change', async () => {
+        // A photographer still on the temporary password: the admin isn't restricted by it.
+        const p = await h.createPhotographer(boss.token, 'actas');
+        const started = await h.admin(boss.token, 'POST', apiPath(A.actAs, { id: p.id }));
+        expect(started.status).toBe(200);
+        const link = actAsResponseSchema.parse(started.body);
+        const url = new URL(link.url);
+        expect(url.pathname).toBe('/auth/act-as');
+        const code = url.searchParams.get('code') ?? '';
+        expect(await h.audits('admin.user.act_as', p.id)).toHaveLength(1);
+
+        const exchanged = await h.bff(apiPath(AR.actAs), { code });
+        expect(exchanged.status).toBe(200);
+        const tokens = authTokenResponseSchema.parse(exchanged.body);
+        // ADMIN_ACT_AS_SESSION_SECONDS (default one hour), never the photographer's 30 days.
+        expect(tokens.refreshExpiresIn).toBeLessThanOrEqual(3600);
+        // The code works once.
+        expect((await h.bff(apiPath(AR.actAs), { code })).status).toBe(401);
+
+        const me = await api.request('GET', apiPath(ME_ROUTES.get), { token: tokens.accessToken });
+        expect(me.status).toBe(200);
+        expect(me.body).toMatchObject({
+          id: p.id,
+          passwordChangeRequired: false,
+          actingAdmin: { id: boss.id },
+        });
+
+        // A change in the photographer's drive works, and is audited under the admin.
+        const folder = await api.request('POST', apiPath(DRIVE_ROUTES.createFolder), {
+          token: tokens.accessToken,
+          body: { parentId: null, name: 'Fixed by admin' },
+        });
+        expect(folder.status).toBe(201);
+        const requests = await h.audits('admin.act_as.request', p.id);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toMatchObject({
+          actorId: boss.id,
+          meta: { method: 'POST', route: DRIVE_ROUTES.createFolder.path },
+        });
+        // Reads aren't audited.
+        await api.request('GET', apiPath(ME_ROUTES.get), { token: tokens.accessToken });
+        expect(await h.audits('admin.act_as.request', p.id)).toHaveLength(1);
+
+        // Never the password.
+        const change = await h.changePassword(tokens.accessToken, TEMP_PW, NEW_PW);
+        expect(change.status).toBe(403);
+
+        // The photographer's own sign-in is unaffected (still the temporary password).
+        expect((await h.signIn(p.email ?? '', TEMP_PW)).status).toBe(200);
+      });
+
+      it('refuses viewers, admins, disabled accounts and stale or unknown codes', async () => {
+        const viewer = await api.viewer();
+        expect(
+          (await h.admin(boss.token, 'POST', apiPath(A.actAs, { id: viewer.id }))).status,
+        ).toBe(404);
+        expect((await h.admin(boss.token, 'POST', apiPath(A.actAs, { id: boss.id }))).status).toBe(
+          404,
+        );
+        const p = await h.createPhotographer(boss.token, 'actas-disabled');
+        await h.admin(boss.token, 'PATCH', apiPath(A.updateUser, { id: p.id }), {
+          status: 'disabled',
+        });
+        expect((await h.admin(boss.token, 'POST', apiPath(A.actAs, { id: p.id }))).status).toBe(
+          409,
+        );
+        const unknown = await h.bff(apiPath(AR.actAs), { code: 'A'.repeat(43) });
+        expect(unknown.status).toBe(401);
+        // Photographers' tokens can't start one.
+        const photographer = await api.photographer();
+        expect(
+          (
+            await api.request('POST', apiPath(A.actAs, { id: p.id }), {
+              token: photographer.token,
+            })
+          ).status,
+        ).not.toBe(200);
+      });
+
+      it('ends the session when the admin is disabled', async () => {
+        const second = await h.cliAdmin('second-actas');
+        const p = await h.createPhotographer(boss.token, 'actas-end');
+        const link = actAsResponseSchema.parse(
+          (await h.admin(second.token, 'POST', apiPath(A.actAs, { id: p.id }))).body,
+        );
+        const code = new URL(link.url).searchParams.get('code') ?? '';
+        const tokens = authTokenResponseSchema.parse(
+          (await h.bff(apiPath(AR.actAs), { code })).body,
+        );
+        const me = () => api.request('GET', apiPath(ME_ROUTES.get), { token: tokens.accessToken });
+        expect((await me()).status).toBe(200);
+        await h.admin(boss.token, 'PATCH', apiPath(A.updateUser, { id: second.id }), {
+          status: 'disabled',
+        });
+        expect((await me()).status).toBe(401);
       });
     });
 

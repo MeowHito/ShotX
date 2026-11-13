@@ -300,6 +300,11 @@ export const enStudio: StudioMessages = {
     body: 'Photographer accounts are opened by the administrator only. New photographers, please contact the administrator to open an account, then sign in with the email and password you receive.',
   },
   studio: {
+    actAs: {
+      banner: 'Admin mode: {admin} is working in {owner}’s account',
+      audited: 'Every change is recorded under the admin’s name.',
+      exit: 'Leave admin mode',
+    },
     drive: 'My Drive',
     recent: 'Recent',
     trash: 'Trash',

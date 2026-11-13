@@ -46,7 +46,10 @@ export class MeController {
   @HttpCode(R.get.status)
   @UseGuards(UserGuard)
   async get(@CurrentUser() user: UserPrincipal) {
-    return respond(R.get.response, await this.me.me(user.id, user.passwordChangeRequired));
+    return respond(
+      R.get.response,
+      await this.me.me(user.id, user.passwordChangeRequired, undefined, user.actingAdminId),
+    );
   }
 
   /**

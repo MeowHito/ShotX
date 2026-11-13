@@ -17,7 +17,7 @@ import { useState } from 'react';
 import { useTotpEnabled } from '@/components/admin-settings';
 import { useFormat } from '@/lib/i18n/use-format';
 
-export type UserAction = 'rename' | 'resetPassword' | 'toggleStatus';
+export type UserAction = 'rename' | 'resetPassword' | 'toggleStatus' | 'actAs';
 
 /** Which row actions an account offers to the signed-in admin (the API enforces the same rules). */
 export function availableActions(user: AdminUser, currentAdminId: string | null): UserAction[] {
@@ -26,6 +26,8 @@ export function availableActions(user: AdminUser, currentAdminId: string | null)
     'rename',
     ...(user.passwordAccount && !self ? (['resetPassword'] as const) : []),
     ...(!self ? (['toggleStatus'] as const) : []),
+    // ADR 0018: an active photographer's studio, as them.
+    ...(user.role === 'photographer' && user.status === 'active' ? (['actAs'] as const) : []),
   ];
 }
 
@@ -177,6 +179,11 @@ export function UsersTable({
                       <DropdownMenuItem asChild>
                         <Link href={userDetailHref(user.id)}>{t('actions.details')}</Link>
                       </DropdownMenuItem>
+                      {actions.includes('actAs') ? (
+                        <DropdownMenuItem onSelect={() => onAction('actAs', user)}>
+                          {t('actions.actAs')}
+                        </DropdownMenuItem>
+                      ) : null}
                       <DropdownMenuSeparator />
                       {actions.includes('rename') ? (
                         <DropdownMenuItem onSelect={() => onAction('rename', user)}>

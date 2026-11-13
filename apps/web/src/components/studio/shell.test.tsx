@@ -341,3 +341,25 @@ describe('recent and search pages', () => {
     expect(screen.getByText('ชนิด: รูปภาพ')).toBeInTheDocument();
   });
 });
+
+describe('admin act-as banner (ADR 0018)', () => {
+  it('says an admin is working in the account, that changes are recorded, and offers the way out', async () => {
+    const fake = new FakeApi({
+      actingAdmin: { id: crypto.randomUUID(), name: 'แอดมินเอ', email: 'admin@example.com' },
+    });
+    renderShell(fake);
+    const banner = await screen.findByText(/โหมดแอดมิน: แอดมินเอ กำลังจัดการบัญชีของ Somchai/);
+    expect(banner).toBeInTheDocument();
+    expect(screen.getByText(th.studio.actAs.audited)).toBeInTheDocument();
+    const exit = screen.getByRole('button', { name: th.studio.actAs.exit });
+    expect(exit.closest('form')).toHaveAttribute('action', '/auth/logout');
+  });
+
+  it('is not there in the photographer’s own session', async () => {
+    const fake = new FakeApi();
+    renderShell(fake);
+    await screen.findByText('page content');
+    await waitFor(() => expect(fake.callsTo(ME_ROUTES.get).length).toBeGreaterThan(0));
+    expect(screen.queryByText(/โหมดแอดมิน/)).toBeNull();
+  });
+});

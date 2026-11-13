@@ -315,6 +315,10 @@ export const ADMIN_AUDIT_ACTIONS = [
   'admin.user.enabled',
   'admin.user.password_reset',
   'admin.cash_payment.created',
+  /** ADR 0018: an admin opened a photographer's studio (a one-time act-as link). */
+  'admin.user.act_as',
+  /** ADR 0018: a change an admin made in a photographer's studio (every non-GET request). */
+  'admin.act_as.request',
 ] as const;
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];
 

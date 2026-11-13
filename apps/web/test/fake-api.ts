@@ -78,6 +78,8 @@ export interface FakeApiOptions {
    * route but PASSWORD_CHANGE_ALLOWED_ROUTES answers PASSWORD_CHANGE_REQUIRED.
    */
   passwordChangeRequired?: boolean;
+  /** ADR 0018: GET /me reports an admin acting in the account. */
+  actingAdmin?: { id: string; name: string | null; email: string | null } | null;
   /**
    * viewerLoginAvailable at the API (LINE/Google or dev login on). False: POST /shares and
    * PATCH /shares/:id with `requireLogin: true` answer LOGIN_PROVIDER_UNAVAILABLE.
@@ -162,6 +164,7 @@ export class FakeApi {
       role: 'photographer',
       faceSearch: false,
       passwordChangeRequired: false,
+      actingAdmin: null,
       viewerLoginAvailable: true,
       zipMaxFiles: 500,
       zipMaxBytes: 2 * 1024 ** 3,
@@ -182,6 +185,7 @@ export class FakeApi {
       subscription: this.options.role === 'photographer' ? TRIAL : null,
       features: { faceSearch: this.options.faceSearch },
       passwordChangeRequired: this.options.passwordChangeRequired,
+      actingAdmin: this.options.actingAdmin,
     };
   }
 

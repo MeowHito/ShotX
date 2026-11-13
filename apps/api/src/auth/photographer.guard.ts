@@ -5,10 +5,11 @@ import {
   Inject,
   Injectable,
 } from '@nestjs/common';
-import { allowedDuringPasswordChange } from '@shotx/shared';
+import { allowedDuringPasswordChange, PHOTOGRAPHER_ACCOUNT_ROUTES } from '@shotx/shared';
 import type { Request } from 'express';
 import type { Db } from '../db/db';
 import { ApiError } from '../http/api-error';
+import { writeAdminAudit } from '../admin/admin-audit';
 import { matchedRoute } from '../http/route-contract';
 import { CLOCK, type Clock, DATABASE, TOKEN_VERIFIER, type TokenVerifier } from '../tokens';
 import {
@@ -31,7 +32,11 @@ const PRINCIPAL = Symbol('principal');
 /** The guard's user plus whether the session is restricted (PASSWORD_CHANGE_CLAIM). */
 export interface UserPrincipal extends AppUser {
   passwordChangeRequired: boolean;
+  /** ADR 0018: the admin acting in this account (act-as session), or null. */
+  actingAdminId: string | null;
 }
+
+const AUDITED_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 type AuthedRequest = Request & { [PRINCIPAL]?: UserPrincipal };
 
@@ -59,15 +64,44 @@ async function authenticateUser(
   }
   const user = await provisionUser(db, identity);
   assertAccountActive(user);
-  await assertUserSessionLive(db, identity, user.id, clock.now());
-  const passwordChangeRequired = identity.passwordChange === true;
+  const now = clock.now();
+  const { actingAdminId } = await assertUserSessionLive(db, identity, user.id, now);
+  if (actingAdminId !== null) {
+    const route = matchedRoute(req);
+    // ADR 0018: an admin never changes the photographer's password from their studio (the admin
+    // app resets it, audited, instead).
+    if (
+      route !== null &&
+      route.method === PHOTOGRAPHER_ACCOUNT_ROUTES.changePassword.method &&
+      route.path === PHOTOGRAPHER_ACCOUNT_ROUTES.changePassword.path
+    ) {
+      throw new ApiError('FORBIDDEN', 'Reset the password from the admin app instead');
+    }
+    // Every change the admin makes here is audited under the admin's name: the route pattern
+    // only, never ids or bodies from the request.
+    if (route !== null && AUDITED_METHODS.has(route.method) && identity.sessionId !== undefined) {
+      await writeAdminAudit(db, {
+        actorId: actingAdminId,
+        action: 'admin.act_as.request',
+        target: 'user',
+        targetId: user.id,
+        meta: {
+          method: route.method as 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+          route: route.path,
+          sessionId: identity.sessionId,
+        },
+        now,
+      });
+    }
+  }
+  const passwordChangeRequired = identity.passwordChange === true && actingAdminId === null;
   if (passwordChangeRequired) {
     const route = matchedRoute(req);
     if (route === null || !allowedDuringPasswordChange(route)) {
       throw new ApiError('PASSWORD_CHANGE_REQUIRED', 'Change your temporary password first');
     }
   }
-  const principal = { ...user, passwordChangeRequired };
+  const principal = { ...user, passwordChangeRequired, actingAdminId };
   req[PRINCIPAL] = principal;
   return principal;
 }

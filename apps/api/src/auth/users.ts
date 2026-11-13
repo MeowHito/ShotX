@@ -96,12 +96,12 @@ export async function assertUserSessionLive(
   identity: VerifiedIdentity,
   userId: string,
   now: Date,
-): Promise<void> {
-  if (identity.issuer !== 'shotx') return;
+): Promise<{ actingAdminId: string | null }> {
+  if (identity.issuer !== 'shotx') return { actingAdminId: null };
   const ended = () => new ApiError('UNAUTHENTICATED', 'Session ended; sign in again');
   if (identity.sessionId === undefined) throw ended();
   const [live] = await q
-    .select({ id: authSessions.id })
+    .select({ id: authSessions.id, actingAdminId: authSessions.actingAdminId })
     .from(authSessions)
     .where(
       and(
@@ -114,4 +114,16 @@ export async function assertUserSessionLive(
     )
     .limit(1);
   if (live === undefined) throw ended();
+  if (live.actingAdminId !== null) {
+    // ADR 0018: an act-as session ends as soon as its admin is no longer an active admin.
+    const [admin] = await q
+      .select({ id: users.id })
+      .from(users)
+      .where(
+        and(eq(users.id, live.actingAdminId), eq(users.role, 'admin'), eq(users.status, 'active')),
+      )
+      .limit(1);
+    if (admin === undefined) throw ended();
+  }
+  return { actingAdminId: live.actingAdminId };
 }

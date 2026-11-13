@@ -58,6 +58,14 @@ export const authSessions = pgTable(
     createdAt: createdAt(),
     lastUsedAt: timestamptz('last_used_at').notNull().defaultNow(),
     amr: text('amr').array(),
+    /**
+     * ADR 0018 (migration 0015): the admin working in this photographer's account through an
+     * act-as link; null for the photographer's own sessions. Copied to every successor. The api
+     * audits every change made in such a session and shows a banner in the studio.
+     */
+    actingAdminId: uuid('acting_admin_id').references((): AnyPgColumn => users.id, {
+      onDelete: 'cascade',
+    }),
   },
   (t) => [
     unique('auth_sessions_refresh_token_hash_unique').on(t.refreshTokenHash),

@@ -143,7 +143,10 @@ describe('UsersTable', () => {
       'resetPassword',
       'toggleStatus',
     ]);
-    expect(availableActions(lineUser, SELF_ID)).toEqual(['rename', 'toggleStatus']);
+    // ADR 0018: an active photographer's studio can be opened as them; disabled or admin: no.
+    expect(availableActions(lineUser, SELF_ID)).toEqual(['rename', 'toggleStatus', 'actAs']);
+    expect(availableActions(photographer, SELF_ID)).toContain('actAs');
     expect(availableActions(self, SELF_ID)).toEqual(['rename']);
+    expect(availableActions(pendingAdmin, SELF_ID)).not.toContain('actAs');
   });
 });

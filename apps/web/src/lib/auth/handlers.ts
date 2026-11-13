@@ -1,4 +1,10 @@
-import { devLoginBodySchema, ErrorCode, OIDC_PROVIDERS, VIEWER_SESSION_COOKIE } from '@shotx/shared';
+import {
+  devLoginBodySchema,
+  ErrorCode,
+  OIDC_PROVIDERS,
+  opaqueTokenSchema,
+  VIEWER_SESSION_COOKIE,
+} from '@shotx/shared';
 import { expireCookie, parseCookies, serializeCookie } from './cookies';
 import { type AuthProvider, AuthProviderError, type AuthTokens, type LoginStart } from './provider';
 import {
@@ -240,6 +246,34 @@ export async function handleDevLogin(request: Request, deps: AuthDeps): Promise<
   } catch (error) {
     return redirect(loginErrorUrl(deps, loginErrorFor(error), next));
   }
+}
+
+/**
+ * GET /auth/act-as?code (ADR 0018): an admin's one-time link into a photographer's studio. The
+ * code is exchanged once (POST /auth/act-as); any session already in this browser is ended first,
+ * then the photographer's act-as session is set and the browser goes to /studio, where a banner
+ * says an admin is working in the account. An unknown, used or expired code goes to the sign-in
+ * page with "expired". The redirect drops the code from the address bar and history.
+ */
+export async function handleActAs(request: Request, deps: AuthDeps): Promise<Response> {
+  const actAs = deps.provider.actAs;
+  if (actAs === undefined) return new Response(null, { status: 404 });
+  const code = new URL(request.url).searchParams.get('code') ?? '';
+  if (!opaqueTokenSchema.safeParse(code).success) {
+    return redirect(loginErrorUrl(deps, 'expired'));
+  }
+  let tokens: AuthTokens;
+  try {
+    tokens = await actAs(code);
+  } catch {
+    return redirect(loginErrorUrl(deps, 'expired'));
+  }
+  const previous = parseCookies(request.headers.get('cookie')).get(
+    cookieNames(deps.secureCookies).refresh,
+  );
+  if (previous) await deps.provider.revoke(previous);
+  const session = sessionFromTokens(tokens, deps.now?.() ?? Date.now());
+  return redirect(`${deps.publicBaseUrl}/studio`, sessionCookies(session, tokens, deps));
 }
 
 /**

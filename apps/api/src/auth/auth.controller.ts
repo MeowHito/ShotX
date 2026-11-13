@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Inject, Param, Post, UseGuards } from 
 import { AUTH_ROUTES, type AuthPool } from '@shotx/shared';
 import type { z } from 'zod';
 import { respond, ZodPipe } from '../http/zod';
+import { ActAsService } from '../admin/act-as.service';
 import { AdminSignIn } from './admin-sign-in';
 import { AuthService } from './auth.service';
 import { ApiError } from '../http/api-error';
@@ -22,7 +23,15 @@ export class AuthController {
     @Inject(AuthService) private readonly auth: AuthService,
     @Inject(AdminSignIn) private readonly admin: AdminSignIn,
     @Inject(PhotographerSignIn) private readonly photographer: PhotographerSignIn,
+    @Inject(ActAsService) private readonly actAs: ActAsService,
   ) {}
+
+  /** ADR 0018: web exchanges an admin's one-time act-as code for the photographer's session. */
+  @Post(R.actAs.path)
+  @HttpCode(R.actAs.status)
+  async actAsExchange(@Body(new ZodPipe(R.actAs.body, 'body')) body: Out<typeof R.actAs.body>) {
+    return respond(R.actAs.response, await this.actAs.exchange(body.code));
+  }
 
   @Get(R.providers.path)
   @HttpCode(R.providers.status)

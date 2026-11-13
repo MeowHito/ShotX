@@ -165,6 +165,7 @@ export const en: TranslatedMessages = {
       details: 'Details and payments',
       rename: 'Rename',
       resetPassword: 'Reset password',
+      actAs: 'Work in this account',
       disable: 'Disable',
       enable: 'Enable',
     },
@@ -211,6 +212,18 @@ export const en: TranslatedMessages = {
       'Set a new temporary password for {email}. The user is signed out on every device and must set a new password at the next sign-in.',
     adminNote: 'The admin’s existing authenticator app keeps working; no need to set it up again.',
     submit: 'Reset password',
+  },
+  actAsDialog: {
+    title: 'Work in {email}’s account?',
+    description:
+      'Their studio opens in a new tab and you can do anything there: see events and photos, edit, delete, create and copy links, design share pages. Everything except changing the password.',
+    audited:
+      'It works for a limited time and then expires. Every change is recorded under your name.',
+    confirm: 'Open studio',
+    opened: 'Opened {email}’s studio in a new tab',
+    blocked:
+      'The browser blocked the new tab. Use this link to open the studio (once, within 2 minutes).',
+    openLink: 'Open {email}’s studio',
   },
   statusDialog: {
     disableTitle: 'Disable account {email}?',

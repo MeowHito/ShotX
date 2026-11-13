@@ -247,6 +247,14 @@ export function createShotxAuthProvider(
     // The API keeps no browser session at LINE or Google to end.
     logoutUrl: (returnTo) => returnTo,
 
+    async actAs(code) {
+      return toTokens(
+        await guarded(timeoutMs, (signal) =>
+          api.call(AUTH_ROUTES.actAs, { body: { code }, signal }),
+        ),
+      );
+    },
+
     async passwordSignIn({ email, password }) {
       const response = await guarded(timeoutMs, (signal) =>
         api.call(AUTH_ROUTES.photographerSignIn, { body: { email, password }, signal }),

@@ -3,6 +3,7 @@ import type { ActivityType } from '../domain';
 import { ErrorCode } from '../errors';
 import {
   adminSystemResponseSchema,
+  actAsResponseSchema,
   adminUserSchema,
   cashPaymentSchema,
   createAdminUserBodySchema,
@@ -23,6 +24,7 @@ import {
   adminMfaBodySchema,
   authProvidersResponseSchema,
   authTokenResponseSchema,
+  actAsBodySchema,
   devLoginBodySchema,
   logoutBodySchema,
   oidcCallbackBodySchema,
@@ -1221,6 +1223,23 @@ export const AUTH_ROUTES = {
    * Added (ADR 0010): photographer email + password. A normal or a restricted session
    * (photographerSignInResponseSchema); writes AUTH_AUDIT_ACTIONS `auth.photographer.*`.
    */
+  /**
+   * ADR 0018: exchanges an admin's one-time act-as code for a session of the photographer (users
+   * pool, ADMIN_ACT_AS_SESSION_SECONDS, marked with the acting admin). Web's /auth/act-as calls it.
+   * An unknown, used or expired code, or an admin or photographer no longer active:
+   * UNAUTHENTICATED.
+   */
+  actAs: {
+    method: 'POST',
+    path: '/auth/act-as',
+    status: 200,
+    auth: 'bff',
+    bffKey: 'users',
+    body: actAsBodySchema,
+    response: authTokenResponseSchema,
+    // UNAUTHENTICATED is common to every route.
+    errors: errors(),
+  },
   photographerSignIn: {
     method: 'POST',
     path: '/auth/photographer/sign-in',
@@ -1319,6 +1338,17 @@ export const ADMIN_ROUTES = {
       ErrorCode.CONFLICT,
       ErrorCode.PASSWORD_TOO_WEAK,
     ),
+  },
+  /** ADR 0018: a one-time link that opens a photographer's studio as them. Audited. */
+  actAs: {
+    method: 'POST',
+    path: '/admin/users/:id/act-as',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    params: idParamsSchema,
+    response: actAsResponseSchema,
+    errors: adminErrors(ErrorCode.NOT_FOUND, ErrorCode.CONFLICT),
   },
   /** ADR 0016: the overview tab (storage, the R2 bucket, the server). Read-only, not audited. */
   system: {

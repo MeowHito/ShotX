@@ -9,6 +9,7 @@ import { type ReactNode, useState } from 'react';
 import { parseSearch, SEARCH_PATH } from '@/lib/drive/search-params';
 import type { ClientStudioConfig } from '@/lib/server/config';
 import { AccountMenu, type StudioUser } from './account-menu';
+import { ActAsBanner } from './act-as-banner';
 import { NewMenu } from './new-menu';
 import { SearchBar } from './search-bar';
 import { SidebarNav } from './sidebar-nav';
@@ -101,6 +102,7 @@ export function StudioShellView({
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
+          <ActAsBanner />
           <header className="sticky top-0 z-40 flex h-[4.25rem] items-center gap-2 border-b bg-background/90 px-3 backdrop-blur sm:gap-3 sm:px-5">
             <Button
               variant="ghost"

@@ -20,6 +20,7 @@ import { AdminUsersService } from './admin/admin-users.service';
 import { CashPaymentsService } from './admin/cash-payments.service';
 import { type MetricsSource, nodeMetricsSource } from './admin/server-metrics';
 import { AdminSystemService, METRICS_SOURCE } from './admin/system.service';
+import { ActAsService } from './admin/act-as.service';
 import { AdminGuard } from './auth/admin.guard';
 import { AdminSignIn } from './auth/admin-sign-in';
 import { AuthController } from './auth/auth.controller';
@@ -243,6 +244,7 @@ export class AppModule {
         AdminUsersService,
         CashPaymentsService,
         AdminSystemService,
+        ActAsService,
       ],
     };
   }
