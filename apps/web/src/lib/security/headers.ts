@@ -36,6 +36,8 @@ export interface CspOptions {
   formActionOrigins?: readonly string[];
   /** Allow compiling WebAssembly (the share page's MediaPipe face detector). */
   allowWasm?: boolean;
+  /** Google Analytics 4 is on (GA_MEASUREMENT_ID, ADR 0017): Google's documented GA4 sources. */
+  analytics?: boolean;
   /** captchaCspSources of the configured captcha (share pages only). */
   captcha?: {
     scriptSrc: readonly string[];
@@ -43,6 +45,22 @@ export interface CspOptions {
     connectSrc: readonly string[];
   };
 }
+
+/**
+ * Google Analytics 4 with gtag.js (Google's CSP guide): the tag script from googletagmanager.com
+ * (inserted by our nonced snippet; the host entry is for browsers without 'strict-dynamic'), and
+ * its measurement requests (fetch and image beacons) to the regional google-analytics and
+ * analytics.google.com hosts.
+ */
+export const ANALYTICS_CSP = {
+  scriptSrc: ['https://www.googletagmanager.com'],
+  imgSrc: ['https://*.google-analytics.com', 'https://*.googletagmanager.com'],
+  connectSrc: [
+    'https://*.google-analytics.com',
+    'https://*.analytics.google.com',
+    'https://*.googletagmanager.com',
+  ],
+} as const;
 
 export function buildCsp(options: CspOptions): string {
   const self = [
@@ -57,11 +75,18 @@ export function buildCsp(options: CspOptions): string {
       `'nonce-${options.nonce}'`,
       "'strict-dynamic'",
       ...(options.captcha?.scriptSrc ?? []),
+      ...(options.analytics ? ANALYTICS_CSP.scriptSrc : []),
       ...(options.allowWasm ? ["'wasm-unsafe-eval'"] : []),
       ...(options.isDev ? ["'unsafe-eval'"] : []),
     ]),
     'style-src': "'self' 'unsafe-inline'",
-    'img-src': unique([...self, ...(options.mediaOrigins ?? []), 'blob:', 'data:']),
+    'img-src': unique([
+      ...self,
+      ...(options.mediaOrigins ?? []),
+      ...(options.analytics ? ANALYTICS_CSP.imgSrc : []),
+      'blob:',
+      'data:',
+    ]),
     'media-src': unique([...self, ...(options.mediaOrigins ?? []), 'blob:']),
     'font-src': "'self'",
     'connect-src': unique([
@@ -69,6 +94,7 @@ export function buildCsp(options: CspOptions): string {
       ...options.uploadOrigins,
       ...(options.mediaOrigins ?? []),
       ...(options.captcha?.connectSrc ?? []),
+      ...(options.analytics ? ANALYTICS_CSP.connectSrc : []),
       ...(options.isDev ? ['ws:', 'wss:'] : []),
     ]),
     ...((options.captcha?.frameSrc.length ?? 0) > 0

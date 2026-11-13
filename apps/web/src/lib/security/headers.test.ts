@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { captchaCsp, formActionOrigins, mediaBrowserOrigins } from '../server/config';
+import { analyticsId, captchaCsp, formActionOrigins, mediaBrowserOrigins } from '../server/config';
 import { buildCsp, securityHeaders } from './headers';
 
 function directives(csp: string): Record<string, string> {
@@ -238,5 +238,40 @@ describe('storage origins', () => {
     expect(() =>
       mediaBrowserOrigins({ ...r2, STORAGE_ENDPOINT_URL: 'http://r2.example.com' }),
     ).toThrow(/must be https/);
+  });
+});
+
+describe('Google Analytics (GA_MEASUREMENT_ID, ADR 0017)', () => {
+  const base = { nonce: 'n0nce', isDev: false, https: true, uploadOrigins: [] };
+  const directive = (csp: string, name: string) =>
+    csp
+      .split('; ')
+      .find((d) => d.startsWith(`${name} `))
+      ?.split(' ')
+      .slice(1) ?? [];
+
+  it('adds Google’s GA4 sources only when analytics is on', () => {
+    const on = buildCsp({ ...base, analytics: true });
+    expect(directive(on, 'script-src')).toContain('https://www.googletagmanager.com');
+    expect(directive(on, 'connect-src')).toEqual(
+      expect.arrayContaining([
+        'https://*.google-analytics.com',
+        'https://*.analytics.google.com',
+        'https://*.googletagmanager.com',
+      ]),
+    );
+    expect(directive(on, 'img-src')).toContain('https://*.google-analytics.com');
+    const off = buildCsp(base);
+    expect(off).not.toContain('google');
+  });
+
+  it('reads the measurement id, off when unset, and refuses a malformed one', () => {
+    expect(analyticsId({ GA_MEASUREMENT_ID: 'G-YK90K2DDPX' })).toBe('G-YK90K2DDPX');
+    expect(analyticsId({ GA_MEASUREMENT_ID: '  G-YK90K2DDPX ' })).toBe('G-YK90K2DDPX');
+    expect(analyticsId({})).toBeNull();
+    expect(analyticsId({ GA_MEASUREMENT_ID: '' })).toBeNull();
+    for (const bad of ['UA-12345-1', 'G-x', "G-1');alert(1)//"]) {
+      expect(() => analyticsId({ GA_MEASUREMENT_ID: bad }), bad).toThrow(/GA_MEASUREMENT_ID/);
+    }
   });
 });

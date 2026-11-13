@@ -366,3 +366,30 @@ export function clientBillingConfig(env: Env = process.env): ClientBillingConfig
   const e = parseEnv(webShareEnvSchema, env, 'web share');
   return { paymentPollIntervalMs: e.WEB_BILLING_POLL_INTERVAL_MS };
 }
+
+/** A Google Analytics 4 measurement id (`G-` and letters or digits). */
+const GA_MEASUREMENT_ID = /^G-[A-Z0-9]{4,20}$/;
+
+/**
+ * GA_MEASUREMENT_ID (web env; ADR 0017): the Google Analytics 4 property of every web page
+ * (share pages, studio, home; never the admin app), or null when unset. Owner decision
+ * 2026-11-13: loaded on every page without a cookie banner. Only page views go to Google (GA4's
+ * own history tracking); no selfie, face data or file name is ever sent. Throws on a malformed id
+ * so a typo fails at start instead of silently tracking nothing.
+ */
+export function analyticsId(env: Env = process.env): string | null {
+  const raw = env.GA_MEASUREMENT_ID?.trim() ?? '';
+  if (raw === '') return null;
+  if (!GA_MEASUREMENT_ID.test(raw)) {
+    throw new Error('Invalid web configuration: GA_MEASUREMENT_ID must look like G-XXXXXXXXXX');
+  }
+  return raw;
+}
+
+let cachedAnalyticsId: string | null | undefined;
+
+/** {@link analyticsId} of `process.env`, cached for the process. */
+export function processAnalyticsId(): string | null {
+  if (cachedAnalyticsId === undefined) cachedAnalyticsId = analyticsId(process.env);
+  return cachedAnalyticsId;
+}

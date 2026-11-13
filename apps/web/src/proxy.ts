@@ -6,6 +6,7 @@ import { buildCsp, securityHeaders } from './lib/security/headers';
 import {
   processCaptchaCsp,
   processFormActionOrigins,
+  processAnalyticsId,
   processMediaBrowserOrigins,
 } from './lib/server/config';
 
@@ -41,6 +42,7 @@ export function proxy(request: NextRequest) {
     mediaOrigins: storage.media,
     formActionOrigins: processFormActionOrigins(),
     allowWasm: sharePage,
+    analytics: processAnalyticsId() !== null,
     ...(sharePage ? { captcha: processCaptchaCsp() } : {}),
   });
   const headers = securityHeaders(csp, https);
