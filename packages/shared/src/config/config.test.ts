@@ -388,11 +388,11 @@ describe('loadCostConfig', () => {
       cloudfrontPlanMonth: 200,
       r2StorageGbMonth: 0.015,
       r2FreeStorageGb: 10,
-      vpsMonthThb: 1529,
+      vpsMonthThb: 0,
       usdThb: 33,
     });
     expect(loadCostConfig({ USD_THB: '36.5' }).usdThb).toBe(36.5);
-    expect(loadCostConfig({ VPS_MONTH_THB: '0' }).vpsMonthThb).toBe(0);
+    expect(loadCostConfig({ VPS_MONTH_THB: '1529' }).vpsMonthThb).toBe(1529);
     expect(() => loadCostConfig({ R2_STORAGE_GB_MONTH: '-1' })).toThrow();
   });
 

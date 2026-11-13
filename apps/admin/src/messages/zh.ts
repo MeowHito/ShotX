@@ -89,6 +89,8 @@ export const zh: TranslatedMessages = {
       title: 'Cloudflare R2',
       total: '已用空间',
       cost: '预估费用',
+      freeTier: '仍在免费额度内',
+      freeTierUsed: '已用 {used}，每月免费 {free, number} GB',
       costHint: '仅存储费用（前 {free, number} GB 免费），不含请求费用 · 出站流量免费',
       objects: '{count, number} 个文件',
       noLimit: 'R2 没有容量上限，按实际用量计费。',
@@ -116,6 +118,8 @@ export const zh: TranslatedMessages = {
       noSensor: '无传感器（虚拟机不报告温度）',
       diskHint: '照片和视频不存储在服务器上，直接上传到 R2。',
       cost: '服务器租金',
+      prepaid: '已按年付费',
+      prepaidHint: '无月度费用',
     },
   },
   shell: {

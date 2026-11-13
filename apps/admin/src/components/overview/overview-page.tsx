@@ -258,13 +258,19 @@ function OverviewCards({ data }: { data: AdminSystemResponse }) {
               }
               hint={server.temperatureC === null ? t('server.noSensor') : undefined}
             />
-            {cost.vpsThbMonth > 0 ? (
-              <Stat
-                label={t('server.cost')}
-                value={t('perMonth', { amount: format.money(cost.vpsThbMonth, 'THB') })}
-                hint={t('approx', { amount: format.money(cost.vpsThbMonth / cost.usdThb, 'USD') })}
-              />
-            ) : null}
+            <Stat
+              label={t('server.cost')}
+              value={
+                cost.vpsThbMonth > 0
+                  ? t('perMonth', { amount: format.money(cost.vpsThbMonth, 'THB') })
+                  : t('server.prepaid')
+              }
+              hint={
+                cost.vpsThbMonth > 0
+                  ? t('approx', { amount: format.money(cost.vpsThbMonth / cost.usdThb, 'USD') })
+                  : t('server.prepaidHint')
+              }
+            />
           </div>
         </div>
       </Card>
@@ -287,9 +293,14 @@ function OverviewCards({ data }: { data: AdminSystemResponse }) {
                 <Stat
                   label={t('bucket.cost')}
                   value={t('perMonth', { amount: format.money(cost.r2StorageUsdMonth, 'USD') })}
-                  hint={t('approx', {
-                    amount: format.money(cost.r2StorageUsdMonth * cost.usdThb, 'THB'),
-                  })}
+                  hint={
+                    cost.r2StorageUsdMonth === 0
+                      ? // Under the free GB-months: say why it is $0 (owner, 2026-11-13).
+                        t('bucket.freeTier')
+                      : t('approx', {
+                          amount: format.money(cost.r2StorageUsdMonth * cost.usdThb, 'THB'),
+                        })
+                  }
                 />
               ) : null}
             </div>
@@ -317,6 +328,20 @@ function OverviewCards({ data }: { data: AdminSystemResponse }) {
                 );
               })}
             </ul>
+            {cost.r2StorageUsdMonth === 0 ? (
+              <div className="space-y-1">
+                <Meter
+                  percent={percentOf(bucket.totalBytes, cost.r2FreeStorageGb * 1024 ** 3)}
+                  label={t('bucket.freeTier')}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t('bucket.freeTierUsed', {
+                    used: format.gigabytes(bucket.totalBytes),
+                    free: cost.r2FreeStorageGb,
+                  })}
+                </p>
+              </div>
+            ) : null}
             <p className="text-xs text-muted-foreground">
               {t('bucket.costHint', { free: cost.r2FreeStorageGb })}
               <br />

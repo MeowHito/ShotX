@@ -92,6 +92,8 @@ export const en: TranslatedMessages = {
       title: 'Cloudflare R2',
       total: 'Total used',
       cost: 'Estimated cost',
+      freeTier: 'Within the free tier',
+      freeTierUsed: '{used} used of {free, number} GB free each month',
       costHint:
         'Storage only (first {free, number} GB free), requests not included · egress is free',
       objects: '{count, number} files',
@@ -121,6 +123,8 @@ export const en: TranslatedMessages = {
       noSensor: 'No sensor (virtual machines don’t report temperature)',
       diskHint: 'Photos and videos aren’t stored on the server; uploads go straight to R2.',
       cost: 'Server rent',
+      prepaid: 'Paid yearly',
+      prepaidHint: 'No monthly cost',
     },
   },
   shell: {

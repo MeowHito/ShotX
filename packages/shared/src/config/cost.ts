@@ -14,10 +14,11 @@ const costEnvSchema = z.object({
   /** GB-months of R2 storage Cloudflare gives free every month. */
   R2_FREE_STORAGE_GB: usd.default(10),
   /**
-   * What the VPS costs per month in THB (Hostinger bills in THB). KVM 8: 36,696 THB per 2 years
-   * = 1,529 THB a month. 0 hides the VPS cost.
+   * A monthly VPS bill in THB, if there is one. 0 (the default): the VPS is prepaid (Hostinger
+   * KVM 8, paid up front for 2 years, owner 2026-11-13), so it adds nothing to the monthly total
+   * and the overview says it is paid.
    */
-  VPS_MONTH_THB: z.coerce.number().nonnegative().default(1529),
+  VPS_MONTH_THB: z.coerce.number().nonnegative().default(0),
   USD_THB: z.coerce.number().positive().default(33),
 });
 

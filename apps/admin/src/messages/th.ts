@@ -186,6 +186,8 @@ export const th = {
       title: 'Cloudflare R2',
       total: 'ใช้พื้นที่ทั้งหมด',
       cost: 'ค่าใช้จ่ายโดยประมาณ',
+      freeTier: 'ยังอยู่ในโควตาฟรี',
+      freeTierUsed: 'ใช้ {used} จากที่ฟรี {free, number} GB ต่อเดือน',
       costHint:
         'ค่าพื้นที่ (ฟรี {free, number} GB แรก) ไม่รวมค่า request · ดาวน์โหลดออกไม่เสียเงิน',
       objects: '{count, number} ไฟล์',
@@ -214,6 +216,8 @@ export const th = {
       noSensor: 'ไม่มีเซ็นเซอร์ (เครื่องเสมือนไม่รายงานอุณหภูมิ)',
       diskHint: 'รูปและวิดีโอไม่ได้เก็บบนเซิร์ฟเวอร์ อัปโหลดตรงขึ้น R2',
       cost: 'ค่าเช่าเซิร์ฟเวอร์',
+      prepaid: 'จ่ายรายปีแล้ว',
+      prepaidHint: 'ไม่มีค่าใช้จ่ายรายเดือน',
     },
   },
   shell: {

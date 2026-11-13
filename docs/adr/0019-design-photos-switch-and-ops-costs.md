@@ -50,8 +50,10 @@ Owner feedback from the first live event (Pocari Trail, 2026-11-13):
   (guests at one venue share a Wi-Fi address). Rate-limit keys still hash the full IPv6 address.
 - **Overview costs.** GET /admin/system adds `cost`: R2 storage above the free GB at the bucket's
   current size (`R2_STORAGE_GB_MONTH` 0.015 USD, `R2_FREE_STORAGE_GB` 10; operations not counted,
-  egress free), the VPS rent `VPS_MONTH_THB` (1,529: Hostinger KVM 8, 36,696 THB per 2 years) and
-  `USD_THB`. The admin shows each in USD and THB and a monthly total.
+  egress free), a monthly VPS bill `VPS_MONTH_THB` and `USD_THB`. The admin shows each in USD and
+  THB and a monthly total. Amended the same day (owner): the VPS is prepaid (KVM 8, 2 years up
+  front), so `VPS_MONTH_THB` defaults to 0, the VPS card says "จ่ายรายปีแล้ว" and the total is R2
+  only; under the free GB, R2 says "ยังอยู่ในโควตาฟรี" with how much of it is used.
 
 ## Consequences
 
