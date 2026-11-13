@@ -75,7 +75,7 @@ export class AdminSystemService {
       .select({ n: sql<number>`count(*)`.mapWith(Number) })
       .from(users)
       .where(eq(users.role, 'photographer'));
-    let databaseBytes: number | null = null;
+    let databaseBytes: number | null;
     try {
       const [size] = await rows<{ bytes: string }>(
         this.db,

@@ -64,6 +64,17 @@ export function bullMqQueue(
   return new Queue(name, { ...bullMqQueueOptions(settings, prefix), connection });
 }
 
+/**
+ * BullMQ takes jobs without a priority before prioritized ones. A photographer's design image
+ * (one job, someone waiting in the editor) must not wait behind an event's thousands of photos
+ * in the media queue (owner, 2026-11-13: it waited 7 minutes), so every other media job gets
+ * priority 1 and `design.asset` none. Other queues: no priority.
+ */
+export function mediaJobPriority(queue: ApiQueue, message: object): { priority?: number } {
+  if (queue !== 'media') return {};
+  return 'kind' in message && message.kind === 'design.asset' ? {} : { priority: 1 };
+}
+
 export interface BullMqSenderConfig {
   /** BullMQ `prefix` (bullMqPrefix(APP_STAGE)). */
   prefix: string;
@@ -93,9 +104,13 @@ export class BullMqQueueSender implements QueueSender {
 
   async send<Q extends ApiQueue>(queue: Q, message: QueueMessageInput<Q>): Promise<void> {
     const body = serializeQueueMessage(queue, message);
-    const name = queueJobName(queue, parseQueueMessage(queue, body));
+    const parsed = parseQueueMessage(queue, body);
+    const name = queueJobName(queue, parsed);
     const target = this.queues[queue];
-    const options = bullMqJobOptions(this.config.queues[queue]);
+    const options = {
+      ...bullMqJobOptions(this.config.queues[queue]),
+      ...mediaJobPriority(queue, parsed),
+    };
     await withEnqueueTimeout(queue, this.config.enqueueTimeoutMs, () =>
       target.add(name, body, options),
     );

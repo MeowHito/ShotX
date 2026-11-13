@@ -1450,6 +1450,11 @@ export const th = {
     loadError: 'เปิดหน้าขอลบใบหน้าไม่ได้',
   },
   downloads: {
+    savedTitle: 'บันทึกเรียบร้อย {count, number} รูป',
+    savedBody: 'เปิดแอป “รูปภาพ” ในเครื่องเพื่อดูรูปของคุณได้เลย',
+    downloadedTitle: 'ดาวน์โหลดเสร็จแล้ว {count, number} รูป',
+    downloadedBody: 'เปิดดูได้ในแอปแกลเลอรีหรือโฟลเดอร์ดาวน์โหลดของเครื่อง',
+    savedDone: 'เรียบร้อย',
     download: 'ดาวน์โหลด',
     downloadSelected: 'ดาวน์โหลด {count, number} รูป',
     selected: 'เลือกแล้ว {count, number} รูป',

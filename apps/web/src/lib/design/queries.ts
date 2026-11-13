@@ -40,13 +40,24 @@ export function useDesign(id: string) {
   });
 }
 
-/** GET /designs/assets: the caller's images (first page), newest first. */
+/** How often the uploads list refreshes while one of its images is still being prepared. */
+export const DESIGN_ASSETS_PENDING_REFETCH_MS = 3000;
+
+/**
+ * GET /designs/assets: the caller's images (first page), newest first. Refetched every
+ * DESIGN_ASSETS_PENDING_REFETCH_MS while any of them is still uploading or processing, so a
+ * slow one appears as soon as the worker has made it.
+ */
 export function useDesignAssets(enabled = true) {
   const api = useApiClient();
   return useQuery({
     queryKey: designKeys.assets,
     queryFn: ({ signal }) => api.call(DESIGN_ROUTES.listAssets, { query: {}, signal }),
     enabled,
+    refetchInterval: (query) =>
+      query.state.data?.items.some((a) => a.status === 'uploading' || a.status === 'processing')
+        ? DESIGN_ASSETS_PENDING_REFETCH_MS
+        : false,
   });
 }
 

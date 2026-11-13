@@ -262,6 +262,11 @@ export const en: PublicMessages = {
     loadError: 'Couldn’t open the face deletion page',
   },
   downloads: {
+    savedTitle: '{count, plural, one {# photo saved} other {# photos saved}}',
+    savedBody: 'Open the Photos app to see them.',
+    downloadedTitle: '{count, plural, one {# photo downloaded} other {# photos downloaded}}',
+    downloadedBody: 'Find them in your gallery app or Downloads folder.',
+    savedDone: 'Done',
     download: 'Download',
     downloadSelected: '{count, plural, one {Download # photo} other {Download # photos}}',
     selected: '{count, plural, one {# photo selected} other {# photos selected}}',

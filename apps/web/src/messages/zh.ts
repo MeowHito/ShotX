@@ -246,6 +246,11 @@ export const zh: PublicMessages = {
     loadError: '无法打开删除人脸页面',
   },
   downloads: {
+    savedTitle: '已保存 {count, number} 张照片',
+    savedBody: '打开“照片”应用即可查看。',
+    downloadedTitle: '已下载 {count, number} 张照片',
+    downloadedBody: '可在图库应用或“下载”文件夹中查看。',
+    savedDone: '完成',
     download: '下载',
     downloadSelected: '下载 {count, number} 张',
     selected: '已选 {count, number} 张',

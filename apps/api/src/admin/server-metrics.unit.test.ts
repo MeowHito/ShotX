@@ -14,19 +14,19 @@ const MEMINFO = 'MemTotal:       32000000 kB\nMemFree:  1000 kB\nMemAvailable:  
 function source(files: Record<string, string | string[]>, overrides: Partial<MetricsSource> = {}) {
   let statReads = 0;
   const base: MetricsSource = {
-    readFile: async (path) => {
-      if (path === '/proc/stat') return statReads++ === 0 ? STAT_A : STAT_B;
+    readFile: (path) => {
+      if (path === '/proc/stat') return Promise.resolve(statReads++ === 0 ? STAT_A : STAT_B);
       const value = files[path];
-      if (typeof value !== 'string') throw new Error(`ENOENT ${path}`);
-      return value;
+      if (typeof value !== 'string') return Promise.reject(new Error(`ENOENT ${path}`));
+      return Promise.resolve(value);
     },
-    readdir: async (path) => {
+    readdir: (path) => {
       const value = files[path];
-      if (!Array.isArray(value)) throw new Error(`ENOENT ${path}`);
-      return value;
+      if (!Array.isArray(value)) return Promise.reject(new Error(`ENOENT ${path}`));
+      return Promise.resolve(value);
     },
-    statfs: async () => ({ blocks: 1000, bfree: 250, bsize: 4096 }),
-    sleep: async () => undefined,
+    statfs: () => Promise.resolve({ blocks: 1000, bfree: 250, bsize: 4096 }),
+    sleep: () => Promise.resolve(),
     hostname: () => 'vps',
     cpuCount: () => 8,
     loadavg: () => [1.234, 0.5, 0.25],
@@ -78,12 +78,8 @@ describe('server metrics (ADR 0016)', () => {
       source(
         {},
         {
-          readFile: async () => {
-            throw new Error('ENOENT');
-          },
-          statfs: async () => {
-            throw new Error('ENOENT');
-          },
+          readFile: () => Promise.reject(new Error('ENOENT')),
+          statfs: () => Promise.reject(new Error('ENOENT')),
           totalmem: () => 1000,
           freemem: () => 400,
         },

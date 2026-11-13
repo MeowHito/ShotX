@@ -211,12 +211,14 @@ export function DesignEditor({
     });
   }, []);
 
-  // Images the design uses that are still processing: show a spinner and check until ready.
+  // Images still being prepared (on the design, or just uploaded and shown in the uploads list):
+  // show a spinner and check until ready. The worker may take minutes while a big event's photos
+  // are processing, longer than an upload's own wait (owner, 2026-11-13).
   const pendingAssets = useMemo(
     () =>
       new Set(
         // Known images still being prepared; unknown or failed ones simply draw nothing.
-        designDocAssetIds(state.doc).filter((id) => {
+        [...designDocAssetIds(state.doc), ...Object.keys(assets)].filter((id) => {
           const status = assets[id]?.status;
           return status === 'uploading' || status === 'processing';
         }),

@@ -324,6 +324,12 @@ describe('downloads', () => {
       share.items.slice(0, 3).map((i) => ({ fileIds: [i.id] })),
     );
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.zipJob)).toHaveLength(0);
+    // Owner, 2026-11-13: a check and where to find them, then "done" clears the selection.
+    expect(await screen.findByText('ดาวน์โหลดเสร็จแล้ว 3 รูป')).toBeInTheDocument();
+    expect(screen.getByText(th.downloads.downloadedBody)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: th.downloads.savedDone }));
+    expect(screen.queryByText('ดาวน์โหลดเสร็จแล้ว 3 รูป')).toBeNull();
+    expect(screen.queryByText(/เลือกแล้ว/)).toBeNull();
   });
 
   it('on iOS one tap saves to Photos: the selection is fetched ahead, no download button', async () => {
@@ -340,6 +346,23 @@ describe('downloads', () => {
     const files = ios.share.mock.calls[0]?.[0].files ?? [];
     expect(files.map((f) => f.name)).toEqual(['IMG_0001.jpg', 'IMG_0002.jpg']);
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.zipJob)).toHaveLength(0);
+    // Saved: a check and "open the Photos app".
+    expect(await screen.findByText('บันทึกเรียบร้อย 2 รูป')).toBeInTheDocument();
+    expect(screen.getByText(th.downloads.savedBody)).toBeInTheDocument();
+  });
+
+  it('on iOS a cancelled share sheet shows no "saved"', async () => {
+    const fake = new FakeApi();
+    const share = fake.addPublicShare();
+    const ios = fakeNavigator({ share: true });
+    ios.share.mockRejectedValueOnce(Object.assign(new Error('cancel'), { name: 'AbortError' }));
+    const { mediaFetch } = renderSharePage(fake, share.token, { nav: ios.nav });
+    await select(['IMG_0001.jpg']);
+    await waitFor(() => expect(mediaFetch).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole('button', { name: th.downloads.saveToPhotos }));
+    await waitFor(() => expect(ios.share).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/บันทึกเรียบร้อย/)).toBeNull();
+    expect(screen.getByRole('button', { name: th.downloads.saveToPhotos })).toBeInTheDocument();
   });
 
   it('on iOS a deselected photo is dropped from what gets saved', async () => {

@@ -46,6 +46,7 @@ import {
 import { designFontFamily } from '@/lib/design/fonts';
 import { designKeys, useDesignAssets } from '@/lib/design/queries';
 import { uploadDesignImage } from '@/lib/design/upload';
+import { ClientError } from '@/lib/errors/messages';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useFormatBytes } from '@/lib/i18n/use-format';
 import { DesignPreview } from '../design-preview';
@@ -261,7 +262,10 @@ function useImageList(): DesignAssetView[] {
   return useMemo(() => {
     const map = new Map<string, DesignAssetView>();
     for (const a of listed.data?.items ?? []) map.set(a.id, a);
-    for (const a of Object.values(assets)) map.set(a.id, a);
+    // The editor's copy is usually fresher, but never hide a list entry that is already ready.
+    for (const a of Object.values(assets)) {
+      if (map.get(a.id)?.status !== 'ready') map.set(a.id, a);
+    }
     return [...map.values()]
       .filter((a) => a.status !== 'failed')
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -305,6 +309,13 @@ export function UploadsPanel({ runtime }: { runtime?: UploadRuntime }) {
       dispatch({ type: 'add', element: makeImage(asset.id, asset) });
       void queryClient.invalidateQueries({ queryKey: designKeys.assets });
     } catch (err) {
+      if (err instanceof ClientError && err.key === 'client.designAssetTimeout') {
+        // Still being prepared (the worker can be busy with an event's photos): the image stays
+        // in the list with its spinner, which checks until it is ready.
+        setUploads((prev) => prev.filter((u) => u.key !== key));
+        void queryClient.invalidateQueries({ queryKey: designKeys.assets });
+        return;
+      }
       patch(key, { status: 'failed', error: describe(err) });
     }
   }

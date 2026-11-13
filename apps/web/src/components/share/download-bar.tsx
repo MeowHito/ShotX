@@ -2,7 +2,7 @@
 
 import type { DownloadSize, ShareItem } from '@shotx/shared';
 import { Alert, Button } from '@shotx/ui';
-import { DownloadIcon, ImageDownIcon, XIcon } from 'lucide-react';
+import { CircleCheckIcon, DownloadIcon, ImageDownIcon, XIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { canShareFiles, fetchFileForShare, requestSingleDownload } from '@/lib/downloads/downloads';
@@ -163,6 +163,9 @@ export function DownloadBar({
   const [waitingFor, setWaitingFor] = useState<readonly ShareItem[] | null>(null);
   const [tapAgainFor, setTapAgainFor] = useState<readonly ShareItem[] | null>(null);
   const [downloading, setDownloading] = useState<{ done: number; total: number } | null>(null);
+  // Owner, 2026-11-13: a clear "done" with a check once the photos are on the phone.
+  const [savedFor, setSavedFor] = useState<readonly ShareItem[] | null>(null);
+  const saved = savedFor === selection;
   const waiting = waitingFor === selection;
   const tapAgain = tapAgainFor === selection;
 
@@ -172,6 +175,8 @@ export function DownloadBar({
       try {
         await nav.share({ files });
         setTapAgainFor(null);
+        // The share sheet resolves once an action (e.g. "Save Images") finished; cancel rejects.
+        setSavedFor(forSelection);
       } catch (err) {
         if (err instanceof Error && err.name === 'NotAllowedError') setTapAgainFor(forSelection);
         else if (!(err instanceof Error && err.name === 'AbortError')) setError(describe(err));
@@ -216,6 +221,7 @@ export function DownloadBar({
         await single(item);
         setDownloading({ done: index + 1, total: items.length });
       }
+      setSavedFor(selection);
     } catch (err) {
       setError(describe(err));
     } finally {
@@ -224,6 +230,37 @@ export function DownloadBar({
   }
 
   if (selection.length === 0) return null;
+
+  if (saved) {
+    return (
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-lg backdrop-blur sm:inset-x-4 sm:bottom-24 sm:mx-auto sm:max-w-md sm:rounded-2xl sm:border">
+        <div
+          role="status"
+          className="mx-auto flex max-w-5xl flex-col items-center gap-2 text-center"
+        >
+          <CircleCheckIcon className="size-12 text-emerald-500" aria-hidden />
+          <p className="text-lg font-semibold">
+            {savesToPhotos
+              ? t('savedTitle', { count: selection.length })
+              : t('downloadedTitle', { count: selection.length })}
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {savesToPhotos ? t('savedBody') : t('downloadedBody')}
+          </p>
+          <Button
+            size="lg"
+            className="mt-1 h-12 w-full max-w-xs rounded-full"
+            onClick={() => {
+              setSavedFor(null);
+              onClear();
+            }}
+          >
+            {t('savedDone')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   let label: string;
   if (!savesToPhotos) {
