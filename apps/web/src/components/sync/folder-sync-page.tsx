@@ -21,6 +21,7 @@ import type { RecentOutcome, SyncSnapshot } from '@/lib/sync/engine';
 import { pickSyncFolder, type SyncDirectoryHandle } from '@/lib/sync/fs-access';
 import type { SyncDestination } from '@/lib/sync/store';
 import { useFolderSync } from './folder-sync-context';
+import { WatermarkCard } from './watermark-card';
 
 /** The studio folder sync page (ADR 0014): set up, watch and stop the sync. */
 export function FolderSyncPage() {
@@ -46,6 +47,10 @@ export function FolderSyncPage() {
       ) : (
         <SyncStatus snapshot={snapshot} />
       )}
+
+      {snapshot.status !== 'unsupported' && snapshot.status !== 'loading' ? (
+        <WatermarkCard />
+      ) : null}
 
       {snapshot.status !== 'unsupported' ? <Tips /> : null}
     </div>

@@ -220,6 +220,8 @@ const webShareEnvSchema = z
       .min(0)
       .max(5 * 60_000)
       .default(20_000),
+    /** ADR 0021: JPEG/WebP quality of a synced photo re-encoded with the watermark (0.5–1). */
+    WEB_FOLDER_SYNC_WATERMARK_QUALITY: z.coerce.number().min(0.5).max(1).default(0.92),
     /** Folder sync: files in the upload queue at once (the rest wait for later scans). */
     WEB_FOLDER_SYNC_MAX_QUEUED: z.coerce.number().int().min(1).max(200).default(20),
     /** Folder sync: subfolder levels under the watched folder that are synced too. */
@@ -361,6 +363,8 @@ export interface ClientFolderSyncConfig {
   intervalMs: number;
   /** WEB_FOLDER_SYNC_SETTLE_MS. */
   settleMs: number;
+  /** WEB_FOLDER_SYNC_WATERMARK_QUALITY. */
+  watermarkQuality: number;
   maxQueued: number;
   maxDepth: number;
   retryDelaysMs: number[];
@@ -371,6 +375,7 @@ export function clientFolderSyncConfig(env: Env = process.env): ClientFolderSync
   return {
     intervalMs: e.WEB_FOLDER_SYNC_INTERVAL_MS,
     settleMs: e.WEB_FOLDER_SYNC_SETTLE_MS,
+    watermarkQuality: e.WEB_FOLDER_SYNC_WATERMARK_QUALITY,
     maxQueued: e.WEB_FOLDER_SYNC_MAX_QUEUED,
     maxDepth: e.WEB_FOLDER_SYNC_MAX_DEPTH,
     retryDelaysMs: e.WEB_FOLDER_SYNC_RETRY_DELAYS_MS,

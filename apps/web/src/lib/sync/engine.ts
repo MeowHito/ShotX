@@ -80,6 +80,14 @@ export type SyncAddResult =
 
 export type SyncUploadOutcome = { ok: true } | { ok: false; error: unknown };
 
+/**
+ * ADR 0021: turns a synced file into what is uploaded (the photographer's watermark burned in).
+ * Same name; it may return the file itself (a video, or a type it doesn't handle). A throw counts
+ * as a failed attempt of that version, retried like a failed upload, so a photo is never sent
+ * without the watermark the photographer asked for.
+ */
+export type SyncPrepare = (file: File) => Promise<File>;
+
 /** The studio upload queue, as the engine sees it. */
 export interface SyncUploads {
   add(
@@ -183,6 +191,7 @@ export class FolderSyncEngine {
   private inFlight = new Map<string, InFlight>();
   private inFlightPaths = new Set<string>();
   private failures = new Map<string, Failure>();
+  private prepare: SyncPrepare | null = null;
   private counts = { uploaded: 0, exists: 0, skipped: 0, failed: 0 };
   private timer: unknown = null;
   private scanning = false;
@@ -202,6 +211,14 @@ export class FolderSyncEngine {
       newId: () => crypto.randomUUID(),
       ...deps,
     };
+  }
+
+  /**
+   * ADR 0021: a step run on each file before it is queued (the watermark), or null. Set again
+   * whenever the photographer saves new settings; files already queued keep what they had.
+   */
+  setPrepare(prepare: SyncPrepare | null): void {
+    this.prepare = prepare;
   }
 
   /** The studio upload queue (again whenever its functions change). */
@@ -487,7 +504,21 @@ export class FolderSyncEngine {
             .record(job.jobId, [{ path: file.path, entry }])
             .catch(() => undefined);
         }
-        const added = this.uploads.add(data, file.relativePath, job.destination.id, clientUploadId);
+        let upload = data;
+        if (this.prepare !== null) {
+          try {
+            upload = await this.prepare(data);
+          } catch {
+            this.noteFailure(file.path, sig);
+            continue;
+          }
+        }
+        const added = this.uploads.add(
+          upload,
+          file.relativePath,
+          job.destination.id,
+          clientUploadId,
+        );
         if (added.status === 'queued') {
           this.inFlight.set(added.id, { file, sig });
           this.inFlightPaths.add(file.path);
@@ -564,19 +595,20 @@ export class FolderSyncEngine {
           .record(job.jobId, [{ path: flight.file.path, entry }])
           .catch(() => undefined);
       }
-      const previous = this.failures.get(flight.file.path);
-      const count = previous !== undefined && previous.sig === flight.sig ? previous.count + 1 : 1;
-      const delay = this.deps.config.retryDelaysMs[count - 1];
-      this.failures.set(flight.file.path, {
-        sig: flight.sig,
-        count,
-        retryAt: this.deps.now() + (delay ?? 0),
-      });
-      if (delay === undefined) {
-        this.counts.failed += 1;
-        this.pushRecent(flight.file.path, 'failed');
-      }
+      this.noteFailure(flight.file.path, flight.sig);
     }
     this.setStats({ ...this.counts, uploading: this.inFlight.size });
+  }
+
+  /** One failed attempt of this version: retried after the next delay, then counted as failed. */
+  private noteFailure(path: string, sig: string) {
+    const previous = this.failures.get(path);
+    const count = previous !== undefined && previous.sig === sig ? previous.count + 1 : 1;
+    const delay = this.deps.config.retryDelaysMs[count - 1];
+    this.failures.set(path, { sig, count, retryAt: this.deps.now() + (delay ?? 0) });
+    if (delay === undefined) {
+      this.counts.failed += 1;
+      this.pushRecent(path, 'failed');
+    }
   }
 }

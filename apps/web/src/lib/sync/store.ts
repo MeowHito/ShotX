@@ -43,6 +43,36 @@ export interface LedgerEntry {
   clientUploadId?: string;
 }
 
+/**
+ * ADR 0021: the photographer's watermark for synced photos, kept in this browser like the job
+ * (and kept when the sync is stopped or set up again).
+ */
+export interface WatermarkSettings {
+  enabled: boolean;
+  /** The mark: PNG (with transparency), JPEG or WebP. */
+  image: Blob;
+  position: WatermarkPosition;
+  /** Width of the mark as a percentage of the photo's shorter side. */
+  sizePercent: number;
+  /** 0–100. */
+  opacityPercent: number;
+  /** Gap to the photo's edges, as a percentage of its shorter side. */
+  marginPercent: number;
+}
+
+export const WATERMARK_POSITIONS = [
+  'top-left',
+  'top',
+  'top-right',
+  'left',
+  'center',
+  'right',
+  'bottom-left',
+  'bottom',
+  'bottom-right',
+] as const;
+export type WatermarkPosition = (typeof WATERMARK_POSITIONS)[number];
+
 export interface SyncStore {
   loadJob(): Promise<SyncJob | null>;
   saveJob(job: SyncJob): Promise<void>;
@@ -50,6 +80,8 @@ export interface SyncStore {
   clear(): Promise<void>;
   loadLedger(jobId: string): Promise<Map<string, LedgerEntry>>;
   record(jobId: string, entries: { path: string; entry: LedgerEntry }[]): Promise<void>;
+  loadWatermark(): Promise<WatermarkSettings | null>;
+  saveWatermark(settings: WatermarkSettings | null): Promise<void>;
 }
 
 const DB_NAME = 'snap-folder-sync';
@@ -57,6 +89,8 @@ const DB_VERSION = 1;
 const JOBS = 'jobs';
 const LEDGER = 'ledger';
 const CURRENT = 'current';
+/** The watermark settings live next to the job, under their own key. */
+const WATERMARK = 'watermark';
 /** Ledger keys are `jobId␀path`, so one key range reads a job's ledger. */
 const SEP = '\u0000';
 
@@ -107,7 +141,8 @@ export function indexedDbSyncStore(factory: IDBFactory = indexedDB): SyncStore {
     },
     async clear() {
       const tx = (await db()).transaction([JOBS, LEDGER], 'readwrite');
-      tx.objectStore(JOBS).clear();
+      // The job only: the watermark outlives a stopped sync.
+      tx.objectStore(JOBS).delete(CURRENT);
       tx.objectStore(LEDGER).clear();
       await done(tx);
     },
@@ -133,12 +168,24 @@ export function indexedDbSyncStore(factory: IDBFactory = indexedDB): SyncStore {
       for (const { path, entry } of entries) store.put(entry, `${jobId}${SEP}${path}`);
       await done(tx);
     },
+    async loadWatermark() {
+      const tx = (await db()).transaction(JOBS, 'readonly');
+      const value: unknown = await request(tx.objectStore(JOBS).get(WATERMARK));
+      return (value as WatermarkSettings | undefined) ?? null;
+    },
+    async saveWatermark(settings) {
+      const tx = (await db()).transaction(JOBS, 'readwrite');
+      if (settings === null) tx.objectStore(JOBS).delete(WATERMARK);
+      else tx.objectStore(JOBS).put(settings, WATERMARK);
+      await done(tx);
+    },
   };
 }
 
 /** The same store in memory (tests, and browsers where IndexedDB fails to open). */
 export function memorySyncStore(): SyncStore {
   let job: SyncJob | null = null;
+  let watermark: WatermarkSettings | null = null;
   const ledger = new Map<string, Map<string, LedgerEntry>>();
   return {
     loadJob: () => Promise.resolve(job),
@@ -156,6 +203,11 @@ export function memorySyncStore(): SyncStore {
       const map = ledger.get(jobId) ?? new Map<string, LedgerEntry>();
       for (const { path, entry } of entries) map.set(path, entry);
       ledger.set(jobId, map);
+      return Promise.resolve();
+    },
+    loadWatermark: () => Promise.resolve(watermark),
+    saveWatermark: (next) => {
+      watermark = next;
       return Promise.resolve();
     },
   };

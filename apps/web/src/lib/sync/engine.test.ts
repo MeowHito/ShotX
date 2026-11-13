@@ -333,6 +333,48 @@ describe('FolderSyncEngine', () => {
     expect(uploads.names()).toEqual(['IMG_1.jpg', 'IMG_2.jpg']);
   });
 
+  it('ADR 0021: uploads what the prepare step returns (the watermarked photo)', async () => {
+    const folder = fakeFolder('Export');
+    folder.put('IMG_1.jpg', 10);
+    const { engine, uploads } = makeEngine();
+    const seen: string[] = [];
+    engine.setPrepare((file) => {
+      seen.push(file.name);
+      return Promise.resolve(new File(['watermarked!'], file.name, { type: 'image/jpeg' }));
+    });
+    await setUp(engine, folder);
+    await engine.tick();
+    expect(seen).toEqual(['IMG_1.jpg']);
+    const [queued] = [...uploads.queued.values()];
+    expect(queued?.file.name).toBe('IMG_1.jpg');
+    expect(await queued?.file.text()).toBe('watermarked!');
+    // Turned off: the file itself goes up.
+    engine.setPrepare(null);
+    folder.put('IMG_2.jpg', 10);
+    await engine.tick();
+    await engine.tick();
+    expect([...uploads.queued.values()].find((q) => q.file.name === 'IMG_2.jpg')?.file.size).toBe(10);
+  });
+
+  it('ADR 0021: a failing prepare step never sends the photo without its watermark; it retries', async () => {
+    const folder = fakeFolder('Export');
+    folder.put('IMG_1.jpg', 10);
+    const { engine, uploads, clock } = makeEngine({ retryDelaysMs: [1000] });
+    let fail = true;
+    engine.setPrepare((file) =>
+      fail ? Promise.reject(new Error('decode failed')) : Promise.resolve(file),
+    );
+    await setUp(engine, folder);
+    await engine.tick();
+    expect(uploads.names()).toEqual([]);
+    await engine.tick(); // still inside the retry wait
+    expect(uploads.names()).toEqual([]);
+    fail = false;
+    clock.now += 1000;
+    await engine.tick();
+    expect(uploads.names()).toEqual(['IMG_1.jpg']);
+  });
+
   it('retries a failed upload after the configured waits, then counts it as failed', async () => {
     const folder = fakeFolder('Export');
     folder.put('IMG_1.jpg', 10);

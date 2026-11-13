@@ -3,6 +3,7 @@
 import {
   createContext,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -15,11 +16,18 @@ import { useMe } from '@/lib/studio/queries';
 import {
   FolderSyncEngine,
   type SyncLock,
+  type SyncPrepare,
   type SyncSetup,
   type SyncSnapshot,
 } from '@/lib/sync/engine';
 import { folderSyncSupported } from '@/lib/sync/fs-access';
-import { indexedDbSyncStore, memorySyncStore, type SyncStore } from '@/lib/sync/store';
+import {
+  indexedDbSyncStore,
+  memorySyncStore,
+  type SyncStore,
+  type WatermarkSettings,
+} from '@/lib/sync/store';
+import { createWatermarker } from '@/lib/sync/watermark';
 
 /**
  * Folder sync for the whole studio session (ADR 0014): the provider sits in the studio layout,
@@ -32,6 +40,10 @@ interface FolderSyncValue {
   resume: () => Promise<void>;
   pause: () => void;
   stop: () => Promise<void>;
+  /** ADR 0021: the saved watermark (undefined while loading), applied to every synced photo. */
+  watermark: WatermarkSettings | null | undefined;
+  /** Saves (or, with null, removes) the watermark; files queued after this get it. */
+  saveWatermark: (settings: WatermarkSettings | null) => Promise<void>;
 }
 
 const FolderSyncContext = createContext<FolderSyncValue | null>(null);
@@ -108,24 +120,76 @@ export function FolderSyncProvider({
 }: {
   children: ReactNode;
   config: ClientFolderSyncConfig;
-  /** Tests: a store in memory and whether the browser counts as supported (jsdom has no picker). */
-  testing?: { store: SyncStore; supported: boolean };
+  /**
+   * Tests: a store in memory, whether the browser counts as supported (jsdom has no picker), and
+   * the watermark step (jsdom can't draw images).
+   */
+  testing?: {
+    store: SyncStore;
+    supported: boolean;
+    makePrepare?: (settings: WatermarkSettings) => Promise<SyncPrepare>;
+  };
 }) {
   const { addFiles, watch, remove } = useUploads();
   // StudioGate renders the studio only once GET /me answered: a set-up resumes for this account only.
   const owner = useMe().data?.id ?? '';
 
-  const [engine] = useState(() => {
+  const [{ engine, store }] = useState(() => {
     const supported =
       testing?.supported ?? (typeof window !== 'undefined' && folderSyncSupported(window));
-    return new FolderSyncEngine({
-      store: testing?.store ?? (supported ? indexedDbSyncStore() : memorySyncStore()),
+    const store = testing?.store ?? (supported ? indexedDbSyncStore() : memorySyncStore());
+    const engine = new FolderSyncEngine({
+      store,
       lock: webLock(),
       owner,
       supported,
       config: { ...config, recentMax: RECENT_MAX },
     });
+    return { engine, store };
   });
+
+  // ADR 0021: the saved watermark becomes the engine's prepare step.
+  const [watermark, setWatermark] = useState<WatermarkSettings | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    void store
+      .loadWatermark()
+      .catch(() => null)
+      .then((saved) => {
+        if (live) setWatermark(saved);
+      });
+    return () => {
+      live = false;
+    };
+  }, [store]);
+  const makePrepare = testing?.makePrepare;
+  const quality = config.watermarkQuality;
+  useEffect(() => {
+    if (watermark === undefined) return;
+    if (watermark === null || !watermark.enabled) {
+      engine.setPrepare(null);
+      return;
+    }
+    let live = true;
+    // Until the mark is decoded nothing is queued without it: a failing step retries the file.
+    engine.setPrepare(() => Promise.reject(new Error('watermark loading')));
+    (makePrepare ?? ((s) => createWatermarker(s, { quality })))(watermark).then(
+      (prepare) => {
+        if (live) engine.setPrepare(prepare);
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [engine, watermark, makePrepare, quality]);
+  const saveWatermark = useCallback(
+    async (settings: WatermarkSettings | null) => {
+      await store.saveWatermark(settings);
+      setWatermark(settings);
+    },
+    [store],
+  );
 
   // The upload queue as of this render (set before init runs: effects run in order).
   useEffect(() => {
@@ -172,8 +236,10 @@ export function FolderSyncProvider({
       resume: () => engine.resume(),
       pause: () => engine.pause(),
       stop: () => engine.stop(),
+      watermark,
+      saveWatermark,
     }),
-    [snapshot, engine],
+    [snapshot, engine, watermark, saveWatermark],
   );
 
   return <FolderSyncContext.Provider value={value}>{children}</FolderSyncContext.Provider>;
