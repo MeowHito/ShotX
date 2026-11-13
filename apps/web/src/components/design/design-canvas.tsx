@@ -92,9 +92,29 @@ export function backgroundCss(bg: DesignBackground): string {
   }
 }
 
-function Background({ bg, assets }: { bg: DesignBackground; assets: DesignCanvasAssets }) {
+/** Extra blur of the screen-filling copy of an image background around the artboard (CSS px). */
+const BACKDROP_BLUR_PX = 24;
+
+function Background({
+  bg,
+  assets,
+  backdrop = false,
+}: {
+  bg: DesignBackground;
+  assets: DesignCanvasAssets;
+  /**
+   * The copy that fills the screen around the artboard (`fill` layout): blurred, so the
+   * artboard's own copy, which shows the whole image as designed, stands out.
+   */
+  backdrop?: boolean;
+}) {
   if (bg.type !== 'image') return null;
   const url = assets[bg.assetId] ?? null;
+  const blur = backdrop
+    ? `calc(${du(bg.blur)} + ${BACKDROP_BLUR_PX}px)`
+    : bg.blur > 0
+      ? du(bg.blur)
+      : null;
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
       {url !== null ? (
@@ -104,12 +124,12 @@ function Background({ bg, assets }: { bg: DesignBackground; assets: DesignCanvas
           src={url}
           alt=""
           draggable={false}
-          data-testid="design-background-image"
+          data-testid={backdrop ? 'design-background-backdrop' : 'design-background-image'}
           className="absolute inset-0 size-full object-cover"
           style={{
-            filter: bg.blur > 0 ? `blur(${du(bg.blur)})` : undefined,
+            filter: blur !== null ? `blur(${blur})` : undefined,
             // Blur bleeds transparent edges in; scale slightly so they stay outside.
-            transform: bg.blur > 0 ? 'scale(1.08)' : undefined,
+            transform: blur !== null ? 'scale(1.08)' : undefined,
           }}
         />
       ) : null}
@@ -433,6 +453,10 @@ export function DesignCanvas(props: DesignCanvasProps) {
         } as CSSProperties
       }
     >
+      {/* fill: the image background covers the artboard exactly as in the designer, so a screen
+          of another shape never crops it (a logo in the image stays whole); the screen around
+          it gets a blurred copy. */}
+      {layout.kind === 'fill' ? <Background bg={doc.background} assets={props.assets} /> : null}
       {doc.elements.map((e) => (e.hidden ? null : <ElementView key={e.id} e={e} props={props} />))}
     </div>
   );
@@ -461,7 +485,7 @@ export function DesignCanvas(props: DesignCanvasProps) {
       }}
     >
       <div className="absolute inset-0" style={{ '--u': unit } as CSSProperties} aria-hidden>
-        <Background bg={doc.background} assets={props.assets} />
+        <Background bg={doc.background} assets={props.assets} backdrop={layout.kind === 'fill'} />
       </div>
       {artboard}
     </div>

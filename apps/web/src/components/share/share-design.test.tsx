@@ -248,10 +248,18 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     renderSharePage(fake, share.token, { locale: 'en' });
     const card = await screen.findByRole('region', { name: 'Event page' });
     expect(within(card).getByRole('button', { name: 'Take a selfie' })).toBeInTheDocument();
-    expect(screen.getByTestId('design-background-image')).toHaveAttribute(
-      'src',
-      `${MEDIA}/designs/p/${assetId}/web.webp?Signature=x`,
-    );
+    const image = screen.getByTestId('design-background-image');
+    expect(image).toHaveAttribute('src', `${MEDIA}/designs/p/${assetId}/web.webp?Signature=x`);
+    // The whole image covers the artboard as designed (a phone of another shape never crops a
+    // logo in it); a blurred copy fills the screen around it.
+    expect(
+      within(screen.getByTestId('design-artboard')).getByTestId('design-background-image'),
+    ).toBe(image);
+    const backdrop = screen.getByTestId('design-background-backdrop');
+    expect(backdrop).toHaveAttribute('src', image.getAttribute('src'));
+    expect(
+      within(screen.getByTestId('design-artboard')).queryByTestId('design-background-backdrop'),
+    ).toBeNull();
   });
 
   it('without a design the layout is unchanged (title, no card)', async () => {
