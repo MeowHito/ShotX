@@ -39,7 +39,7 @@ export class SignedUrls {
 
   /** A view URL; pass one `expiresAt` (viewExpiry) for all URLs of a response. */
   view(key: string, expiresAt: Date): string {
-    return this.signer.sign(key, expiresAt);
+    return this.signer.sign(key, expiresAt, { cacheable: true });
   }
 
   /**

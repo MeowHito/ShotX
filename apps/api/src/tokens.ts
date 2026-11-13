@@ -89,9 +89,15 @@ export interface BucketUsage {
 export interface MediaUrlSigner {
   /**
    * A signed URL of `key` that expires at `expiresAt`. `contentDisposition` is added as the
-   * `response-content-disposition` query parameter before signing (downloads).
+   * `response-content-disposition` query parameter before signing (downloads). `cacheable` asks
+   * the storage to answer with a private Cache-Control lasting as long as the URL (view URLs:
+   * thumbnails and previews are immutable per key), where the signer supports it.
    */
-  sign(key: string, expiresAt: Date, options?: { contentDisposition?: string }): string;
+  sign(
+    key: string,
+    expiresAt: Date,
+    options?: { contentDisposition?: string; cacheable?: boolean },
+  ): string;
 }
 
 export interface RateLimitResult {

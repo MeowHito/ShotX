@@ -302,7 +302,7 @@ for (const backend of DATABASE_BACKENDS) {
         );
       });
 
-      it('pages items in (taken_at, created_at, id) order with signed, bucketed URLs', async () => {
+      it('pages items newest first by (taken_at, created_at, id) with signed, cacheable URLs', async () => {
         const { share, files } = await gallery();
         const b = api.browser();
         const page1 = shareItemsResponseSchema.parse(
@@ -313,7 +313,10 @@ for (const backend of DATABASE_BACKENDS) {
         const page2 = shareItemsResponseSchema.parse(
           (await b.request('GET', items(share.token, `?cursor=${page1.nextCursor ?? ''}`))).body,
         );
-        expect([...page1.items, ...page2.items].map((i) => i.id)).toEqual(files.map((f) => f.id));
+        // Owner, 2026-11-13: the latest photos first.
+        expect([...page1.items, ...page2.items].map((i) => i.id)).toEqual(
+          files.map((f) => f.id).reverse(),
+        );
         expect(page2.nextCursor).toBeNull();
         // Byte-identical URLs within the bucket window.
         const again = shareItemsResponseSchema.parse(

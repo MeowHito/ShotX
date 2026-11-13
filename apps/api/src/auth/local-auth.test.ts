@@ -79,6 +79,24 @@ describe('S3PresignMediaUrlSigner', () => {
     expect(ours.searchParams.get('X-Amz-Signature')).toBe(sdk.searchParams.get('X-Amz-Signature'));
   });
 
+  it('signs a cacheable view URL exactly like the SDK with ResponseCacheControl', async () => {
+    const signer = new S3PresignMediaUrlSigner(options);
+    const ours = new URL(signer.sign(key, new Date(now.getTime() + 600_000), { cacheable: true }));
+    expect(ours.searchParams.get('response-cache-control')).toBe('private, max-age=600, immutable');
+    const sdk = new URL(
+      await getSignedUrl(
+        sdkClient(),
+        new GetObjectCommand({
+          Bucket: options.bucket,
+          Key: key,
+          ResponseCacheControl: 'private, max-age=600, immutable',
+        }),
+        { expiresIn: 600, signingDate: now },
+      ),
+    );
+    expect(ours.searchParams.get('X-Amz-Signature')).toBe(sdk.searchParams.get('X-Amz-Signature'));
+  });
+
   it('encodes non-ASCII and reserved characters in the key like the SDK', async () => {
     const thaiKey =
       "originals/0199b2a0-0000-7000-8000-000000000001/0199b2a0-0000-7000-8000-000000000002/รูป (1)!'.jpg";

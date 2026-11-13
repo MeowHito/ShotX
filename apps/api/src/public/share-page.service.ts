@@ -18,7 +18,7 @@ import {
   type Viewer,
   viewerColumns,
 } from '@shotx/shared';
-import { and, asc, eq, inArray, isNull, like, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, like, type SQL, sql } from 'drizzle-orm';
 import { recordActivity, shareEventSource } from '../activity/activity';
 import { verifyPassword } from '../auth/password';
 import type { PublicContext } from '../auth/public.guard';
@@ -289,20 +289,23 @@ export class SharePageService {
     after: { key: string; id: string } | null,
     limit: number,
   ) {
-    return this.db
-      .select({ ...shareItemColumns, key: sql<string>`${ITEM_KEY}::text` })
-      .from(files)
-      .where(
-        and(
-          shareItemsScope(share),
-          share.mode === 'face_only' ? inArray(files.id, [...(grant ?? [])]) : undefined,
-          after === null
-            ? undefined
-            : sql`(${ITEM_KEY}, ${files.id}) > (${after.key}::timestamptz, ${after.id}::uuid)`,
-        ),
-      )
-      .orderBy(asc(ITEM_KEY), asc(files.id))
-      .limit(limit + 1);
+    return (
+      this.db
+        .select({ ...shareItemColumns, key: sql<string>`${ITEM_KEY}::text` })
+        .from(files)
+        .where(
+          and(
+            shareItemsScope(share),
+            share.mode === 'face_only' ? inArray(files.id, [...(grant ?? [])]) : undefined,
+            after === null
+              ? undefined
+              : sql`(${ITEM_KEY}, ${files.id}) < (${after.key}::timestamptz, ${after.id}::uuid)`,
+          ),
+        )
+        // Newest first (owner, 2026-11-13): the latest photos at the top, the oldest at the end.
+        .orderBy(desc(ITEM_KEY), desc(files.id))
+        .limit(limit + 1)
+    );
   }
 
   // --- POST /s/:token/unlock -----------------------------------------------------------------------

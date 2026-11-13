@@ -1,6 +1,7 @@
 import { createHash, createHmac } from 'node:crypto';
 import {
   bucketedSigningDate,
+  CACHE_CONTROL_QUERY_PARAM,
   CONTENT_DISPOSITION_QUERY_PARAM,
   parseS3Key,
   S3_PRESIGN_MAX_EXPIRES_SECONDS,
@@ -52,7 +53,11 @@ export class S3PresignMediaUrlSigner implements MediaUrlSigner {
     this.origin = new URL(options.endpointUrl);
   }
 
-  sign(key: string, expiresAt: Date, options: { contentDisposition?: string } = {}): string {
+  sign(
+    key: string,
+    expiresAt: Date,
+    options: { contentDisposition?: string; cacheable?: boolean } = {},
+  ): string {
     if (parseS3Key(key) === null)
       throw new RangeError('Refusing to sign a key the platform did not build');
     const now = bucketedSigningDate(
@@ -81,6 +86,12 @@ export class S3PresignMediaUrlSigner implements MediaUrlSigner {
     ];
     if (options.contentDisposition !== undefined) {
       params.push([CONTENT_DISPOSITION_QUERY_PARAM, options.contentDisposition]);
+    }
+    if (options.cacheable === true) {
+      // Derived keys never change content, and every URL of a key in one signing window is the
+      // same, so the browser may reuse the bytes as long as the URL is valid (deterministic:
+      // byte-identical URLs keep their cache hits).
+      params.push([CACHE_CONTROL_QUERY_PARAM, `private, max-age=${expires}, immutable`]);
     }
     const query = params
       .map(([k, v]) => [rfc3986(k), rfc3986(v)] as const)

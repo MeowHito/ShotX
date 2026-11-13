@@ -44,6 +44,12 @@ export function bucketedSigningDate(now: Date, bucketSeconds: number): Date {
  */
 export const CONTENT_DISPOSITION_QUERY_PARAM = 'response-content-disposition';
 
+/**
+ * S3 / R2 GetObject override of the answer's Cache-Control, signed into view URLs so browsers
+ * keep thumbnails and previews for as long as the URL lives (R2 objects carry no Cache-Control).
+ */
+export const CACHE_CONTROL_QUERY_PARAM = 'response-cache-control';
+
 // RFC 5987 attr-char: ALPHA / DIGIT / "!" / "#" / "$" / "&" / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
 function encodeRfc5987(value: string): string {
   return Array.from(new TextEncoder().encode(value), (b) => {
