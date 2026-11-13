@@ -4,9 +4,11 @@
 // repository's existing ignore rules (git, Prettier, ESLint: `dist/`) skip the generated copy.
 //
 // The face detector model (FACE_DETECTOR_MODEL_PATH, default
-// /mediapipe/blaze_face_short_range.tflite) is not on npm: deployment provides it (see the
-// Phase 3 report). Without it the quality gate skips face checks and the API's
-// NO_FACE_DETECTED stays the backstop.
+// /mediapipe/blaze_face_short_range.tflite) is not on npm, so it is committed next to this copy:
+// public/mediapipe/blaze_face_short_range.tflite, MediaPipe's BlazeFace short range (float16, v1,
+// Apache-2.0, 229,746 bytes, SHA-256 b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f)
+// from storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/.
+// Without it the quality gate skips face checks and the API's NO_FACE_DETECTED stays the backstop.
 import { copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';

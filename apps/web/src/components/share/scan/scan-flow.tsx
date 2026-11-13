@@ -14,6 +14,7 @@ import { useLocale, useTranslations } from 'next-intl';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, isApiError } from '@/lib/api/errors';
 import type { SelfieLimits } from '@/lib/face/config';
+import { nonBlockingDetectorLoader } from '@/lib/face/detector';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import type { SelfieIssue } from '@/lib/face/quality-gate';
 import { processSelfie, type SelfieSource } from '@/lib/face/selfie';
@@ -132,13 +133,20 @@ export function ScanFlow({
     [],
   );
 
+  // The on-phone face check never holds the photo back: it starts downloading now, while the
+  // camera opens, and a photo taken before it is in goes straight to the API.
+  const loadDetector = useMemo(() => nonBlockingDetectorLoader(tools.loadDetector), [tools]);
+  useEffect(() => {
+    void loadDetector();
+  }, [loadDetector]);
+
   const processor = useMemo(
     () => ({
       canvas: tools.canvas,
-      loadDetector: tools.loadDetector,
+      loadDetector,
       config: { gate: tools.config.gate, selfie: limits.selfie },
     }),
-    [tools, limits.selfie],
+    [tools, loadDetector, limits.selfie],
   );
   const searching = search.isPending || deletion.isPending;
   const busy = checking || searching;

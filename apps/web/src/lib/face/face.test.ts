@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canUseLiveCamera, centerCrop, isInAppBrowser, isIOS } from './camera';
 import type { ClientFaceConfig, SelfieLimits } from './config';
-import { createMediaPipeDetectorLoader } from './detector';
+import { createMediaPipeDetectorLoader, nonBlockingDetectorLoader } from './detector';
 import { evaluateSelfie, type FaceBox, meanLuma, type SelfieGateConfig } from './quality-gate';
 import { type CanvasOps, fitLongEdge, processSelfie } from './selfie';
 
@@ -211,6 +211,29 @@ describe('MediaPipe face detector loader', () => {
   it('resolves to null when MediaPipe fails to load (the gate degrades)', async () => {
     visionMock.createFromOptions.mockRejectedValue(new Error('model 404'));
     await expect(createMediaPipeDetectorLoader(detectorConfig)()).resolves.toBeNull();
+  });
+});
+
+describe('non-blocking detector loader (owner 2026-11-13: never hold the photo back)', () => {
+  it('starts loading on the first call, resolves null until the detector is in, then the detector', async () => {
+    const detector = { detect: () => [] };
+    let finish = (_: typeof detector) => undefined as void;
+    const loader = vi.fn(() => new Promise<typeof detector | null>((r) => (finish = r)));
+    const load = nonBlockingDetectorLoader(loader);
+    await expect(load()).resolves.toBeNull();
+    await expect(load()).resolves.toBeNull();
+    expect(loader).toHaveBeenCalledTimes(1);
+    finish(detector);
+    await Promise.resolve();
+    await expect(load()).resolves.toBe(detector);
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays null when the detector cannot load', async () => {
+    const load = nonBlockingDetectorLoader(() => Promise.resolve(null));
+    await load();
+    await Promise.resolve();
+    await expect(load()).resolves.toBeNull();
   });
 });
 

@@ -52,3 +52,23 @@ export function createMediaPipeDetectorLoader(
     return loading;
   };
 }
+
+/**
+ * A loader that never makes the scan wait (owner, 2026-11-13: fastest first). The first call
+ * starts `loader` (the scan flow calls it as soon as it opens, so the detector downloads while
+ * the camera starts); every call resolves at once with the detector if it is in by then, else
+ * null, and the selfie goes to the API, whose NO_FACE_DETECTED stays the backstop.
+ */
+export function nonBlockingDetectorLoader(loader: DetectorLoader): DetectorLoader {
+  let ready: FaceDetectorLike | null = null;
+  let started = false;
+  return () => {
+    if (!started) {
+      started = true;
+      void loader().then((detector) => {
+        ready = detector;
+      });
+    }
+    return Promise.resolve(ready);
+  };
+}

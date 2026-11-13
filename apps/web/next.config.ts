@@ -16,6 +16,23 @@ const config: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   // Security headers (including the per-request CSP nonce) are set in src/proxy.ts.
+  headers() {
+    return Promise.resolve([
+      {
+        // The scan's face detector (MediaPipe wasm, ~4 MB gzipped, and its model): kept on the
+        // phone for 30 days instead of revalidated on every visit. Not `immutable`: the names
+        // carry no hash, so an upgrade reaches phones within the month (a mismatch only turns
+        // the on-phone check off; the API still checks every selfie).
+        source: '/mediapipe/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=2592000, stale-while-revalidate=86400',
+          },
+        ],
+      },
+    ]);
+  },
 };
 
 export default withNextIntl(config);
