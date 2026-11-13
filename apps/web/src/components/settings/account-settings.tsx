@@ -28,46 +28,48 @@ export function AccountSettings({
   const [changed, setChanged] = useState(false);
 
   return (
-    <div className="mx-auto max-w-xl space-y-6">
+    <div className="w-full space-y-6">
       <h1 className="font-display text-2xl font-bold tracking-[-0.02em] sm:text-3xl">
         {t('title')}
       </h1>
-      <section className="space-y-3 rounded-xl border p-4 sm:p-6">
-        <h2 className="text-lg">{t('account')}</h2>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-          <dt className="text-muted-foreground">{t('name')}</dt>
-          <dd className="min-w-0 truncate">{user?.name ?? '-'}</dd>
-          <dt className="text-muted-foreground">{t('email')}</dt>
-          <dd className="min-w-0 truncate">{user?.email ?? '-'}</dd>
-        </dl>
-        <p className="text-xs text-muted-foreground">{t('contactAdmin')}</p>
-      </section>
-      <section aria-labelledby={passwordHeading} className="space-y-4 rounded-xl border p-4 sm:p-6">
-        <div className="space-y-1">
-          <h2 id={passwordHeading} className="text-lg">
-            {tp('title')}
-          </h2>
-          {passwordAccount ? <p className="text-sm text-muted-foreground">{tp('body')}</p> : null}
-        </div>
-        {passwordAccount ? (
-          <>
-            {changed ? (
-              <Alert role="status" aria-live="polite">
-                {tp('done')}
-              </Alert>
-            ) : null}
-            <ChangePasswordForm
-              mode="voluntary"
-              email={user?.email ?? null}
-              minLength={minLength}
-              fetch={fetch}
-              onChanged={() => setChanged(true)}
-            />
-          </>
-        ) : (
-          <p className="text-sm text-muted-foreground">{tp('noPassword')}</p>
-        )}
-      </section>
+      <div className="grid items-start gap-5 lg:grid-cols-2">
+        <section className="studio-card space-y-3 p-4 sm:p-6">
+          <h2 className="text-lg">{t('account')}</h2>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt className="text-muted-foreground">{t('name')}</dt>
+            <dd className="min-w-0 truncate">{user?.name ?? '-'}</dd>
+            <dt className="text-muted-foreground">{t('email')}</dt>
+            <dd className="min-w-0 truncate">{user?.email ?? '-'}</dd>
+          </dl>
+          <p className="text-xs text-muted-foreground">{t('contactAdmin')}</p>
+        </section>
+        <section aria-labelledby={passwordHeading} className="studio-card space-y-4 p-4 sm:p-6">
+          <div className="space-y-1">
+            <h2 id={passwordHeading} className="text-lg">
+              {tp('title')}
+            </h2>
+            {passwordAccount ? <p className="text-sm text-muted-foreground">{tp('body')}</p> : null}
+          </div>
+          {passwordAccount ? (
+            <>
+              {changed ? (
+                <Alert role="status" aria-live="polite">
+                  {tp('done')}
+                </Alert>
+              ) : null}
+              <ChangePasswordForm
+                mode="voluntary"
+                email={user?.email ?? null}
+                minLength={minLength}
+                fetch={fetch}
+                onChanged={() => setChanged(true)}
+              />
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">{tp('noPassword')}</p>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

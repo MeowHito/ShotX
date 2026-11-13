@@ -81,15 +81,15 @@ export function SidebarNav({
                 className={cn(
                   'flex h-11 items-center gap-3 rounded-lg px-3.5 text-sm transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   current
-                    ? 'bg-accent font-semibold text-cyan-300 shadow-[inset_2px_0_0_0_rgb(34_211_238)]'
-                    : 'text-foreground/75 hover:bg-white/5 hover:text-foreground',
+                    ? 'bg-accent font-semibold text-primary shadow-[inset_2px_0_0_0_var(--color-ring)] dark:text-cyan-300'
+                    : 'text-foreground/75 hover:bg-foreground/5 hover:text-foreground',
                   rail && 'md:max-lg:justify-center md:max-lg:px-0',
                 )}
               >
                 <Icon
                   className={cn(
                     'size-5 shrink-0',
-                    current ? 'text-cyan-300' : 'text-muted-foreground',
+                    current ? 'text-primary dark:text-cyan-300' : 'text-muted-foreground',
                   )}
                   aria-hidden
                 />

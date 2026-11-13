@@ -45,8 +45,10 @@ export interface ItemCardProps {
   onPrimaryClick?: (event: MouseEvent) => void;
   /** Space (and Enter on files): show the item's details. */
   onPreview?: () => void;
-  /** Show the selection checkbox (false on search and recent lists). */
+  /** Show the selection checkbox (false on search lists). */
   selectable?: boolean;
+  /** The checkbox shows all the time, not only on hover (Recent, owner 2026-11-13). */
+  checkboxAlwaysVisible?: boolean;
   /**
    * Folders as events (ADR 0016): cover, created date, link status, QR and edit. Without it a
    * folder is a plain folder tile (search, recent, move).
@@ -235,6 +237,7 @@ export function ItemCard({
   onPrimaryClick,
   onPreview,
   selectable = true,
+  checkboxAlwaysVisible = false,
   eventActions,
 }: ItemCardProps) {
   const formatBytes = useFormatBytes();
@@ -387,6 +390,7 @@ export function ItemCard({
         !list && 'absolute top-0.5 left-0.5',
         !selected &&
           !selectionMode &&
+          !checkboxAlwaysVisible &&
           'lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 pointer-coarse:opacity-100',
       )}
     >
@@ -394,7 +398,13 @@ export function ItemCard({
         checked={selected}
         onCheckedChange={onToggleSelect}
         aria-label={t('select', { name: item.name })}
-        className="bg-background/90 shadow-sm"
+        className={cn(
+          'shadow-sm',
+          list
+            ? 'border-2 border-input bg-background'
+            : // Over a photo: a white box with a dark halo reads on light and dark pictures.
+              'size-6 border-2 border-white bg-black/35 shadow-[0_0_0_1px_rgb(0_0_0/0.45),0_1px_4px_rgb(0_0_0/0.5)] data-[state=checked]:border-primary',
+        )}
       />
     </label>
   );
@@ -411,7 +421,7 @@ export function ItemCard({
             ? 'border-primary bg-accent'
             : eventActions.inspected === true
               ? 'border-indigo-400/40 bg-surface shadow-featured'
-              : 'border-white/5 bg-surface hover:border-indigo-400/30',
+              : 'border-border bg-surface hover:border-indigo-400/40 dark:border-white/5',
         )}
       >
         {checkbox}
@@ -419,14 +429,14 @@ export function ItemCard({
         <span className="hidden min-w-0 flex-col items-start gap-1.5 md:flex md:w-44 2xl:w-56">
           <EventStatusBadge folder={event} />
           {link !== null ? (
-            <span className="flex max-w-full items-center gap-1 rounded-md bg-background/70 py-0.5 pr-0.5 pl-2 font-mono text-xs text-cyan-300">
+            <span className="flex max-w-full items-center gap-1 rounded-md bg-muted py-0.5 pr-0.5 pl-2 font-mono text-xs text-primary dark:bg-background/70 dark:text-cyan-300">
               <LinkIcon className="size-3 shrink-0" aria-hidden />
               <span className="truncate">{link.path}</span>
               {eventActions.onCopyLink != null ? (
                 <button
                   type="button"
                   onClick={eventActions.onCopyLink}
-                  className="rounded p-1 text-muted-foreground hover:bg-white/10 hover:text-foreground"
+                  className="rounded p-1 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
                   aria-label={te('copyLinkOf', { name: item.name })}
                   title={te('copyLink')}
                 >

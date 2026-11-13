@@ -68,7 +68,7 @@ function Billing({
     chosen === null ? undefined : plans.data?.plans.find((p) => p.code === chosen);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="w-full space-y-6">
       <h1 className="text-2xl font-bold">{t('title')}</h1>
       {subscription.isError ? (
         <Alert variant="destructive">

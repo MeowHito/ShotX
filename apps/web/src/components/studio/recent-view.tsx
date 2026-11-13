@@ -234,6 +234,7 @@ export function RecentView() {
               layout={layout}
               selected={selectedIds.has(file.id)}
               selectionMode={selection.length > 0}
+              checkboxAlwaysVisible
               onToggleSelect={() => toggle(file)}
               onPrimaryClick={(event) => {
                 event.preventDefault();

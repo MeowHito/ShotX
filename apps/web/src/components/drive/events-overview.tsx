@@ -24,9 +24,21 @@ type Metric = 'visitors' | 'downloads' | 'photos';
  * tile, so the colour only ties the chart to its tile.
  */
 const SERIES: Record<Metric, { stroke: string; fill: string; soft: string }> = {
-  visitors: { stroke: '#3987e5', fill: 'bg-[#3987e5]', soft: 'bg-[#3987e5]/15 text-[#7fb2f0]' },
-  downloads: { stroke: '#d95926', fill: 'bg-[#d95926]', soft: 'bg-[#d95926]/15 text-[#f0a07d]' },
-  photos: { stroke: '#199e70', fill: 'bg-[#199e70]', soft: 'bg-[#199e70]/15 text-[#5fd3a6]' },
+  visitors: {
+    stroke: 'var(--series-visitors)',
+    fill: 'bg-(--series-visitors)',
+    soft: 'bg-(--series-visitors)/15 text-(--series-visitors) dark:text-[#7fb2f0]',
+  },
+  downloads: {
+    stroke: 'var(--series-downloads)',
+    fill: 'bg-(--series-downloads)',
+    soft: 'bg-(--series-downloads)/15 text-(--series-downloads) dark:text-[#f0a07d]',
+  },
+  photos: {
+    stroke: 'var(--series-photos)',
+    fill: 'bg-(--series-photos)',
+    soft: 'bg-(--series-photos)/15 text-(--series-photos) dark:text-[#5fd3a6]',
+  },
 };
 
 export interface EventCounts {
@@ -72,7 +84,7 @@ export function EventsOverview({ events }: { events: EventCounts }) {
         <div
           role="radiogroup"
           aria-label={t('range')}
-          className="flex rounded-xl border border-white/5 bg-surface p-1"
+          className="flex rounded-xl border border-border bg-surface p-1 dark:border-white/5"
         >
           {DRIVE_STATS_DAYS.map((d) => (
             <button
@@ -83,7 +95,9 @@ export function EventsOverview({ events }: { events: EventCounts }) {
               onClick={() => setDays(d)}
               className={cn(
                 'h-9 rounded-lg px-3 text-sm text-muted-foreground transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                days === d ? 'bg-accent font-semibold text-cyan-300' : 'hover:text-foreground',
+                days === d
+                  ? 'bg-accent font-semibold text-primary dark:text-cyan-300'
+                  : 'hover:text-foreground',
               )}
             >
               {t('days', { count: d })}
@@ -96,7 +110,7 @@ export function EventsOverview({ events }: { events: EventCounts }) {
         <Tile
           label={t('events.total')}
           icon={<RadioIcon className="size-5" />}
-          iconClass="bg-emerald-400/10 text-emerald-300"
+          iconClass="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
           value={
             <>
               {format.number(events.published)}
@@ -106,7 +120,7 @@ export function EventsOverview({ events }: { events: EventCounts }) {
             </>
           }
           footer={
-            <span className="flex items-center gap-2 text-emerald-300">
+            <span className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
               <span className="relative flex size-2">
                 <span className="absolute inline-flex size-full rounded-full bg-emerald-400 opacity-60 motion-safe:animate-ping" />
                 <span className="relative inline-flex size-2 rounded-full bg-emerald-400" />
@@ -267,9 +281,9 @@ function ChangeBadge({ now, before }: { now: number; before: number }) {
       className={cn(
         'inline-flex items-center gap-0.5 font-sans text-xs font-semibold',
         change.kind === 'up' || change.kind === 'new'
-          ? 'text-emerald-300'
+          ? 'text-emerald-700 dark:text-emerald-300'
           : change.kind === 'down'
-            ? 'text-rose-300'
+            ? 'text-rose-700 dark:text-rose-300'
             : 'text-muted-foreground',
       )}
       title={t('vsBefore')}
@@ -376,7 +390,7 @@ function Spark({
           </svg>
           {hover !== null ? (
             <span
-              className="absolute top-0 bottom-0 w-px bg-white/25"
+              className="absolute top-0 bottom-0 w-px bg-foreground/25"
               style={{ left: `${x(hover)}%` }}
             />
           ) : null}

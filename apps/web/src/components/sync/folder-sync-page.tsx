@@ -29,7 +29,7 @@ export function FolderSyncPage() {
   const { snapshot } = useFolderSync();
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-6 p-4 md:p-6">
+    <div className="w-full space-y-6">
       <header className="space-y-1">
         <h1 className="font-display text-2xl font-bold tracking-[-0.02em] sm:text-3xl">
           {t('title')}

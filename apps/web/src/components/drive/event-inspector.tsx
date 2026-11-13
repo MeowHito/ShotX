@@ -22,7 +22,7 @@ import { shareHref } from './paths';
 export const INSPECTOR_DAYS = 7;
 const DAY_MS = 86_400_000;
 /** The visitors series colour (the overview's visitors tile). */
-const VISITORS = 'bg-[#3987e5]';
+const VISITORS = 'bg-(--series-visitors)';
 
 /** Today in Asia/Bangkok (the stats calendar), `YYYY-MM-DD`. */
 function bangkokToday(now = new Date()): string {
@@ -62,7 +62,7 @@ export function EventInspector({
         <EventStatusBadge folder={folder} />
       </div>
 
-      <div className="relative aspect-[16/10] overflow-hidden rounded-xl border border-white/5 bg-muted">
+      <div className="relative aspect-[16/10] overflow-hidden rounded-xl border border-border bg-muted dark:border-white/5">
         {cover !== null ? (
           // The cover's signed thumbnail (CDN).
           // eslint-disable-next-line @next/next/no-img-element
@@ -95,7 +95,7 @@ export function EventInspector({
 
       {live ? (
         <>
-          <div className="flex items-center gap-3 rounded-xl border border-white/5 bg-background/60 p-3">
+          <div className="flex items-center gap-3 rounded-xl border border-border bg-muted/60 p-3 dark:border-white/5 dark:bg-background/60">
             <QrPreview url={link.url} />
             <div className="min-w-0 space-y-1">
               <p className="text-sm font-semibold">{t('scanTitle')}</p>
@@ -104,7 +104,7 @@ export function EventInspector({
                 type="button"
                 variant="link"
                 size="sm"
-                className="h-auto p-0 text-cyan-300"
+                className="h-auto p-0 text-primary dark:text-cyan-300"
                 onClick={onQr}
               >
                 <QrCodeIcon aria-hidden />
@@ -213,7 +213,7 @@ function VisitorsChart({ shareId }: { shareId: string }) {
       </div>
       <dl className="grid grid-cols-3 gap-2 pt-1 text-center">
         {(['visitors', 'downloads', 'scans'] as const).map((key) => (
-          <div key={key} className="rounded-lg bg-background/60 px-2 py-1.5">
+          <div key={key} className="rounded-lg bg-muted/70 px-2 py-1.5 dark:bg-background/60">
             <dt className="text-[11px] text-muted-foreground">{t(`totals.${key}`)}</dt>
             <dd className="font-display text-lg font-bold tabular-nums">
               {format.number(totals?.[key] ?? 0)}

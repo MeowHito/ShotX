@@ -816,7 +816,7 @@ export function DriveBrowser({
                 disabled={uploadsBlocked !== null}
                 onClick={() => studio.run('uploadFiles')}
               >
-                <CloudUploadIcon className="text-cyan-300" aria-hidden />
+                <CloudUploadIcon className="text-primary dark:text-cyan-300" aria-hidden />
                 {t('drive.uploadFiles')}
               </Button>
               <Button
@@ -999,8 +999,8 @@ export function DriveBrowser({
                             className={cn(
                               'h-10 shrink-0 rounded-lg px-3.5 text-sm whitespace-nowrap transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
                               eventTab === tab
-                                ? 'bg-accent font-semibold text-cyan-300'
-                                : 'text-muted-foreground hover:bg-white/5 hover:text-foreground',
+                                ? 'bg-accent font-semibold text-primary dark:text-cyan-300'
+                                : 'text-muted-foreground hover:bg-foreground/5 hover:text-foreground',
                             )}
                           >
                             {t(`events.tabs.${tab}`, { count })}
@@ -1019,7 +1019,7 @@ export function DriveBrowser({
                           onChange={(e) => setEventQuery(e.target.value)}
                           placeholder={t('events.filterPlaceholder')}
                           aria-label={t('events.filterPlaceholder')}
-                          className="h-10 rounded-lg border-white/5 bg-background/70 pl-9"
+                          className="h-10 rounded-lg bg-background pl-9 dark:border-white/5 dark:bg-background/70"
                         />
                       </div>
                       {viewToggle}

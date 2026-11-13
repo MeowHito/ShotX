@@ -1,7 +1,7 @@
 'use client';
 
 import { Button, cn, Sheet, SheetContent, SheetTitle } from '@shotx/ui';
-import { ApertureIcon, MenuIcon, PanelLeftCloseIcon, PanelLeftOpenIcon } from 'lucide-react';
+import { MenuIcon, PanelLeftCloseIcon, PanelLeftOpenIcon } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
@@ -13,6 +13,7 @@ import { ActAsBanner } from './act-as-banner';
 import { NewMenu } from './new-menu';
 import { SearchBar } from './search-bar';
 import { SidebarNav } from './sidebar-nav';
+import { SnapMark } from './snap-mark';
 import { StorageMeter } from './storage-meter';
 import { StudioProvider } from './studio-context';
 
@@ -48,18 +49,13 @@ export function StudioShellView({
   const [railExpanded, setRailExpanded] = useState(false);
   const rail = !railExpanded;
 
-  // ADR 0024: the brand block, a gradient aperture over "Snap · Studio".
+  // ADR 0024: the brand block, the tab icon's mark beside "Snap · Studio".
   const logo = (
     <Link
       href="/studio"
       className="flex items-center gap-2.5 rounded-lg px-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <span
-        className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-400 text-white shadow-[0_0_20px_-4px_rgb(99_102_241/0.6)]"
-        aria-hidden
-      >
-        <ApertureIcon className="size-5" />
-      </span>
+      <SnapMark className="size-9" />
       <span className="leading-none">
         <span className="block font-display text-lg font-bold tracking-[-0.02em]">
           {t('common.appName')}
@@ -78,7 +74,7 @@ export function StudioShellView({
         <aside
           data-expanded={railExpanded}
           className={cn(
-            'sticky top-0 hidden h-dvh shrink-0 flex-col gap-6 overflow-y-auto border-r border-white/5 bg-sidebar px-3 py-4 transition-[width] duration-200 md:flex lg:w-64',
+            'sticky top-0 hidden h-dvh shrink-0 flex-col gap-6 overflow-y-auto border-r border-border bg-sidebar dark:border-white/5 px-3 py-4 transition-[width] duration-200 md:flex lg:w-64',
             railExpanded ? 'md:w-64' : 'md:w-[4.75rem]',
           )}
         >
@@ -118,7 +114,7 @@ export function StudioShellView({
 
         <div className="flex min-w-0 flex-1 flex-col">
           <ActAsBanner />
-          <header className="sticky top-0 z-40 flex h-[4.25rem] items-center gap-2 border-b border-white/5 bg-background/85 px-3 backdrop-blur-xl sm:gap-3 sm:px-5">
+          <header className="sticky top-0 z-40 flex h-[4.25rem] items-center gap-2 border-b border-border bg-background/85 dark:border-white/5 px-3 backdrop-blur-xl sm:gap-3 sm:px-5">
             <Button
               variant="ghost"
               size="icon"
@@ -141,7 +137,7 @@ export function StudioShellView({
               <AccountMenu user={user} />
             </div>
           </header>
-          <main className="mx-auto w-full max-w-7xl flex-1 space-y-5 px-3 pt-4 pb-40 sm:px-6 sm:pt-6">
+          <main className="w-full flex-1 space-y-5 px-3 pt-4 pb-40 sm:px-6 sm:pt-6 xl:px-8">
             {banner}
             {children}
           </main>
