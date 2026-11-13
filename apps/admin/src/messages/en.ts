@@ -143,7 +143,7 @@ export const en: TranslatedMessages = {
   passwordField: {
     label: 'Temporary password',
     generate: 'Generate password',
-    hint: 'At least {minLength, number} characters. Press “Generate password” for a long, secure password.',
+    hint: 'Anything with at least {minLength, number} characters. The owner must change it at first sign-in.',
     required: 'Please enter or generate a password',
   },
   oneTimePassword: {

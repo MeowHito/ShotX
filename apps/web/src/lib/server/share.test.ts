@@ -74,7 +74,7 @@ describe('SSR share meta', () => {
         meta: {
           token: share.token,
           slug: share.slug,
-          path: `/s/${encodeURIComponent(share.slug ?? '')}`,
+          path: `/${encodeURIComponent(share.slug ?? '')}`,
         },
       });
     }

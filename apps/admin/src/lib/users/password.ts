@@ -3,6 +3,7 @@ import {
   type AdminPasswordUiConfig,
   type PasswordPolicyReason,
   passwordPolicyViolation,
+  temporaryPasswordViolation,
 } from '@shotx/shared';
 
 /**
@@ -13,18 +14,16 @@ import {
 export type PasswordUiConfig = AdminPasswordUiConfig;
 
 /**
- * The first rule a typed initial password breaks for the account's pool (too short, too simple,
- * contains the email), checked before calling the API. The API stays the authority and adds
- * `common` (PASSWORD_TOO_WEAK).
+ * Whether a typed initial (temporary) password is too short (ADR 0015: only the length counts;
+ * the first sign-in replaces it), checked before calling the API, which stays the authority.
  */
 export function initialPasswordProblem(
   password: string,
   role: AccountRole,
-  email: string | null,
   config: PasswordUiConfig,
 ): { reason: PasswordPolicyReason; minLength: number } | null {
   const minLength = config.minLength[role];
-  const reason = passwordPolicyViolation(password, { minLength, email });
+  const reason = temporaryPasswordViolation(password, minLength);
   return reason === null ? null : { reason, minLength };
 }
 

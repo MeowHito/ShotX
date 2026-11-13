@@ -46,14 +46,9 @@ function scanShare(fake: FakeApi, extra: Partial<PublicShareFixture> = {}) {
   return share;
 }
 
+/** Tapping the scan button records the consent and opens the camera (ADR 0015). */
 async function acceptConsent() {
   await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-  await userEvent.click(
-    screen.getByRole('checkbox', {
-      name: th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION].checkbox,
-    }),
-  );
-  await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
 }
 
 /** The camera starts by itself in the round frame (ADR 0011); one tap takes the photo. */
@@ -64,82 +59,44 @@ async function takeLiveSelfie() {
 }
 
 describe('consent', () => {
-  it('shows the versioned Thai text, requires the checkbox, posts the version', async () => {
+  it('records the consent of the current version on tap and opens the camera, no text (ADR 0015)', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = scanShare(fake);
     renderSharePage(fake, share.token);
-    await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    const policy = th.consent.policies.face_search['2026-11-12'];
-    expect(LATEST_CONSENT_POLICY_VERSION).toBe('2026-11-12');
-    expect(screen.getByRole('heading', { name: policy.title })).toBeInTheDocument();
-    // The short text: exactly the four bullets, visible.
-    const consent = screen.getByRole('region', { name: policy.title });
-    const bullets = within(consent).getAllByRole('list')[0] as HTMLElement;
-    expect(
-      within(bullets)
-        .getAllByRole('listitem')
-        .map((li) => li.textContent),
-    ).toEqual([
-      policy.points.purpose,
-      policy.points.noStorage,
-      'ผลการค้นหาเก็บไว้ให้ดาวน์โหลดได้ 24 ชั่วโมง หลังการค้นหาครั้งล่าสุด แล้วลบเอง',
-      policy.points.processor,
-    ]);
-    for (const li of within(bullets).getAllByRole('listitem')) expect(li).toBeVisible();
-    // The legal detail: collapsed until "อ่านรายละเอียด" is opened.
-    const summary = within(consent).getByText(th.consent.details);
-    const details = summary.closest('details') as HTMLDetailsElement;
-    expect(details.open).toBe(false);
-    const transfer = within(details).getByText(policy.details.transfer);
-    expect(transfer).not.toBeVisible();
-    expect(within(details).getByText(policy.details.sensitive)).not.toBeVisible();
-    await userEvent.click(summary);
-    expect(details.open).toBe(true);
-    expect(transfer).toBeVisible();
-    expect(within(details).getByText(policy.details.backups)).toBeVisible();
-    // ADR 0011 decision 2: the details mention the right but don't link to the deletion page.
-    expect(within(details).queryByRole('link')).toBeNull();
-    expect(screen.getByText(`ฉบับวันที่ ${LATEST_CONSENT_POLICY_VERSION}`)).toBeInTheDocument();
-
-    // No consent, no scan: the camera isn't offered and nothing is posted.
-    expect(screen.queryByRole('button', { name: th.capture.openCamera })).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
-    expect(screen.getByText(th.consent.mustCheck)).toBeInTheDocument();
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)).toHaveLength(0);
-
-    await userEvent.click(screen.getByRole('checkbox', { name: policy.checkbox }));
-    await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
-    // Then straight to the camera, in its round frame with the face outline, without tips.
+    await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
+    const policy = th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION];
+    // Straight to the camera, in its round frame with the face outline, without tips.
     expect(await screen.findByRole('button', { name: th.capture.takePhoto })).toBeInTheDocument();
     expect(screen.getByTestId('face-guide')).toBeInTheDocument();
     expect(screen.getByLabelText(th.capture.preview).parentElement).toHaveClass('rounded-full');
+    expect(screen.queryByRole('heading', { name: policy.title })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: policy.checkbox })).toBeNull();
+    expect(screen.queryByText(th.capture.notStored)).toBeNull();
+    // The consent row is still written, once, before any scan.
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)).toHaveLength(1);
     expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)[0]).toMatchObject({
       prefix: '/api',
       credentials: 'include',
-      body: { policyVersion: LATEST_CONSENT_POLICY_VERSION, locale: 'th', accepted: true },
+      body: {
+        purpose: 'face_search',
+        policyVersion: LATEST_CONSENT_POLICY_VERSION,
+        locale: 'th',
+        accepted: true,
+      },
     });
+    expect(share.consented).toBe(true);
   });
 
-  it('withdraws consent (DELETE) and forgets the results', async () => {
+  it('does not post consent again once given, and has no withdraw link (ADR 0015)', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = scanShare(fake, { consented: true });
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     await takeLiveSelfie();
     expect(await screen.findByRole('region', { name: th.results.strong })).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('button', { name: th.share.withdraw }));
-    expect(await screen.findByText(th.share.withdrawn)).toBeInTheDocument();
-    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.withdrawConsent)).toHaveLength(1);
-    expect(screen.queryByRole('region', { name: th.results.strong })).not.toBeInTheDocument();
-    expect(share.consented).toBe(false);
-    // Scanning again asks for consent again.
-    await userEvent.click(screen.getByRole('button', { name: th.share.scan }));
-    expect(
-      await screen.findByRole('checkbox', {
-        name: th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION].checkbox,
-      }),
-    ).toBeInTheDocument();
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: th.share.withdraw })).toBeNull();
   });
 });
 
@@ -266,15 +223,14 @@ describe('scan', () => {
     expect(await screen.findByText(/ไม่พบใบหน้าในรูปที่ส่ง \(1 รูป\)/)).toBeInTheDocument();
   });
 
-  it('after a scan the event title and cover are gone; the found photos come first', async () => {
+  it('after a scan the event title is gone; the found photos come first', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = scanShare(fake, { consented: true });
     renderSharePage(fake, share.token);
-    expect(await screen.findByTestId('share-cover')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     await takeLiveSelfie();
     await screen.findByRole('region', { name: th.results.strong });
-    expect(screen.queryByTestId('share-cover')).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
   });
 

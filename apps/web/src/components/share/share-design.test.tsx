@@ -1,5 +1,6 @@
 import {
   LATEST_CONSENT_POLICY_VERSION,
+  PUBLIC_SHARE_ROUTES,
   type ShareMetaDesign,
   designTemplateDoc,
 } from '@shotx/shared';
@@ -99,11 +100,6 @@ function designedShare(fake: FakeApi, extra: Partial<PublicShareFixture> = {}) {
 
 const policy = th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION];
 
-async function acceptConsent() {
-  await userEvent.click(await screen.findByRole('checkbox', { name: policy.checkbox }));
-  await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
-}
-
 describe('share page with a design (ADR 0013), phone viewport', () => {
   it('the designed card replaces the title and cover; the photos follow below in gallery mode', async () => {
     const fake = new FakeApi({ faceSearch: true });
@@ -143,17 +139,16 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: th.share.scan })).toBeNull());
   });
 
-  it('"take a selfie" opens the scan sheet: consent first, then the live camera', async () => {
+  it('"take a selfie" records the consent, then opens the live camera (ADR 0015)', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = designedShare(fake);
     const { nav, getUserMedia } = fakeNavigator();
     renderSharePage(fake, share.token, { nav });
     await userEvent.click(await screen.findByRole('button', { name: th.share.design.camera }));
-    // PDPA: the consent text comes before any camera, whatever the design says.
-    expect(await screen.findByRole('heading', { name: policy.title })).toBeInTheDocument();
-    expect(getUserMedia).not.toHaveBeenCalled();
-    await acceptConsent();
     expect(await screen.findByRole('button', { name: th.capture.takePhoto })).toBeInTheDocument();
+    // No consent text to read; the consent row is written before the camera starts.
+    expect(screen.queryByRole('heading', { name: policy.title })).toBeNull();
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)).toHaveLength(1);
     expect(getUserMedia).toHaveBeenCalledOnce();
   });
 
@@ -163,7 +158,6 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     const { nav, getUserMedia } = fakeNavigator();
     renderSharePage(fake, share.token, { nav });
     await userEvent.click(await screen.findByRole('button', { name: th.share.design.choosePhoto }));
-    await acceptConsent();
     const picker = await screen.findByLabelText(th.capture.chooseFromGallery);
     expect(picker).toHaveAttribute('type', 'file');
     expect(picker).not.toHaveAttribute('capture');
@@ -197,7 +191,6 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     const share = designedShare(fake);
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.design.camera }));
-    await acceptConsent();
     const take = await screen.findByRole('button', { name: th.capture.takePhoto });
     await waitFor(() => expect(take).toBeEnabled());
     await userEvent.click(take);
@@ -246,12 +239,11 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     );
   });
 
-  it('without a design the layout is unchanged (title and cover, no card)', async () => {
+  it('without a design the layout is unchanged (title, no card)', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = fake.addPublicShare({ faceSearchAvailable: true });
     renderSharePage(fake, share.token);
     expect(await screen.findByRole('heading', { level: 1, name: share.title })).toBeInTheDocument();
-    expect(screen.getByTestId('share-cover')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: th.share.design.label })).toBeNull();
     expect(screen.getByRole('button', { name: th.share.scan })).toBeInTheDocument();
   });

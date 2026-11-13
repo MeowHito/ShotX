@@ -113,13 +113,13 @@ export type ListAdminUsersResponse = z.output<typeof listAdminUsersResponseSchem
  * - `admin`: admins pool, subject adminAccountSubject(id), admin_credentials with the argon2id
  *   hash, `must_change_password = true` and no TOTP secret (enrolled at first sign-in with
  *   ADMIN_MFA_MODE=totp; with `off`, the default since ADR 0011, never; ADMIN_SIGN_IN_STEPS).
- *   Password policy: ADMIN_PASSWORD_MIN_LENGTH.
  * - `photographer`: users pool, subject passwordAccountSubject(id), user_password_credentials
- *   (`must_change_password = true`) and a storage_usage row. Policy:
- *   PHOTOGRAPHER_PASSWORD_MIN_LENGTH.
+ *   (`must_change_password = true`) and a storage_usage row.
+ * The password is temporary: TEMPORARY_PASSWORD_MIN_LENGTH code points, nothing else
+ * (temporaryPasswordViolation, ADR 0015); the first sign-in replaces it under the pool's policy.
  * `created_by_id` is the acting admin. EMAIL_TAKEN when another password account (either pool)
- * has the email ignoring ASCII case; PASSWORD_TOO_WEAK for the policy. The password is never
- * logged, audited or returned; the admin hands it over out of band.
+ * has the email ignoring ASCII case; PASSWORD_TOO_WEAK (`too_short`) for a short password. The
+ * password is never logged, audited or returned; the admin hands it over out of band.
  */
 export const createAdminUserBodySchema = z.strictObject({
   email: accountEmailSchema,
@@ -157,8 +157,8 @@ export type UpdateAdminUserBody = z.input<typeof updateAdminUserBodySchema>;
  * POST /admin/users/:id/reset-password: a new temporary password (200, the item). Sets
  * `must_change_password = true`, clears `failed_attempts` and `locked_until`, revokes every
  * session of the account. An admin's TOTP is kept (they change the password, then enter their
- * code). Own account: CANNOT_MODIFY_SELF; not a password account: CONFLICT; policy:
- * PASSWORD_TOO_WEAK (the pool's minimum length).
+ * code). Own account: CANNOT_MODIFY_SELF; not a password account: CONFLICT; shorter than
+ * TEMPORARY_PASSWORD_MIN_LENGTH: PASSWORD_TOO_WEAK.
  */
 export const resetAdminUserPasswordBodySchema = z.strictObject({ password: newPasswordSchema });
 export type ResetAdminUserPasswordBody = z.input<typeof resetAdminUserPasswordBodySchema>;

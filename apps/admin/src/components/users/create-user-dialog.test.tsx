@@ -135,38 +135,27 @@ describe('CreateUserDialog', () => {
     ).toBeInTheDocument();
   });
 
-  it('checks the real minimum of the chosen role before calling the API', async () => {
+  it('takes any temporary password of at least 4 characters (ADR 0015)', async () => {
     const user = userEvent.setup();
     const api = new FakeAdminApi();
     renderWithProviders(<Harness />, { fetch: api.fetch });
     await user.click(screen.getByRole('button', { name: 'open' }));
     await fill(user, 'someone.new@example.com', 'New');
-    // Photographers: PHOTOGRAPHER_PASSWORD_MIN_LENGTH (10 in the tests), shown in the hint.
-    expect(screen.getByText(/^อย่างน้อย 10 ตัวอักษร/)).toBeInTheDocument();
-    await user.type(screen.getByLabelText('รหัสผ่านชั่วคราว'), 'Short-pw1');
+    expect(screen.getByText(/อย่างน้อย 4 ตัวอักษร/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText('รหัสผ่านชั่วคราว'), '123');
     await user.click(screen.getByRole('button', { name: 'สร้างผู้ใช้' }));
-    expect(screen.getByText('รหัสผ่านสั้นเกินไป ต้องยาวอย่างน้อย 10 ตัวอักษร')).toBeInTheDocument();
-
-    // Admins: ADMIN_PASSWORD_MIN_LENGTH (14); 12 characters pass for a photographer only.
-    await user.clear(screen.getByLabelText('รหัสผ่านชั่วคราว'));
-    await user.type(screen.getByLabelText('รหัสผ่านชั่วคราว'), 'Twelve-chars');
-    await user.selectOptions(screen.getByLabelText('บทบาท'), 'admin');
-    expect(screen.getByText(/^อย่างน้อย 14 ตัวอักษร/)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'สร้างผู้ใช้' }));
-    expect(screen.getByText('รหัสผ่านสั้นเกินไป ต้องยาวอย่างน้อย 14 ตัวอักษร')).toBeInTheDocument();
-
-    // Containing the email is refused too.
-    await user.clear(screen.getByLabelText('รหัสผ่านชั่วคราว'));
-    await user.type(screen.getByLabelText('รหัสผ่านชั่วคราว'), 'someone.new-Xy7-Qz9');
-    await user.click(screen.getByRole('button', { name: 'สร้างผู้ใช้' }));
-    expect(screen.getByText(/ต้องไม่มีอีเมลของบัญชี/)).toBeInTheDocument();
+    expect(screen.getByText('รหัสผ่านสั้นเกินไป ต้องยาวอย่างน้อย 4 ตัวอักษร')).toBeInTheDocument();
     expect(api.calls).toHaveLength(0);
 
-    await user.selectOptions(screen.getByLabelText('บทบาท'), 'photographer');
-    await user.clear(screen.getByLabelText('รหัสผ่านชั่วคราว'));
-    await user.type(screen.getByLabelText('รหัสผ่านชั่วคราว'), 'Twelve-chars');
+    // Simple is fine, for admins too: the first sign-in replaces it.
+    await user.type(screen.getByLabelText('รหัสผ่านชั่วคราว'), '4');
+    await user.selectOptions(screen.getByLabelText('บทบาท'), 'admin');
     await user.click(screen.getByRole('button', { name: 'สร้างผู้ใช้' }));
-    expect(await screen.findByTestId('one-time-password')).toHaveTextContent('Twelve-chars');
+    expect(await screen.findByTestId('one-time-password')).toHaveTextContent('1234');
+    expect(api.callsOf(ADMIN_ROUTES.createUser)[0]!.body).toMatchObject({
+      role: 'admin',
+      password: '1234',
+    });
   });
 
   it('checks the email, name and password before calling the API', async () => {

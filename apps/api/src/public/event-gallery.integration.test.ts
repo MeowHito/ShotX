@@ -59,8 +59,8 @@ for (const backend of DATABASE_BACKENDS) {
         const first = await folderShare(api, 'Bangkok Marathon 2026!');
         expect(first.share).toMatchObject({
           slug: 'bangkok-marathon-2026',
-          path: '/s/bangkok-marathon-2026',
-          url: 'http://localhost:3000/s/bangkok-marathon-2026',
+          path: '/bangkok-marathon-2026',
+          url: 'http://localhost:3000/bangkok-marathon-2026',
         });
         // Another photographer's event of the same name: base + '-' + 6 base36 characters.
         const second = await folderShare(api, 'bangkok marathon 2026');
@@ -79,7 +79,7 @@ for (const backend of DATABASE_BACKENDS) {
       it('handles Thai, file names, emoji-only and token-shaped names', async () => {
         const thai = await folderShare(api, 'งานวิ่ง กรุงเทพ 2026');
         expect(thai.share.slug).toBe('งานวิ่ง-กรุงเทพ-2026');
-        expect(thai.share.path).toBe(`/s/${encodeURIComponent('งานวิ่ง-กรุงเทพ-2026')}`);
+        expect(thai.share.path).toBe(`/${encodeURIComponent('งานวิ่ง-กรุงเทพ-2026')}`);
         const emoji = await folderShare(api, '🎉🎉');
         expect(emoji.share.slug).toMatch(/^event(-[0-9a-z]{6})?$/);
         // 22 ASCII letters: token-shaped, so always suffixed.

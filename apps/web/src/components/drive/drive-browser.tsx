@@ -823,7 +823,14 @@ export function DriveBrowser({
             clearSelection();
           }}
         />
-        <ShareDialog target={sharing} onOpenChange={(open) => !open && setSharing(null)} />
+        <ShareDialog
+          target={sharing}
+          onOpenChange={(open) => !open && setSharing(null)}
+          onCreatedAndCopied={() => {
+            setSharing(null);
+            setNotice({ kind: 'info', text: t('shareDialog.createdCopied') });
+          }}
+        />
         <MoveDialog
           open={moving !== null}
           onOpenChange={(open) => !open && setMoving(null)}

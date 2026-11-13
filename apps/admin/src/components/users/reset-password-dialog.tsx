@@ -88,8 +88,7 @@ function ResetPasswordForm({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const problem =
-      password === '' ? null : initialPasswordProblem(password, user.role, user.email, passwords);
+    const problem = password === '' ? null : initialPasswordProblem(password, user.role, passwords);
     const invalid =
       password === ''
         ? tp('required')

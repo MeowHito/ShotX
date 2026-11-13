@@ -121,7 +121,9 @@ describe('share management', () => {
       th.shareForm.downloadSizes.original,
     );
     await userEvent.click(within(dialog).getByRole('button', { name: th.shareForm.create }));
-    expect(await within(dialog).findByText(th.shareDialog.created)).toBeInTheDocument();
+    // ADR 0015: creating copies the new link and closes the dialog.
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(await screen.findByText(th.shareDialog.createdCopied)).toBeInTheDocument();
     expect(fake.callsTo(SHARE_ROUTES.create)[0]?.body).toEqual({
       target: { type: 'folder', folderId: folder.id },
       mode: 'gallery',
@@ -138,30 +140,40 @@ describe('share management', () => {
     const share = [...fake.ownerShares.values()][0]?.share;
     // ADR 0011: the readable slug link (the folder's name), not the token.
     expect(share?.slug).toBe('งานวิ่ง-2569');
-    expect(share?.url).toBe(`https://photos.example.com/s/${encodeURIComponent('งานวิ่ง-2569')}`);
+    expect(share?.url).toBe(`https://photos.example.com/${encodeURIComponent('งานวิ่ง-2569')}`);
     expect(share?.url).not.toContain(share?.token ?? '-');
-    expect(await within(dialog).findByText(share?.url ?? '')).toBeInTheDocument();
-    expect(within(dialog).getByText(/มีรหัสผ่าน/)).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole('button', { name: th.shares.copy }));
     expect(writeText).toHaveBeenCalledWith(share?.url);
-    expect(await within(dialog).findByText(th.shares.copied)).toBeInTheDocument();
+    writeText.mockClear();
+
+    await choose(folder.name, th.itemMenu.share, th.itemMenu.createShare);
+    const reopened = await screen.findByRole('dialog', { name: `แชร์ “${folder.name}”` });
+    expect(await within(reopened).findByText(share?.url ?? '')).toBeInTheDocument();
+    expect(within(reopened).getByText(/มีรหัสผ่าน/)).toBeInTheDocument();
+    await userEvent.click(within(reopened).getByRole('button', { name: th.shares.copy }));
+    expect(writeText).toHaveBeenCalledWith(share?.url);
+    expect(await within(reopened).findByText(th.shares.copied)).toBeInTheDocument();
 
     // The "delete my face" link to send on request (studio only; ADR 0011 decision 2).
-    expect(within(dialog).getByText(th.shares.deletionLinkHint)).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole('button', { name: th.shares.copyDeletionLink }));
-    expect(writeText).toHaveBeenLastCalledWith(
-      `https://photos.example.com/s/${encodeURIComponent('งานวิ่ง-2569')}/delete-my-face`,
+    expect(within(reopened).getByText(th.shares.deletionLinkHint)).toBeInTheDocument();
+    await userEvent.click(
+      within(reopened).getByRole('button', { name: th.shares.copyDeletionLink }),
     );
-    expect(await within(dialog).findByText(th.shares.deletionLinkCopied)).toBeInTheDocument();
+    expect(writeText).toHaveBeenLastCalledWith(
+      `https://photos.example.com/${encodeURIComponent('งานวิ่ง-2569')}/delete-my-face`,
+    );
+    expect(await within(reopened).findByText(th.shares.deletionLinkCopied)).toBeInTheDocument();
 
-    await userEvent.click(within(dialog).getByRole('button', { name: th.shares.revoke }));
+    await userEvent.click(within(reopened).getByRole('button', { name: th.shares.revoke }));
     const confirm = await screen.findByRole('dialog', { name: th.shares.revokeTitle });
     await userEvent.click(within(confirm).getByRole('button', { name: th.shares.revoke }));
     await waitFor(() => expect(fake.callsTo(SHARE_ROUTES.revoke)).toHaveLength(1));
-    expect(await within(dialog).findByText(th.shares.status.revoked)).toBeInTheDocument();
+    expect(await within(reopened).findByText(th.shares.status.revoked)).toBeInTheDocument();
   });
 
   it('offers face_only for folders only when me.features.faceSearch is on', async () => {
+    // A browser that refuses the copy: the dialog stays open and lists the new link (ADR 0015).
+    const writeText = vi.fn(() => Promise.reject(new Error('NotAllowedError')));
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     const fake = new FakeApi({ faceSearch: true });
     const folder = fake.addFolder('Event');
     const file = fake.addFile('a.jpg');

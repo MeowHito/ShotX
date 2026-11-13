@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { loadAdminPasswordPolicy, loadPhotographerPasswordPolicy } from './auth';
+import { loadTemporaryPasswordPolicy } from './auth';
 import { type Env, parseEnv } from './env';
 import { int } from './fields';
 
@@ -45,7 +45,10 @@ const adminPasswordUiEnvSchema = z.object({
 export interface AdminPasswordUiConfig {
   /** ADMIN_GENERATED_PASSWORD_LENGTH. */
   generatedLength: number;
-  /** ADMIN_PASSWORD_MIN_LENGTH and PHOTOGRAPHER_PASSWORD_MIN_LENGTH (the API's loaders). */
+  /**
+   * The shortest password an admin may set for each role: TEMPORARY_PASSWORD_MIN_LENGTH for both
+   * (ADR 0015; the first sign-in replaces it under the pool's own policy).
+   */
   minLength: { admin: number; photographer: number };
 }
 
@@ -62,15 +65,13 @@ export function requiredGeneratedPasswordLength(minLength: {
 
 /**
  * Reads ADMIN_GENERATED_PASSWORD_LENGTH (16-128, default 20) and both pools' password minimums
- * (loadAdminPasswordPolicy, loadPhotographerPasswordPolicy). Secret-free (admin app). Throws when
+ * (loadTemporaryPasswordPolicy, ADR 0015). Secret-free (admin app). Throws when
  * the generated length is below requiredGeneratedPasswordLength.
  */
 export function loadAdminPasswordUiConfig(env: Env): AdminPasswordUiConfig {
   const e = parseEnv(adminPasswordUiEnvSchema, env, 'admin password UI');
-  const minLength = {
-    admin: loadAdminPasswordPolicy(env).minLength,
-    photographer: loadPhotographerPasswordPolicy(env).minLength,
-  };
+  const temporary = loadTemporaryPasswordPolicy(env).minLength;
+  const minLength = { admin: temporary, photographer: temporary };
   const required = requiredGeneratedPasswordLength(minLength);
   if (e.ADMIN_GENERATED_PASSWORD_LENGTH < required) {
     throw new Error(

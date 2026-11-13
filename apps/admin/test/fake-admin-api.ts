@@ -81,8 +81,8 @@ export class FakeAdminApi {
   users: AdminUser[] = [];
   payments: AdminCashPayment[] = [];
   pageSize = 50;
-  /** Each pool's minimum (ADMIN_PASSWORD_MIN_LENGTH, PHOTOGRAPHER_PASSWORD_MIN_LENGTH). */
-  minLength: Record<AccountRole, number> = { admin: 14, photographer: 10 };
+  /** TEMPORARY_PASSWORD_MIN_LENGTH, the only rule for admin-set passwords (ADR 0015). */
+  minLength: Record<AccountRole, number> = { admin: 4, photographer: 4 };
   /** Fail the next calls of a route with this error instead (consumed in order). */
   readonly failures = new Map<RouteContract, Fail[]>();
   private readonly idempotency = new Map<string, { body: string; payment: AdminCashPayment }>();

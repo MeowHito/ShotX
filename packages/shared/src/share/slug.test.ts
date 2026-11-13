@@ -14,6 +14,7 @@ import {
   sharePublicUrl,
   shareRefOf,
   shareRefPath,
+  isReservedShareSlug,
   shareSlugCandidate,
   shareSlugSchema,
   shareSlugSourceName,
@@ -238,24 +239,34 @@ describe('paths and URLs', () => {
   it('links by slug when there is one, by token otherwise', () => {
     expect(shareRefOf({ slug: 'bangkok-run', token: TOKEN })).toBe('bangkok-run');
     expect(shareRefOf({ slug: null, token: TOKEN })).toBe(TOKEN);
-    expect(sharePublicPath({ slug: null, token: TOKEN })).toBe(`/s/${TOKEN}`);
+    expect(sharePublicPath({ slug: null, token: TOKEN })).toBe(`/${TOKEN}`);
     expect(sharePublicPath({ slug: 'งาน-2026', token: TOKEN })).toBe(
-      `/s/${encodeURIComponent('งาน-2026')}`,
+      `/${encodeURIComponent('งาน-2026')}`,
     );
     expect(sharePublicUrl('https://snap.example.com/', { slug: 'bangkok-run', token: TOKEN })).toBe(
-      'https://snap.example.com/s/bangkok-run',
+      'https://snap.example.com/bangkok-run',
     );
+  });
+
+  it('keeps a reserved slug under /s/ and never generates one (ADR 0015)', () => {
+    for (const slug of ['studio', 'login', 's', 'api', 'pricing']) {
+      expect(isReservedShareSlug(slug)).toBe(true);
+      expect(sharePublicPath({ slug, token: TOKEN })).toBe(`/s/${slug}`);
+      expect(shareSlugCandidate(slug, 0)).toMatch(new RegExp(`^${slug}-[0-9a-z]{6}$`));
+    }
+    expect(isReservedShareSlug('bangkok-run')).toBe(false);
+    expect(shareSlugCandidate('bangkok-run', 0)).toBe('bangkok-run');
   });
 
   it('round-trips an encoded path through parseShareRef', () => {
     const slug = 'รับปริญญา-2026';
-    const ref = sharePublicPath({ slug, token: TOKEN }).slice('/s/'.length);
+    const ref = sharePublicPath({ slug, token: TOKEN }).slice('/'.length);
     expect(parseShareRef(ref)).toEqual({ kind: 'slug', slug });
   });
 
   it('builds the unlinked delete-my-face path and refuses non-refs', () => {
-    expect(shareFaceDeletionPagePath('bangkok-run')).toBe('/s/bangkok-run/delete-my-face');
-    expect(shareFaceDeletionPagePath(TOKEN)).toBe(`/s/${TOKEN}/delete-my-face`);
+    expect(shareFaceDeletionPagePath('bangkok-run')).toBe('/bangkok-run/delete-my-face');
+    expect(shareFaceDeletionPagePath(TOKEN)).toBe(`/${TOKEN}/delete-my-face`);
     expect(() => shareRefPath('../x')).toThrow(RangeError);
     expect(() => shareRefPath('Bangkok')).toThrow(RangeError);
   });

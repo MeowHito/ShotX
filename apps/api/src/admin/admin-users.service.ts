@@ -10,10 +10,11 @@ import {
   isPasswordAccountSubject,
   type ListAdminUsersResponse,
   passwordAccountSubject,
+  temporaryPasswordViolation,
 } from '@shotx/shared';
 import { and, desc, eq, inArray, or, type SQL, sql } from 'drizzle-orm';
 import { hashPassword } from '../auth/password';
-import { assertPasswordPolicy } from '../auth/password-policy';
+import { passwordTooWeak } from '../auth/password-policy';
 import { revokeUserSessions } from '../auth/sessions';
 import type { ApiConfig } from '../config';
 import { type Db, isUniqueViolation, type Queryable, type Tx } from '../db/db';
@@ -120,18 +121,23 @@ export class AdminUsersService {
   ) {}
 
   /**
-   * The pool's minimum password length. Password accounts need the API's own sign-in
-   * (AUTH_PROVIDER=shotx or local; for admins also the admins pool): otherwise CONFLICT, since an
-   * account created there could never sign in.
+   * PASSWORD_TOO_WEAK (`too_short`) unless an admin-set password has TEMPORARY_PASSWORD_MIN_LENGTH
+   * code points. Only the length counts (ADR 0015): the password is temporary, and the first
+   * sign-in must replace it under the pool's full policy. Password accounts need the API's own
+   * sign-in (AUTH_PROVIDER=shotx or local; for admins also the admins pool): otherwise CONFLICT,
+   * since an account created there could never sign in.
    */
-  private minLength(accountRole: AccountRole): number {
+  private assertTemporaryPassword(accountRole: AccountRole, password: string): void {
     const auth = this.config.shotxAuth;
     if (auth === null) {
       throw new ApiError('CONFLICT', 'Password accounts need AUTH_PROVIDER=shotx');
     }
-    if (accountRole === 'photographer') return auth.photographer.passwordMinLength;
-    if (auth.admin === null) throw new ApiError('CONFLICT', 'Admin sign-in is not configured');
-    return auth.admin.passwordMinLength;
+    if (accountRole === 'admin' && auth.admin === null) {
+      throw new ApiError('CONFLICT', 'Admin sign-in is not configured');
+    }
+    const minLength = auth.temporaryPasswordMinLength;
+    const violation = temporaryPasswordViolation(password, minLength);
+    if (violation !== null) throw passwordTooWeak(violation, minLength);
   }
 
   private async find(q: Queryable, id: string): Promise<AdminUser | null> {
@@ -241,16 +247,13 @@ export class AdminUsersService {
    * `must_change_password` and no TOTP (enrolled at first sign-in). Photographer: users pool,
    * `password:<id>`, user_password_credentials (`must_change_password`) and a storage_usage row.
    * `created_by_id` is the acting admin. EMAIL_TAKEN for an email another password account has
-   * (either pool, ASCII case ignored); PASSWORD_TOO_WEAK for the pool's policy.
+   * (either pool, ASCII case ignored); PASSWORD_TOO_WEAK below TEMPORARY_PASSWORD_MIN_LENGTH.
    */
   async create(
     actorId: string,
     body: { email: string; name: string; role: AccountRole; password: string },
   ): Promise<AdminUser> {
-    await assertPasswordPolicy(body.password, {
-      minLength: this.minLength(body.role),
-      email: body.email,
-    });
+    this.assertTemporaryPassword(body.role, body.password);
     const passwordHash = await hashPassword(body.password, this.config.password.argon2id);
     const now = this.clock.now();
     try {
@@ -390,10 +393,7 @@ export class AdminUsersService {
     if (!existing.passwordAccount) {
       throw new ApiError('CONFLICT', 'This account signs in with LINE or Google');
     }
-    await assertPasswordPolicy(password, {
-      minLength: this.minLength(existing.role),
-      email: existing.email,
-    });
+    this.assertTemporaryPassword(existing.role, password);
     const passwordHash = await hashPassword(password, this.config.password.argon2id);
     const now = this.clock.now();
     return this.db.transaction(async (tx) => {

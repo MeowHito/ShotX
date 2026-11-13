@@ -57,13 +57,13 @@ export function generateShareToken(randomBytes: RandomBytes = cryptoRandomBytes)
   return generateOpaqueToken(randomBytes);
 }
 
-/** Path of the share page: `/s/{token}`. */
+/** Path of the share page: `/{token}` (ADR 0015; old `/s/{token}` links redirect there). */
 export function sharePagePath(token: string): string {
   if (!isShareToken(token)) throw new RangeError('Not a share token');
-  return `/s/${token}`;
+  return `/${token}`;
 }
 
-/** Absolute share link, e.g. `https://example.com/s/{token}`. `publicBaseUrl` is AppConfig's. */
+/** Absolute share link, e.g. `https://example.com/{token}`. `publicBaseUrl` is AppConfig's. */
 export function shareUrl(publicBaseUrl: string, token: string): string {
   return `${publicBaseUrl.replace(/\/+$/, '')}${sharePagePath(token)}`;
 }

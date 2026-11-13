@@ -734,6 +734,7 @@ export const zhStudio: StudioMessages = {
     none: '此项目还没有链接',
     newLink: '创建新链接',
     created: '链接已创建，复制后即可分享。',
+    createdCopied: '链接已创建并复制，直接粘贴即可分享。',
   },
   shareForm: {
     mode: '分享方式',

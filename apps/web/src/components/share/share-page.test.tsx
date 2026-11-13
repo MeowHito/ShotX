@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { LATEST_CONSENT_POLICY_VERSION, ME_ROUTES, PUBLIC_SHARE_ROUTES } from '@shotx/shared';
+import { ME_ROUTES, PUBLIC_SHARE_ROUTES } from '@shotx/shared';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -66,7 +66,7 @@ beforeAll(() => {
 });
 
 describe('share page: states', () => {
-  it('layout (ADR 0011): top bar, centered title over a 16:3 cover, no photographer or count', async () => {
+  it('layout (ADR 0011, 0015): top bar, centered title, no cover, photographer or count', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = fake.addPublicShare({ itemCount: 3, faceSearchAvailable: true });
     renderSharePage(fake, share.token);
@@ -78,16 +78,14 @@ describe('share page: states', () => {
     expect(
       within(nav).getByRole('button', { name: new RegExp(th.publicNav.language) }),
     ).toHaveAttribute('aria-haspopup', 'menu');
-    const cover = screen.getByTestId('share-cover');
-    expect(cover).toHaveClass('aspect-[16/3]');
-    expect(cover.querySelector('img')).toHaveAttribute('src', share.items[0]?.previewUrl);
-    expect(cover.querySelector('img')).toHaveClass('object-cover');
+    expect(screen.queryByTestId('share-cover')).toBeNull();
     expect(screen.queryByText(/ถ่ายโดย/)).not.toBeInTheDocument();
     expect(screen.queryByText(/3 รูป/)).not.toBeInTheDocument();
 
-    // The sticky face-search button, safe-area aware at the bottom.
+    // The sticky face-search button, safe-area aware at the bottom, raised above a macOS Dock on
+    // wider screens (ADR 0015).
     const scan = screen.getByRole('button', { name: th.share.scan });
-    expect(scan.parentElement).toHaveClass('fixed', 'bottom-0');
+    expect(scan.parentElement).toHaveClass('fixed', 'bottom-0', 'sm:pb-24');
     expect(scan.parentElement?.className).toContain('safe-area-inset-bottom');
 
     // No link to "delete my face" anywhere (ADR 0011 decision 2), not even the studio's copy action.
@@ -104,15 +102,6 @@ describe('share page: states', () => {
     }
   });
 
-  it('uses the folder\u2019s chosen cover', async () => {
-    const fake = new FakeApi();
-    const share = fake.addPublicShare({ itemCount: 3 });
-    share.coverItemId = share.items[2]?.id ?? null;
-    renderSharePage(fake, share.token);
-    const cover = await screen.findByTestId('share-cover');
-    expect(cover.querySelector('img')).toHaveAttribute('src', share.items[2]?.previewUrl);
-  });
-
   it('opens by slug, then makes every other call with the token and shows the slug URL', async () => {
     const fake = new FakeApi();
     const share = fake.addPublicShare({ title: 'งานวิ่ง กรุงเทพ 2026', itemCount: 2 });
@@ -126,7 +115,7 @@ describe('share page: states', () => {
     expect(fake.refKinds.slice(1).every((k) => k === 'token')).toBe(true);
     // The canonical (slug) URL replaces an old token URL, without a reload.
     await waitFor(() =>
-      expect(window.location.pathname).toBe(`/s/${encodeURIComponent(share.slug ?? '')}`),
+      expect(window.location.pathname).toBe(`/${encodeURIComponent(share.slug ?? '')}`),
     );
     window.history.replaceState(null, '', '/');
   });
@@ -238,7 +227,7 @@ describe('share page: states', () => {
     renderSharePage(fake, share.token, { signedIn: false });
     const line = await screen.findByRole('link', { name: th.share.login.line });
     // Back to the canonical (slug) page after signing in.
-    const next = encodeURIComponent(`/s/${share.slug ?? ''}`);
+    const next = encodeURIComponent(`/${share.slug ?? ''}`);
     expect(line).toHaveAttribute('href', `/auth/login?provider=line&next=${next}`);
     expect(screen.getByRole('link', { name: th.share.login.google })).toHaveAttribute(
       'href',
@@ -274,7 +263,7 @@ describe('share page: states', () => {
     renderSharePage(fake, share.token, { viewerLogin: { oidc: [], devLogin: true } });
     expect(await screen.findByRole('link', { name: th.share.login.devLogin })).toHaveAttribute(
       'href',
-      `/login?next=${encodeURIComponent(`/s/${share.slug ?? ''}`)}`,
+      `/login?next=${encodeURIComponent(`/${share.slug ?? ''}`)}`,
     );
   });
 
@@ -328,12 +317,6 @@ describe('lightbox (ADR 0011, owner feedback 2026-11-12)', () => {
 
   async function scanAndShowResults() {
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    await userEvent.click(
-      screen.getByRole('checkbox', {
-        name: th.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION].checkbox,
-      }),
-    );
-    await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
     const take = await screen.findByRole('button', { name: th.capture.takePhoto });
     await waitFor(() => expect(take).toBeEnabled());
     await userEvent.click(take);

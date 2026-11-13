@@ -93,6 +93,21 @@ function isSingleRun(codePoints: number[]): boolean {
 }
 
 /**
+ * The rule a temporary password (set by an admin on create or reset, ADR 0015) breaks, or null:
+ * only `too_short` (TEMPORARY_PASSWORD_MIN_LENGTH code points). Anything else goes, since the first
+ * sign-in must replace it with a password that passes passwordPolicyViolation.
+ */
+export function temporaryPasswordViolation(
+  password: string,
+  minLength: number,
+): Extract<PasswordPolicyReason, 'too_short'> | null {
+  if (!Number.isInteger(minLength) || minLength < 1) {
+    throw new RangeError('minLength must be a positive integer');
+  }
+  return [...password].length < minLength ? 'too_short' : null;
+}
+
+/**
  * The first rule `password` breaks among `too_short`, `too_simple` and `contains_email`, or null.
  * Pure: the API also checks `common` and `same_as_current`.
  */

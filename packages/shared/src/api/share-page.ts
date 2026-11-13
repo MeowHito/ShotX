@@ -24,7 +24,7 @@ import { signedDownloadSchema } from './drive';
  *
  * Refs (ADR 0011): the `:token` path parameter carries a ref, the share's slug or its token
  * (parseShareRef; the parameter keeps its name so existing callers and controllers don't change).
- * The page URL is `/s/{slug}` (old `/s/{token}` links keep working). The unlock cookie stays
+ * The page URL is `/{slug}` (ADR 0015; old `/s/{ref}` links redirect). The unlock cookie stays
  * scoped to `/api/s/{token}`, so web resolves the page's ref once with `GET /s/:ref` and makes
  * every other call with `meta.token`: a password share unlocked through a slug page then works,
  * and cookie paths never contain percent-encoded Thai. Resolution by slug is rate-limited per IP
@@ -109,10 +109,10 @@ export const shareMetaResponseSchema = z.object({
    */
   slug: shareSlugSchema.nullable(),
   /**
-   * The canonical page path, percent-encoded: sharePublicPath (`/s/{slug}`, or `/s/{token}`
+   * The canonical page path, percent-encoded: sharePublicPath (`/{slug}`, or `/{token}`
    * without a slug). Web may `replace` a token URL with it and uses it as the canonical URL.
    */
-  path: z.string().startsWith('/s/'),
+  path: z.string().startsWith('/'),
   targetType: z.enum(SHARE_TARGET_TYPES),
   mode: z.enum(SHARE_MODES),
   allowDownload: z.boolean(),

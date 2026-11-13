@@ -1,5 +1,6 @@
 'use client';
 
+import { shareRefPath } from '@shotx/shared';
 import { Alert, Button } from '@shotx/ui';
 import { useTranslations } from 'next-intl';
 import { PublicTopBar } from '@/components/site/public-top-bar';
@@ -47,7 +48,7 @@ function FaceDeletion({ token, onClose }: { token: string; onClose?: () => void 
   const t = useTranslations();
   const describe = useErrorMessage();
   const info = useFaceDeletionInfo(token);
-  const close = onClose ?? (() => window.location.assign(`/s/${encodeURIComponent(token)}`));
+  const close = onClose ?? (() => window.location.assign(shareRefPath(token)));
 
   if (info.isPending) {
     return (

@@ -197,6 +197,15 @@ const photographerPasswordPolicyEnvSchema = z.object({
   PHOTOGRAPHER_PASSWORD_MIN_LENGTH: int(8, 128).default(10),
 });
 
+const temporaryPasswordPolicyEnvSchema = z.object({
+  /**
+   * Shortest temporary password an admin sets when creating an account or resetting its password
+   * (ADR 0015). Only the length is checked (temporaryPasswordViolation): the first sign-in must
+   * replace it, and the new password follows the pool's full policy.
+   */
+  TEMPORARY_PASSWORD_MIN_LENGTH: int(4, 128).default(4),
+});
+
 /** A pool's password length policy (see passwordPolicyViolation for the other rules). */
 export interface PasswordLengthPolicy {
   minLength: number;
@@ -210,6 +219,12 @@ export interface PasswordLengthPolicy {
 export function loadPhotographerPasswordPolicy(env: Env): PasswordLengthPolicy {
   const e = parseEnv(photographerPasswordPolicyEnvSchema, env, 'photographer password policy');
   return { minLength: e.PHOTOGRAPHER_PASSWORD_MIN_LENGTH };
+}
+
+/** Reads TEMPORARY_PASSWORD_MIN_LENGTH (4-128, default 4), secret-free (ADR 0015). */
+export function loadTemporaryPasswordPolicy(env: Env): PasswordLengthPolicy {
+  const e = parseEnv(temporaryPasswordPolicyEnvSchema, env, 'temporary password policy');
+  return { minLength: e.TEMPORARY_PASSWORD_MIN_LENGTH };
 }
 
 /** Reads ADMIN_PASSWORD_MIN_LENGTH (12-128, default 14), secret-free like the photographer one. */
@@ -578,6 +593,8 @@ export interface ShotxAuthConfig {
   devLogin: { pool: 'users' } | null;
   /** Null when the admins pool is off. */
   admin: AdminSignInConfig | null;
+  /** TEMPORARY_PASSWORD_MIN_LENGTH: admin-set passwords (create, reset; ADR 0015). */
+  temporaryPasswordMinLength: number;
   /** Always on with `shotx` and `local` (users pool). */
   photographer: PhotographerSignInConfig;
 }
@@ -618,6 +635,7 @@ export function loadShotxAuthConfig(env: Env): ShotxAuthConfig {
   // Validated whether or not the admins pool is on, as before.
   const adminPasswordPolicy = loadAdminPasswordPolicy(env);
   const photographerPasswordPolicy = loadPhotographerPasswordPolicy(env);
+  const temporaryPasswordPolicy = loadTemporaryPasswordPolicy(env);
 
   const usersKey = e.AUTH_USERS_SIGNING_KEY ?? fail('AUTH_USERS_SIGNING_KEY is required');
   const adminsOn =
@@ -797,6 +815,7 @@ export function loadShotxAuthConfig(env: Env): ShotxAuthConfig {
       },
       passwordChangeSessionTtlSeconds: e.PHOTOGRAPHER_PASSWORD_CHANGE_SESSION_TTL_SECONDS,
     },
+    temporaryPasswordMinLength: temporaryPasswordPolicy.minLength,
   };
 }
 

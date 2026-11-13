@@ -10,7 +10,7 @@ import { MESSAGES, TIME_ZONE } from '@/i18n/config';
 import { reloadPage } from '@/lib/browser/navigate';
 import { localeCookie } from '@/lib/i18n/locale-cookie';
 import { PublicTopBar } from './public-top-bar';
-import { DRIVE_ROOT, LATEST_CONSENT_POLICY_VERSION } from '@shotx/shared';
+import { DRIVE_ROOT } from '@shotx/shared';
 import { within } from '@testing-library/react';
 import { apiClientFor, renderWithProviders } from '../../../test/render';
 import { DriveBrowser } from '@/components/drive/drive-browser';
@@ -150,19 +150,11 @@ describe('language switcher (ADR 0011)', () => {
     await expect(config()).resolves.toMatchObject({ locale: 'th', messages: MESSAGES.th });
   });
 
-  it('shows the share page and the consent in English, and records the locale with the consent', async () => {
+  it('records the locale with the consent given on tap (ADR 0015)', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = fake.addPublicShare({ faceSearchAvailable: true });
     renderSharePage(fake, share.token, { locale: 'en', nav: fakeNavigator().nav });
     await userEvent.click(await screen.findByRole('button', { name: 'Find me by face' }));
-    expect(screen.getByRole('heading', { name: 'Find your photos by face' })).toBeInTheDocument();
-    expect(screen.getByText(MESSAGES.en.consent.translationNote)).toBeInTheDocument();
-    await userEvent.click(
-      screen.getByRole('checkbox', {
-        name: 'I agree to the use of my face photo to find my photos',
-      }),
-    );
-    await userEvent.click(screen.getByRole('button', { name: 'Accept and start' }));
     expect(await screen.findByRole('button', { name: 'Take photo' })).toBeInTheDocument();
     expect(share.consentLocales).toEqual(['en']);
   });
@@ -198,9 +190,6 @@ describe('language switcher (ADR 0011)', () => {
 
       await userEvent.click(screen.getByRole('button', { name: m.share.scan }));
       noThai();
-      const policy = m.consent.policies.face_search[LATEST_CONSENT_POLICY_VERSION];
-      await userEvent.click(screen.getByRole('checkbox', { name: policy.checkbox }));
-      await userEvent.click(screen.getByRole('button', { name: m.consent.accept }));
 
       // A refused shot: a short statement in the UI language.
       scenario.faces = [];

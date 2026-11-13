@@ -350,17 +350,12 @@ for (const backend of DATABASE_BACKENDS) {
         ).rejects.toThrow(/already exists/);
       });
 
-      it('applies the pool password policy (PASSWORD_TOO_WEAK with reason and minLength)', async () => {
-        const address = email('policy');
-        const cases = [
-          ['photographer', 'short-1', 'too_short', 10],
-          ['photographer', 'aaaaaaaaaaaa', 'too_simple', 10],
-          ['photographer', '1234567890', 'too_simple', 10],
-          ['photographer', 'Password1234', 'common', 10],
-          ['photographer', `${address.split('@')[0] ?? ''}-xyz`, 'contains_email', 10],
-          ['admin', 'fake-pw-12345', 'too_short', 14],
-        ] as const;
-        for (const [role, password, reason, minLength] of cases) {
+      it('takes any temporary password from TEMPORARY_PASSWORD_MIN_LENGTH up (ADR 0015)', async () => {
+        for (const [role, password] of [
+          ['photographer', '123'],
+          ['admin', 'abc'],
+        ] as const) {
+          const address = email('short');
           const res = await h.admin(boss.token, 'POST', apiPath(A.createUser), {
             email: address,
             name: 'Policy',
@@ -370,10 +365,25 @@ for (const backend of DATABASE_BACKENDS) {
           expect(res.status, password).toBe(422);
           expect(res.body).toMatchObject({
             code: 'PASSWORD_TOO_WEAK',
-            details: { reason, minLength },
+            details: { reason: 'too_short', minLength: 4 },
           });
+          expect(await api.db.select().from(users).where(eq(users.email, address))).toHaveLength(0);
         }
-        expect(await api.db.select().from(users).where(eq(users.email, address))).toHaveLength(0);
+        // Simple, common or containing the email: fine for a temporary password.
+        for (const [role, password] of [
+          ['photographer', '1111'],
+          ['photographer', 'Password1234'],
+          ['admin', '1234'],
+        ] as const) {
+          const address = email('simple');
+          const res = await h.admin(boss.token, 'POST', apiPath(A.createUser), {
+            email: address,
+            name: 'Simple',
+            role,
+            password,
+          });
+          expect(res.status, password).toBe(201);
+        }
       });
 
       it('lists and gets accounts (never viewers), with filters and cursor pages', async () => {

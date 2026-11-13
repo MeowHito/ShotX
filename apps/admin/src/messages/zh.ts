@@ -137,7 +137,7 @@ export const zh: TranslatedMessages = {
   passwordField: {
     label: '临时密码',
     generate: '随机生成密码',
-    hint: '至少 {minLength, number} 个字符。点击“随机生成密码”可获得又长又安全的密码。',
+    hint: '任意密码，至少 {minLength, number} 个字符。账户所有者首次登录时必须更改密码。',
     required: '请输入或随机生成密码',
   },
   oneTimePassword: {

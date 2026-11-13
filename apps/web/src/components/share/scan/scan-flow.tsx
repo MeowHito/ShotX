@@ -5,18 +5,24 @@ import {
   type ConsentPolicyVersion,
   ErrorCode,
   type FaceSearchResponse,
+  isSupportedLocale,
   rateLimitedDetailsSchema,
 } from '@shotx/shared';
 import { Alert, Button, Progress } from '@shotx/ui';
 import { XIcon } from 'lucide-react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, isApiError } from '@/lib/api/errors';
 import type { SelfieLimits } from '@/lib/face/config';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import type { SelfieIssue } from '@/lib/face/quality-gate';
 import { processSelfie, type SelfieSource } from '@/lib/face/selfie';
-import { useFaceDeletion, useFaceSearch, useInvalidateShare } from '@/lib/share/queries';
+import {
+  useFaceDeletion,
+  useFaceSearch,
+  useGiveConsent,
+  useInvalidateShare,
+} from '@/lib/share/queries';
 import { CaptchaChallenge, type CaptchaFailure } from './captcha-challenge';
 import { ConsentScreen, knownPolicyVersion } from './consent-screen';
 import { useFaceTools } from './face-tools';
@@ -46,7 +52,10 @@ export interface ScanConsent {
 }
 
 /**
- * Consent first (unchanged rule), then the camera (ADR 0011): one selfie in a round frame, checked
+ * Consent first (unchanged rule), then the camera (ADR 0011). Face search records the consent
+ * itself as soon as the sheet opens (ADR 0015: the organiser tells attendees before the event, and
+ * tapping "search by face" is the act of consent), so the camera comes up with no text to read;
+ * "delete my face" keeps its consent screen: one selfie in a round frame, checked
  * by the client-side quality gate without upfront tips (a failed check says why and the camera
  * comes back), and for face search the search starts as soon as the photo passes: no extra
  * angles, no second button, a progress bar while it runs. "Delete my face" ("delete", reached
@@ -250,7 +259,20 @@ export function ScanFlow({
   const title = purpose === 'search' ? t('capture.title') : t('faceDeletion.title');
 
   let body;
-  if (consentNeeded && consentVersion !== null) {
+  if (consentNeeded && consentVersion !== null && purpose === 'search') {
+    body = (
+      <AutoConsent
+        key={consentVersion}
+        token={token}
+        policyVersion={consentVersion}
+        onAccepted={(version) => {
+          setConsentVersion(version);
+          setConsentNeeded(false);
+          setError(null);
+        }}
+      />
+    );
+  } else if (consentNeeded && consentVersion !== null) {
     body = (
       <div className="space-y-4">
         {error !== null ? <Alert variant="warning">{error}</Alert> : null}
@@ -347,7 +369,9 @@ export function ScanFlow({
           startWith={startWith}
           busy={busy}
         />
-        <p className="text-center text-xs text-muted-foreground">{t('capture.notStored')}</p>
+        {purpose === 'delete' ? (
+          <p className="text-center text-xs text-muted-foreground">{t('capture.notStored')}</p>
+        ) : null}
       </div>
     );
   }
@@ -365,6 +389,79 @@ export function ScanFlow({
       </div>
       {body}
     </section>
+  );
+}
+
+/**
+ * Face search consent without a screen (ADR 0015): posts the face_search consent of
+ * `policyVersion` once, as the person tapped the scan button, then hands over to the camera. A
+ * newer version (CONSENT_VERSION_MISMATCH) is posted instead; any other error shows a retry.
+ */
+function AutoConsent({
+  token,
+  policyVersion,
+  onAccepted,
+}: {
+  token: string;
+  policyVersion: ConsentPolicyVersion;
+  onAccepted: (version: ConsentPolicyVersion) => void;
+}) {
+  const t = useTranslations();
+  const describe = useErrorMessage();
+  const locale = useLocale();
+  const giveConsent = useGiveConsent(
+    token,
+    'face_search',
+    isSupportedLocale(locale) ? locale : 'th',
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const onAcceptedRef = useRef(onAccepted);
+  useEffect(() => {
+    onAcceptedRef.current = onAccepted;
+  }, [onAccepted]);
+  const { mutateAsync } = giveConsent;
+
+  useEffect(() => {
+    let live = true;
+    async function post(version: ConsentPolicyVersion, retried: boolean): Promise<void> {
+      try {
+        await mutateAsync(version);
+        if (live) onAcceptedRef.current(version);
+      } catch (err) {
+        if (!live) return;
+        const current = isApiError(err, ErrorCode.CONSENT_VERSION_MISMATCH)
+          ? knownPolicyVersion(err.details)
+          : null;
+        if (current !== null && !retried) return post(current, true);
+        setError(
+          isApiError(err, ErrorCode.CONSENT_VERSION_MISMATCH) && current === null
+            ? t('errors.client.consentVersionUnknown')
+            : describe(err),
+        );
+      }
+    }
+    void post(policyVersion, false);
+    return () => {
+      live = false;
+    };
+    // `attempt` re-runs the post after an error; t and describe are stable enough per render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [policyVersion, attempt, mutateAsync]);
+
+  if (error === null) return <SearchProgress label={t('common.loading')} />;
+  return (
+    <div className="space-y-3">
+      <Alert variant="destructive">{error}</Alert>
+      <Button
+        onClick={() => {
+          setError(null);
+          setAttempt((a) => a + 1);
+        }}
+      >
+        {t('common.retry')}
+      </Button>
+    </div>
   );
 }
 

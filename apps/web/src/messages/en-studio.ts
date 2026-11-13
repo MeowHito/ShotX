@@ -763,6 +763,7 @@ export const enStudio: StudioMessages = {
     none: 'No links for this item yet',
     newLink: 'Create a new link',
     created: 'Link created. Copy it and share it.',
+    createdCopied: 'Link created and copied. Paste it to share.',
   },
   shareForm: {
     mode: 'Sharing mode',

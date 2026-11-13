@@ -84,8 +84,8 @@ export const ownerShareSchema = z.object({
    * during the deploy of migration 0012 (until the follow-up backfill).
    */
   slug: shareSlugSchema.nullable(),
-  /** sharePublicPath: `/s/{slug}` percent-encoded, or `/s/{token}` without a slug. */
-  path: z.string().startsWith('/s/'),
+  /** sharePublicPath: `/{slug}` percent-encoded, or `/{token}` without a slug (ADR 0015). */
+  path: z.string().startsWith('/'),
   /**
    * Absolute link to copy and share: PUBLIC_BASE_URL + `path` (sharePublicUrl). Changed in ADR
    * 0011: it was the token link (shareUrl), which keeps working.

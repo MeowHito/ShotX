@@ -56,26 +56,6 @@ describe('limits come from share meta, not web env', () => {
     expect(rendered).toEqual([{ width: 640, height: 480 }]);
     expect(toJpeg).toHaveBeenCalledWith(0.7);
   });
-
-  it('states the result TTL from meta in the consent text', async () => {
-    const fake = new FakeApi({ faceSearch: true, resultTtlSeconds: 6 * 3600 });
-    const share = scanShare(fake);
-    renderSharePage(fake, share.token);
-    await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    expect(
-      await screen.findByText(
-        'ผลการค้นหาเก็บไว้ให้ดาวน์โหลดได้ 6 ชั่วโมง หลังการค้นหาครั้งล่าสุด แล้วลบเอง',
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it('states a sub-hour TTL in minutes', async () => {
-    const fake = new FakeApi({ faceSearch: true, resultTtlSeconds: 1800 });
-    const share = scanShare(fake);
-    renderSharePage(fake, share.token);
-    await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    expect(await screen.findByText(/ดาวน์โหลดได้ 30 นาที หลังการค้นหา/)).toBeInTheDocument();
-  });
 });
 
 describe('ขอลบใบหน้าของฉัน', () => {
@@ -154,23 +134,12 @@ describe('ขอลบใบหน้าของฉัน', () => {
   });
 });
 
-describe('CONSENT_VERSION_MISMATCH', () => {
-  it('shows the current text again with the checkbox cleared, then accepts it', async () => {
+describe('CONSENT_VERSION_MISMATCH (consent recorded on tap, ADR 0015)', () => {
+  it('posts the current version from the error details, then opens the camera', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = scanShare(fake, { consentMismatchOnce: true });
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    const checkbox = screen.getByRole('checkbox', { name: searchPolicy.checkbox });
-    await userEvent.click(checkbox);
-    await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
-
-    expect(await screen.findByText(th.errors.codes.CONSENT_VERSION_MISMATCH)).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: searchPolicy.title })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: searchPolicy.checkbox })).not.toBeChecked();
-    expect(share.consented).toBe(false);
-
-    await userEvent.click(screen.getByRole('checkbox', { name: searchPolicy.checkbox }));
-    await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
     expect(await screen.findByRole('button', { name: th.capture.takePhoto })).toBeInTheDocument();
     const posts = fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent);
     expect(posts).toHaveLength(2);
@@ -181,6 +150,7 @@ describe('CONSENT_VERSION_MISMATCH', () => {
       accepted: true,
     });
     expect(share.consented).toBe(true);
+    expect(screen.queryByRole('checkbox', { name: searchPolicy.checkbox })).toBeNull();
   });
 
   it('asks to reload when the current version is newer than this page knows', async () => {
@@ -188,27 +158,21 @@ describe('CONSENT_VERSION_MISMATCH', () => {
     const share = scanShare(fake, { serverPolicyVersion: '2099-01-01' });
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    await userEvent.click(screen.getByRole('checkbox', { name: searchPolicy.checkbox }));
-    await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
     expect(await screen.findByText(th.errors.client.consentVersionUnknown)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: th.consent.accept })).toBeDisabled();
+    expect(screen.getByRole('button', { name: th.common.retry })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: th.capture.takePhoto })).toBeNull();
     expect(share.consented).toBe(false);
   });
 
-  it('a scan answered with a mismatch brings the consent screen back', async () => {
+  it('a scan answered with a mismatch records the current consent and brings the camera back', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = scanShare(fake, { consented: true, searchConsentStale: true });
     renderSharePage(fake, share.token);
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
     await takeLiveSelfie();
-    expect(
-      await screen.findByRole('checkbox', { name: searchPolicy.checkbox }),
-    ).toBeInTheDocument();
-    expect(screen.getByText(th.errors.codes.CONSENT_VERSION_MISMATCH)).toBeInTheDocument();
-    // The selfie was dropped; accepting starts the capture again.
-    await userEvent.click(screen.getByRole('checkbox', { name: searchPolicy.checkbox }));
-    await userEvent.click(screen.getByRole('button', { name: th.consent.accept }));
     await waitFor(() => expect(share.consented).toBe(true));
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)).toHaveLength(1);
+    // The selfie was dropped; the camera comes back for another photo.
     expect(await screen.findByRole('button', { name: th.capture.takePhoto })).toBeInTheDocument();
   });
 });

@@ -2,27 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { loadAdminConfig, loadAdminUiConfig } from './config';
 
 describe('admin UI config', () => {
-  it('reads both pools’ minimum lengths with the shared policy loaders', () => {
+  it('reads the temporary password minimum for both roles (ADR 0015)', () => {
     expect(loadAdminUiConfig({})).toEqual({
-      passwords: { generatedLength: 20, minLength: { admin: 14, photographer: 10 } },
+      passwords: { generatedLength: 20, minLength: { admin: 4, photographer: 4 } },
     });
     expect(
       loadAdminUiConfig({
         ADMIN_GENERATED_PASSWORD_LENGTH: '32',
+        TEMPORARY_PASSWORD_MIN_LENGTH: '8',
+        // The pools' own minimums apply at the first sign-in, not here.
         ADMIN_PASSWORD_MIN_LENGTH: '24',
-        PHOTOGRAPHER_PASSWORD_MIN_LENGTH: '12',
       }).passwords,
-    ).toEqual({ generatedLength: 32, minLength: { admin: 24, photographer: 12 } });
+    ).toEqual({ generatedLength: 32, minLength: { admin: 8, photographer: 8 } });
   });
 
-  it('refuses a generated length below either minimum', () => {
-    expect(() =>
-      loadAdminUiConfig({ ADMIN_GENERATED_PASSWORD_LENGTH: '20', ADMIN_PASSWORD_MIN_LENGTH: '24' }),
-    ).toThrow(/at least 24/);
+  it('refuses a generated length below the minimum', () => {
     expect(() =>
       loadAdminUiConfig({
         ADMIN_GENERATED_PASSWORD_LENGTH: '20',
-        PHOTOGRAPHER_PASSWORD_MIN_LENGTH: '30',
+        TEMPORARY_PASSWORD_MIN_LENGTH: '30',
       }),
     ).toThrow(/at least 30/);
     expect(() => loadAdminUiConfig({ ADMIN_GENERATED_PASSWORD_LENGTH: '15' })).toThrow();

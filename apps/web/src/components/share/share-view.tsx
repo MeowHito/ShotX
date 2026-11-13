@@ -20,13 +20,7 @@ import { isApiError } from '@/lib/api/errors';
 import type { ViewerLoginOptions } from '@/lib/auth/viewer-login';
 import type { ClientFaceConfig, ClientShareConfig } from '@/lib/face/config';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
-import {
-  shareKeys,
-  useInvalidateShare,
-  useShareItems,
-  useShareMeta,
-  useWithdrawConsent,
-} from '@/lib/share/queries';
+import { shareKeys, useInvalidateShare, useShareItems, useShareMeta } from '@/lib/share/queries';
 import { ShareApiProvider, useShareApi } from '@/lib/share/share-api';
 import { DownloadBar, useSingleDownload } from './download-bar';
 import { JustifiedGrid } from './justified-grid';
@@ -57,10 +51,10 @@ export interface SharePageProps {
 }
 
 /**
- * The public share page `/s/[ref]` (client part; see app/s/[ref]/page.tsx for SSR). ADR 0011
- * layout, mobile first: the top bar (home, language), the centered event title over a 16:3 cover,
+ * The public share page `/[ref]` (client part; see app/[ref]/page.tsx for SSR). ADR 0011
+ * layout, mobile first: the top bar (home, language), the centered event title (no cover, ADR 0015),
  * the photos in their own aspect ratios, and a sticky face-search button (share.scan) at the bottom.
- * With a design (ADR 0013, meta.design) the designed card replaces the title and cover as a
+ * With a design (ADR 0013, meta.design) the designed card replaces the title as a
  * full-screen first screen under the top bar.
  */
 export function SharePage({ testing, ...props }: SharePageProps) {
@@ -70,7 +64,7 @@ export function SharePage({ testing, ...props }: SharePageProps) {
       <ShareRuntimeContext.Provider value={runtime}>
         <FaceToolsProvider config={props.faceConfig} overrides={testing?.faceTools}>
           <PublicTopBar />
-          <main className="pb-36">
+          <main className="pb-36 sm:pb-48">
             <ShareGate {...props} />
           </main>
         </FaceToolsProvider>
@@ -181,8 +175,8 @@ function ShareGate({ shareRef, initialMeta, shareConfig, viewerLogin }: SharePag
 }
 
 /**
- * The event's title, centered and prominent, over the cover cropped to 16:3 (the folder's chosen
- * cover, else its first photo). No photographer name or photo count (ADR 0011).
+ * The event's title, centered and prominent. No cover image (owner, ADR 0015), no photographer
+ * name or photo count (ADR 0011). The cover still makes the link's OG image.
  */
 function ShareHeader({ meta }: { meta: ShareMetaResponse }) {
   const ts = useTranslations('share');
@@ -190,7 +184,7 @@ function ShareHeader({ meta }: { meta: ShareMetaResponse }) {
   const details = meta.details;
   if (details === null) return null;
   return (
-    <header className="mb-5 space-y-4">
+    <header className="mb-5">
       <div className="space-y-1 text-center">
         <h1 className="text-[clamp(1.6rem,5vw,3rem)] leading-tight font-bold break-words">
           {details.title}
@@ -203,21 +197,6 @@ function ShareHeader({ meta }: { meta: ShareMetaResponse }) {
           </p>
         ) : null}
       </div>
-      {details.cover !== null ? (
-        <div
-          className="aspect-[16/3] w-full overflow-hidden rounded-xl bg-muted sm:rounded-2xl"
-          data-testid="share-cover"
-        >
-          {/* The cover's signed preview URL (CDN); the 16:3 crop is display only. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={details.cover.previewUrl}
-            alt=""
-            className="size-full object-cover"
-            decoding="async"
-          />
-        </div>
-      ) : null}
     </header>
   );
 }
@@ -308,7 +287,6 @@ function ShareContent({
   const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const [selected, setSelected] = useState<ReadonlyMap<string, ShareItem>>(new Map());
   const resultsRef = useRef<HTMLDivElement>(null);
-  const withdraw = useWithdrawConsent(token);
   const single = useSingleDownload(token);
 
   const onLightboxDownload = useCallback(
@@ -342,19 +320,7 @@ function ShareContent({
     />
   );
 
-  async function withdrawConsent() {
-    try {
-      await withdraw.mutateAsync();
-      setResults(null);
-      setScanning(null);
-      setSelected(new Map());
-      setNotice({ kind: 'info', text: t('share.withdrawn') });
-    } catch (err) {
-      setNotice({ kind: 'error', text: describe(err) });
-    }
-  }
-
-  // ADR 0013: a design replaces the title and cover until a scan, like the header (ADR 0012).
+  // ADR 0013: a design replaces the title until a scan, like the header (ADR 0012).
   const design = meta.design;
   const showCard = design !== null && results === null;
   const cardButtonsOnScreen = useOnScreen(showCard ? cardButtons : null);
@@ -449,21 +415,8 @@ function ShareContent({
             />
           )}
 
-          {meta.faceSearch.consented ? (
-            <footer className="flex justify-center border-t pt-4 text-sm">
-              <Button
-                variant="link"
-                className="h-auto p-0 text-muted-foreground"
-                onClick={() => void withdrawConsent()}
-                disabled={withdraw.isPending}
-              >
-                {t('share.withdraw')}
-              </Button>
-            </footer>
-          ) : null}
-
           {showFaceButton ? (
-            <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center px-4 pt-6 pb-[max(1rem,env(safe-area-inset-bottom))]">
+            <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center px-4 pt-6 pb-[max(1rem,env(safe-area-inset-bottom))] sm:pb-24">
               <Button
                 size="lg"
                 className="pointer-events-auto h-14 w-full max-w-md rounded-full text-base shadow-float"

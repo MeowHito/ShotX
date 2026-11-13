@@ -73,7 +73,7 @@ describe('share tokens', () => {
   it('builds share links', () => {
     const token = 'Ab3dEf6hIj9kLm2oPq5sTu';
     expect(shareUrl('https://photos.example.com/', token)).toBe(
-      'https://photos.example.com/s/Ab3dEf6hIj9kLm2oPq5sTu',
+      'https://photos.example.com/Ab3dEf6hIj9kLm2oPq5sTu',
     );
     expect(() => shareUrl('https://photos.example.com', 'x/../y')).toThrow(RangeError);
   });

@@ -43,6 +43,31 @@ export const SHARE_SLUG_FALLBACK = 'event';
  */
 export const SHARE_SLUG_MAX_ATTEMPTS = 5;
 
+/**
+ * First path segments the web app uses for its own pages and files (ADR 0015: share pages live at
+ * the site root, `/{slug}`). The API never generates these as slugs (shareSlugCandidate adds the
+ * suffix); a share that already holds one keeps its `/s/{slug}` link (shareRefPath).
+ */
+export const SHARE_SLUG_RESERVED: ReadonlySet<string> = new Set([
+  'admin',
+  'api',
+  'auth',
+  'bff',
+  'change-password',
+  'healthz',
+  'login',
+  'logout',
+  'mediapipe',
+  'pricing',
+  's',
+  'studio',
+]);
+
+/** True when a slug can't be served at the site root (SHARE_SLUG_RESERVED). */
+export function isReservedShareSlug(slug: string): boolean {
+  return SHARE_SLUG_RESERVED.has(slug);
+}
+
 const SLUG_PATTERN = /^[\p{L}\p{M}\p{N}]+(?:-[\p{L}\p{M}\p{N}]+)*$/u;
 const SUFFIX_PATTERN = new RegExp(`^[0-9a-z]{${SHARE_SLUG_SUFFIX_LENGTH}}$`);
 /** Variation selectors and enclosing marks (keycaps): parts of emoji, not of words. */
@@ -154,7 +179,7 @@ export function withShareSlugSuffix(base: string, suffix: string): string {
 
 /**
  * The slug to try on insert attempt `attempt` (0-based, below SHARE_SLUG_MAX_ATTEMPTS): the base
- * itself first (when it is a valid slug, i.e. not token-shaped), then the base with a new random
+ * itself first (when it is a valid slug, i.e. not token-shaped, and not reserved), then the base with a new random
  * suffix each time.
  */
 export function shareSlugCandidate(
@@ -165,7 +190,7 @@ export function shareSlugCandidate(
   if (!Number.isInteger(attempt) || attempt < 0 || attempt >= SHARE_SLUG_MAX_ATTEMPTS) {
     throw new RangeError('attempt out of range');
   }
-  if (attempt === 0 && isShareSlug(base)) return base;
+  if (attempt === 0 && isShareSlug(base) && !isReservedShareSlug(base)) return base;
   return withShareSlugSuffix(base, generateShareSlugSuffix(randomBytes));
 }
 
@@ -214,18 +239,23 @@ export function shareRefOf(share: { slug: string | null; token: string }): strin
   return share.slug ?? share.token;
 }
 
-/** Path of a share page for a ref, percent-encoded: `/s/{ref}`. */
+/**
+ * Path of a share page for a ref, percent-encoded: `/{ref}` at the site root (ADR 0015), or
+ * `/s/{ref}` for a slug the web app's own pages already use (SHARE_SLUG_RESERVED). Old `/s/{ref}`
+ * links redirect to the root path.
+ */
 export function shareRefPath(ref: string): string {
   if (!isShareToken(ref) && !isShareSlug(ref)) throw new RangeError('Not a share ref');
-  return `/s/${encodeURIComponent(ref)}`;
+  const encoded = encodeURIComponent(ref);
+  return isReservedShareSlug(ref) ? `/s/${encoded}` : `/${encoded}`;
 }
 
-/** The public path of a share: `/s/{slug}` (ADR 0011), or `/s/{token}` while it has no slug. */
+/** The public path of a share: `/{slug}` (ADR 0011, 0015), or `/{token}` while it has no slug. */
 export function sharePublicPath(share: { slug: string | null; token: string }): string {
   return shareRefPath(shareRefOf(share));
 }
 
-/** Absolute public link, e.g. `https://example.com/s/bangkok-run`. */
+/** Absolute public link, e.g. `https://example.com/bangkok-run`. */
 export function sharePublicUrl(
   publicBaseUrl: string,
   share: { slug: string | null; token: string },
@@ -234,7 +264,7 @@ export function sharePublicUrl(
 }
 
 /**
- * Path of the unlinked "ขอลบใบหน้าของฉัน" page (ADR 0011 decision 2): `/s/{ref}/delete-my-face`.
+ * Path of the unlinked "ขอลบใบหน้าของฉัน" page (ADR 0011 decision 2): `/{ref}/delete-my-face`.
  * Nothing on the share page, in the consent text or in the footer links to it; the company sends
  * it to a person who asks for deletion.
  */

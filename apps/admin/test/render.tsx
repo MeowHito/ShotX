@@ -10,10 +10,10 @@ import { DEFAULT_LOCALE, type Locale, MESSAGES, TIME_ZONE } from '@/i18n/config'
 import { createApiClient } from '@/lib/api/client';
 import type { PasswordUiConfig } from '@/lib/users/password';
 
-/** Password settings of the tests: different minimums per pool, as configured by default. */
+/** Password settings of the tests: TEMPORARY_PASSWORD_MIN_LENGTH (4) for both roles (ADR 0015). */
 export const TEST_PASSWORDS: PasswordUiConfig = {
   generatedLength: 20,
-  minLength: { admin: 14, photographer: 10 },
+  minLength: { admin: 4, photographer: 4 },
 };
 
 /**

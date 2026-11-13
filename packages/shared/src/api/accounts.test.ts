@@ -5,6 +5,7 @@ import {
   PASSWORD_MAX_LENGTH,
   PASSWORD_POLICY_REASONS,
   passwordPolicyViolation,
+  temporaryPasswordViolation,
 } from '../account/password-accounts';
 import {
   loadAdminBffAuthConfig,
@@ -128,6 +129,16 @@ describe('password accounts', () => {
     expect(accountEmailSchema.parse('  a@example.test ')).toBe('a@example.test');
     expect(accountEmailSchema.safeParse('not-an-email').success).toBe(false);
     expect(accountEmailSchema.safeParse(`${'a'.repeat(250)}@x.co`).success).toBe(false);
+  });
+
+  it('checks only the length of a temporary password (ADR 0015)', () => {
+    expect(temporaryPasswordViolation('1111', 4)).toBeNull();
+    expect(temporaryPasswordViolation('abcd', 4)).toBeNull();
+    expect(temporaryPasswordViolation('123', 4)).toBe('too_short');
+    // Code points: three letters plus one emoji (2 UTF-16 units) is 4.
+    expect(temporaryPasswordViolation('ab😀c', 4)).toBeNull();
+    expect(temporaryPasswordViolation('a😀c', 4)).toBe('too_short');
+    expect(() => temporaryPasswordViolation('abcd', 0)).toThrow(RangeError);
   });
 
   it('checks length, simplicity and the email; leaves common and same_as_current to the api', () => {
@@ -596,11 +607,19 @@ describe('contract change requests (wave 9)', () => {
 });
 
 describe('review fixes (wave 9)', () => {
-  it('reads the generated password length, never below either pool minimum', () => {
+  it('reads the generated password length and the temporary password minimum', () => {
+    // ADR 0015: an admin-set password is temporary; only TEMPORARY_PASSWORD_MIN_LENGTH counts.
     expect(loadAdminPasswordUiConfig({})).toEqual({
       generatedLength: 20,
-      minLength: { admin: 14, photographer: 10 },
+      minLength: { admin: 4, photographer: 4 },
     });
+    expect(loadAdminPasswordUiConfig({ TEMPORARY_PASSWORD_MIN_LENGTH: '6' }).minLength).toEqual({
+      admin: 6,
+      photographer: 6,
+    });
+    expect(() => loadAdminPasswordUiConfig({ TEMPORARY_PASSWORD_MIN_LENGTH: '3' })).toThrow(
+      /TEMPORARY_PASSWORD_MIN_LENGTH/,
+    );
     expect(
       loadAdminPasswordUiConfig({ ADMIN_GENERATED_PASSWORD_LENGTH: '16' }).generatedLength,
     ).toBe(16);
@@ -612,7 +631,7 @@ describe('review fixes (wave 9)', () => {
     expect(() =>
       loadAdminPasswordUiConfig({
         ADMIN_GENERATED_PASSWORD_LENGTH: '20',
-        ADMIN_PASSWORD_MIN_LENGTH: '24',
+        TEMPORARY_PASSWORD_MIN_LENGTH: '24',
       }),
     ).toThrow(/at least 24/);
     expect(requiredGeneratedPasswordLength({ admin: 14, photographer: 10 })).toBe(16);

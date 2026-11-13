@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">SNAP camera and face search icon</title>
+  <path d="M86 132h68l25-42c7-12 18-18 31-18h92c13 0 24 6 31 18l25 42h68c34 0 62 28 62 62v202c0 34-28 62-62 62H86c-34 0-62-28-62-62V194c0-34 28-62 62-62Z" fill="none" stroke="#05264d" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="414" cy="195" r="16" fill="#05264d"/>
+  <path d="M154 235v-19c0-11 9-20 20-20h19m126 0h19c11 0 20 9 20 20v19M154 310v19c0 11 9 20 20 20h19m126 0h19c11 0 20-9 20-20v-19" fill="none" stroke="#0877f9" stroke-width="23" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="256" cy="272" r="43" fill="#05264d"/>
+  <path d="M176 411c4-49 37-82 80-82s76 33 80 82c1 8-5 13-13 13H189c-8 0-14-5-13-13Z" fill="#05264d"/>
+</svg>

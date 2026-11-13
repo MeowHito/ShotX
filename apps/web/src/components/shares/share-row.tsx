@@ -34,7 +34,7 @@ async function copyText(text: string): Promise<void> {
 }
 
 /**
- * The absolute link of a share's "delete my face" page (`/s/{slug or token}/delete-my-face`).
+ * The absolute link of a share's "delete my face" page (`/{slug or token}/delete-my-face`).
  * ADR 0011 decision 2: the public pages never link to it; the photographer sends it to a person
  * who asks for their face data to be deleted (the consent text tells people to ask them).
  */

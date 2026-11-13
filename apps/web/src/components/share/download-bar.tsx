@@ -241,7 +241,9 @@ export function DownloadBar({
   const Icon = savesToPhotos ? ImageDownIcon : DownloadIcon;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-lg backdrop-blur">
+    // Phones: a full-width bar at the bottom. Wider screens: a floating card raised above the
+    // bottom edge, where a macOS Dock that never hides would cover it (owner, ADR 0015).
+    <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-lg backdrop-blur sm:inset-x-4 sm:bottom-24 sm:mx-auto sm:max-w-md sm:rounded-2xl sm:border sm:pb-3">
       <div className="mx-auto flex max-w-5xl flex-col gap-2">
         <div className="flex items-center justify-between gap-2 text-sm">
           <span role="status" className="font-medium">

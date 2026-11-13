@@ -4,12 +4,16 @@ import { SERVER_CALL_HEADERS } from './lib/bff/client-ip';
 import { buildCsp, securityHeaders } from './lib/security/headers';
 import { SIGN_IN_PATHS } from './lib/sign-in/protocol';
 
-/** Paths reachable without a session cookie: the sign-in page and its route handlers. */
+/**
+ * Paths reachable without a session cookie: the sign-in page, its route handlers, robots.txt
+ * and the tab icon (app/icon.svg, shown on the sign-in page too).
+ */
 function isPublicPath(pathname: string): boolean {
   return (
     pathname === SIGN_IN_PATHS.loginPage ||
     pathname.startsWith('/auth/') ||
-    pathname === '/robots.txt'
+    pathname === '/robots.txt' ||
+    pathname === '/icon.svg'
   );
 }
 

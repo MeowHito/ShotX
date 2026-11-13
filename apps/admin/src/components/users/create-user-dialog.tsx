@@ -120,10 +120,7 @@ function CreateUserForm({
       ...(emailCheck.success ? {} : { email: t('invalidEmail') }),
       ...(nameCheck.success ? {} : { name: t('invalidName') }),
     };
-    const problem =
-      password === ''
-        ? null
-        : initialPasswordProblem(password, role, emailCheck.data ?? email, passwords);
+    const problem = password === '' ? null : initialPasswordProblem(password, role, passwords);
     const passwordError =
       password === ''
         ? tp('required')

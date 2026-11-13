@@ -1,3 +1,4 @@
+import { isReservedShareSlug, parseShareRef } from '@shotx/shared';
 import { type NextRequest, NextResponse } from 'next/server';
 import { cookieNames } from './lib/auth/session';
 import { SERVER_CALL_HEADERS } from './lib/bff/client-ip';
@@ -15,7 +16,9 @@ import {
  *   check is the API's token verification on every call;
  * - removes any BFF key or client IP header a client sent (SERVER_CALL_HEADERS): only web sets
  *   them, on its own calls to the API. Web never copies them from a request anyway; this keeps
- *   any later code from doing so by accident.
+ *   any later code from doing so by accident;
+ * - redirects old share links, `/s/{ref}[/delete-my-face]`, to `/{ref}[/...]` (ADR 0015), except
+ *   for a slug the web app's own pages use (those shares stay at `/s/`).
  */
 export function proxy(request: NextRequest) {
   const nonce = btoa(crypto.randomUUID());
@@ -23,8 +26,12 @@ export function proxy(request: NextRequest) {
   const publicBaseUrl = env.PUBLIC_BASE_URL || undefined;
   const https = (publicBaseUrl ?? request.nextUrl.origin).startsWith('https://');
   const storage = processMediaBrowserOrigins();
-  // Only share pages run the face detector and may show the Turnstile widget.
-  const sharePage = request.nextUrl.pathname.startsWith('/s/');
+  const pathname = request.nextUrl.pathname;
+  const segments = pathname.split('/');
+  // Only share pages run the face detector and may show the Turnstile widget. They live at the
+  // site root (ADR 0015); every other first segment is one of the app's own (reserved).
+  const first = segments[1] ?? '';
+  const sharePage = first === 's' || rootShareRef(first) !== null;
   const csp = buildCsp({
     nonce,
     isDev: env.NODE_ENV === 'development',
@@ -38,7 +45,15 @@ export function proxy(request: NextRequest) {
   });
   const headers = securityHeaders(csp, https);
 
-  if (request.nextUrl.pathname.startsWith('/studio')) {
+  if (first === 's' && rootShareRef(segments[2] ?? '') !== null) {
+    const target = request.nextUrl.clone();
+    target.pathname = `/${segments.slice(2).join('/')}`;
+    const response = NextResponse.redirect(target, 308);
+    for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
+    return response;
+  }
+
+  if (pathname.startsWith('/studio')) {
     const names = cookieNames(https);
     const signedIn =
       Boolean(request.cookies.get(names.session)?.value) ||
@@ -59,6 +74,15 @@ export function proxy(request: NextRequest) {
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
   return response;
+}
+
+/** The share ref a first path segment names, or null (not a ref, or one of the app's own). */
+function rootShareRef(segment: string): string | null {
+  if (segment === '') return null;
+  const parsed = parseShareRef(segment);
+  if (parsed === null) return null;
+  const ref = parsed.kind === 'token' ? parsed.token : parsed.slug;
+  return isReservedShareSlug(ref) ? null : ref;
 }
 
 export const config = {
