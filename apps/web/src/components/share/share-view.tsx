@@ -264,15 +264,16 @@ function DesignedCard({
         scanAvailable={meta.faceSearch.available}
         scanButtonsRef={scanButtonsRef}
         label={tDesign('label')}
-        // The first screen is the whole viewport: the background runs under the transparent top
-        // bar, the artboard sits below it (padding = the bar's 3.5rem plus the safe area), less
-        // the 3.5rem "all photos" row when photos follow. The artboard fits both the width and
-        // the height on every screen, so the whole card (its scan buttons included) is visible
-        // without scrolling, also between a phone browser's bars (svh).
+        // The first screen is the whole viewport, the artboard included: it starts at the top of
+        // the page under the transparent top bar (only the safe area above it), as big as the
+        // screen allows (owner, 2026-11-14), less the 3.5rem "all photos" row when photos
+        // follow. The artboard fits both the width and the height on every screen, so the whole
+        // card (its scan buttons included) is visible without scrolling, also between a phone
+        // browser's bars (svh).
         className={
           photosBelow
-            ? 'min-h-[calc(100svh-3.5rem)] pt-[calc(3.5rem+env(safe-area-inset-top))] [--design-cap:min(480px,calc((100svh_-_7rem_-_env(safe-area-inset-top))_*_390_/_844))]'
-            : 'min-h-svh pt-[calc(3.5rem+env(safe-area-inset-top))] [--design-cap:min(480px,calc((100svh_-_3.5rem_-_env(safe-area-inset-top))_*_390_/_844))]'
+            ? 'min-h-[calc(100svh-3.5rem)] pt-[env(safe-area-inset-top)] [--design-cap:min(480px,calc((100svh_-_3.5rem_-_env(safe-area-inset-top))_*_390_/_844))]'
+            : 'min-h-svh pt-[env(safe-area-inset-top)] [--design-cap:min(480px,calc((100svh_-_env(safe-area-inset-top))_*_390_/_844))]'
         }
       />
       {photosBelow ? (
