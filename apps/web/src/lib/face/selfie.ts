@@ -24,6 +24,13 @@ export interface RenderedImage {
   toJpeg(quality: number): Promise<Blob>;
 }
 
+/**
+ * `accept` of the "pick a photo" inputs. Named types, not `image/*`: Chrome on Android then opens
+ * the photo picker straight away instead of a chooser of apps (camera, Files, Drive...); iOS always
+ * shows its own menu and hands HEIC over as JPEG. The camera-app fallback keeps `image/*`.
+ */
+export const GALLERY_PHOTO_ACCEPT = 'image/jpeg,image/png,image/webp';
+
 /** Canvas access, injectable because jsdom has no canvas. */
 export interface CanvasOps {
   /** Decodes an image file with its EXIF orientation applied. */

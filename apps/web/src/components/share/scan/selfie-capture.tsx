@@ -11,7 +11,7 @@ import {
   openFrontCamera,
   stopStream,
 } from '@/lib/face/camera';
-import type { SelfieSource } from '@/lib/face/selfie';
+import { GALLERY_PHOTO_ACCEPT, type SelfieSource } from '@/lib/face/selfie';
 import { useFaceTools } from './face-tools';
 
 type CameraState = 'idle' | 'starting' | 'live' | 'blocked';
@@ -160,7 +160,13 @@ export function SelfieCapture({
     >
       <ImageIcon aria-hidden />
       {t('chooseFromGallery')}
-      <input type="file" accept="image/*" className="sr-only" onChange={onFile} disabled={busy} />
+      <input
+        type="file"
+        accept={GALLERY_PHOTO_ACCEPT}
+        className="sr-only"
+        onChange={onFile}
+        disabled={busy}
+      />
     </label>
   ) : null;
 

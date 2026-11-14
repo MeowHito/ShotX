@@ -167,7 +167,8 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     const button = await screen.findByRole('button', { name: th.share.design.choosePhoto });
     const input = screen.getByTestId<HTMLInputElement>('design-photo-input');
     expect(input).toHaveAttribute('type', 'file');
-    expect(input).toHaveAttribute('accept', 'image/*');
+    // Named types: Android opens the photo picker itself, not a chooser of apps.
+    expect(input).toHaveAttribute('accept', 'image/jpeg,image/png,image/webp');
     expect(input).not.toHaveAttribute('capture');
     // The tap opens the picker (a click on the file input, inside the tap), not the sheet.
     const pick = vi.spyOn(input, 'click');

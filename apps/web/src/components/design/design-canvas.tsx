@@ -13,6 +13,7 @@ import { CameraIcon, CircleHelpIcon, ImageIcon, LoaderCircleIcon } from 'lucide-
 import { useTranslations } from 'next-intl';
 import { useRef, type ChangeEvent, type CSSProperties, type ReactNode, type Ref } from 'react';
 import { designFontFamily } from '@/lib/design/fonts';
+import { GALLERY_PHOTO_ACCEPT } from '@/lib/face/selfie';
 import { FaceGlyph } from './face-glyph';
 
 /**
@@ -374,7 +375,7 @@ function ScanButtons({
         <input
           ref={photoInput}
           type="file"
-          accept="image/*"
+          accept={GALLERY_PHOTO_ACCEPT}
           className="sr-only"
           tabIndex={-1}
           aria-hidden
