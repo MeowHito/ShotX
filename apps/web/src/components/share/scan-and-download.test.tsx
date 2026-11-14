@@ -174,7 +174,7 @@ describe('scan', () => {
     await takeLiveSelfie();
     // The digging cat while it searches (owner, 2026-11-13).
     expect(await screen.findByRole('status', { name: th.capture.searching })).toBeInTheDocument();
-    expect(screen.getByTestId('search-cat')).toHaveClass('motion-safe:animate-snap-dig');
+    expect(screen.getByTestId('search-cat')).toHaveClass('animate-snap-dig');
     expect(screen.queryByRole('button', { name: /มุม/ })).not.toBeInTheDocument();
     release();
     await screen.findByRole('region', { name: th.results.strong });

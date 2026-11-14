@@ -497,7 +497,9 @@ function AutoConsent({
  * Shown while the photo is checked and searched: the mascot cat digging through a box of photos
  * (owner, 2026-11-13; transparent background 2026-11-14), in place of a progress bar the API
  * could not feed anyway. One 26 KB sprite of three frames, stepped by CSS; a hashed static file,
- * cached for good. Reduced motion keeps the first frame still.
+ * cached for good. Slid by transform, which keeps moving while the main thread is busy (iOS left
+ * a background-position animation still). It always moves, like a spinner (it says "working"),
+ * only slower under reduced motion.
  */
 export function SearchProgress({ label }: { label: string }) {
   return (
@@ -506,12 +508,15 @@ export function SearchProgress({ label }: { label: string }) {
       role="status"
       aria-label={label}
     >
-      <div
-        aria-hidden
-        data-testid="search-cat"
-        className="size-24 bg-no-repeat motion-safe:animate-snap-dig"
-        style={{ backgroundImage: `url(${CAT_DIG_URL})`, backgroundSize: '300% 100%' }}
-      />
+      <div className="size-24 overflow-hidden" aria-hidden>
+        {/* eslint-disable-next-line @next/next/no-img-element -- a static sprite, not a photo */}
+        <img
+          src={CAT_DIG_URL}
+          alt=""
+          data-testid="search-cat"
+          className="h-full w-[300%] max-w-none animate-snap-dig will-change-transform motion-reduce:[animation-duration:1200ms]"
+        />
+      </div>
       <p className="font-medium">{label}</p>
     </div>
   );
