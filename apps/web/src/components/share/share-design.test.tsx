@@ -263,6 +263,11 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     expect(
       within(screen.getByTestId('design-artboard')).queryByTestId('design-background-backdrop'),
     ).toBeNull();
+    // The artboard's copy fades into the backdrop at its edges: no hard frame around the card.
+    expect(screen.getByTestId('design-background-feathered')).toContainElement(image);
+    expect(screen.getByTestId('design-background-feathered').style.maskImage).toContain(
+      'linear-gradient',
+    );
   });
 
   it('without a design the layout is unchanged (title, no card)', async () => {

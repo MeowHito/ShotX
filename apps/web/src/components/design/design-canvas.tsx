@@ -100,13 +100,31 @@ export function backgroundCss(bg: DesignBackground): string {
 /** Extra blur of the screen-filling copy of an image background around the artboard (CSS px). */
 const BACKDROP_BLUR_PX = 24;
 
+/**
+ * How far in (design units) the artboard's own image background fades into the blurred copy
+ * around it on the share page, so the card shows no hard rectangular edge (owner, 2026-11-14).
+ */
+const FEATHER_DU = 28;
+const featherGradient = (to: string) =>
+  `linear-gradient(to ${to}, transparent, #000 ${du(FEATHER_DU)}, #000 calc(100% - ${du(FEATHER_DU)}), transparent)`;
+/** Both directions intersected: all four edges fade, the corners most. */
+const FEATHER_MASK: CSSProperties = {
+  maskImage: `${featherGradient('right')}, ${featherGradient('bottom')}`,
+  maskComposite: 'intersect',
+  WebkitMaskImage: `${featherGradient('right')}, ${featherGradient('bottom')}`,
+  WebkitMaskComposite: 'source-in',
+};
+
 function Background({
   bg,
   assets,
   backdrop = false,
+  feather = false,
 }: {
   bg: DesignBackground;
   assets: DesignCanvasAssets;
+  /** The artboard's copy on the share page: its edges fade into the backdrop. */
+  feather?: boolean;
   /**
    * The copy that fills the screen around the artboard (`fill` layout): blurred, so the
    * artboard's own copy, which shows the whole image as designed, stands out.
@@ -121,7 +139,12 @@ function Background({
       ? du(bg.blur)
       : null;
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+    <div
+      className="pointer-events-none absolute inset-0 overflow-hidden"
+      style={feather ? FEATHER_MASK : undefined}
+      data-testid={feather ? 'design-background-feathered' : undefined}
+      aria-hidden
+    >
       {url !== null ? (
         // Signed CDN URL of the design image (web.webp); blur and dim are display only.
         // eslint-disable-next-line @next/next/no-img-element
@@ -478,8 +501,10 @@ export function DesignCanvas(props: DesignCanvasProps) {
     >
       {/* fill: the image background covers the artboard exactly as in the designer, so a screen
           of another shape never crops it (a logo in the image stays whole); the screen around
-          it gets a blurred copy. */}
-      {layout.kind === 'fill' ? <Background bg={doc.background} assets={props.assets} /> : null}
+          it gets a blurred copy, into which the artboard's edges fade. */}
+      {layout.kind === 'fill' ? (
+        <Background bg={doc.background} assets={props.assets} feather />
+      ) : null}
       {doc.elements.map((e) => (e.hidden ? null : <ElementView key={e.id} e={e} props={props} />))}
     </div>
   );
