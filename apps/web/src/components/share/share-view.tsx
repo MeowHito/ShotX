@@ -266,13 +266,14 @@ function DesignedCard({
         label={tDesign('label')}
         // The first screen is the whole viewport: the background runs under the transparent top
         // bar, the artboard sits below it (padding = the bar's 3.5rem plus the safe area), less
-        // the 3.5rem "all photos" row when photos follow. The artboard fits both the width and
-        // the height on every screen, so the whole card (its scan buttons included) is visible
-        // without scrolling, also between a phone browser's bars (svh).
+        // the 3.5rem "all photos" row when photos follow. On a phone the artboard (a phone-sized
+        // page) is as wide as the screen, with no margins (owner, 2026-11-14); its foot may be a
+        // scroll away, and the floating scan button stands in while its own are off screen.
+        // From `sm` up it fits both the width and the height, so the whole card is in view.
         className={
           photosBelow
-            ? 'min-h-[calc(100svh-3.5rem)] pt-[calc(3.5rem+env(safe-area-inset-top))] [--design-cap:min(480px,calc((100svh_-_7rem_-_env(safe-area-inset-top))_*_390_/_844))]'
-            : 'min-h-svh pt-[calc(3.5rem+env(safe-area-inset-top))] [--design-cap:min(480px,calc((100svh_-_3.5rem_-_env(safe-area-inset-top))_*_390_/_844))]'
+            ? 'min-h-[calc(100svh-3.5rem)] pt-[calc(3.5rem+env(safe-area-inset-top))] sm:[--design-cap:min(480px,calc((100svh_-_7rem_-_env(safe-area-inset-top))_*_390_/_844))]'
+            : 'min-h-svh pt-[calc(3.5rem+env(safe-area-inset-top))] sm:[--design-cap:min(480px,calc((100svh_-_3.5rem_-_env(safe-area-inset-top))_*_390_/_844))]'
         }
       />
       {photosBelow ? (
