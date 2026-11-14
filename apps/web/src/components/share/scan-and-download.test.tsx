@@ -174,7 +174,10 @@ describe('scan', () => {
     await takeLiveSelfie();
     // The digging cat while it searches (owner, 2026-11-13).
     expect(await screen.findByRole('status', { name: th.capture.searching })).toBeInTheDocument();
-    expect(screen.getByTestId('search-cat')).toHaveClass('animate-snap-dig');
+    // Three frames taking turns (opacity keeps moving on iOS while the page is busy).
+    const frames = screen.getByTestId('search-cat').children;
+    expect(frames).toHaveLength(3);
+    for (const frame of frames) expect(frame).toHaveClass('animate-snap-dig');
     expect(screen.queryByRole('button', { name: /มุม/ })).not.toBeInTheDocument();
     release();
     await screen.findByRole('region', { name: th.results.strong });

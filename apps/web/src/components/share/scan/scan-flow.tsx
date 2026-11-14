@@ -33,6 +33,13 @@ import catDig from './assets/cat-dig.webp';
 /** Next gives a static image import as `{ src }`, Vitest as the URL itself. */
 const CAT_DIG_URL: string = typeof catDig === 'string' ? catDig : catDig.src;
 
+/** Each frame's place in the sprite, and when its third of the cycle starts. */
+const CAT_DIG_FRAMES = [
+  { position: '0%', delay: '0ms' },
+  { position: '50%', delay: 'calc(var(--dig) * -2 / 3)' },
+  { position: '100%', delay: 'calc(var(--dig) * -1 / 3)' },
+] as const;
+
 export type ScanPurpose = 'search' | 'delete';
 
 /**
@@ -496,10 +503,12 @@ function AutoConsent({
 /**
  * Shown while the photo is checked and searched: the mascot cat digging through a box of photos
  * (owner, 2026-11-13; transparent background 2026-11-14), in place of a progress bar the API
- * could not feed anyway. One 26 KB sprite of three frames, stepped by CSS; a hashed static file,
- * cached for good. Slid by transform, which keeps moving while the main thread is busy (iOS left
- * a background-position animation still). It always moves, like a spinner (it says "working"),
- * only slower under reduced motion.
+ * could not feed anyway. One 26 KB sprite of three frames (a hashed static file, cached for good),
+ * drawn as three stacked layers whose opacity takes turns. Opacity with linear timing runs on
+ * the compositor in WebKit, so the cat keeps digging while the page is busy checking the photo;
+ * a steps() animation (of background-position or transform) and an animated image both stood
+ * still on iOS then (checked in the iPhone simulator). It always moves, like a spinner (it says
+ * "working"), only slower under reduced motion.
  */
 export function SearchProgress({ label }: { label: string }) {
   return (
@@ -508,14 +517,23 @@ export function SearchProgress({ label }: { label: string }) {
       role="status"
       aria-label={label}
     >
-      <div className="size-24 overflow-hidden" aria-hidden>
-        {/* eslint-disable-next-line @next/next/no-img-element -- a static sprite, not a photo */}
-        <img
-          src={CAT_DIG_URL}
-          alt=""
-          data-testid="search-cat"
-          className="h-full w-[300%] max-w-none animate-snap-dig will-change-transform motion-reduce:[animation-duration:1200ms]"
-        />
+      <div
+        aria-hidden
+        data-testid="search-cat"
+        className="relative size-24 [--dig:720ms] motion-reduce:[--dig:1200ms]"
+      >
+        {CAT_DIG_FRAMES.map((frame) => (
+          <div
+            key={frame.position}
+            className="absolute inset-0 animate-snap-dig bg-no-repeat opacity-0"
+            style={{
+              backgroundImage: `url(${CAT_DIG_URL})`,
+              backgroundSize: '300% 100%',
+              backgroundPosition: `${frame.position} 0`,
+              animationDelay: frame.delay,
+            }}
+          />
+        ))}
       </div>
       <p className="font-medium">{label}</p>
     </div>
