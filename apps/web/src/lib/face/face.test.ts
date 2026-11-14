@@ -111,16 +111,37 @@ describe('selfie processing (downscale, gate, JPEG)', () => {
     expect(fitLongEdge(640, 480, 1280)).toEqual({ width: 640, height: 480 });
   });
 
-  it('downscales to FACE_SELFIE_LONG_EDGE before detecting and encodes JPEG', async () => {
+  it('downscales a camera frame to FACE_SELFIE_LONG_EDGE before detecting and encodes JPEG', async () => {
     const { canvas, rendered } = fakeCanvas(128);
     const detect = vi.fn(() => [face({ x: 200, y: 300, width: 400, height: 400 })]);
     const result = await processSelfie(
-      { kind: 'file', blob: new Blob(['x'], { type: 'image/heic' }) },
+      { kind: 'frame', source: {} as CanvasImageSource, width: 3000, height: 4000 },
       'front',
       { config, canvas, loadDetector: () => Promise.resolve({ detect }) },
     );
     expect(rendered).toEqual([{ width: 960, height: 1280 }]);
     expect(detect).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ ok: true, width: 960, height: 1280 });
+    if (result.ok) {
+      expect(result.blob.type).toBe('image/jpeg');
+      await expect(result.blob.text()).resolves.toBe('jpeg@0.9');
+    }
+  });
+
+  it('sends a photo picked from the gallery without the on-phone check (the API decides)', async () => {
+    // An event photo: the runner's face is small and there are other people; the on-phone
+    // detector (made for selfies) finds no face in it (owner, 2026-11-14).
+    const { canvas, rendered } = fakeCanvas(250);
+    const detect = vi.fn(() => []);
+    const loadDetector = vi.fn(() => Promise.resolve({ detect }));
+    const result = await processSelfie(
+      { kind: 'file', blob: new Blob(['x'], { type: 'image/heic' }) },
+      'front',
+      { config, canvas, loadDetector },
+    );
+    expect(rendered).toEqual([{ width: 960, height: 1280 }]);
+    expect(loadDetector).not.toHaveBeenCalled();
+    expect(detect).not.toHaveBeenCalled();
     expect(result).toMatchObject({ ok: true, width: 960, height: 1280 });
     if (result.ok) {
       expect(result.blob.type).toBe('image/jpeg');

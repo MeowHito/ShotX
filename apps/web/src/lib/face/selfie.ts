@@ -69,6 +69,13 @@ export function fitLongEdge(width: number, height: number, longEdge: number) {
   };
 }
 
+/**
+ * Decodes, downsizes and re-encodes a selfie as JPEG. Only the live camera's frame goes through
+ * the quality gate: the on-phone detector (BlazeFace short range) is made for a face close to
+ * the camera and finds no face in a photo from the gallery, typically an event photo where the
+ * runner's face is a small part of the picture (owner, 2026-11-14). A picked photo goes straight
+ * to the API, which searches with the largest face it finds and says NO_FACE_DETECTED otherwise.
+ */
 export async function processSelfie(
   input: SelfieSource,
   angle: SelfieAngle,
@@ -85,6 +92,10 @@ export async function processSelfie(
 
   const size = fitLongEdge(area.width, area.height, deps.config.selfie.longEdge);
   const image = deps.canvas.render(decoded.source, size.width, size.height, decoded.crop);
+  if (input.kind === 'file') {
+    const blob = await image.toJpeg(deps.config.selfie.jpegQuality / 100);
+    return { ok: true, blob, ...size };
+  }
   const detector = await deps.loadDetector();
   const faces = detector === null ? null : detector.detect(image.surface);
   const face = faces?.length === 1 ? faces[0] : undefined;
