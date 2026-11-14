@@ -2,6 +2,8 @@ import {
   apiErrorBodySchema,
   ErrorCode,
   photographerChangePasswordBodySchema,
+  photographerPasswordResetConfirmBodySchema,
+  photographerPasswordResetRequestBodySchema,
   photographerSignInBodySchema,
 } from '@shotx/shared';
 import { z } from 'zod';
@@ -161,4 +163,59 @@ export async function handleChangePassword(request: Request, deps: AuthDeps): Pr
       SESSION_ENDED.includes(error.code);
     return providerErrorResponse(error, ended ? clearSessionCookies(deps) : setCookies);
   }
+}
+
+/**
+ * POST /auth/password-reset/request `{ email }` (ADR 0025): AUTH_ROUTES
+ * .photographerPasswordResetRequest with web's key. Answers 204 whatever the email.
+ */
+export async function handlePasswordResetRequest(
+  request: Request,
+  deps: AuthDeps,
+): Promise<Response> {
+  const send = deps.provider.requestPasswordReset;
+  if (send === undefined) return errorResponse(404, ErrorCode.NOT_FOUND);
+  if (!isSameOrigin(request, deps.publicBaseUrl)) {
+    return errorResponse(403, ErrorCode.FORBIDDEN);
+  }
+  const parsed = photographerPasswordResetRequestBodySchema.safeParse(await readBody(request));
+  if (!parsed.success) return errorResponse(400, ErrorCode.VALIDATION_FAILED);
+  try {
+    await send(parsed.data.email);
+  } catch (error) {
+    return providerErrorResponse(error);
+  }
+  return new Response(null, { status: 204, headers: { 'cache-control': 'no-store' } });
+}
+
+/**
+ * POST /auth/password-reset/confirm `{ token, newPassword }` (ADR 0025): sets the new password
+ * and stores the answered session in the cookies (any previous session in this browser ends).
+ * Answers 204.
+ */
+export async function handlePasswordResetConfirm(
+  request: Request,
+  deps: AuthDeps,
+): Promise<Response> {
+  const confirm = deps.provider.confirmPasswordReset;
+  if (confirm === undefined) return errorResponse(404, ErrorCode.NOT_FOUND);
+  if (!isSameOrigin(request, deps.publicBaseUrl)) {
+    return errorResponse(403, ErrorCode.FORBIDDEN);
+  }
+  const parsed = photographerPasswordResetConfirmBodySchema.safeParse(await readBody(request));
+  if (!parsed.success) return errorResponse(400, ErrorCode.VALIDATION_FAILED);
+  let tokens: Awaited<ReturnType<typeof confirm>>;
+  try {
+    tokens = await confirm(parsed.data);
+  } catch (error) {
+    return providerErrorResponse(error);
+  }
+  const previous = parseCookies(request.headers.get('cookie')).get(
+    cookieNames(deps.secureCookies).refresh,
+  );
+  if (previous) await deps.provider.revoke(previous);
+  const session = sessionFromTokens(tokens, deps.now?.() ?? Date.now());
+  const headers = new Headers({ 'cache-control': 'no-store' });
+  for (const cookie of sessionCookies(session, tokens, deps)) headers.append('set-cookie', cookie);
+  return new Response(null, { status: 204, headers });
 }

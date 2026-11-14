@@ -357,6 +357,7 @@ export const en: TranslatedMessages = {
       AUTH_PROVIDER_UNAVAILABLE: 'Signing in this way is not available yet',
       LOGIN_STATE_INVALID:
         'The sign-in timed out or was already used. Please start signing in again.',
+      PASSWORD_RESET_INVALID: 'This reset link no longer works. Please ask for a new one.',
       IDENTITY_PROVIDER_ERROR: 'Could not connect to the sign-in provider',
       INVALID_CREDENTIALS: 'Incorrect email or password',
       MFA_INVALID:

@@ -160,7 +160,7 @@ export class AuthService {
 
   providers(): AuthProvidersResponse {
     // The same answer the share guard decides require_login with (authProvidersOf).
-    return authProvidersOf(this.shotx().config);
+    return authProvidersOf(this.shotx().config, this.config.accountEmail.provider !== 'off');
   }
 
   /** The exact redirect URI the API accepts. */

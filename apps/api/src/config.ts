@@ -15,6 +15,7 @@ import {
   type CostConfig,
   type DesignConfig,
   type DriveConfig,
+  type AccountEmailConfig,
   type EmailConfig,
   type Env,
   type FaceConfig,
@@ -38,6 +39,7 @@ import {
   loadCostConfig,
   loadDesignConfig,
   loadDriveConfig,
+  loadAccountEmailConfig,
   loadEmailConfig,
   loadFaceConfig,
   loadFaceSearchUploadConfig,
@@ -210,6 +212,8 @@ export interface ApiConfig {
   cost: CostConfig;
   /** `fake` is refused in production by the loader. */
   email: EmailConfig;
+  /** ADR 0025: ACCOUNT_EMAIL_PROVIDER and SMTP_* (password-reset links). */
+  accountEmail: AccountEmailConfig;
   /**
    * DESIGN_* (ADR 0013): designs per owner, document limits, the JSON body limit of
    * `POST /designs` and `PUT /designs/:id`, and the design image upload settings.
@@ -258,6 +262,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     adminConsole: loadAdminConsoleConfig(env),
     cost: loadCostConfig(env),
     email: loadEmailConfig(env),
+    accountEmail: loadAccountEmailConfig(env),
     design: loadDesignConfig(env),
   };
 }

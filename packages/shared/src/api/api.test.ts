@@ -296,6 +296,9 @@ describe('route table', () => {
       'POST /auth/admin/mfa',
       'POST /auth/act-as',
       'POST /auth/photographer/sign-in',
+      // ADR 0025: forgotten photographer password, by email.
+      'POST /auth/photographer/password-reset/request',
+      'POST /auth/photographer/password-reset/confirm',
       // ADR 0010: photographer account and the admin app.
       'POST /auth/photographer/password',
       'GET /admin/users',

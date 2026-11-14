@@ -291,6 +291,15 @@ export const AUTH_AUDIT_ACTIONS = [
   'auth.photographer.sign_in_disabled',
   /** POST /auth/photographer/password (forced first change or a voluntary one). */
   'auth.photographer.password_changed',
+  // ADR 0025: password reset by email. Actor: the account (null for an unknown email).
+  /**
+   * A reset link was asked for: `meta.outcome` `sent`, `throttled` (over
+   * PHOTOGRAPHER_PASSWORD_RESET_EMAILS_PER_HOUR), `no_account` (unknown email, `target_type`
+   * `photographer_login`), `disabled`, or `send_failed`. The answer is the same in every case.
+   */
+  'auth.photographer.password_reset_requested',
+  /** The password was set through a reset link (every session of the account revoked). */
+  'auth.photographer.password_reset',
 ] as const;
 export type AuthAuditAction = (typeof AUTH_AUDIT_ACTIONS)[number];
 

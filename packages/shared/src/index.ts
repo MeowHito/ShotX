@@ -68,6 +68,7 @@ export * from './config/cloudfront';
 export * from './config/cognito';
 export * from './config/local-dev';
 export * from './config/auth';
+export * from './config/account-email';
 export * from './config/schedules';
 export * from './config/proxy';
 export * from './config/observability';

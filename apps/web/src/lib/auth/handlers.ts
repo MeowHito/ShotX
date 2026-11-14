@@ -31,6 +31,12 @@ export const AUTH_PATHS = {
   loginPage: '/login',
   /** The forced change of a temporary password (ADR 0010), outside the studio layout. */
   changePasswordPage: '/change-password',
+  /** ADR 0025: "forgot password" (email form) and its JSON route. */
+  forgotPasswordPage: '/forgot-password',
+  passwordResetRequest: '/auth/password-reset/request',
+  /** ADR 0025: the emailed link's page (PHOTOGRAPHER_PASSWORD_RESET_PATH) and its JSON route. */
+  resetPasswordPage: '/reset-password',
+  passwordResetConfirm: '/auth/password-reset/confirm',
   /** infra `auth.logoutPath`. */
   afterLogout: '/',
 } as const;

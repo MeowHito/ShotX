@@ -66,6 +66,8 @@ const ENV = shotxEnv({
   ...OFFLINE_ACCOUNTS_ENV,
   // These suites use the TOTP flow; ADMIN_MFA_MODE=off has its own tests.
   ADMIN_MFA_MODE: 'totp',
+  // ADR 0025: the limits are off by default; these suites test them.
+  PHOTOGRAPHER_LOGIN_LIMITS_ENABLED: 'true',
   PHOTOGRAPHER_LOGIN_LOCKOUT_THRESHOLD: '3',
   PHOTOGRAPHER_LOGIN_RATE_PER_ACCOUNT: '20',
   PHOTOGRAPHER_LOGIN_RATE_PER_IP: '6',

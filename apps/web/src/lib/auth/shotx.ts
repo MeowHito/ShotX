@@ -262,6 +262,23 @@ export function createShotxAuthProvider(
       return { step: response.step, tokens: toTokens(response) };
     },
 
+    async requestPasswordReset(email) {
+      await guarded(timeoutMs, (signal) =>
+        api.call(AUTH_ROUTES.photographerPasswordResetRequest, { body: { email }, signal }),
+      );
+    },
+
+    async confirmPasswordReset({ token, newPassword }) {
+      return toTokens(
+        await guarded(timeoutMs, (signal) =>
+          api.call(AUTH_ROUTES.photographerPasswordResetConfirm, {
+            body: { token, newPassword },
+            signal,
+          }),
+        ),
+      );
+    },
+
     async changePassword({ accessToken, currentPassword, newPassword }) {
       // Not a `bff` route: it needs the photographer's own token (serverOnly: never via /bff).
       const own = authApi(options, accessToken).api;

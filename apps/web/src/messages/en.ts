@@ -350,6 +350,7 @@ export const en: PublicMessages = {
       PAYMENT_GATEWAY_ERROR: 'The payment system is temporarily unavailable.',
       AUTH_PROVIDER_UNAVAILABLE: 'This sign-in option isn’t available. Please choose another.',
       LOGIN_STATE_INVALID: 'The sign-in timed out or was already used. Please start again.',
+      PASSWORD_RESET_INVALID: 'This reset link no longer works. Please ask for a new one.',
       IDENTITY_PROVIDER_ERROR: 'Couldn’t connect to LINE or Google. Please try again.',
       INVALID_CREDENTIALS: 'Wrong email or password',
       MFA_INVALID: 'The verification code is wrong or has expired.',

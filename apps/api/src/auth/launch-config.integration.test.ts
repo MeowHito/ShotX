@@ -57,6 +57,7 @@ describe('launch configuration loads', () => {
       devLogin: false,
       adminLogin: true,
       adminMfaMode: 'off',
+      passwordReset: false,
     });
     expect(viewerLoginAvailable(authProvidersOf(auth))).toBe(false);
   });
@@ -130,6 +131,7 @@ for (const backend of DATABASE_BACKENDS) {
         devLogin: false,
         adminLogin: true,
         adminMfaMode: 'off',
+        passwordReset: false,
       });
       for (const provider of ['line', 'google'] as const) {
         const start = await bff(launch, 'POST', apiPath(AR.oidcStart, { provider }), {

@@ -20,6 +20,7 @@ import {
   loadConsentConfig,
   loadCostConfig,
   loadDriveConfig,
+  loadAccountEmailConfig,
   loadEmailConfig,
   loadFaceConfig,
   loadFaceSearchUploadConfig,
@@ -220,6 +221,8 @@ const ALL_LOADERS: Loader[] = [
   loadConsentConfig,
   loadSharePasswordHashConfig,
   loadEmailConfig,
+  // ADR 0025: account email (SMTP) of the api, VPS only (no CDK service sets it).
+  loadAccountEmailConfig,
   // ADR 0010: billing mode, storage quota, the admin console and the admin app's password UI.
   loadBillingModeConfig,
   loadStorageQuotaConfig,

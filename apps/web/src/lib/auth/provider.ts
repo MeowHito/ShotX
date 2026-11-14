@@ -76,6 +76,10 @@ export interface AuthProvider {
     currentPassword: string;
     newPassword: string;
   }) => Promise<AuthTokens>;
+  /** ADR 0025: emails a reset link (if the email has an account; always resolves the same). */
+  requestPasswordReset?: (email: string) => Promise<void>;
+  /** ADR 0025: sets the new password with the emailed token; answers a new session. */
+  confirmPasswordReset?: (input: { token: string; newPassword: string }) => Promise<AuthTokens>;
 }
 
 export type PhotographerSignInStep = PhotographerSignInResponse['step'];

@@ -37,6 +37,7 @@ import { BillingEnabledGuard } from './billing/billing-enabled.guard';
 import { BillingController } from './billing/billing.controller';
 import { BillingService } from './billing/billing.service';
 import { createEmailProvider } from './billing/email';
+import { type AccountMailer, createAccountMailer } from './auth/account-email';
 import { createPaymentGateway } from './billing/gateways';
 import { WebhookService } from './billing/webhook.service';
 import type { ApiConfig } from './config';
@@ -69,6 +70,7 @@ import {
   CLOCK,
   type Clock,
   DATABASE,
+  ACCOUNT_MAILER,
   EMAIL_PROVIDER,
   EVENT_LOG,
   FACE_PROVIDER,
@@ -109,6 +111,8 @@ export interface ApiDeps {
   paymentGateway?: PaymentGatewayAdapter;
   /** The EMAIL_PROVIDER adapter; default createEmailProvider(config). Tests pass the fake. */
   email?: EmailProvider;
+  /** ADR 0025: account emails; default createAccountMailer(config.accountEmail). */
+  accountMailer?: AccountMailer;
   /**
    * HTTP client and Google JWKS of the LINE/Google sign-in (AUTH_PROVIDER=shotx or local);
    * default: fetch and Google's remote JWKS. Tests pass local fakes (never the network).
@@ -204,6 +208,10 @@ export class AppModule {
             createEmailProvider(deps.config.email, null, (entry) => {
               logger.log(JSON.stringify(entry), 'Email');
             }),
+        },
+        {
+          provide: ACCOUNT_MAILER,
+          useValue: deps.accountMailer ?? createAccountMailer(deps.config.accountEmail),
         },
         { provide: SHOTX_AUTH, useValue: createShotxAuth(deps.config, deps.clock, deps.oidc) },
         {

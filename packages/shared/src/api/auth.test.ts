@@ -139,14 +139,22 @@ describe('no viewer login provider (launch decision 2026-11-11)', () => {
         devLogin: false,
         adminLogin: true,
         adminMfaMode: 'off',
+        passwordReset: false,
       }),
-    ).toEqual({ oidc: [], devLogin: false, adminLogin: true, adminMfaMode: 'off' });
+    ).toEqual({
+      oidc: [],
+      devLogin: false,
+      adminLogin: true,
+      adminMfaMode: 'off',
+      passwordReset: false,
+    });
     expect(
       authProvidersResponseSchema.safeParse({
         oidc: ['line', 'google'],
         devLogin: false,
         adminLogin: true,
         adminMfaMode: null,
+        passwordReset: true,
       }).success,
     ).toBe(true);
     expect(
@@ -155,6 +163,7 @@ describe('no viewer login provider (launch decision 2026-11-11)', () => {
         devLogin: false,
         adminLogin: true,
         adminMfaMode: null,
+        passwordReset: true,
       }).success,
     ).toBe(false);
     expect(AUTH_ROUTES.providers.response).toBe(authProvidersResponseSchema);

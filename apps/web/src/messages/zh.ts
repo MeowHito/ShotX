@@ -331,6 +331,7 @@ export const zh: PublicMessages = {
       PAYMENT_GATEWAY_ERROR: '支付系统暂时不可用。',
       AUTH_PROVIDER_UNAVAILABLE: '此登录方式暂不可用，请选择其他方式。',
       LOGIN_STATE_INVALID: '登录已超时或已被使用，请重新开始。',
+      PASSWORD_RESET_INVALID: '重置链接已失效，请重新获取。',
       IDENTITY_PROVIDER_ERROR: '无法连接 LINE 或 Google，请重试。',
       INVALID_CREDENTIALS: '邮箱或密码错误',
       MFA_INVALID: '验证码错误或已过期。',

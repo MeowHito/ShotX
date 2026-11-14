@@ -8,6 +8,8 @@ export interface LoginButtonsProps {
   options: {
     /** Photographer email + password (ADR 0010; API-issued tokens). */
     password: boolean;
+    /** ADR 0025: "forgot password" by email is available. */
+    passwordReset?: boolean;
     /** Identity providers to offer, in display order (only those configured). */
     oidc: readonly OidcProvider[];
     /** The development sign-in form (AUTH_PROVIDER=local). */
@@ -54,7 +56,13 @@ export function LoginButtons({ options, next, fetch }: LoginButtonsProps) {
   const styles = options.password ? SECONDARY_PROVIDER_STYLES : PROVIDER_STYLES;
   return (
     <div className="grid gap-6">
-      {options.password ? <PasswordSignInForm next={next} fetch={fetch} /> : null}
+      {options.password ? (
+        <PasswordSignInForm
+          next={next}
+          passwordReset={options.passwordReset === true}
+          fetch={fetch}
+        />
+      ) : null}
       {options.password && options.oidc.length > 0 ? (
         <div className="flex items-center gap-3 text-xs text-muted-foreground" aria-hidden>
           <span className="h-px flex-1 bg-border" />

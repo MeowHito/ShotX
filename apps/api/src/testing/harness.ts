@@ -1,3 +1,4 @@
+import type { AccountMailer } from '../auth/account-email';
 import { randomUUID } from 'node:crypto';
 import type { INestApplication, LoggerService } from '@nestjs/common';
 import {
@@ -124,6 +125,8 @@ export class TestApi {
        * instead of injecting the FakeEmailProvider. Never `ses` (no client in tests).
        */
       configuredEmail?: boolean;
+      /** ADR 0025: the account mailer (FakeAccountMailer); default: built from the config. */
+      accountMailer?: AccountMailer;
     } = {},
   ): Promise<TestApi> {
     const config = testConfig(options.env, options.limits);
@@ -160,6 +163,7 @@ export class TestApi {
         faceProvider,
         paymentGateway: gateway,
         ...(options.configuredEmail === true ? {} : { email }),
+        ...(options.accountMailer === undefined ? {} : { accountMailer: options.accountMailer }),
         events,
         oidc: options.oidc?.(clock) ?? {},
         ...(options.captchaVerifier === undefined

@@ -1,8 +1,10 @@
 'use client';
 
 import { Alert, Button, Input, Label } from '@shotx/ui';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { type FormEvent, useId, useState } from 'react';
+import { AUTH_PATHS } from '@/lib/auth/handlers';
 import { requestPasswordSignIn } from '@/lib/auth/password-client';
 import { navigateTo } from '@/lib/browser/navigate';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
@@ -15,10 +17,13 @@ import { useErrorMessage } from '@/lib/errors/use-error-message';
  */
 export function PasswordSignInForm({
   next,
+  passwordReset = false,
   fetch: fetchImpl,
 }: {
   /** Same-origin path to return to (already safeNextPath'ed). */
   next: string;
+  /** ADR 0025: link to "forgot password" (email reset); otherwise "ask the admin". */
+  passwordReset?: boolean;
   /** Tests route the request to the handler. */
   fetch?: typeof fetch;
 }) {
@@ -76,7 +81,17 @@ export function PasswordSignInForm({
         />
       </div>
       <div className="grid gap-2">
-        <Label htmlFor={passwordId}>{t('password')}</Label>
+        <div className="flex items-baseline justify-between gap-3">
+          <Label htmlFor={passwordId}>{t('password')}</Label>
+          {passwordReset ? (
+            <Link
+              href={AUTH_PATHS.forgotPasswordPage}
+              className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              {t('forgot')}
+            </Link>
+          ) : null}
+        </div>
         <Input
           id={passwordId}
           name="password"
@@ -98,6 +113,9 @@ export function PasswordSignInForm({
       <Button type="submit" size="lg" className="h-12" disabled={busy}>
         {busy ? t('submitting') : t('submit')}
       </Button>
+      {passwordReset ? null : (
+        <p className="text-sm text-muted-foreground">{t('forgotAskAdmin')}</p>
+      )}
       <p className="text-sm text-muted-foreground">{t('noAccount')}</p>
     </form>
   );

@@ -488,6 +488,8 @@ describe('account config', () => {
       },
       lockout: { threshold: 10, seconds: 900 },
       passwordChangeSessionTtlSeconds: 1800,
+      limitsEnabled: false,
+      passwordReset: { ttlSeconds: 3600, emailsPerHour: 5 },
     });
     expect(
       loadShotxAuthConfig({ ...env, PHOTOGRAPHER_PASSWORD_MIN_LENGTH: '8' }).photographer
@@ -766,6 +768,8 @@ describe('separate admin BFF key (wave 9 round 2)', () => {
       adminMfa: 'admins',
       actAs: 'users',
       photographerSignIn: 'users',
+      photographerPasswordResetRequest: 'users',
+      photographerPasswordResetConfirm: 'users',
     });
   });
 });

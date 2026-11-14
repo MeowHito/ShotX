@@ -57,6 +57,7 @@ function fakeApi(overrides: Partial<AdminAuthApi> = {}): AdminAuthApi {
         devLogin: false,
         adminLogin: true,
         adminMfaMode: 'off' as const,
+        passwordReset: false,
       }),
     ),
     ...overrides,

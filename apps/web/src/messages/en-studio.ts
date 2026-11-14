@@ -244,6 +244,8 @@ export const enStudio: StudioMessages = {
     submit: 'Sign in',
     submitting: 'Signing in…',
     noAccount: 'No account yet? New photographers, please contact the administrator to open one.',
+    forgot: 'Forgot password?',
+    forgotAskAdmin: 'Forgot your password? Ask the administrator to reset it.',
     or: 'or',
     legacy: 'For photographers who signed in with LINE or Google before',
     google: 'Sign in with Google',
@@ -266,6 +268,28 @@ export const enStudio: StudioMessages = {
       defaultName: 'Test photographer',
       submit: 'Sign in (test mode)',
     },
+  },
+  passwordReset: {
+    requestTitle: 'Forgot password',
+    requestBody:
+      'Enter the email you sign in with and we’ll send you a link to set a new password.',
+    email: 'Email',
+    send: 'Send reset link',
+    sending: 'Sending…',
+    emailMissing: 'Please enter your email',
+    sentTitle: 'Check your email',
+    sentBody:
+      'If {email} belongs to a photographer account, a link to set a new password will arrive in a few minutes (check your spam folder too).',
+    sendAgain: 'Send again',
+    backToLogin: 'Back to sign in',
+    resetTitle: 'Set a new password',
+    resetBody: 'Choose your new password and you’ll be signed in right away.',
+    save: 'Save new password',
+    saving: 'Saving…',
+    linkInvalid:
+      'This link no longer works (it expired or was already used). Please ask for a new one.',
+    requestNew: 'Get a new link',
+    unavailable: 'Password reset by email isn’t available. Please contact the administrator.',
   },
   password: {
     requiredEyebrow: 'Before you start',

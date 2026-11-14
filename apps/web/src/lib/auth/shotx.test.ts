@@ -334,6 +334,7 @@ describe('API-issued tokens (AUTH_PROVIDER=shotx)', () => {
       devLogin: true,
       adminLogin: false,
       adminMfaMode: null,
+      passwordReset: false,
     });
     expect(api.clientIps()).toEqual(['2001:db8::1']);
     await expect(

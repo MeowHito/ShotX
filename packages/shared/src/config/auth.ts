@@ -448,6 +448,21 @@ const shotxAuthEnvSchema = z
       5 * SECONDS_PER_MINUTE,
       2 * SECONDS_PER_HOUR,
     ).default(30 * SECONDS_PER_MINUTE),
+    /**
+     * ADR 0025 (owner's decision, 2026-11-14): whether the photographer sign-in rate limits
+     * (PHOTOGRAPHER_LOGIN_RATE_*) and lockout (PHOTOGRAPHER_LOGIN_LOCKOUT_*) apply. Off by default:
+     * a photographer who mistypes is never told to wait. Admin sign-in keeps its limits.
+     */
+    PHOTOGRAPHER_LOGIN_LIMITS_ENABLED: z.stringbool().default(false),
+    /** ADR 0025: how long an emailed password-reset link works. */
+    PHOTOGRAPHER_PASSWORD_RESET_TTL_SECONDS: int(5 * SECONDS_PER_MINUTE, SECONDS_PER_DAY).default(
+      SECONDS_PER_HOUR,
+    ),
+    /**
+     * ADR 0025: reset emails per account per hour; more requests are answered the same way and
+     * send nothing (protects the inbox and the SMTP quota).
+     */
+    PHOTOGRAPHER_PASSWORD_RESET_EMAILS_PER_HOUR: int(1, 100).default(5),
   })
   .superRefine((e, ctx) => {
     const together = (a: keyof typeof e, b: keyof typeof e) => {
@@ -570,6 +585,10 @@ export interface PhotographerSignInConfig {
   lockout: { threshold: number; seconds: number };
   /** PHOTOGRAPHER_PASSWORD_CHANGE_SESSION_TTL_SECONDS. */
   passwordChangeSessionTtlSeconds: number;
+  /** PHOTOGRAPHER_LOGIN_LIMITS_ENABLED: false skips `rateLimits` and `lockout` (ADR 0025). */
+  limitsEnabled: boolean;
+  /** ADR 0025: PHOTOGRAPHER_PASSWORD_RESET_TTL_SECONDS and _EMAILS_PER_HOUR. */
+  passwordReset: { ttlSeconds: number; emailsPerHour: number };
 }
 
 export interface ShotxAuthConfig {
@@ -814,6 +833,11 @@ export function loadShotxAuthConfig(env: Env): ShotxAuthConfig {
         seconds: e.PHOTOGRAPHER_LOGIN_LOCKOUT_SECONDS,
       },
       passwordChangeSessionTtlSeconds: e.PHOTOGRAPHER_PASSWORD_CHANGE_SESSION_TTL_SECONDS,
+      limitsEnabled: e.PHOTOGRAPHER_LOGIN_LIMITS_ENABLED,
+      passwordReset: {
+        ttlSeconds: e.PHOTOGRAPHER_PASSWORD_RESET_TTL_SECONDS,
+        emailsPerHour: e.PHOTOGRAPHER_PASSWORD_RESET_EMAILS_PER_HOUR,
+      },
     },
     temporaryPasswordMinLength: temporaryPasswordPolicy.minLength,
   };
@@ -832,12 +856,17 @@ export function enabledOidcProviders(config: Pick<ShotxAuthConfig, 'oidc'>): Oid
  * whether the dev login and the admin sign-in exist. Web and admin read it from that route (they
  * never hold the OIDC secrets); the api builds the route's answer and the share guard from it.
  */
-export function authProvidersOf(config: ShotxAuthConfig): AuthProvidersResponse {
+export function authProvidersOf(
+  config: ShotxAuthConfig,
+  /** ADR 0025: an account email provider is configured (ACCOUNT_EMAIL_PROVIDER is not `off`). */
+  passwordReset = false,
+): AuthProvidersResponse {
   return {
     oidc: enabledOidcProviders(config),
     devLogin: config.devLogin !== null,
     adminLogin: config.admin !== null,
     adminMfaMode: config.admin?.mfaMode ?? null,
+    passwordReset,
   };
 }
 

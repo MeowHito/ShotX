@@ -132,6 +132,31 @@ export class AuthController {
     );
   }
 
+  /** ADR 0025: "ลืมรหัสผ่าน". Always 204; the email (if any) is sent after the answer. */
+  @Post(R.photographerPasswordResetRequest.path)
+  @HttpCode(R.photographerPasswordResetRequest.status)
+  async photographerPasswordResetRequest(
+    @Body(new ZodPipe(R.photographerPasswordResetRequest.body, 'body'))
+    body: Out<typeof R.photographerPasswordResetRequest.body>,
+    @BffIpHash() ipHash: string,
+  ) {
+    await this.photographer.requestPasswordReset(body.email, ipHash);
+  }
+
+  /** ADR 0025: the emailed link's page sets the new password and gets a session. */
+  @Post(R.photographerPasswordResetConfirm.path)
+  @HttpCode(R.photographerPasswordResetConfirm.status)
+  async photographerPasswordResetConfirm(
+    @Body(new ZodPipe(R.photographerPasswordResetConfirm.body, 'body'))
+    body: Out<typeof R.photographerPasswordResetConfirm.body>,
+    @BffIpHash() ipHash: string,
+  ) {
+    return respond(
+      R.photographerPasswordResetConfirm.response,
+      await this.photographer.confirmPasswordReset(body.token, body.newPassword, ipHash),
+    );
+  }
+
   @Post(R.adminMfa.path)
   @HttpCode(R.adminMfa.status)
   async adminMfa(

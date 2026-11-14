@@ -33,6 +33,8 @@ import {
   oidcStartResponseSchema,
   photographerChangePasswordBodySchema,
   photographerChangePasswordResponseSchema,
+  photographerPasswordResetConfirmBodySchema,
+  photographerPasswordResetRequestBodySchema,
   photographerSignInBodySchema,
   photographerSignInResponseSchema,
   refreshBodySchema,
@@ -1272,6 +1274,39 @@ export const AUTH_ROUTES = {
     body: photographerSignInBodySchema,
     response: photographerSignInResponseSchema,
     errors: errors(ErrorCode.NOT_FOUND, ErrorCode.INVALID_CREDENTIALS, ErrorCode.ACCOUNT_DISABLED),
+  },
+  /**
+   * ADR 0025, "ลืมรหัสผ่าน": emails a one-time reset link when the email belongs to an active
+   * photographer password account. Always 204 otherwise too (never reveals whether an account
+   * exists). FEATURE_DISABLED without an account email provider.
+   */
+  photographerPasswordResetRequest: {
+    method: 'POST',
+    path: '/auth/photographer/password-reset/request',
+    status: 204,
+    auth: 'bff',
+    bffKey: 'users',
+    body: photographerPasswordResetRequestBodySchema,
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.FEATURE_DISABLED),
+  },
+  /**
+   * ADR 0025: sets a new password with the emailed token and answers a new normal session (every
+   * other session of the account is revoked); web stores it in the session cookie.
+   */
+  photographerPasswordResetConfirm: {
+    method: 'POST',
+    path: '/auth/photographer/password-reset/confirm',
+    status: 200,
+    auth: 'bff',
+    bffKey: 'users',
+    body: photographerPasswordResetConfirmBodySchema,
+    response: authTokenResponseSchema,
+    errors: errors(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.FEATURE_DISABLED,
+      ErrorCode.PASSWORD_RESET_INVALID,
+      ErrorCode.PASSWORD_TOO_WEAK,
+    ),
   },
 } as const satisfies Record<string, RouteContract>;
 

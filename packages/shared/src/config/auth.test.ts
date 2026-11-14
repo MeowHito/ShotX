@@ -315,6 +315,7 @@ describe('loadShotxAuthConfig', () => {
         devLogin: false,
         adminLogin: true,
         adminMfaMode: 'off',
+        passwordReset: false,
       });
       expect(viewerLoginAvailable(authProvidersOf(config))).toBe(false);
       // Empty values (`LINE_LOGIN_CHANNEL_ID=` in an env file) count as unset.

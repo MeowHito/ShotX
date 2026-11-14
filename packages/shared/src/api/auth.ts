@@ -77,6 +77,11 @@ export const authProvidersResponseSchema = z.object({
    * flag of AdminUser.totpEnrolled) with `off`. Not a secret.
    */
   adminMfaMode: z.enum(ADMIN_MFA_MODES).nullable(),
+  /**
+   * ADR 0025: photographers can reset a forgotten password by email (an account email provider
+   * is configured). False: the sign-in page tells them to ask an admin instead.
+   */
+  passwordReset: z.boolean(),
 });
 export type AuthProvidersResponse = z.output<typeof authProvidersResponseSchema>;
 
@@ -357,6 +362,44 @@ export const photographerChangePasswordBodySchema = z.strictObject({
   newPassword: newPasswordSchema,
 });
 export type PhotographerChangePasswordBody = z.input<typeof photographerChangePasswordBodySchema>;
+
+// --- Photographer password reset by email (ADR 0025) ----------------------------------------------
+
+/**
+ * Step 1, "ลืมรหัสผ่าน": the photographer types their email. The API always answers 202 with an
+ * empty body, whether or not the email belongs to an active photographer password account, so
+ * the answer never reveals which emails have accounts. When it does, the API emails a one-time
+ * link (PHOTOGRAPHER_PASSWORD_RESET_PATH + `#token=`), valid for
+ * PHOTOGRAPHER_PASSWORD_RESET_TTL_SECONDS; at most PHOTOGRAPHER_PASSWORD_RESET_EMAILS_PER_HOUR
+ * emails per account (more requests are accepted and dropped silently). Without an account email
+ * provider (ACCOUNT_EMAIL_PROVIDER=off) the route is FEATURE_DISABLED and GET /auth/providers
+ * says `passwordReset: false`.
+ */
+export const photographerPasswordResetRequestBodySchema = z.strictObject({
+  email: z.email().max(254),
+});
+export type PhotographerPasswordResetRequestBody = z.input<
+  typeof photographerPasswordResetRequestBodySchema
+>;
+
+/**
+ * Step 2: the page the link opens sends the token with the new password. Unknown, expired or
+ * used token, or one issued before the password last changed or the account was disabled:
+ * PASSWORD_RESET_INVALID. Policy (PHOTOGRAPHER_PASSWORD_MIN_LENGTH, ...): PASSWORD_TOO_WEAK, and
+ * the token stays usable. On success the API stores the new hash, clears `must_change_password`
+ * and any lockout, revokes every session of the account and answers with a new normal session,
+ * which the BFF stores in its session cookie (the photographer is signed in).
+ */
+export const photographerPasswordResetConfirmBodySchema = z.strictObject({
+  token: opaqueTokenSchema,
+  newPassword: newPasswordSchema,
+});
+export type PhotographerPasswordResetConfirmBody = z.input<
+  typeof photographerPasswordResetConfirmBodySchema
+>;
+
+/** The studio page the emailed link opens (PUBLIC_BASE_URL + this + `#token=<token>`). */
+export const PHOTOGRAPHER_PASSWORD_RESET_PATH = '/reset-password';
 
 /** The new session after a password change. */
 export const photographerChangePasswordResponseSchema = authTokenResponseSchema;

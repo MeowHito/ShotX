@@ -339,6 +339,7 @@ export const zh: TranslatedMessages = {
       PAYMENT_GATEWAY_ERROR: '支付系统暂时出现故障',
       AUTH_PROVIDER_UNAVAILABLE: '暂时无法通过此方式登录',
       LOGIN_STATE_INVALID: '登录已超时或已被使用，请重新开始登录',
+      PASSWORD_RESET_INVALID: '重置链接已失效，请重新获取',
       IDENTITY_PROVIDER_ERROR: '无法连接登录服务提供方',
       INVALID_CREDENTIALS: '邮箱或密码错误',
       MFA_INVALID: '验证码错误或已过期，请输入身份验证器应用中的最新验证码',

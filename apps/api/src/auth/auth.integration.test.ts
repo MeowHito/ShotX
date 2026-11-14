@@ -122,6 +122,7 @@ for (const backend of DATABASE_BACKENDS) {
           devLogin: false,
           adminLogin: true,
           adminMfaMode: 'totp',
+          passwordReset: false,
         });
       });
     });
@@ -871,6 +872,7 @@ describe('/auth in other modes', () => {
         devLogin: true,
         adminLogin: true,
         adminMfaMode: 'off',
+        passwordReset: false,
       });
       const unavailable = await api.request('POST', apiPath(R.oidcStart, { provider: 'line' }), {
         headers,

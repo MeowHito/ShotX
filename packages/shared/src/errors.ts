@@ -259,6 +259,14 @@ export const ErrorCode = {
    * designs (unknown, another owner's, or deleted). Nothing is changed. Details: none.
    */
   DESIGN_NOT_FOUND: 'DESIGN_NOT_FOUND',
+
+  // Photographer password reset by email (ADR 0025).
+  /**
+   * POST /auth/photographer/password-reset/confirm with a link token that is unknown, expired,
+   * already used, or no longer valid because the account's password changed (or was reset by an
+   * admin) or the account was disabled after the email was sent. Ask for a new link.
+   */
+  PASSWORD_RESET_INVALID: 'PASSWORD_RESET_INVALID',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -307,6 +315,7 @@ export const ERROR_HTTP_STATUS = {
   PAYMENT_GATEWAY_ERROR: 502,
   AUTH_PROVIDER_UNAVAILABLE: 404,
   LOGIN_STATE_INVALID: 400,
+  PASSWORD_RESET_INVALID: 400,
   IDENTITY_PROVIDER_ERROR: 502,
   INVALID_CREDENTIALS: 401,
   MFA_INVALID: 401,

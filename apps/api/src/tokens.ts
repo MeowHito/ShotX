@@ -21,6 +21,8 @@ export const PAYMENT_GATEWAY = Symbol('PAYMENT_GATEWAY');
 /** Structured operational events (infra/events): JSON lines with a top-level `event`. */
 export const EVENT_LOG = Symbol('EVENT_LOG');
 export const EMAIL_PROVIDER = Symbol('EMAIL_PROVIDER');
+/** ADR 0025: account emails (password-reset links); auth/account-email AccountMailer. */
+export const ACCOUNT_MAILER = Symbol('ACCOUNT_MAILER');
 
 export interface Clock {
   now(): Date;

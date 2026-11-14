@@ -225,7 +225,13 @@ export class FakeAuthApi {
 
     switch (route) {
       case AUTH_ROUTES.providers:
-        return { oidc: this.oidc, devLogin: this.devLogin, adminLogin: false, adminMfaMode: null };
+        return {
+          oidc: this.oidc,
+          devLogin: this.devLogin,
+          adminLogin: false,
+          adminMfaMode: null,
+          passwordReset: false,
+        };
       case AUTH_ROUTES.oidcStart: {
         const provider = AUTH_ROUTES.oidcStart.params.parse({
           provider: path.split('/')[3],

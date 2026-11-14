@@ -85,3 +85,16 @@ export async function requestPasswordChange(
 ): Promise<void> {
   await post(AUTH_PATHS.changePassword, input, fetchImpl);
 }
+
+/** ADR 0025: asks for a reset link (resolves the same whether or not the email has an account). */
+export async function requestPasswordReset(email: string, fetchImpl?: typeof fetch): Promise<void> {
+  await post(AUTH_PATHS.passwordResetRequest, { email }, fetchImpl);
+}
+
+/** ADR 0025: sets the new password with the emailed token; the response sets the session cookies. */
+export async function confirmPasswordReset(
+  input: { token: string; newPassword: string },
+  fetchImpl?: typeof fetch,
+): Promise<void> {
+  await post(AUTH_PATHS.passwordResetConfirm, input, fetchImpl);
+}

@@ -61,6 +61,8 @@ export interface LoginOptions {
    * photographer sign-in has no switch), never with Cognito.
    */
   password: boolean;
+  /** ADR 0025: "forgot password" by email is available (GET /auth/providers `passwordReset`). */
+  passwordReset?: boolean;
   /** Identity providers to offer, in display order. */
   oidc: OidcProvider[];
   /** Show the development sign-in form (AUTH_PROVIDER=local and the API offers it). */
@@ -84,6 +86,7 @@ export async function loginOptions(): Promise<LoginOptions | null> {
   if (providers === null) return null;
   return {
     password: true,
+    passwordReset: providers.passwordReset,
     oidc: OIDC_PROVIDERS.filter((p) => providers.oidc.includes(p)),
     devLogin: config.authProvider === 'local' && providers.devLogin,
   };
