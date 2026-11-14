@@ -495,9 +495,9 @@ function AutoConsent({
 
 /**
  * Shown while the photo is checked and searched: the mascot cat digging through a box of photos
- * (owner, 2026-11-13), in place of a progress bar the API could not feed anyway. One 30 KB
- * sprite of three frames, stepped by CSS; a hashed static file, cached for good. Reduced motion
- * keeps the first frame still.
+ * (owner, 2026-11-13; transparent background 2026-11-14), in place of a progress bar the API
+ * could not feed anyway. One 26 KB sprite of three frames, stepped by CSS; a hashed static file,
+ * cached for good. Reduced motion keeps the first frame still.
  */
 export function SearchProgress({ label }: { label: string }) {
   return (
