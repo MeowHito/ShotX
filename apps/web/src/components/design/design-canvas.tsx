@@ -11,7 +11,7 @@ import {
 import { cn } from '@shotx/ui';
 import { CameraIcon, CircleHelpIcon, ImageIcon, LoaderCircleIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import type { CSSProperties, ReactNode, Ref } from 'react';
+import { useRef, type ChangeEvent, type CSSProperties, type ReactNode, type Ref } from 'react';
 import { designFontFamily } from '@/lib/design/fonts';
 import { FaceGlyph } from './face-glyph';
 
@@ -36,7 +36,11 @@ export type DesignCanvasAssets = Readonly<Record<string, string | null>>;
 
 export interface DesignCanvasActions {
   onCamera: () => void;
-  onChoosePhoto: () => void;
+  /**
+   * "Use a photo": the button opens the phone's photo picker itself (in the tap, as a file input
+   * needs) and hands over the picked image, so there is no second picker to tap.
+   */
+  onChoosePhoto: (photo: File) => void;
   onHelp: () => void;
 }
 
@@ -314,6 +318,7 @@ function ScanButtons({
 }) {
   const t = useTranslations('share.design');
   const both = mode === 'gallery';
+  const photoInput = useRef<HTMLInputElement>(null);
   // The contract's box rule: each button `height` tall, as wide as the box (column) or half the
   // box minus the gap (row), centred vertically in the box. One button (face_only) spans the box.
   const width = !both || e.layout === 'column' ? '100%' : `calc(50% - ${du(e.gap / 2)})`;
@@ -352,7 +357,7 @@ function ScanButtons({
       </DesignButton>
       {both ? (
         <DesignButton
-          onClick={actions?.onChoosePhoto}
+          onClick={actions === null ? undefined : () => photoInput.current?.click()}
           style={{
             ...base,
             background: e.secondary.bg,
@@ -364,6 +369,23 @@ function ScanButtons({
           <ImageIcon style={icon} aria-hidden />
           {t('choosePhoto')}
         </DesignButton>
+      ) : null}
+      {both && actions !== null ? (
+        <input
+          ref={photoInput}
+          type="file"
+          accept="image/*"
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden
+          data-testid="design-photo-input"
+          onChange={(event: ChangeEvent<HTMLInputElement>) => {
+            const file = event.target.files?.[0];
+            // Cleared so the same photo can be picked again; no reference lingers here.
+            event.target.value = '';
+            if (file !== undefined) actions.onChoosePhoto(file);
+          }}
+        />
       ) : null}
     </div>
   );

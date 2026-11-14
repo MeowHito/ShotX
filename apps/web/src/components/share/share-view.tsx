@@ -9,7 +9,7 @@ import {
 } from '@shotx/shared';
 import { Alert, Button, cn } from '@shotx/ui';
 import { useQuery } from '@tanstack/react-query';
-import { CheckCheckIcon, ChevronDownIcon, RotateCcwIcon, ScanFaceIcon } from 'lucide-react';
+import { CheckCheckIcon, ChevronUpIcon, RotateCcwIcon, ScanFaceIcon } from 'lucide-react';
 import { useFormatter, useTranslations } from 'next-intl';
 import {
   createContext,
@@ -289,7 +289,7 @@ function DesignedCard({
             className="inline-flex h-10 items-center gap-1.5 rounded-full border-2 border-primary bg-background px-5 text-sm font-semibold text-primary shadow-card transition-colors hover:bg-primary hover:text-primary-foreground"
           >
             {tDesign('seeAll')}
-            <ChevronDownIcon className="size-4 motion-safe:animate-bounce" aria-hidden />
+            <ChevronUpIcon className="size-4 motion-safe:animate-bounce" aria-hidden />
           </button>
         </div>
       ) : null}
@@ -339,6 +339,8 @@ function ShareContent({
   const scanAvailable = meta.faceSearch.available;
   /** The open face-search sheet and what it starts with, or null. */
   const [scanning, setScanning] = useState<ScanSource | null>(null);
+  /** The photo picked with the card's "use a photo" button, checked and searched at once. */
+  const [pickedPhoto, setPickedPhoto] = useState<Blob | null>(null);
   const [howToOpen, setHowToOpen] = useState(false);
   const [cardButtons, setCardButtons] = useState<HTMLDivElement | null>(null);
   const [results, setResults] = useState<FaceSearchResponse | null>(null);
@@ -387,10 +389,17 @@ function ShareContent({
     selection.length === 0 &&
     // The card's own buttons do the same while they are on screen.
     !(showCard && cardButtonsOnScreen);
+  function closeScan() {
+    setScanning(null);
+    setPickedPhoto(null);
+  }
   const cardActions = useMemo<DesignCanvasActions>(
     () => ({
       onCamera: () => setScanning('camera'),
-      onChoosePhoto: () => setScanning('gallery'),
+      onChoosePhoto: (photo) => {
+        setPickedPhoto(photo);
+        setScanning('gallery');
+      },
       onHelp: () => setHowToOpen(true),
     }),
     [],
@@ -486,7 +495,7 @@ function ShareContent({
           ) : null}
 
           {scanning !== null && scanAvailable ? (
-            <ScanSheet onClose={() => setScanning(null)}>
+            <ScanSheet onClose={closeScan}>
               <ScanFlow
                 token={token}
                 purpose="search"
@@ -504,16 +513,17 @@ function ShareContent({
                 }}
                 allowGallery={meta.mode === 'gallery'}
                 startWith={scanning}
+                photo={pickedPhoto ?? undefined}
                 onResults={(r) => {
                   setResults(r);
-                  setScanning(null);
+                  closeScan();
                   setNotice(null);
                   // The results come first on the page: show them from the very top, top bar
                   // included, found or not (owner, 2026-11-13: scrolling to the results left
                   // the page a little way down).
                   requestAnimationFrame(() => window.scrollTo({ top: 0 }));
                 }}
-                onClose={() => setScanning(null)}
+                onClose={closeScan}
               />
             </ScanSheet>
           ) : null}

@@ -84,6 +84,7 @@ export function ScanFlow({
   limits,
   allowGallery,
   startWith = 'camera',
+  photo,
   onResults,
   onClose,
 }: {
@@ -93,6 +94,11 @@ export function ScanFlow({
   limits: SelfieLimits;
   allowGallery: boolean;
   startWith?: ScanSource;
+  /**
+   * A photo already picked (the designed card's "use a photo" button opens the picker itself):
+   * checked and searched as soon as consent is recorded, as if picked in the sheet.
+   */
+  photo?: Blob;
   onResults?: (results: FaceSearchResponse) => void;
   onClose: () => void;
 }) {
@@ -148,6 +154,16 @@ export function ScanFlow({
     }),
     [tools, loadDetector, limits.selfie],
   );
+  // The photo handed in is used once (also under Strict Mode's double effects), after consent.
+  const pickedRef = useRef(photo ?? null);
+  useEffect(() => {
+    const picked = pickedRef.current;
+    if (consentNeeded || picked === null) return;
+    pickedRef.current = null;
+    void onCaptured({ kind: 'file', blob: picked });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consentNeeded]);
+
   const searching = search.isPending || deletion.isPending;
   const busy = checking || searching;
 

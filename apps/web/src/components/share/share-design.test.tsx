@@ -159,27 +159,29 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     expect(getUserMedia).toHaveBeenCalledOnce();
   });
 
-  it('"use a photo" opens the scan sheet straight on the gallery picker (after consent)', async () => {
+  it('"use a photo" opens the phone\'s picker itself; the picked photo is searched at once (after consent)', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = designedShare(fake);
     const { nav, getUserMedia } = fakeNavigator();
     renderSharePage(fake, share.token, { nav });
-    await userEvent.click(await screen.findByRole('button', { name: th.share.design.choosePhoto }));
-    const picker = await screen.findByLabelText(th.capture.chooseFromGallery);
-    expect(picker).toHaveAttribute('type', 'file');
-    expect(picker).not.toHaveAttribute('capture');
-    // The camera waits until asked.
+    const button = await screen.findByRole('button', { name: th.share.design.choosePhoto });
+    const input = screen.getByTestId<HTMLInputElement>('design-photo-input');
+    expect(input).toHaveAttribute('type', 'file');
+    expect(input).toHaveAttribute('accept', 'image/*');
+    expect(input).not.toHaveAttribute('capture');
+    // The tap opens the picker (a click on the file input, inside the tap), not the sheet.
+    const pick = vi.spyOn(input, 'click');
+    await userEvent.click(button);
+    expect(pick).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('region', { name: th.capture.title })).toBeNull();
+
+    await userEvent.upload(input, new File(['raw'], 'me.jpg', { type: 'image/jpeg' }));
+    await screen.findByRole('region', { name: th.results.strong });
+    // No second picker in between: consent recorded, then the search with the re-encoded photo.
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.giveConsent)).toHaveLength(1);
+    expect(fake.callsTo(PUBLIC_SHARE_ROUTES.faceSearch)).toHaveLength(1);
+    expect(fake.selfieUploads[0]?.types).toEqual(['image/jpeg']);
     expect(getUserMedia).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: th.capture.openCamera })).toBeInTheDocument();
-    // The picker comes first.
-    const sheet = screen.getByRole('region', { name: th.capture.title });
-    const pickerLabel = picker.closest('label') as HTMLElement;
-    expect(
-      pickerLabel.compareDocumentPosition(
-        screen.getByRole('button', { name: th.capture.openCamera }),
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(sheet).toContainElement(pickerLabel);
   });
 
   it('face_only: the card is all there is, with the camera button alone', async () => {

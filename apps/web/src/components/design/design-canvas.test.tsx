@@ -180,10 +180,11 @@ describe('DesignCanvas: the one renderer (ADR 0013)', () => {
     );
     const card = screen.getByRole('region', { name: 'card' });
     await userEvent.click(within(card).getByRole('button', { name: th.share.design.camera }));
-    await userEvent.click(within(card).getByRole('button', { name: th.share.design.choosePhoto }));
+    const photo = new File(['raw'], 'me.jpg', { type: 'image/jpeg' });
+    await userEvent.upload(within(card).getByTestId('design-photo-input'), photo);
     await userEvent.click(within(card).getByRole('button', { name: th.share.design.help }));
     expect(onCamera).toHaveBeenCalledOnce();
-    expect(onChoosePhoto).toHaveBeenCalledOnce();
+    expect(onChoosePhoto).toHaveBeenCalledExactlyOnceWith(photo);
     expect(onHelp).toHaveBeenCalledOnce();
     expect(screen.getByTestId('face-glyph')).toBeInTheDocument();
 
