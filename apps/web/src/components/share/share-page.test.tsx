@@ -123,6 +123,26 @@ describe('share page: states', () => {
     expect(screen.queryByText(th.share.loadingMore)).toBeNull();
   });
 
+  it('an open page whose share switches to face_only drops the gallery at once', async () => {
+    const fake = new FakeApi();
+    const share = fake.addPublicShare({ itemCount: 3, faceSearchAvailable: true });
+    renderSharePage(fake, share.token, { shareConfig: { livePollMs: 40 } });
+    const grid = await screen.findByRole('list', { name: th.share.galleryLabel });
+    await waitFor(() => expect(within(grid).getAllByRole('listitem')).toHaveLength(3));
+
+    // The photographer switches the link to "only their own photos"; the new items list is slow.
+    let release = () => {};
+    fake.hold = { pathSuffix: '/items', release: new Promise<void>((r) => (release = r)) };
+    share.mode = 'face_only';
+    expect(await screen.findByText(th.share.faceOnly.body)).toBeInTheDocument();
+    // The gallery list cached before the switch is never shown in face_only mode.
+    expect(screen.queryByRole('list', { name: th.share.galleryLabel })).toBeNull();
+    release();
+    fake.hold = null;
+    await waitFor(() => expect(fake.callsTo(PUBLIC_SHARE_ROUTES.items).length).toBeGreaterThan(1));
+    expect(screen.queryByRole('list', { name: th.share.galleryLabel })).toBeNull();
+  });
+
   it('opens by slug, then makes every other call with the token and shows the slug URL', async () => {
     const fake = new FakeApi();
     const share = fake.addPublicShare({ title: 'งานวิ่ง กรุงเทพ 2026', itemCount: 2 });

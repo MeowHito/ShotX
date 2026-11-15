@@ -919,6 +919,7 @@ export const zhStudio: StudioMessages = {
     create: '创建链接',
     save: '保存设置',
     saved: '设置已保存。',
+    savedFaceOnly: '访客需先扫描面部，只能看到有自己的照片。',
     design: '分享页',
     designNone: '不使用设计',
     designNoneHint: '普通页面：活动名称和封面',

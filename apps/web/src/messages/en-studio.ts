@@ -954,6 +954,7 @@ export const enStudio: StudioMessages = {
     create: 'Create link',
     save: 'Save settings',
     saved: 'Settings saved.',
+    savedFaceOnly: 'Viewers scan their face first and see only the photos they are in.',
     design: 'Share page',
     designNone: 'No design',
     designNoneHint: 'The plain page: event name and cover',

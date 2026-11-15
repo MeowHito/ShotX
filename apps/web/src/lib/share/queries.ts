@@ -10,6 +10,7 @@ import {
   type ShareItem,
   type ShareItemsResponse,
   type ShareMetaResponse,
+  type ShareMode,
   type SupportedLocale,
 } from '@shotx/shared';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -25,7 +26,15 @@ export const shareKeys = {
   page: ['share'] as const,
   all: (token: string) => ['share', token] as const,
   meta: (token: string) => ['share', token, 'meta'] as const,
-  items: (token: string) => ['share', token, 'items'] as const,
+  /**
+   * Items by mode: a face_only page must never show the gallery list cached while the share
+   * was in gallery mode (an open page whose share switched to face_only, owner 2026-11-15).
+   * Without a mode, every mode's list (for invalidation).
+   */
+  items: (token: string, mode?: ShareMode) =>
+    mode === undefined
+      ? (['share', token, 'items'] as const)
+      : (['share', token, 'items', mode] as const),
   faceDeletion: (token: string) => ['share', token, 'face-deletion'] as const,
 };
 
@@ -47,11 +56,14 @@ export function useShareMeta(ref: string, initial: ShareMetaResponse | null) {
 /** Refetch this long before signed URLs expire. */
 const URL_REFRESH_MARGIN_MS = 60_000;
 
-/** The share's items, page by page (cursor pagination), refreshed before their URLs expire. */
-export function useShareItems(token: string, enabled: boolean) {
+/**
+ * The share's items in its current mode, page by page (cursor pagination), refreshed before their
+ * URLs expire.
+ */
+export function useShareItems(token: string, mode: ShareMode, enabled: boolean) {
   const { api } = useShareApi();
   const query = useInfiniteQuery({
-    queryKey: shareKeys.items(token),
+    queryKey: shareKeys.items(token, mode),
     queryFn: ({ pageParam, signal }) =>
       api.call(PUBLIC_SHARE_ROUTES.items, {
         params: { token },

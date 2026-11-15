@@ -15,6 +15,7 @@ import { useTranslations } from 'next-intl';
 import { type FormEvent, useId, useState } from 'react';
 import { LinkDesignPicker } from '@/components/shares/link-design-picker';
 import { ShareForm } from '@/components/shares/share-form';
+import { SavedToast } from '@/components/studio/saved-toast';
 import { useRenameItem } from '@/lib/drive/queries';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useCreateShare, useMe, useShares, useUpdateShare } from '@/lib/studio/queries';
@@ -130,6 +131,11 @@ function LinkSection({
   const create = useCreateShare();
   const update = useUpdateShare();
   const [message, setMessage] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
+  /** The "saved" popup of the last settings save (its mode), keyed so each save pops again. */
+  const [savedPopup, setSavedPopup] = useState<{ at: number; mode: OwnerShare['mode'] } | null>(
+    null,
+  );
+  const tf = useTranslations('shareForm');
   const link = eventLink(shares.items);
   const faceSearchEnabled = me.data?.features.faceSearch ?? false;
 
@@ -213,12 +219,22 @@ function LinkSection({
             share={link}
             faceSearchEnabled={faceSearchEnabled}
             onSubmit={async (changes) => {
+              setMessage(null);
               await update.mutateAsync({ id: link.id, body: changes });
-              setMessage({ kind: 'info', text: te('dialog.settingsSaved') });
+              // A popup, not the message above: the save button is far below it (owner, 2026-11-15).
+              setSavedPopup({ at: Date.now(), mode: changes.mode ?? link.mode });
             }}
           />
         </>
       )}
+      {savedPopup !== null ? (
+        <SavedToast
+          key={savedPopup.at}
+          title={te('dialog.settingsSaved')}
+          body={savedPopup.mode === 'face_only' ? tf('savedFaceOnly') : undefined}
+          onDone={() => setSavedPopup(null)}
+        />
+      ) : null}
     </section>
   );
 }

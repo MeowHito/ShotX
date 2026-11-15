@@ -1,6 +1,6 @@
 'use client';
 
-import type { ShareStatsQuery, ShareStatsValues } from '@shotx/shared';
+import type { ShareMode, ShareStatsQuery, ShareStatsValues } from '@shotx/shared';
 import { Alert, Button, Input, Label } from '@shotx/ui';
 import { ArrowLeftIcon } from 'lucide-react';
 import Link from 'next/link';
@@ -10,6 +10,7 @@ import { SHARES_HREF } from '@/components/drive/paths';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useFormatBytes } from '@/lib/i18n/use-format';
 import { useMe, useShare, useShareStats, useUpdateShare } from '@/lib/studio/queries';
+import { SavedToast } from '@/components/studio/saved-toast';
 import { ShareForm } from './share-form';
 import { ShareRow } from './share-row';
 
@@ -30,7 +31,8 @@ export function ShareDetails({ shareId }: { shareId: string }) {
   const share = useShare(shareId);
   const me = useMe();
   const update = useUpdateShare();
-  const [saved, setSaved] = useState(false);
+  /** The "saved" popup of the last save (its mode), keyed so each save pops again. */
+  const [saved, setSaved] = useState<{ at: number; mode: ShareMode } | null>(null);
 
   return (
     <div className="space-y-6">
@@ -58,18 +60,24 @@ export function ShareDetails({ shareId }: { shareId: string }) {
               <p className="text-sm text-muted-foreground">{t('shareStats.revokedNote')}</p>
             ) : (
               <div className="max-w-lg">
-                {saved ? <Alert role="status">{t('shareForm.saved')}</Alert> : null}
                 <ShareForm
                   key={`${share.data.id}-${share.dataUpdatedAt}`}
                   kind="edit"
                   share={share.data}
                   faceSearchEnabled={me.data?.features.faceSearch ?? false}
                   onSubmit={async (changes) => {
-                    setSaved(false);
                     await update.mutateAsync({ id: shareId, body: changes });
-                    setSaved(true);
+                    setSaved({ at: Date.now(), mode: changes.mode ?? share.data.mode });
                   }}
                 />
+                {saved !== null ? (
+                  <SavedToast
+                    key={saved.at}
+                    title={t('shareForm.saved')}
+                    body={saved.mode === 'face_only' ? t('shareForm.savedFaceOnly') : undefined}
+                    onDone={() => setSaved(null)}
+                  />
+                ) : null}
               </div>
             )}
           </section>

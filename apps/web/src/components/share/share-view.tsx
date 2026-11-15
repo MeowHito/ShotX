@@ -6,6 +6,7 @@ import {
   shareExpiredDetailsSchema,
   type ShareItem,
   type ShareMetaResponse,
+  type ShareMode,
 } from '@shotx/shared';
 import { Alert, Button, cn } from '@shotx/ui';
 import { useQuery } from '@tanstack/react-query';
@@ -469,6 +470,7 @@ function ShareContent({
             results === null && scanAvailable ? (
               <ShareGallery
                 token={token}
+                mode="face_only"
                 heading={t('share.yourPhotos')}
                 tile={tile}
                 hideWhenEmpty
@@ -477,6 +479,7 @@ function ShareContent({
           ) : (
             <ShareGallery
               token={token}
+              mode="gallery"
               heading={results !== null ? t('share.allPhotos') : null}
               tile={tile}
             />
@@ -671,18 +674,20 @@ function ScanResults({
 /** The virtualized, cursor-paginated grid of the share's items, in their own aspect ratios. */
 function ShareGallery({
   token,
+  mode,
   heading,
   tile,
   hideWhenEmpty = false,
 }: {
   token: string;
+  mode: ShareMode;
   heading: string | null;
   tile: TileRenderer;
   hideWhenEmpty?: boolean;
 }) {
   const tg = useTranslations('share');
   const describe = useErrorMessage();
-  const listing = useShareItems(token, true);
+  const listing = useShareItems(token, mode, true);
   if (listing.isError) {
     return (
       <Alert variant="destructive">
