@@ -19,6 +19,8 @@ export interface MediaSweepResult {
   designAssetsRequeued: number;
   /** `processing` design images past MEDIA_SWEEP_MAX_REQUEUES (left for the operator). */
   designAssetsOverCap: number;
+  /** Ready images whose web.jpg is over MEDIA_WEB_MAX_BYTES, sent `web.rerender` (ADR 0028). */
+  webRerenders: number;
   /** `uploading` rows completed from their object (markCompleted lost). */
   uploadsRecovered: number;
   /** `uploading` rows still being uploaded, or without a complete object (left alone). */
@@ -202,6 +204,42 @@ async function requeueDesignAssets(
 }
 
 /**
+ * ADR 0028: sends `web.rerender` for ready, live images whose web.jpg is over the cap (rendered
+ * before it, or under a larger one). No outbox mark: a row stays selected until the worker has
+ * rendered it under the cap, and the worker re-checks the row, so a duplicate is a no-op.
+ */
+async function requeueOversizedWeb(ctx: JobContext, settings: Settings): Promise<number> {
+  if (settings.webMaxBytes === 0) return 0;
+  const found = await rows<{ id: string; owner_id: string }>(
+    ctx.db,
+    sql`SELECT ${files.id} AS "id", ${files.ownerId} AS "owner_id" FROM ${files}
+      WHERE ${files.status} = 'ready'
+        AND ${files.purgeRequestedAt} IS NULL
+        AND ${files.webKey} IS NOT NULL
+        AND ${files.mime} LIKE 'image/%'
+        AND ${files.webSizeBytes} > ${settings.webMaxBytes}
+      ORDER BY ${files.id}
+      LIMIT ${settings.batchSize}`,
+  );
+  if (found.length === 0) return 0;
+  await ctx.queues.sendMessages(
+    ctx.destinations.media,
+    found.map((row) =>
+      serializeQueueMessage('media', {
+        kind: 'web.rerender',
+        fileId: row.id,
+        photographerId: row.owner_id,
+      }),
+    ),
+  );
+  ctx.log.info('sent web.rerender for web.jpg over the cap', {
+    count: found.length,
+    maxBytes: settings.webMaxBytes,
+  });
+  return found.length;
+}
+
+/**
  * `uploading` rows older than MEDIA_SWEEP_UPLOADING_AGE_SECONDS: when the multipart upload is gone
  * (ListParts) and the object exists with exactly `size_bytes` (HeadObject), the API crashed between
  * CompleteMultipartUpload and markCompleted; complete the row and send `original.completed`. A live
@@ -280,11 +318,13 @@ export async function runMediaSweep(
   const uploads = mayContinue(ctx)
     ? await recoverUploads(ctx, settings)
     : { recovered: 0, left: 0, errors: 0 };
+  const webRerenders = mayContinue(ctx) ? await requeueOversizedWeb(ctx, settings) : 0;
   return {
     requeued: processing.requeued,
     overCap,
     designAssetsRequeued: design.requeued,
     designAssetsOverCap: design.overCap,
+    webRerenders,
     uploadsRecovered: uploads.recovered,
     uploadsLeft: uploads.left,
     errors: processing.errors + uploads.errors,

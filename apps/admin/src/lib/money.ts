@@ -39,3 +39,30 @@ export function formatSatang(satang: number, locale: string): string {
     maximumFractionDigits: 2,
   }).format(satang / 100);
 }
+
+/** U+2212, the minus sign shown before a loss (never only colour). */
+export const MINUS_SIGN = '−';
+
+/**
+ * Signed satang (profit) as baht: a loss gets a minus sign, `−฿1,250`; zero and gains have none.
+ */
+export function formatSignedSatang(satang: number, locale: string): string {
+  const shown = formatSatang(Math.abs(satang), locale);
+  return satang < 0 ? `${MINUS_SIGN}${shown}` : shown;
+}
+
+/**
+ * Satang as compact baht for chart axes and direct labels, e.g. `฿1.5K`, `฿12K`, `฿1.2M` (th-TH:
+ * the locale's own compact form); negatives with a minus sign. Exact values are in the tooltip
+ * and the table view.
+ */
+export function formatCompactSatang(satang: number, locale: string): string {
+  const shown = new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: 'THB',
+    currencyDisplay: 'narrowSymbol',
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(Math.abs(satang) / 100);
+  return satang < 0 ? `${MINUS_SIGN}${shown}` : shown;
+}

@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cameraJpeg, ffmpegAvailable, pngBytes, sampleVideo } from '../testing/fixtures';
 import { MediaDecodeError } from './errors';
 import { parseUtcOffset, takenAtFromExif } from './exif';
-import { renderImageDerivatives } from './image';
+import { renderImageDerivatives, renderWebJpeg } from './image';
 import { magicBytesMatch, sniffMediaType } from './magic';
 import {
   extractPosterFrame,
@@ -164,6 +164,40 @@ describe('image derivatives', () => {
     const web = await sharp(out.web).metadata();
     expect([web.format, web.width, web.height, web.hasAlpha]).toEqual(['jpeg', 64, 48, false]);
     expect((await sharp(out.thumb).metadata()).width).toBe(64);
+  });
+
+  it('keeps web.jpg under MEDIA_WEB_MAX_BYTES: lower quality first, then a smaller long edge (ADR 0028)', async () => {
+    // Noise barely compresses, so a 2000 x 1500 JPEG is far over a 150 kB cap at any quality.
+    const noise = Buffer.alloc(2000 * 1500 * 3);
+    for (let i = 0; i < noise.length; i++) noise[i] = (i * 2654435761) >>> 24;
+    const path = join(dir, 'noise.jpg');
+    await writeFile(
+      path,
+      await sharp(noise, { raw: { width: 2000, height: 1500, channels: 3 } })
+        .jpeg({ quality: 95 })
+        .toBuffer(),
+    );
+    const uncapped = await renderImageDerivatives(
+      path,
+      { ...media, web: { ...media.web, maxBytes: 0 } },
+      '+07:00',
+    );
+    const maxBytes = 150_000;
+    expect(uncapped.web.length).toBeGreaterThan(maxBytes);
+    const capped = await renderImageDerivatives(
+      path,
+      { ...media, web: { ...media.web, maxBytes } },
+      '+07:00',
+    );
+    expect(capped.web.length).toBeLessThanOrEqual(maxBytes);
+    const meta = await sharp(capped.web).metadata();
+    expect(meta.format).toBe('jpeg');
+    expect(meta.width).toBeLessThan(2000);
+    expect(meta.width / meta.height).toBeCloseTo(2000 / 1500, 1);
+    // The same rendering for web.rerender.
+    expect((await renderWebJpeg(path, { ...media, web: { ...media.web, maxBytes } })).length).toBe(
+      capped.web.length,
+    );
   });
 
   it('throws MediaDecodeError for bytes that are not an image', async () => {

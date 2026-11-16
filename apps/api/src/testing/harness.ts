@@ -15,7 +15,12 @@ import {
 } from '@shotx/db';
 import type { FaceProvider } from '@shotx/face';
 import { FakeFaceProvider } from '@shotx/face/testing';
-import type { Env, FakeWebhookBody, SubscriptionStatus } from '@shotx/shared';
+import type {
+  Env,
+  FakeWebhookBody,
+  PackagePaymentGateway,
+  SubscriptionStatus,
+} from '@shotx/shared';
 import {
   FAKE_WEBHOOK_SIGNATURE_HEADER,
   fakeWebhookSignatureHeader,
@@ -127,6 +132,8 @@ export class TestApi {
       configuredEmail?: boolean;
       /** ADR 0025: the account mailer (FakeAccountMailer); default: built from the config. */
       accountMailer?: AccountMailer;
+      /** ADR 0026: the package gateway (a FakePackageGateway with a known secret). */
+      packageGateway?: PackagePaymentGateway;
     } = {},
   ): Promise<TestApi> {
     const config = testConfig(options.env, options.limits);
@@ -164,6 +171,7 @@ export class TestApi {
         paymentGateway: gateway,
         ...(options.configuredEmail === true ? {} : { email }),
         ...(options.accountMailer === undefined ? {} : { accountMailer: options.accountMailer }),
+        ...(options.packageGateway === undefined ? {} : { packageGateway: options.packageGateway }),
         events,
         oidc: options.oidc?.(clock) ?? {},
         ...(options.captchaVerifier === undefined

@@ -6,6 +6,7 @@ import {
   isFileCopy,
   isOriginalCompleted,
   isS3TestEvent,
+  isWebRerender,
   type MediaQueueMessage,
   mediaQueueMessageSchema,
 } from './media';
@@ -65,7 +66,7 @@ export function serializeQueueMessage<Q extends QueueName>(
 
 /**
  * BullMQ job name of a message (dashboards and logs only; consumers branch on the parsed message,
- * never on the name): `media.original-completed`, `media.file-copy`, `media.design-asset`, `media.object-created` or `media.s3-test-event`, `faces.<type>` (e.g.
+ * never on the name): `media.original-completed`, `media.file-copy`, `media.design-asset`, `media.web-rerender`, `media.object-created` or `media.s3-test-event`, `faces.<type>` (e.g.
  * `faces.index.file`), `zip.create`, and the job type for `jobs`. Don't give jobs custom ids for
  * deduplication: a kept failed or completed job with the same id would silently swallow a later
  * job, while consumers are idempotent anyway.
@@ -77,6 +78,7 @@ export function queueJobName<Q extends QueueName>(queue: Q, message: QueueMessag
       if (isOriginalCompleted(media)) return 'media.original-completed';
       if (isFileCopy(media)) return 'media.file-copy';
       if (isDesignAsset(media)) return 'media.design-asset';
+      if (isWebRerender(media)) return 'media.web-rerender';
       return isS3TestEvent(media) ? 'media.s3-test-event' : 'media.object-created';
     }
     case 'faces':

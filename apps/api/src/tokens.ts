@@ -23,6 +23,11 @@ export const EVENT_LOG = Symbol('EVENT_LOG');
 export const EMAIL_PROVIDER = Symbol('EMAIL_PROVIDER');
 /** ADR 0025: account emails (password-reset links); auth/account-email AccountMailer. */
 export const ACCOUNT_MAILER = Symbol('ACCOUNT_MAILER');
+/**
+ * ADR 0026: the package payment gateway (PackagePaymentGateway from @shotx/shared), or null with
+ * PACKAGE_GATEWAY=off.
+ */
+export const PACKAGE_GATEWAY = Symbol('PACKAGE_GATEWAY');
 
 export interface Clock {
   now(): Date;

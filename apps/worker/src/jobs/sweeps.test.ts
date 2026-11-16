@@ -168,6 +168,55 @@ describe('sweeps (ADR 0008 lost jobs)', () => {
     });
   });
 
+  describe('media.sweep: web.jpg over the cap (ADR 0028)', () => {
+    it('sends web.rerender for ready images over MEDIA_WEB_MAX_BYTES only', async () => {
+      const queues = new MemoryQueueClient();
+      const ownerId = await createPhotographer(db);
+      const cap = SWEEPS.media.webMaxBytes;
+      const ready = (webSizeBytes: number, extra: Parameters<typeof createFileRow>[2] = {}) =>
+        createFileRow(db, ownerId, {
+          originalName: `${randomUUID()}.jpg`,
+          status: 'ready',
+          verifiedAt: ago(DAY),
+          webKey: `derived/${ownerId}/${randomUUID()}/web.jpg`,
+          webSizeBytes,
+          ...extra,
+        });
+      const over = await ready(cap + 1);
+      await ready(cap);
+      await ready(cap + 1, { purgeRequestedAt: ago(HOUR), deletedAt: ago(DAY) });
+      await ready(cap + 1, { mime: 'video/mp4', originalName: `${randomUUID()}.mp4` });
+      const result = await runMediaSweep(jobContext(db, new MemoryObjectStore(), queues), {
+        ...SWEEPS.media,
+        batchSize: 100,
+      });
+      const rerenders = sentTo(queues, 'media').filter(
+        (m) => 'kind' in m && m.kind === 'web.rerender',
+      );
+      expect(rerenders).toContainEqual({
+        kind: 'web.rerender',
+        fileId: over.id,
+        photographerId: ownerId,
+      });
+      expect(
+        rerenders.filter((m) => 'photographerId' in m && m.photographerId === ownerId),
+      ).toHaveLength(1);
+      expect(result.webRerenders).toBeGreaterThanOrEqual(1);
+
+      // A cap of 0 sends nothing.
+      const off = new MemoryQueueClient();
+      await runMediaSweep(jobContext(db, new MemoryObjectStore(), off), {
+        ...SWEEPS.media,
+        webMaxBytes: 0,
+      });
+      expect(
+        sentTo(off, 'media').filter((m) => 'kind' in m && m.kind === 'web.rerender'),
+      ).toHaveLength(0);
+      // The database is shared with the other sweep tests: leave nothing over the cap.
+      await db.delete(files).where(eq(files.ownerId, ownerId));
+    });
+  });
+
   describe('media.sweep: uploads whose markCompleted was lost', () => {
     it('completes them from the object; leaves live, missing, wrong-size and young ones', async () => {
       const store = new MemoryObjectStore();

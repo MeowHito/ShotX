@@ -2,12 +2,12 @@ import { Inject, Injectable } from '@nestjs/common';
 import { files, zipJobEntries, zipJobs } from '@shotx/db';
 import {
   type CreateDownloadResponse,
-  downloadObject,
   ERROR_CODES,
   type ErrorCode,
   faceOnlyGrantAllows,
   type DownloadObject,
   sanitizeOriginalName,
+  shareDownloadObject,
   uniqueZipEntryNames,
   type Viewer,
   viewerColumns,
@@ -110,9 +110,11 @@ export class DownloadsService {
       if (file === undefined || !faceOnlyGrantAllows(share.mode, grant, fileId)) {
         throw notFound('File');
       }
-      const object = downloadObject(
+      // ADR 0028: an image original over the cap is served as web.jpg.
+      const object = shareDownloadObject(
         { ...file, mediaKind: mediaKindOf(file.mime) },
         share.downloadSize,
+        this.config.shareDownloadCap.imageMaxBytes,
       );
       if (object === null) throw notFound('File');
       return { fileId, object };

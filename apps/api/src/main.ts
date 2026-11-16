@@ -12,6 +12,7 @@ import {
   mediaSignerSummary,
   mediaUrlSigner,
   queueSender,
+  packageSalesSummary,
   tokenVerifier,
 } from './wiring';
 
@@ -22,6 +23,7 @@ async function main(): Promise<void> {
   // Off AWS nothing may use AWS_ENDPOINT_URL or the default credential chain (ADR 0008 §1).
   assertExplicitStorage(config);
   logger.log(mediaSignerSummary(config));
+  logger.log(packageSalesSummary(config));
   const pool = createPool(loadDatabaseConfig(env));
   const redis = createRedis(config.redis);
   const s3 = createS3Client(config.storage);

@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   childFolderDepth,
+  designAssets,
   type DriveFile as DriveFileRow,
   driveNameKeySql,
   files,
@@ -39,6 +40,7 @@ import {
   type DownloadSize,
   downloadObject,
   isFaceIndexActive,
+  packageUploadsBlockedBy,
   type SignedDownload,
   subscriptionAllowsSharing,
   type CoverFileInvalidDetails,
@@ -53,6 +55,7 @@ import { ApiError, notFound } from '../http/api-error';
 import { validationError } from '../http/zod';
 import { SignedUrls } from '../media/signed-urls';
 import { API_CONFIG, CLOCK, type Clock, DATABASE, QUEUE_SENDER, type QueueSender } from '../tokens';
+import { assertPackageActive, photographerPackage } from '../packages/package-state';
 import { currentSubscription, storageCounters, uploadGate, uploadsBlockedUnder } from './account';
 import { eventsOf } from './events';
 import { ancestorsOf, insertFolder, liveFolder, subtreeMaxDepth } from './folders';
@@ -308,14 +311,25 @@ export class DriveService {
       }
       const moved = await liveFolder(tx, ownerId, id);
       if (moved === null) throw new Error('Folder vanished inside its transaction');
-      if (body.coverFileId === undefined) return toDriveFolder(moved);
+      if (body.coverFileId === undefined && body.coverAssetId === undefined) {
+        return toDriveFolder(moved);
+      }
       // ADR 0011: the share page cover, checked against the folder as it is after this request's
-      // move (same transaction).
-      if (body.coverFileId !== null)
+      // move (same transaction). ADR 0028: or an uploaded cover; setting one clears the other,
+      // null for either clears both.
+      if (body.coverFileId != null) {
         await this.assertCoverFile(tx, ownerId, moved, body.coverFileId);
+      }
+      if (body.coverAssetId != null) await this.lockCoverAsset(tx, ownerId, body.coverAssetId);
+      const cover =
+        body.coverAssetId != null
+          ? { coverAssetId: body.coverAssetId, coverFileId: null }
+          : body.coverFileId != null
+            ? { coverFileId: body.coverFileId, coverAssetId: null }
+            : { coverFileId: null, coverAssetId: null };
       const [covered] = await tx
         .update(folders)
-        .set({ coverFileId: body.coverFileId })
+        .set(cover)
         .where(and(eq(folders.id, id), eq(folders.ownerId, ownerId)))
         .returning();
       if (covered === undefined) throw new Error('Folder vanished inside its transaction');
@@ -361,6 +375,34 @@ export class DriveService {
       throw new ApiError('COVER_FILE_INVALID', 'This file cannot be the folder cover', {
         reason,
       } satisfies CoverFileInvalidDetails);
+    }
+  }
+
+  /**
+   * ADR 0028: an uploaded cover must be the caller's live design image (any status but purge
+   * requested; it shows once `ready`), else DESIGN_ASSET_NOT_FOUND. Locked FOR KEY SHARE, as a
+   * design save does, so the orphan purge can't take it before this transaction commits.
+   */
+  private async lockCoverAsset(tx: Tx, ownerId: string, assetId: string): Promise<void> {
+    const [asset] = await tx
+      .select({ id: designAssets.id })
+      .from(designAssets)
+      .where(
+        and(
+          eq(designAssets.id, assetId),
+          eq(designAssets.ownerId, ownerId),
+          isNull(designAssets.purgeRequestedAt),
+        ),
+      )
+      .for('key share');
+    if (asset === undefined) {
+      throw new ApiError(
+        'DESIGN_ASSET_NOT_FOUND',
+        'The cover image is not yours or no longer exists',
+        {
+          assetIds: [assetId],
+        },
+      );
     }
   }
 
@@ -818,6 +860,9 @@ export class DriveService {
           );
         }
       }
+      // ADR 0026: turning indexing on (or extending it) needs a package that still runs (no
+      // package row: unlimited). Turning it off always works.
+      await assertPackageActive(tx, ownerId, now);
       const current = await liveFolder(tx, ownerId, id, 'update');
       if (current === null) throw notFound('Folder');
       const expiresAt =
@@ -914,6 +959,7 @@ export class DriveService {
     return this.db.transaction(
       async (tx) => {
         const subscription = await currentSubscription(tx, ownerId);
+        const pkg = await photographerPackage(tx, ownerId);
         const counters = await storageCounters(tx, ownerId);
         const trashBytes = await trashedQuotaBytes(tx, ownerId);
         const state = { ...counters, quotaBytes: subscription?.quotaBytes ?? 0 };
@@ -934,7 +980,10 @@ export class DriveService {
                   planCode: subscription.planCode,
                   periodEnd: subscription.periodEnd.toISOString(),
                 },
-          uploadsBlockedBy: uploadsBlockedUnder(gate, subscription?.status ?? null, state),
+          // ADR 0026: the package first (expired, then no photos left); null when unlimited.
+          uploadsBlockedBy:
+            packageUploadsBlockedBy(pkg, this.clock.now()) ??
+            uploadsBlockedUnder(gate, subscription?.status ?? null, state),
         };
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' },

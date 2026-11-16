@@ -31,11 +31,25 @@ export function availableActions(user: AdminUser, currentAdminId: string | null)
   ];
 }
 
+/**
+ * ADR 0026: the photographer's package and whether it has run out at `now` (the api's `expired`,
+ * or the expiry passed since the answer). Null without a package: unlimited (admin-created
+ * photographers, and admins).
+ */
+export function packageStateOf(
+  user: AdminUser,
+  now: number,
+): { pkg: NonNullable<AdminUser['package']>; expired: boolean } | null {
+  const pkg = user.role === 'photographer' ? (user.package ?? null) : null;
+  if (pkg === null) return null;
+  return { pkg, expired: pkg.expired || Date.parse(pkg.expiresAt) <= now };
+}
+
 export function userDetailHref(id: string): string {
   return `/users/${id}`;
 }
 
-function Badge({
+export function Badge({
   tone,
   children,
 }: {
@@ -78,10 +92,15 @@ export function UsersTable({
   const [mountedAt] = useState(() => Date.now());
   const totp = useTotpEnabled();
   const now = nowProp ?? mountedAt;
+  // ADR 0027: paid orders · packages + cash in THB; admins (null) and an older api (absent): –.
+  const paidCell = (user: AdminUser) =>
+    user.role === 'photographer' && user.ordersPaid != null && user.paidSatang != null
+      ? t('paidSummary', { orders: user.ordersPaid, amount: format.satang(user.paidSatang) })
+      : tc('none');
 
   return (
     <div className="overflow-x-auto rounded-xl border bg-background shadow-card">
-      <table className="w-full min-w-[56rem] text-left text-sm">
+      <table className="w-full min-w-[70rem] text-left text-sm">
         <caption className="sr-only">{t('tableLabel')}</caption>
         <thead className="border-b bg-sidebar text-xs text-muted-foreground">
           <tr>
@@ -107,6 +126,12 @@ export function UsersTable({
               {t('columns.photos')}
             </th>
             <th scope="col" className="px-4 py-3 font-medium">
+              {t('columns.package')}
+            </th>
+            <th scope="col" className="px-4 py-3 text-right font-medium">
+              {t('columns.paid')}
+            </th>
+            <th scope="col" className="px-4 py-3 font-medium">
               <span className="sr-only">{t('columns.actions')}</span>
             </th>
           </tr>
@@ -117,6 +142,7 @@ export function UsersTable({
             const locked = user.lockedUntil !== null && Date.parse(user.lockedUntil) > now;
             const actions = availableActions(user, currentAdminId);
             const label = user.email ?? user.name ?? user.id;
+            const packageState = packageStateOf(user, now);
             return (
               <tr key={user.id} className={cn(user.status === 'disabled' && 'bg-muted/40')}>
                 <td className="px-4 py-3">
@@ -134,9 +160,14 @@ export function UsersTable({
                   {user.name ?? <span className="text-muted-foreground">{t('noName')}</span>}
                 </td>
                 <td className="px-4 py-3">
-                  <Badge tone={user.role === 'admin' ? 'primary' : 'neutral'}>
-                    {tr(user.role)}
-                  </Badge>
+                  <div className="flex flex-wrap gap-1.5">
+                    <Badge tone={user.role === 'admin' ? 'primary' : 'neutral'}>
+                      {tr(user.role)}
+                    </Badge>
+                    {user.selfSignup === true ? (
+                      <Badge tone="primary">{t('selfSignup')}</Badge>
+                    ) : null}
+                  </div>
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-1.5">
@@ -163,6 +194,40 @@ export function UsersTable({
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums">
                   {user.photoCount !== null ? format.count(user.photoCount) : tc('none')}
+                </td>
+                <td className="px-4 py-3">
+                  {user.role !== 'photographer' ? (
+                    tc('none')
+                  ) : packageState === null ? (
+                    <span className="text-muted-foreground">{t('package.unlimited')}</span>
+                  ) : (
+                    <div className="space-y-0.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-medium">{packageState.pkg.name}</span>
+                        {packageState.expired ? (
+                          <Badge tone="danger">{t('package.expired')}</Badge>
+                        ) : null}
+                      </div>
+                      <div className="text-xs whitespace-nowrap text-muted-foreground">
+                        {packageState.expired
+                          ? t('package.expiredOn', {
+                              date: format.dateTime(packageState.pkg.expiresAt),
+                            })
+                          : t('package.until', {
+                              date: format.dateTime(packageState.pkg.expiresAt),
+                            })}
+                      </div>
+                      <div className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+                        {t('package.photos', {
+                          used: packageState.pkg.photosUsed,
+                          limit: packageState.pkg.photoLimit,
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-right whitespace-nowrap tabular-nums">
+                  {paidCell(user)}
                 </td>
                 <td className="px-2 py-2 text-right">
                   <DropdownMenu modal={false}>

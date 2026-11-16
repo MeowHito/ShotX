@@ -267,6 +267,48 @@ export const ErrorCode = {
    * admin) or the account was disabled after the email was sent. Ask for a new link.
    */
   PASSWORD_RESET_INVALID: 'PASSWORD_RESET_INVALID',
+
+  // Packages, self sign-up and online payment (ADR 0026). Accounts without a package row are
+  // unlimited and never get PLAN_EXPIRED or PHOTO_LIMIT_REACHED.
+  /**
+   * The photographer's package has expired (`now >= photographer_packages.expires_at`):
+   * POST /uploads/init, creating a share, re-activating or un-pausing one, and turning on face
+   * indexing are refused. Browsing, renaming, deleting and the owner's own downloads keep working.
+   * Shares of the account answer SHARE_EXPIRED with reason `plan_expired` instead. Details:
+   * PlanExpiredDetails.
+   */
+  PLAN_EXPIRED: 'PLAN_EXPIRED',
+  /**
+   * POST /uploads/init would take the package past its photo limit
+   * (`photos_used + 1 > photo_limit`). Nothing is created. Details: PhotoLimitReachedDetails.
+   */
+  PHOTO_LIMIT_REACHED: 'PHOTO_LIMIT_REACHED',
+  /**
+   * POST /package-orders with a package code that is unknown, inactive, free (FREE_PACKAGE_CODE) or
+   * priced 0: it can't be bought online.
+   */
+  PACKAGE_UNAVAILABLE: 'PACKAGE_UNAVAILABLE',
+  /**
+   * POST /package-orders while PACKAGE_GATEWAY=off: online payment isn't open yet. The dialog says
+   * it opens soon and to contact the team. Not a 5xx: it is off on purpose.
+   */
+  PAYMENT_UNAVAILABLE: 'PAYMENT_UNAVAILABLE',
+  /**
+   * POST /package-orders with an email that can't buy a package online: it belongs to an admin, a
+   * disabled account, or an unlimited (admin-created, no package row) photographer. One generic
+   * code and message for all of them.
+   */
+  EMAIL_UNAVAILABLE: 'EMAIL_UNAVAILABLE',
+  /**
+   * POST /signup/free/confirm with a link token that is unknown, expired or already used, or the
+   * email got an account since the link was sent. Ask for a new link (or sign in).
+   */
+  SIGNUP_LINK_INVALID: 'SIGNUP_LINK_INVALID',
+  /**
+   * GET /package-orders/:id (and its fake-result) with an unknown order id or a wrong
+   * X-Order-Token. One code for both, so the answer never confirms that an order id exists.
+   */
+  ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -335,6 +377,14 @@ export const ERROR_HTTP_STATUS = {
   DESIGN_LIMIT_REACHED: 409,
   DESIGN_DOC_TOO_LARGE: 422,
   DESIGN_NOT_FOUND: 422,
+  PLAN_EXPIRED: 403,
+  PHOTO_LIMIT_REACHED: 403,
+  PACKAGE_UNAVAILABLE: 404,
+  // Not 503: payment is off on purpose (PACKAGE_GATEWAY=off), not an outage.
+  PAYMENT_UNAVAILABLE: 409,
+  EMAIL_UNAVAILABLE: 409,
+  SIGNUP_LINK_INVALID: 400,
+  ORDER_NOT_FOUND: 404,
 } as const satisfies Record<ErrorCode, number>;
 
 /** Body of every API error response. */
@@ -590,6 +640,20 @@ export const designDocTooLargeDetailsSchema = z.object({
 });
 export type DesignDocTooLargeDetails = z.output<typeof designDocTooLargeDetailsSchema>;
 
+/** PLAN_EXPIRED: when the package ran out. */
+export const planExpiredDetailsSchema = z.object({
+  expiresAt: z.iso.datetime({ offset: true }),
+});
+export type PlanExpiredDetails = z.output<typeof planExpiredDetailsSchema>;
+
+/** PHOTO_LIMIT_REACHED: the package's limit, what is used, and what the request asked for. */
+export const photoLimitReachedDetailsSchema = z.object({
+  photoLimit: z.number().int().positive(),
+  photosUsed: z.number().int().nonnegative(),
+  requested: z.number().int().positive(),
+});
+export type PhotoLimitReachedDetails = z.output<typeof photoLimitReachedDetailsSchema>;
+
 /** Schema of `details` for the codes that have them. */
 export const ERROR_DETAILS_SCHEMAS = {
   VALIDATION_FAILED: validationFailedDetailsSchema,
@@ -616,6 +680,8 @@ export const ERROR_DETAILS_SCHEMAS = {
   DESIGN_ASSET_NOT_FOUND: designAssetNotFoundDetailsSchema,
   DESIGN_LIMIT_REACHED: designLimitReachedDetailsSchema,
   DESIGN_DOC_TOO_LARGE: designDocTooLargeDetailsSchema,
+  PLAN_EXPIRED: planExpiredDetailsSchema,
+  PHOTO_LIMIT_REACHED: photoLimitReachedDetailsSchema,
 } as const satisfies Partial<Record<ErrorCode, z.ZodType>>;
 
 /**

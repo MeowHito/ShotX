@@ -108,12 +108,15 @@ describe('admin UI in th, en and zh', () => {
 
   it.each(TRANSLATIONS)('%s never offers plans or checkout (BILLING_MODE=offline)', (_, m) => {
     // The error codes of the switched-off billing API keep their messages (an exhaustive map).
+    // ADR 0026: the users page shows a photographer's package (套餐), but never sells one.
     const ui = Object.entries(m)
       .filter(([namespace]) => namespace !== 'errors')
       .flatMap(([, tree]) => leaves(tree))
       .map(([, text]) => text)
       .join('\n');
-    expect(ui).not.toMatch(/checkout|online payment|在线支付|结账|套餐/i);
+    expect(ui).not.toMatch(
+      /checkout|online payment|在线支付|结账|购买套餐|升级套餐|buy a package/i,
+    );
   });
 
   it('uses the agreed admin terms', () => {

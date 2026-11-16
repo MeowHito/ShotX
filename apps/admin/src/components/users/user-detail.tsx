@@ -11,7 +11,8 @@ import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useFormat } from '@/lib/i18n/use-format';
 import { useUser } from '@/lib/users/queries';
 import { UserActionDialogs, useUserActions } from './user-action-dialogs';
-import { availableActions } from './users-table';
+import { UserFinance } from './user-finance';
+import { availableActions, Badge, packageStateOf } from './users-table';
 import type { PasswordUiConfig } from '@/lib/users/password';
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -78,6 +79,7 @@ export function UserDetail({
   const available = availableActions(user, currentAdminId);
   const self = currentAdminId !== null && user.id === currentAdminId;
   const locked = user.lockedUntil !== null && Date.parse(user.lockedUntil) > now;
+  const packageState = packageStateOf(user, now);
 
   return (
     <div className="space-y-8">
@@ -85,7 +87,10 @@ export function UserDetail({
         {back}
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="space-y-1">
-            <p className="eyebrow">{tr(user.role)}</p>
+            <p className="eyebrow">
+              {tr(user.role)}
+              {user.selfSignup === true ? ` · ${tu('selfSignup')}` : ''}
+            </p>
             <h1 className="text-2xl break-all">{user.email ?? tu('noEmail')}</h1>
             <p className="text-sm text-muted-foreground">
               {user.name ?? tu('noName')}
@@ -169,7 +174,11 @@ export function UserDetail({
           </Row>
           <Row label={tu('columns.created')}>
             {format.dateTime(user.createdAt)} ·{' '}
-            {user.createdById !== null ? t('createdBy') : t('createdByCli')}
+            {user.createdById !== null
+              ? t('createdBy')
+              : user.selfSignup === true
+                ? t('createdBySelfSignup')
+                : t('createdByCli')}
           </Row>
           <Row label={tu('columns.storage')}>
             {user.usedBytes !== null ? format.gigabytes(user.usedBytes) : tc('none')}
@@ -177,8 +186,45 @@ export function UserDetail({
           {user.photoCount !== null ? (
             <Row label={tu('columns.photos')}>{format.count(user.photoCount)}</Row>
           ) : null}
+          {user.role === 'photographer' ? (
+            <Row label={tu('columns.package')}>
+              {packageState === null ? (
+                <span data-testid="package-state">{tu('package.unlimited')}</span>
+              ) : (
+                <span
+                  className="inline-flex flex-wrap items-center gap-1.5"
+                  data-testid="package-state"
+                >
+                  <span className="font-medium">{packageState.pkg.name}</span>
+                  {packageState.expired ? (
+                    <Badge tone="danger">{tu('package.expired')}</Badge>
+                  ) : null}
+                  <span className="text-muted-foreground">
+                    {t('packageStarted', { date: format.dateTime(packageState.pkg.startsAt) })} ·{' '}
+                    {packageState.expired
+                      ? tu('package.expiredOn', {
+                          date: format.dateTime(packageState.pkg.expiresAt),
+                        })
+                      : tu('package.until', { date: format.dateTime(packageState.pkg.expiresAt) })}
+                  </span>
+                </span>
+              )}
+            </Row>
+          ) : null}
+          {packageState !== null ? (
+            <Row label={t('packagePhotos')}>
+              <span className="tabular-nums" data-testid="package-photos">
+                {tu('package.photos', {
+                  used: packageState.pkg.photosUsed,
+                  limit: packageState.pkg.photoLimit,
+                })}
+              </span>
+            </Row>
+          ) : null}
         </dl>
       </section>
+
+      {user.role === 'photographer' ? <UserFinance userId={user.id} /> : null}
 
       {user.role === 'photographer' ? <CashPayments photographer={user} /> : null}
 

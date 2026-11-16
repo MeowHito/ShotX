@@ -115,7 +115,8 @@ export function useLightboxDownload(
         setLabel(tLightbox('saved'));
       } catch (err) {
         if (err instanceof Error && err.name === 'NotAllowedError') setLabel(tLightbox('tapAgain'));
-        else if (err instanceof Error && err.name === 'AbortError') setLabel(tLightbox('saveShort'));
+        else if (err instanceof Error && err.name === 'AbortError')
+          setLabel(tLightbox('saveShort'));
         else {
           setLabel(tLightbox('saveShort'));
           errorRef.current(err);

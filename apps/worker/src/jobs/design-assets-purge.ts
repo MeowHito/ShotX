@@ -1,4 +1,4 @@
-import { designAssets, shareDesigns } from '@shotx/db';
+import { designAssets, folders, shareDesigns } from '@shotx/db';
 import {
   designAssetKeys,
   designDocAssetIds,
@@ -46,9 +46,11 @@ function uuidsIn(value: unknown, out: Set<string>): void {
 }
 
 /**
- * Asset ids any of the owner's designs references (designDocAssetIds). A document that doesn't
- * parse with the current designDocSchema (a newer api's version, say) never lets an image go:
- * every uuid in it counts as referenced, and the problem is logged.
+ * Asset ids any of the owner's designs references (designDocAssetIds), plus the owner's uploaded
+ * event covers (`folders.cover_asset_id`, ADR 0028; any folder row, trashed ones too, so a
+ * restored event keeps its cover). A document that doesn't parse with the current designDocSchema
+ * (a newer api's version, say) never lets an image go: every uuid in it counts as referenced, and
+ * the problem is logged.
  */
 export async function referencedAssetIds(
   db: Db,
@@ -60,6 +62,11 @@ export async function referencedAssetIds(
     .from(shareDesigns)
     .where(eq(shareDesigns.ownerId, ownerId));
   const ids = new Set<string>();
+  const covers = await db
+    .select({ assetId: folders.coverAssetId })
+    .from(folders)
+    .where(and(eq(folders.ownerId, ownerId), isNotNull(folders.coverAssetId)));
+  for (const { assetId } of covers) if (assetId !== null) ids.add(assetId.toLowerCase());
   for (const { id, doc } of docs) {
     const parsed = designDocSchema.safeParse(doc);
     if (parsed.success) {

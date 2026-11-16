@@ -57,12 +57,15 @@ export const en: PublicMessages = {
     unavailable: {
       title: 'This link has expired',
       pausedTitle: 'This link isn’t open yet',
+      closedTitle: 'This link is closed for now',
       body: 'Ask the photographer for a new link.',
       reasons: {
         revoked: 'The photographer has turned this link off.',
         paused: 'The photographer hasn’t opened this event for viewing right now. Try again later.',
         expired: 'This link is past its expiry date.',
         unavailable: 'The photos in this link are no longer available.',
+        plan_expired:
+          'The photographer hasn’t renewed their package yet. Try this link again later.',
       },
     },
     login: {
@@ -371,6 +374,15 @@ export const en: PublicMessages = {
         'You have the maximum number of designs. Delete one you don’t use first.',
       DESIGN_DOC_TOO_LARGE: 'This design is too large. Remove some elements and try again.',
       DESIGN_NOT_FOUND: 'The selected design wasn’t found. It may have been deleted.',
+      PLAN_EXPIRED: 'Your package has expired. Renew it to keep using Snap.',
+      PHOTO_LIMIT_REACHED:
+        'You have uploaded all the photos your package allows. Renew or add a package to upload more.',
+      PACKAGE_UNAVAILABLE: 'This package is no longer on sale. Please choose another one.',
+      PAYMENT_UNAVAILABLE: 'Online payment is coming soon. Please contact our team.',
+      EMAIL_UNAVAILABLE: 'This email can’t buy a package online. Please contact our team.',
+      SIGNUP_LINK_INVALID:
+        'This confirmation link no longer works (it expired, was already used, or the email already has an account).',
+      ORDER_NOT_FOUND: 'This order wasn’t found.',
     },
     details: {
       quotaExceeded: 'Not enough space: this file needs {requested} but only {available} is left.',
@@ -385,6 +397,10 @@ export const en: PublicMessages = {
       sharePaused: 'The photographer hasn’t opened this event for viewing right now.',
       shareExpired: 'This link has expired',
       shareUnavailable: 'This link has expired. Its photos are no longer available.',
+      sharePlanExpired: 'This link is closed for now. Try again later.',
+      planExpired: 'Your package expired on {date}. Renew it to keep using Snap.',
+      photoLimitReached:
+        'You have uploaded the {limit, number} photos your package allows. Renew or add a package to upload more.',
       zipTooLarge:
         'One download can hold up to {maxFiles, number} photos and {maxBytes} in total (you selected {files, number} photos, {bytes}).',
       noFaceDetected: 'Photos with no face found: {count, number}',

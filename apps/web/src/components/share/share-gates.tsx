@@ -15,20 +15,27 @@ import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useUnlockShare } from '@/lib/share/queries';
 
 /**
- * The "link expired" page for every SHARE_EXPIRED reason (revoked, expired, unavailable). ADR 0011
- * decision 2: it no longer links to "delete my face" (the page stays at its URL, unlinked).
+ * The "link expired" page for every SHARE_EXPIRED reason (revoked, expired, unavailable; paused and
+ * ADR 0026's plan_expired read "not open yet" / "closed for now"). ADR 0011 decision 2: it no
+ * longer links to "delete my face" (the page stays at its URL, unlinked).
  */
 export function ShareUnavailable({ reason }: { reason: ShareUnavailableReason | null }) {
   const tu = useTranslations('share.unavailable');
+  // ADR 0016: an unpublished event comes back with the same link; ADR 0026: so does a link whose
+  // photographer renews an expired package. Neither says "ask for a new one".
+  const comesBack = reason === 'paused' || reason === 'plan_expired';
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-3 py-16 text-center">
       <TimerOffIcon className="size-12 text-muted-foreground" aria-hidden />
-      {/* ADR 0016: an unpublished event comes back with the same link; no "ask for a new one". */}
       <h1 className="text-2xl font-bold">
-        {reason === 'paused' ? tu('pausedTitle') : tu('title')}
+        {reason === 'paused'
+          ? tu('pausedTitle')
+          : reason === 'plan_expired'
+            ? tu('closedTitle')
+            : tu('title')}
       </h1>
       {reason !== null ? <p className="text-muted-foreground">{tu(`reasons.${reason}`)}</p> : null}
-      {reason === 'paused' ? null : <p className="text-sm text-muted-foreground">{tu('body')}</p>}
+      {comesBack ? null : <p className="text-sm text-muted-foreground">{tu('body')}</p>}
     </div>
   );
 }

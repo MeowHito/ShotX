@@ -235,6 +235,9 @@ export const SCHEDULED_JOB_TYPES = [
    *   MEDIA_SWEEP_PROCESSING_AGE_SECONDS and `requeues` below MEDIA_SWEEP_MAX_REQUEUES: send
    *   `design.asset` again, bumping both in the same guarded UPDATE first
    *   (`design_assets_processing_idx`).
+   * - web.jpg over the cap (ADR 0028): `ready`, not purge-requested image files whose
+   *   `web_size_bytes` is over MEDIA_WEB_MAX_BYTES (unless 0): send `web.rerender` (no mark; the
+   *   worker re-checks the row), at most MEDIA_SWEEP_BATCH_SIZE per run.
    */
   'media.sweep',
   /**

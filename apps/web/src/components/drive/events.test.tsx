@@ -117,7 +117,7 @@ describe('events (ADR 0016)', () => {
     expect(fake.ownerShares.get(share.id)?.share.url).toBe(share.url);
   });
 
-  it('edits the name and creates the link from the edit dialog; no cover picker', async () => {
+  it('edits the name and creates the link from the edit dialog', async () => {
     const user = userEvent.setup();
     const fake = new FakeApi();
     const folder = fake.addFolder('Draft');
@@ -131,8 +131,6 @@ describe('events (ADR 0016)', () => {
     const name = within(dialog).getByLabelText(th.event.dialog.name);
     await user.clear(name);
     await user.type(name, 'Bangkok Run');
-    // The cover picker is gone (owner, 2026-11-13): the event's look is its design.
-    expect(within(dialog).queryByRole('button', { name: 'ใช้ b.jpg เป็นรูปปก' })).toBeNull();
     await user.click(within(dialog).getByRole('button', { name: th.event.dialog.save }));
     expect(await within(dialog).findByText(th.event.dialog.saved)).toBeInTheDocument();
     expect(fake.callsTo(DRIVE_ROUTES.updateFolder).map((c) => c.body)).toEqual([
@@ -149,6 +147,39 @@ describe('events (ADR 0016)', () => {
     expect(
       await within(dialog).findByRole('button', { name: th.event.unpublish }),
     ).toBeInTheDocument();
+  });
+
+  it('sets the 2:3 cover from the event photos, then back to automatic (ADR 0028)', async () => {
+    const user = userEvent.setup();
+    const fake = new FakeApi();
+    const folder = fake.addFolder('Trail');
+    fake.addFile('a.jpg', folder.id);
+    const b = fake.addFile('b.jpg', folder.id);
+    renderDrive(fake);
+    await screen.findByRole('list', { name: th.event.events });
+    await user.click(within(cardOf('Trail')).getByRole('button', { name: 'แก้ไข Trail' }));
+    const dialog = await screen.findByRole('dialog', { name: th.event.dialog.title });
+
+    expect(within(dialog).getByRole('heading', { name: th.event.dialog.cover })).toBeVisible();
+    expect(within(dialog).getByTestId('event-cover-preview')).toHaveClass('aspect-[2/3]');
+    expect(within(dialog).getByRole('button', { name: th.event.dialog.coverUpload })).toBeVisible();
+    // Automatic until one is chosen: no reset button.
+    expect(within(dialog).queryByRole('button', { name: th.event.dialog.coverAuto })).toBeNull();
+
+    await user.click(within(dialog).getByRole('button', { name: th.event.dialog.coverPick }));
+    await user.click(await within(dialog).findByRole('button', { name: 'ใช้ b.jpg เป็นภาพปก' }));
+    expect(await within(dialog).findByText(th.event.dialog.coverSaved)).toBeInTheDocument();
+    expect(fake.callsTo(DRIVE_ROUTES.updateFolder).map((c) => c.body)).toEqual([
+      { coverFileId: b.id },
+    ]);
+    expect(fake.folders.get(folder.id)?.coverFileId).toBe(b.id);
+
+    await user.click(
+      await within(dialog).findByRole('button', { name: th.event.dialog.coverAuto }),
+    );
+    await waitFor(() => expect(fake.callsTo(DRIVE_ROUTES.updateFolder)).toHaveLength(2));
+    expect(fake.callsTo(DRIVE_ROUTES.updateFolder)[1]?.body).toEqual({ coverFileId: null });
+    expect(fake.folders.get(folder.id)?.coverFileId).toBeNull();
   });
 
   it('changes the design of the published link in place: same link, no new share', async () => {

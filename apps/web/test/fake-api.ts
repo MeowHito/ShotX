@@ -13,7 +13,9 @@ import {
   ME_ROUTES,
   type MeResponse,
   multipartPlan,
+  type MyPackageResponse,
   type OwnerShare,
+  PACKAGE_ROUTES,
   type RouteContract,
   UPLOAD_ROUTES,
   uploadFileType,
@@ -100,6 +102,8 @@ export interface FakeApiOptions {
   /** Polls of GET /s/:token/zip-jobs/:id before the job is done. */
   zipPollsUntilDone?: number;
   zipOutcome?: 'ready' | 'failed';
+  /** ADR 0026: GET /me/package (null: an unlimited, admin-created account). */
+  myPackage?: MyPackageResponse;
 }
 
 export interface RecordedCall {
@@ -177,6 +181,7 @@ export class FakeApi {
       resultTtlSeconds: 24 * 3600,
       zipPollsUntilDone: 2,
       zipOutcome: 'ready',
+      myPackage: null,
       ...options,
     };
     this.me = {
@@ -212,6 +217,7 @@ export class FakeApi {
       faceIndexEnabled: false,
       faceIndexExpiresAt: null,
       coverFileId: null,
+      coverAssetId: null,
     };
     this.folders.set(folder.id, folder);
     return folder;
@@ -421,7 +427,11 @@ export class FakeApi {
       .filter((s) => s.status !== 'revoked')
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))[0];
     return {
-      coverThumbUrl: cover?.thumbUrl ?? null,
+      // ADR 0028: an uploaded cover wins (the fake's own CDN URL for a design image).
+      coverThumbUrl:
+        folder.coverAssetId !== null
+          ? `https://cdn.test/designs/${folder.coverAssetId}/web.webp`
+          : (cover?.thumbUrl ?? null),
       link:
         link === undefined
           ? null
@@ -563,7 +573,12 @@ export class FakeApi {
       case DRIVE_ROUTES.updateFolder: {
         const folder = this.folderOrFail(params.id ?? null);
         if (folder === null) throw new Fail('NOT_FOUND');
-        const b = body as { name?: string; parentId?: string | null; coverFileId?: string | null };
+        const b = body as {
+          name?: string;
+          parentId?: string | null;
+          coverFileId?: string | null;
+          coverAssetId?: string | null;
+        };
         if (b.coverFileId !== undefined && b.coverFileId !== null) {
           const cover = this.files.get(b.coverFileId);
           if (cover === undefined) throw new Fail('NOT_FOUND');
@@ -581,7 +596,17 @@ export class FakeApi {
                     : null;
           if (reason !== null) throw new Fail('COVER_FILE_INVALID', { reason });
         }
-        if (b.coverFileId !== undefined) folder.coverFileId = b.coverFileId;
+        // ADR 0028: setting one cover clears the other; null for either clears both.
+        if (b.coverAssetId != null) {
+          folder.coverAssetId = b.coverAssetId;
+          folder.coverFileId = null;
+        } else if (b.coverFileId !== undefined) {
+          folder.coverFileId = b.coverFileId;
+          folder.coverAssetId = null;
+        } else if (b.coverAssetId === null) {
+          folder.coverFileId = null;
+          folder.coverAssetId = null;
+        }
         const parentId = b.parentId === undefined ? folder.parentId : b.parentId;
         if (parentId !== null) {
           this.folderOrFail(parentId);
@@ -1001,6 +1026,8 @@ export class FakeApi {
         this.uploads.delete(upload.file.id);
         return { file: upload.file };
       }
+      case PACKAGE_ROUTES.myPackage:
+        return this.options.myPackage;
       case UPLOAD_ROUTES.abort: {
         const upload = this.uploadOrFail(params.id);
         this.reservedBytes -= upload.file.sizeBytes;

@@ -1,6 +1,6 @@
 import { CASH_PAYMENT_MAX_SATANG } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
-import { formatSatang, thbToSatang } from './money';
+import { formatCompactSatang, formatSatang, formatSignedSatang, thbToSatang } from './money';
 
 describe('THB → satang', () => {
   it.each([
@@ -51,5 +51,18 @@ describe('satang → THB display', () => {
     const plain = (text: string) => text.replace(/\u00a0/g, ' ');
     expect(plain(formatSatang(150_000, 'en-GB'))).toBe('THB 1,500');
     expect(plain(formatSatang(150_050, 'zh-CN'))).toBe('THB 1,500.50');
+  });
+});
+
+describe('signed and compact baht (finance)', () => {
+  it('puts a minus sign before a loss, never only colour', () => {
+    expect(formatSignedSatang(-125_000, 'th-TH')).toBe('−฿1,250');
+    expect(formatSignedSatang(125_050, 'th-TH')).toBe('฿1,250.50');
+    expect(formatSignedSatang(0, 'th-TH')).toBe('฿0');
+  });
+
+  it('shortens large amounts for axes', () => {
+    expect(formatCompactSatang(15_234_550, 'th-TH')).toBe('฿152.3K');
+    expect(formatCompactSatang(-50_000, 'th-TH')).toBe('−฿500');
   });
 });

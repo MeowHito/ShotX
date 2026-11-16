@@ -19,6 +19,7 @@ import { SavedToast } from '@/components/studio/saved-toast';
 import { useRenameItem } from '@/lib/drive/queries';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useCreateShare, useMe, useShares, useUpdateShare } from '@/lib/studio/queries';
+import { EventCoverSection } from './event-cover';
 import { EventStatusBadge } from './item-card';
 
 /** The newest share of a folder that isn't revoked (shares come newest first). */
@@ -27,9 +28,10 @@ export function eventLink(shares: readonly OwnerShare[]): OwnerShare | null {
 }
 
 /**
- * The event editor (ADR 0016): the event's name, then its link: publish / unpublish (the same link
- * either way), the link's page design (changed in place, ADR 0019; it replaced the cover picker,
- * owner 2026-11-13) and the link settings, or "create link and publish" when it has none.
+ * The event editor (ADR 0016): the event's name, its 2:3 cover (uploaded or one of its photos, ADR
+ * 0028), then its link: publish / unpublish (the same link either way), the link's page design
+ * (changed in place, ADR 0019) and the link settings, or "create link and publish" when it has
+ * none.
  */
 export function EventDialog({
   folder,
@@ -55,6 +57,7 @@ export function EventDialog({
           </DialogHeader>
           <div className="grid gap-6">
             <DetailsSection key={folder.id} folder={folder} />
+            <EventCoverSection folder={folder} />
             <LinkSection folder={folder} onPublishedChange={onPublishedChange} />
           </div>
         </DialogContent>

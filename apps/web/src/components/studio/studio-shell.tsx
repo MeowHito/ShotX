@@ -11,6 +11,7 @@ import type { ClientStudioConfig } from '@/lib/server/config';
 import { AccountMenu, type StudioUser } from './account-menu';
 import { ActAsBanner } from './act-as-banner';
 import { NewMenu } from './new-menu';
+import { PackageChip, PackageExpiredBanner } from './package-chip';
 import { SearchBar } from './search-bar';
 import { SidebarNav } from './sidebar-nav';
 import { SnapMark } from './snap-mark';
@@ -96,19 +97,36 @@ export function StudioShellView({
             </Button>
           </div>
           <SidebarNav pathname={pathname} rail={rail} />
-          <div className="studio-card mt-auto p-3">
+          <div className="mt-auto space-y-3">
+            {/* ADR 0026: nothing for an unlimited account. */}
             {rail ? (
               <>
                 <div className="lg:hidden">
-                  <StorageMeter compact />
+                  <PackageChip compact />
                 </div>
-                <div className="hidden lg:block">
-                  <StorageMeter />
+                <div className="studio-card hidden p-3 empty:hidden lg:block">
+                  <PackageChip />
                 </div>
               </>
             ) : (
-              <StorageMeter />
+              <div className="studio-card p-3 empty:hidden">
+                <PackageChip />
+              </div>
             )}
+            <div className="studio-card p-3">
+              {rail ? (
+                <>
+                  <div className="lg:hidden">
+                    <StorageMeter compact />
+                  </div>
+                  <div className="hidden lg:block">
+                    <StorageMeter />
+                  </div>
+                </>
+              ) : (
+                <StorageMeter />
+              )}
+            </div>
           </div>
         </aside>
 
@@ -139,6 +157,7 @@ export function StudioShellView({
           </header>
           <main className="w-full flex-1 space-y-5 px-3 pt-4 pb-40 sm:px-6 sm:pt-6 xl:px-8">
             {banner}
+            <PackageExpiredBanner />
             {children}
           </main>
         </div>
@@ -150,8 +169,13 @@ export function StudioShellView({
             <div className="flex h-11 items-center">{logo}</div>
           </SheetTitle>
           <SidebarNav pathname={pathname} onNavigate={() => setDrawerOpen(false)} />
-          <div className="studio-card mt-auto p-3">
-            <StorageMeter />
+          <div className="mt-auto space-y-3">
+            <div className="studio-card p-3 empty:hidden">
+              <PackageChip />
+            </div>
+            <div className="studio-card p-3">
+              <StorageMeter />
+            </div>
           </div>
         </SheetContent>
       </Sheet>

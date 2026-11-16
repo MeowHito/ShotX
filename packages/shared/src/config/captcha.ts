@@ -43,6 +43,8 @@ export type CaptchaProvider = (typeof CAPTCHA_PROVIDERS)[number];
 export const TURNSTILE_ACTIONS = {
   faceSearch: 'face_search',
   faceDeletion: 'face_deletion',
+  /** ADR 0026: POST /signup/free (the token is in the body's `captchaToken`). */
+  signupFree: 'signup_free',
 } as const satisfies Record<string, CaptchaAction>;
 
 /** The origin Turnstile is served from: the CSP's `script-src` and `frame-src` exception. */

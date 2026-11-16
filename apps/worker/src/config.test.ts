@@ -70,7 +70,12 @@ describe('worker config', () => {
       },
       visibilityTimeoutSeconds: { media: 300, faces: 900, zip: 300, jobs: 900 },
     });
-    expect(config.media.web).toEqual({ longEdge: 2560, jpegQuality: 85 });
+    expect(config.media.web).toEqual({
+      longEdge: 2560,
+      jpegQuality: 85,
+      minJpegQuality: 70,
+      maxBytes: 1_500_000,
+    });
     expect(config.retention.trashRetentionDays).toBe(30);
     expect(config.retention.faceIndexExpiryDays).toBe(90);
     expect(config.worker.consumers.media).toEqual({ batchSize: 4, concurrency: 2 });

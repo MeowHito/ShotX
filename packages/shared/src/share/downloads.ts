@@ -54,3 +54,23 @@ export function downloadObject(file: DownloadableFile, size: DownloadSize): Down
     bytes: file.webSizeBytes ?? 0,
   };
 }
+
+/**
+ * The object a share viewer downloads (ADR 0028, owner 2026-11-16: every image a viewer gets is at
+ * most 1.5 MB). Like downloadObject with the share's `download_size`, except that an image whose
+ * original is larger than `imageMaxBytes` is served as web.jpg (which the worker keeps under the
+ * same cap) even when the share allows originals. Videos and the owner's own downloads are not
+ * capped. `imageMaxBytes` 0: no cap.
+ */
+export function shareDownloadObject(
+  file: DownloadableFile,
+  size: DownloadSize,
+  imageMaxBytes: number,
+): DownloadObject | null {
+  const capped =
+    size === 'original' &&
+    file.mediaKind === 'image' &&
+    imageMaxBytes > 0 &&
+    file.sizeBytes > imageMaxBytes;
+  return downloadObject(file, capped ? 'web' : size);
+}

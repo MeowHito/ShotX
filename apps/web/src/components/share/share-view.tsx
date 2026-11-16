@@ -78,14 +78,21 @@ export function SharePage({ testing, ...props }: SharePageProps) {
   // A designed first screen on view: the top bar floats over it (the SSR meta says so up front,
   // so the first paint doesn't shift).
   const [overlay, setOverlay] = useState(props.initialMeta?.design != null);
+  // A scan-only designed card is the whole page: no room kept at the bottom for the sticky scan
+  // button or the download bar (owner, 2026-11-16, ADR 0028: a blank strip under the card).
+  const [compact, setCompact] = useState(
+    props.initialMeta?.design != null && props.initialMeta.mode === 'face_only',
+  );
   return (
     <ShareApiProvider signedIn={props.signedIn} publicApi={testing?.publicApi}>
       <ShareRuntimeContext.Provider value={runtime}>
         <FaceToolsProvider config={props.faceConfig} overrides={testing?.faceTools}>
           <TopBarOverlayContext.Provider value={setOverlay}>
             <PublicTopBar overlay={overlay} />
-            <main className="pb-36 sm:pb-48">
-              <ShareGate {...props} />
+            <main className={compact ? undefined : 'pb-36 sm:pb-48'}>
+              <CompactPageContext.Provider value={setCompact}>
+                <ShareGate {...props} />
+              </CompactPageContext.Provider>
             </main>
           </TopBarOverlayContext.Provider>
         </FaceToolsProvider>
@@ -97,9 +104,16 @@ export function SharePage({ testing, ...props }: SharePageProps) {
 /** Lets the designed card float the top bar over itself while it is shown. */
 const TopBarOverlayContext = createContext<(overlay: boolean) => void>(() => undefined);
 
+/** Drops the page's bottom room while only a scan-only designed card is on it. */
+const CompactPageContext = createContext<(compact: boolean) => void>(() => undefined);
+
 /** The page's centred column (everything but a design's full-bleed card). */
-function Column({ children }: { children: ReactNode }) {
-  return <div className="mx-auto max-w-5xl px-3 pt-5 sm:px-6 sm:pt-8">{children}</div>;
+function Column({ children, compact = false }: { children: ReactNode; compact?: boolean }) {
+  return (
+    <div className={cn('mx-auto max-w-5xl px-3 sm:px-6', compact ? null : 'pt-5 sm:pt-8')}>
+      {children}
+    </div>
+  );
 }
 
 /**
@@ -385,6 +399,12 @@ function ShareContent({
   const design = meta.design;
   const showCard = design !== null && results === null;
   const cardButtonsOnScreen = useOnScreen(showCard ? cardButtons : null);
+  const setCompact = useContext(CompactPageContext);
+  const compact = showCard && faceOnly && selection.length === 0;
+  useEffect(() => {
+    setCompact(compact);
+    return () => setCompact(false);
+  }, [compact, setCompact]);
   const showFaceButton =
     scanAvailable &&
     scanning === null &&
@@ -417,7 +437,7 @@ function ShareContent({
           scanButtonsRef={setCardButtons}
         />
       ) : null}
-      <Column>
+      <Column compact={compact}>
         <div className="space-y-5">
           {/* After a scan the found photos come first: no event title or cover (owner, 2026-11-12). */}
           {results === null && design === null ? <ShareHeader meta={meta} /> : null}
@@ -515,7 +535,8 @@ function ShareContent({
                     jpegQuality: meta.faceSearch.selfieJpegQuality,
                   },
                 }}
-                allowGallery={meta.mode === 'gallery'}
+                // Every share may search with a photo from the device (owner, 2026-11-16, ADR 0028).
+                allowGallery
                 startWith={scanning}
                 photo={pickedPhoto ?? undefined}
                 onResults={(r) => {
@@ -532,9 +553,7 @@ function ShareContent({
             </ScanSheet>
           ) : null}
 
-          {design !== null ? (
-            <HowToSheet open={howToOpen} onOpenChange={setHowToOpen} mode={meta.mode} />
-          ) : null}
+          {design !== null ? <HowToSheet open={howToOpen} onOpenChange={setHowToOpen} /> : null}
 
           {meta.allowDownload ? (
             <DownloadBar

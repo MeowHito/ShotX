@@ -132,6 +132,16 @@ export function mediaSignerSummary(config: Pick<ApiConfig, 'mediaUrls'>): string
 }
 
 /**
+ * The start-up line about package sales (ADR 0026): PACKAGE_SALES and PACKAGE_GATEWAY. Never a
+ * merchant id or key.
+ */
+export function packageSalesSummary(
+  config: Pick<ApiConfig, 'packages' | 'packageGateway'>,
+): string {
+  return `package sales: ${config.packages.salesEnabled ? 'on' : 'off'}, gateway=${config.packageGateway.gateway}`;
+}
+
+/**
  * The api's FaceProvider as FACE_PROVIDER selects (ADR 0009): self-hosted runs the selfie through
  * the ONNX models in this process (bounded by FACE_INFERENCE_CONCURRENCY) and searches
  * `face_vectors` on `pool`; rekognition is interactiveFaceProvider below.

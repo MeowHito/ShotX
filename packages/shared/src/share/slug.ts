@@ -54,12 +54,16 @@ export const SHARE_SLUG_RESERVED: ReadonlySet<string> = new Set([
   'auth',
   'bff',
   'change-password',
+  'checkout',
+  'forgot-password',
   'healthz',
   'login',
   'logout',
   'mediapipe',
   'pricing',
+  'reset-password',
   's',
+  'signup',
   'studio',
 ]);
 

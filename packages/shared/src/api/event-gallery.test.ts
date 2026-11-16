@@ -154,6 +154,16 @@ describe('folder cover', () => {
     expect(updateFolderBodySchema.parse({ coverFileId: null })).toEqual({ coverFileId: null });
     expect(updateFolderBodySchema.safeParse({}).success).toBe(false);
     expect(updateFolderBodySchema.safeParse({ coverFileId: 'nope' }).success).toBe(false);
+    // ADR 0028: an uploaded cover; never both covers at once.
+    expect(updateFolderBodySchema.parse({ coverAssetId: id })).toEqual({ coverAssetId: id });
+    expect(updateFolderBodySchema.parse({ coverAssetId: null })).toEqual({ coverAssetId: null });
+    expect(updateFolderBodySchema.safeParse({ coverAssetId: id, coverFileId: id }).success).toBe(
+      false,
+    );
+    expect(updateFolderBodySchema.parse({ coverAssetId: id, coverFileId: null })).toEqual({
+      coverAssetId: id,
+      coverFileId: null,
+    });
     const folder = {
       kind: 'folder',
       id,
@@ -164,6 +174,7 @@ describe('folder cover', () => {
       faceIndexEnabled: true,
       faceIndexExpiresAt: at,
       coverFileId: id,
+      coverAssetId: null,
     };
     expect(driveFolderSchema.parse(folder)).toEqual(folder);
     expect(driveFolderSchema.safeParse({ ...folder, coverFileId: undefined }).success).toBe(false);

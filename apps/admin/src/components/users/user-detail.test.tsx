@@ -24,6 +24,46 @@ describe('UserDetail', () => {
     expect(screen.getByRole('button', { name: 'รีเซ็ตรหัสผ่าน' })).toBeInTheDocument();
   });
 
+  it("shows a self-signed-up photographer's package, expiry and photos used", async () => {
+    const photographer = makeUser({
+      email: 'free@example.com',
+      createdById: null,
+      selfSignup: true,
+      package: {
+        code: 'free',
+        name: 'Free',
+        startsAt: '2026-11-01T00:00:00.000Z',
+        expiresAt: '2026-11-04T00:00:00.000Z',
+        photoLimit: 100,
+        photosUsed: 7,
+        expired: true,
+      },
+    });
+    const api = new FakeAdminApi([photographer]);
+    renderWithProviders(
+      <UserDetail userId={photographer.id} currentAdminId={SELF_ID} passwords={TEST_PASSWORDS} />,
+      { fetch: api.fetch },
+    );
+    expect(await screen.findByRole('heading', { name: 'free@example.com' })).toBeInTheDocument();
+    expect(screen.getByText('ตากล้อง · สมัครเอง')).toBeInTheDocument();
+    expect(screen.getByText(/สมัครเองจากหน้าเว็บ/)).toBeInTheDocument();
+    expect(screen.getByTestId('package-state')).toHaveTextContent(/^Free/);
+    expect(screen.getByTestId('package-state')).toHaveTextContent(/หมดอายุเมื่อ 4 พ\.ย\. 2569/);
+    expect(screen.getByTestId('package-photos')).toHaveTextContent('7/100 รูป');
+  });
+
+  it('shows an admin-created photographer as unlimited', async () => {
+    const photographer = makeUser({ email: 'cash@example.com' });
+    const api = new FakeAdminApi([photographer]);
+    renderWithProviders(
+      <UserDetail userId={photographer.id} currentAdminId={SELF_ID} passwords={TEST_PASSWORDS} />,
+      { fetch: api.fetch },
+    );
+    expect(await screen.findByTestId('package-state')).toHaveTextContent('ไม่จำกัด');
+    expect(screen.queryByTestId('package-photos')).not.toBeInTheDocument();
+    expect(screen.queryByText(/สมัครเอง/)).not.toBeInTheDocument();
+  });
+
   it('shows no cash section for admins and no disable or reset for oneself', async () => {
     const api = new FakeAdminApi();
     renderWithProviders(

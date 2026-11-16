@@ -15,6 +15,8 @@ const config: NextConfig = {
   transpilePackages: ['@shotx/shared', '@shotx/ui'],
   poweredByHeader: false,
   reactStrictMode: true,
+  // `next dev` behind a tunnel (e.g. a customer demo): comma-separated hosts, dev server only.
+  allowedDevOrigins: process.env.NEXT_ALLOWED_DEV_ORIGINS?.split(',').filter(Boolean),
   // Security headers (including the per-request CSP nonce) are set in src/proxy.ts.
   headers() {
     return Promise.resolve([

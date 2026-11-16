@@ -2,8 +2,9 @@ import type { AccountEmailConfig, AccountEmailFrom } from '@shotx/shared';
 import { createTransport } from 'nodemailer';
 
 /**
- * Emails about a person's own account (ADR 0025), separate from the billing EmailProvider. Today
- * only the photographer password-reset link. Plain text and a small HTML version, Thai only.
+ * Emails about a person's own account (ADR 0025), separate from the billing EmailProvider: the
+ * photographer password-reset link, and (ADR 0026, packages/package-emails) the sign-up and
+ * package emails. Plain text and a small HTML version, Thai only.
  * Nothing here logs a recipient, a link or a body.
  */
 
@@ -99,7 +100,9 @@ export function createAccountMailer(config: AccountEmailConfig): AccountMailer {
   }
 }
 
-const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+/** HTML-escapes text for the account emails' HTML parts. */
+export const escapeHtml = (value: string) =>
+  value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 /** The Thai password-reset email (link valid for `ttlMinutes`). */
 export function passwordResetEmail(input: {

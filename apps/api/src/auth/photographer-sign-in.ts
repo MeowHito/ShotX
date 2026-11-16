@@ -550,11 +550,7 @@ export class PhotographerSignIn {
     );
     if (!quota.allowed) return audit('throttled');
 
-    const token = newOpaqueToken();
-    const key = resetTokenKey(token);
-    const grant: ResetGrant = { u: row.id, f: passwordFingerprint(row.passwordHash) };
-    await this.store.setWithTtl(key, JSON.stringify(grant), settings.passwordReset.ttlSeconds);
-    const link = `${new URL(this.config.app.publicBaseUrl).origin}${PHOTOGRAPHER_PASSWORD_RESET_PATH}#token=${token}`;
+    const { key, link } = await this.issueResetToken(row, settings.passwordReset.ttlSeconds);
     const message = passwordResetEmail({
       to: row.email,
       name: row.name,
@@ -571,6 +567,40 @@ export class PhotographerSignIn {
       })
       .finally(() => this.deliveries.delete(delivery));
     this.deliveries.add(delivery);
+  }
+
+  /**
+   * Stores a one-time reset grant for `row` (SHA-256 of the token, the account and the fingerprint
+   * of its current password hash) for `ttlSeconds`, and returns its Redis key and the link
+   * (PUBLIC_BASE_URL + PHOTOGRAPHER_PASSWORD_RESET_PATH + `#token=`). The token itself is only in
+   * the link; never log it.
+   */
+  private async issueResetToken(
+    row: { id: string; passwordHash: string },
+    ttlSeconds: number,
+  ): Promise<{ key: string; link: string }> {
+    const token = newOpaqueToken();
+    const key = resetTokenKey(token);
+    const grant: ResetGrant = { u: row.id, f: passwordFingerprint(row.passwordHash) };
+    await this.store.setWithTtl(key, JSON.stringify(grant), ttlSeconds);
+    const link = `${new URL(this.config.app.publicBaseUrl).origin}${PHOTOGRAPHER_PASSWORD_RESET_PATH}#token=${token}`;
+    return { key, link };
+  }
+
+  /**
+   * ADR 0026: a "ตั้งรหัสผ่าน" link for an account a paid order created: the ADR 0025 reset token
+   * (same page, same confirm route, same single use) with its own TTL
+   * (PACKAGE_SET_PASSWORD_TTL_SECONDS). Null unless `userId` is an active photographer password
+   * account. `discard` drops the grant (when its email couldn't be sent).
+   */
+  async issuePasswordSetLink(
+    userId: string,
+    ttlSeconds: number,
+  ): Promise<{ link: string; discard: () => Promise<void> } | null> {
+    const row = await findById(this.db, userId);
+    if (row === null || row.status !== 'active') return null;
+    const { key, link } = await this.issueResetToken(row, ttlSeconds);
+    return { link, discard: () => this.store.del(key) };
   }
 
   /**

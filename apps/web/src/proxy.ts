@@ -2,6 +2,7 @@ import { isReservedShareSlug, parseShareRef } from '@shotx/shared';
 import { type NextRequest, NextResponse } from 'next/server';
 import { cookieNames } from './lib/auth/session';
 import { SERVER_CALL_HEADERS } from './lib/bff/client-ip';
+import { analyticsAllowed, PATHNAME_HEADER } from './lib/site/analytics-paths';
 import { buildCsp, securityHeaders } from './lib/security/headers';
 import {
   processCaptchaCsp,
@@ -33,6 +34,8 @@ export function proxy(request: NextRequest) {
   // site root (ADR 0015); every other first segment is one of the app's own (reserved).
   const first = segments[1] ?? '';
   const sharePage = first === 's' || rootShareRef(first) !== null;
+  // ADR 0026: the home page's Free sign-up may show the Turnstile widget too.
+  const captchaPage = sharePage || pathname === '/';
   const csp = buildCsp({
     nonce,
     isDev: env.NODE_ENV === 'development',
@@ -42,8 +45,8 @@ export function proxy(request: NextRequest) {
     mediaOrigins: storage.media,
     formActionOrigins: processFormActionOrigins(),
     allowWasm: sharePage,
-    analytics: processAnalyticsId() !== null,
-    ...(sharePage ? { captcha: processCaptchaCsp() } : {}),
+    analytics: processAnalyticsId() !== null && analyticsAllowed(pathname),
+    ...(captchaPage ? { captcha: processCaptchaCsp() } : {}),
   });
   const headers = securityHeaders(csp, https);
 
@@ -72,6 +75,8 @@ export function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   for (const name of SERVER_CALL_HEADERS) requestHeaders.delete(name);
   requestHeaders.set('x-nonce', nonce);
+  // The root layout leaves Google Analytics off pages with a token in the URL (analyticsAllowed).
+  requestHeaders.set(PATHNAME_HEADER, pathname);
   requestHeaders.set('Content-Security-Policy', csp);
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);

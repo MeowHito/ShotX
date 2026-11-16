@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { consents, files, shareFaceSearchAvailableSql } from '@shotx/db';
+import { consents, designAssets, files, shareFaceSearchAvailableSql } from '@shotx/db';
 import {
   type ConsentPurpose,
   type ConsentResponse,
@@ -24,7 +24,7 @@ import { verifyPassword } from '../auth/password';
 import type { PublicContext } from '../auth/public.guard';
 import type { ApiConfig } from '../config';
 import { type Db, rows } from '../db/db';
-import { DesignViews } from '../designs/design-views';
+import { DesignViews, designAssetWebKey } from '../designs/design-views';
 import { ApiError } from '../http/api-error';
 import { sha256Hex } from '../http/client';
 import { validationError } from '../http/zod';
@@ -161,6 +161,32 @@ export class SharePageService {
       const gallery = share.mode === 'gallery';
       let itemCount: number | null = null;
       let cover: NonNullable<ShareMetaResponse['details']>['cover'] = null;
+      // ADR 0028: an uploaded cover (a poster, not a photo of people) is the cover in any mode
+      // while its design image is `ready`.
+      if (share.coverAssetId !== null) {
+        const [asset] = await this.db
+          .select({ width: designAssets.width, height: designAssets.height })
+          .from(designAssets)
+          .where(
+            and(
+              eq(designAssets.id, share.coverAssetId),
+              eq(designAssets.ownerId, share.ownerId),
+              eq(designAssets.status, 'ready'),
+              isNull(designAssets.purgeRequestedAt),
+            ),
+          )
+          .limit(1);
+        if (asset !== undefined) {
+          cover = {
+            previewUrl: this.urls.view(
+              designAssetWebKey({ ownerId: share.ownerId, id: share.coverAssetId }),
+              this.urls.viewExpiry(),
+            ),
+            width: asset.width,
+            height: asset.height,
+          };
+        }
+      }
       if (gallery) {
         const [count] = await this.db
           .select({ n: sql<number>`count(*)`.mapWith(Number) })
@@ -193,7 +219,7 @@ export class SharePageService {
                 .where(imageInScope)
                 .orderBy(asc(ITEM_KEY), asc(files.id))
                 .limit(1);
-        if (first?.previewKey != null) {
+        if (cover === null && first?.previewKey != null) {
           // No `view` event (PUBLIC_SHARE_ROUTE_ACTIVITY.meta is empty): SSR and link unfurlers
           // call this route, so views come only from items pages and face-search results.
           cover = {

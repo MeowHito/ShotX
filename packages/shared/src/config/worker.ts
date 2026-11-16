@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { QUEUE_BACKENDS, type QueueName } from '../queues/names';
 import { type Env, parseEnv } from './env';
 import { int, MS_PER_SECOND, SECONDS_PER_DAY, SECONDS_PER_HOUR } from './fields';
+import { loadShareDownloadCapConfig } from './media';
 
 /** x264 speed/size presets the worker accepts for preview.mp4. */
 export const X264_PRESETS = [
@@ -178,6 +179,8 @@ export interface WorkerSweepSettings {
     uploadingAgeSeconds: number;
     maxRequeues: number;
     batchSize: number;
+    /** MEDIA_WEB_MAX_BYTES (ADR 0028): ready images whose web.jpg is larger get `web.rerender`. */
+    webMaxBytes: number;
   };
   faces: {
     deletionAgeSeconds: number;
@@ -246,6 +249,7 @@ export function loadWorkerSettings(env: Env): WorkerSettings {
         uploadingAgeSeconds: e.MEDIA_SWEEP_UPLOADING_AGE_SECONDS,
         maxRequeues: e.MEDIA_SWEEP_MAX_REQUEUES,
         batchSize: e.MEDIA_SWEEP_BATCH_SIZE,
+        webMaxBytes: loadShareDownloadCapConfig(env).imageMaxBytes,
       },
       faces: {
         deletionAgeSeconds: e.FACES_SWEEP_DELETION_AGE_SECONDS,

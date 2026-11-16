@@ -2,6 +2,7 @@ import { shares } from '@shotx/db';
 import { type DriveFolder, ownerShareStatus, sharePublicPath, sharePublicUrl } from '@shotx/shared';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { type Queryable, rows } from '../db/db';
+import { designAssetWebKey } from '../designs/design-views';
 import type { SignedUrls } from '../media/signed-urls';
 
 export type DriveEvent = NonNullable<DriveFolder['event']>;
@@ -10,7 +11,8 @@ export type DriveEvent = NonNullable<DriveFolder['event']>;
  * The event view of folders (ADR 0016), for a drive listing page: each folder's cover thumbnail
  * and its link. Two queries for the whole page, whatever its size.
  *
- * - Cover: the folder's chosen cover while it is still a live, ready image in the folder's
+ * - Cover: the uploaded cover (ADR 0028) while its design image is `ready`, else the folder's
+ *   chosen cover while it is still a live, ready image in the folder's
  *   subtree, else the first such image in share-page order (taken_at, else created_at), as the
  *   share page picks its cover (ADR 0011). Null when the event has no ready image yet.
  * - Link: the newest share of the folder that isn't revoked (active, paused or expired), with its
@@ -28,10 +30,17 @@ export async function eventsOf(
     folderIds.map((id) => sql`${id}::uuid`),
     sql`, `,
   );
-  const covers = await rows<{ folder_id: string; thumb_key: string | null }>(
+  const covers = await rows<{
+    folder_id: string;
+    thumb_key: string | null;
+    cover_asset_id: string | null;
+  }>(
     q,
-    sql`SELECT f.id AS folder_id, c.thumb_key
+    sql`SELECT f.id AS folder_id, c.thumb_key, a.id AS cover_asset_id
         FROM folders f
+        LEFT JOIN design_assets a
+          ON a.id = f.cover_asset_id AND a.owner_id = f.owner_id
+          AND a.status = 'ready' AND a.purge_requested_at IS NULL
         LEFT JOIN LATERAL (
           SELECT x.thumb_key
           FROM files x
@@ -71,7 +80,12 @@ export async function eventsOf(
   for (const row of covers) {
     const share = newest.get(row.folder_id);
     out.set(row.folder_id, {
-      coverThumbUrl: row.thumb_key === null ? null : deps.urls.view(row.thumb_key, deps.expiresAt),
+      coverThumbUrl:
+        row.cover_asset_id !== null
+          ? deps.urls.view(designAssetWebKey({ ownerId, id: row.cover_asset_id }), deps.expiresAt)
+          : row.thumb_key === null
+            ? null
+            : deps.urls.view(row.thumb_key, deps.expiresAt),
       link:
         share === undefined
           ? null

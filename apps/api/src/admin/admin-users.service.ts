@@ -1,5 +1,15 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { adminCredentials, files, storageUsage, userPasswordCredentials, users } from '@shotx/db';
+import {
+  adminCredentials,
+  cashPayments,
+  files,
+  packageOrders,
+  packages,
+  photographerPackages,
+  storageUsage,
+  userPasswordCredentials,
+  users,
+} from '@shotx/db';
 import {
   type AccountRole,
   type AccountStatus,
@@ -9,11 +19,13 @@ import {
   encodeAdminUserCursor,
   isPasswordAccountSubject,
   type ListAdminUsersResponse,
-  passwordAccountSubject,
+  packageExpired,
   temporaryPasswordViolation,
 } from '@shotx/shared';
 import { and, desc, eq, inArray, or, type SQL, sql } from 'drizzle-orm';
+import { QueryBuilder } from 'drizzle-orm/pg-core';
 import { hashPassword } from '../auth/password';
+import { insertPhotographerAccount } from '../auth/photographer-accounts';
 import { passwordTooWeak } from '../auth/password-policy';
 import { revokeUserSessions } from '../auth/sessions';
 import type { ApiConfig } from '../config';
@@ -33,6 +45,29 @@ import { writeAdminAudit } from './admin-audit';
 const EMAIL_INDEXES = ['users_password_account_email_unique', 'users_admin_email_unique'];
 
 const ACCOUNT_ROLE_FILTER = inArray(users.role, ['admin', 'photographer']);
+
+// ADR 0027: what each account paid, all time, as left-joined aggregates (one LATERAL per row,
+// served by package_orders_photographer_created_idx and cash_payments_photographer_paid_idx).
+const qb = new QueryBuilder();
+const paidOrders = qb
+  .select({
+    ordersPaid: sql<number>`count(*)::int`.as('orders_paid'),
+    orderPaidSatang: sql<string>`coalesce(sum(${packageOrders.totalSatang}), 0)::text`.as(
+      'order_paid_satang',
+    ),
+  })
+  .from(packageOrders)
+  .where(and(eq(packageOrders.photographerId, users.id), eq(packageOrders.status, 'paid')))
+  .as('paid_orders');
+const paidCash = qb
+  .select({
+    cashPaidSatang: sql<string>`coalesce(sum(${cashPayments.amountSatang}), 0)::text`.as(
+      'cash_paid_satang',
+    ),
+  })
+  .from(cashPayments)
+  .where(eq(cashPayments.photographerId, users.id))
+  .as('paid_cash');
 
 const userColumns = {
   id: users.id,
@@ -60,6 +95,16 @@ const userColumns = {
       and ${files.status} in ('processing', 'ready')
       and ${files.mime} like 'image/%'
   )`,
+  // ADR 0026: the package (no photographer_packages row = unlimited).
+  packageCode: packages.code,
+  packageName: packages.name,
+  packageStartsAt: photographerPackages.startsAt,
+  packageExpiresAt: photographerPackages.expiresAt,
+  packagePhotoLimit: photographerPackages.photoLimit,
+  packagePhotosUsed: photographerPackages.photosUsed,
+  ordersPaid: paidOrders.ordersPaid,
+  orderPaidSatang: paidOrders.orderPaidSatang,
+  cashPaidSatang: paidCash.cashPaidSatang,
 };
 
 function selectUsers(q: Queryable) {
@@ -68,7 +113,11 @@ function selectUsers(q: Queryable) {
     .from(users)
     .leftJoin(adminCredentials, eq(adminCredentials.userId, users.id))
     .leftJoin(userPasswordCredentials, eq(userPasswordCredentials.userId, users.id))
-    .leftJoin(storageUsage, eq(storageUsage.photographerId, users.id));
+    .leftJoin(storageUsage, eq(storageUsage.photographerId, users.id))
+    .leftJoin(photographerPackages, eq(photographerPackages.photographerId, users.id))
+    .leftJoin(packages, eq(packages.id, photographerPackages.packageId))
+    .leftJoinLateral(paidOrders, sql`true`)
+    .leftJoinLateral(paidCash, sql`true`);
 }
 
 type UserRow = Awaited<ReturnType<typeof selectUsers>>[number];
@@ -80,6 +129,29 @@ function likeContains(text: string): string {
 }
 
 const role = (r: string): AccountRole => (r === 'admin' ? 'admin' : 'photographer');
+
+/** adminUserSchema.package: the photographer's package, or null (unlimited, or an admin). */
+function packageOf(row: UserRow, now: Date): AdminUser['package'] {
+  if (
+    row.packageCode === null ||
+    row.packageName === null ||
+    row.packageStartsAt === null ||
+    row.packageExpiresAt === null ||
+    row.packagePhotoLimit === null ||
+    row.packagePhotosUsed === null
+  ) {
+    return null;
+  }
+  return {
+    code: row.packageCode,
+    name: row.packageName,
+    startsAt: row.packageStartsAt.toISOString(),
+    expiresAt: row.packageExpiresAt.toISOString(),
+    photoLimit: row.packagePhotoLimit,
+    photosUsed: row.packagePhotosUsed,
+    expired: packageExpired({ expiresAt: row.packageExpiresAt }, now),
+  };
+}
 
 /** One account as the admin users page shows it (adminUserSchema). */
 function toAdminUser(row: UserRow, now: Date): AdminUser {
@@ -110,6 +182,15 @@ function toAdminUser(row: UserRow, now: Date): AdminUser {
     // have MFA in their pool and no credentials row.
     totpEnrolled:
       accountRole === 'admin' && passwordAccount ? row.adminTotpConfirmedAt !== null : null,
+    package: accountRole === 'photographer' ? packageOf(row, now) : null,
+    // ADR 0026: Free sign-up and paid orders create photographers with no creating admin.
+    selfSignup: accountRole === 'photographer' && passwordAccount && row.createdById === null,
+    // ADR 0027: paid package orders (VAT included) plus cash payments, all time.
+    ordersPaid: accountRole === 'photographer' ? Number(row.ordersPaid ?? 0) : null,
+    paidSatang:
+      accountRole === 'photographer'
+        ? Number(row.orderPaidSatang ?? 0) + Number(row.cashPaidSatang ?? 0)
+        : null,
   };
 }
 
@@ -269,18 +350,17 @@ export class AdminUsersService {
       return await this.db.transaction(async (tx) => {
         await this.lockAccounts(tx, actorId, actorId);
         const id = await newId(tx);
-        const admin = body.role === 'admin';
-        await tx.insert(users).values({
-          id,
-          role: body.role,
-          authPool: admin ? 'admins' : 'users',
-          authSubject: admin ? adminAccountSubject(id) : passwordAccountSubject(id),
-          email: body.email,
-          name: body.name,
-          createdAt: now,
-          createdById: actorId,
-        });
-        if (admin) {
+        if (body.role === 'admin') {
+          await tx.insert(users).values({
+            id,
+            role: 'admin',
+            authPool: 'admins',
+            authSubject: adminAccountSubject(id),
+            email: body.email,
+            name: body.name,
+            createdAt: now,
+            createdById: actorId,
+          });
           await tx.insert(adminCredentials).values({
             userId: id,
             passwordHash,
@@ -289,14 +369,16 @@ export class AdminUsersService {
             updatedAt: now,
           });
         } else {
-          await tx.insert(userPasswordCredentials).values({
-            userId: id,
+          // The same account rows as ADR 0026 self sign-up, with this admin as creator.
+          await insertPhotographerAccount(tx, {
+            id,
+            email: body.email,
+            name: body.name,
             passwordHash,
             mustChangePassword: true,
-            createdAt: now,
-            updatedAt: now,
+            createdById: actorId,
+            now,
           });
-          await tx.insert(storageUsage).values({ photographerId: id }).onConflictDoNothing();
         }
         await writeAdminAudit(tx, {
           actorId,

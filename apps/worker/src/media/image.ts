@@ -1,5 +1,5 @@
 import type { DesignAssetConfig, MediaConfig } from '@shotx/shared';
-import sharp from 'sharp';
+import sharp, { type Sharp } from 'sharp';
 import { isTransientMediaFailure, MediaDecodeError, MediaFormatMismatchError } from './errors';
 import { takenAtFromExif } from './exif';
 
@@ -47,11 +47,7 @@ export async function renderImageDerivatives(
     const [thumb, preview, web] = await Promise.all([
       fitted(config.thumb.longEdge).webp({ quality: config.thumb.webpQuality }).toBuffer(),
       fitted(config.preview.longEdge).webp({ quality: config.preview.webpQuality }).toBuffer(),
-      fitted(config.web.longEdge)
-        // JPEG has no alpha: transparent PNG/WebP areas become white, not black.
-        .flatten({ background: '#ffffff' })
-        .jpeg({ quality: config.web.jpegQuality, progressive: true })
-        .toBuffer(),
+      encodeWebJpeg(fitted, Math.max(width, height), config.web),
     ]);
     return {
       width,
@@ -61,6 +57,65 @@ export async function renderImageDerivatives(
       preview,
       web,
     };
+  } catch (error) {
+    if (error instanceof MediaDecodeError) throw error;
+    throw decodeError(error);
+  }
+}
+
+/** Each step down from the configured quality toward the minimum (ADR 0028). */
+const WEB_QUALITY_STEP = 5;
+/** Each step down of the long edge once the quality is at its minimum. */
+const WEB_EDGE_FACTOR = 0.85;
+/** web.jpg never gets smaller than this long edge, cap or not. */
+const WEB_MIN_LONG_EDGE = 640;
+
+/**
+ * web.jpg within `config.maxBytes` (ADR 0028): the configured quality first, then lower quality
+ * in steps down to `minJpegQuality`, then a smaller long edge at that quality, until it fits (or
+ * the long edge reaches WEB_MIN_LONG_EDGE). A cap of 0 encodes once. `sourceLongEdge` is the
+ * oriented original's long edge (never enlarged).
+ */
+async function encodeWebJpeg(
+  fitted: (longEdge: number) => Sharp,
+  sourceLongEdge: number,
+  config: MediaConfig['web'],
+): Promise<Buffer> {
+  // JPEG has no alpha: transparent PNG/WebP areas become white, not black.
+  const encode = (edge: number, quality: number) =>
+    fitted(edge).flatten({ background: '#ffffff' }).jpeg({ quality, progressive: true }).toBuffer();
+  let edge = Math.min(config.longEdge, sourceLongEdge);
+  let quality = config.jpegQuality;
+  let out = await encode(edge, quality);
+  while (config.maxBytes > 0 && out.length > config.maxBytes) {
+    if (quality > config.minJpegQuality) {
+      quality = Math.max(config.minJpegQuality, quality - WEB_QUALITY_STEP);
+    } else if (edge > WEB_MIN_LONG_EDGE) {
+      edge = Math.max(WEB_MIN_LONG_EDGE, Math.floor(edge * WEB_EDGE_FACTOR));
+    } else {
+      break;
+    }
+    out = await encode(edge, quality);
+  }
+  return out;
+}
+
+/**
+ * web.jpg alone, for an original whose web.jpg is over the cap (ADR 0028, `web.rerender`). The
+ * same rendering as renderImageDerivatives' web.jpg. Throws MediaDecodeError when the bytes don't
+ * decode.
+ */
+export async function renderWebJpeg(path: string, config: MediaConfig): Promise<Buffer> {
+  try {
+    const source = sharp(path, { failOn: 'error' });
+    const { width, height } = (await source.metadata()).autoOrient;
+    if (!(width > 0 && height > 0)) throw new MediaDecodeError('Image has no dimensions');
+    const fitted = (longEdge: number) =>
+      source
+        .clone()
+        .autoOrient()
+        .resize({ width: longEdge, height: longEdge, fit: 'inside', withoutEnlargement: true });
+    return await encodeWebJpeg(fitted, Math.max(width, height), config.web);
   } catch (error) {
     if (error instanceof MediaDecodeError) throw error;
     throw decodeError(error);

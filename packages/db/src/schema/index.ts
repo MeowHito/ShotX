@@ -9,4 +9,6 @@ export * from './sharing';
 export * from './downloads';
 export * from './analytics';
 export * from './face-vectors';
+export * from './packages';
+export * from './finance';
 export { bytea, driveNameKeySql, ltree, NIL_UUID, parentKeySql } from './columns';

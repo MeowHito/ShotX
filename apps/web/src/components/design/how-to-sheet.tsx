@@ -1,30 +1,22 @@
 'use client';
 
-import type { ShareMode } from '@shotx/shared';
 import { Button, Sheet, SheetContent, SheetTitle } from '@shotx/ui';
 import { useTranslations } from 'next-intl';
 
 /**
- * The "how it works" sheet (ADR 0013, share.design.help): a short how-to as a bottom sheet. The choose-a-photo step only in
- * gallery shares, where that button exists.
+ * The "how it works" sheet (ADR 0013, share.design.help): a short how-to as a bottom sheet. Every
+ * share offers both the camera and "use a photo" (ADR 0028).
  */
 export function HowToSheet({
   open,
   onOpenChange,
-  mode,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  mode: ShareMode;
 }) {
   const t = useTranslations('share.design.howTo');
   const tc = useTranslations('common');
-  const steps = [
-    t('camera'),
-    ...(mode === 'gallery' ? [t('choosePhoto')] : []),
-    t('photo'),
-    t('results'),
-  ];
+  const steps = [t('camera'), t('choosePhoto'), t('photo'), t('results')];
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent

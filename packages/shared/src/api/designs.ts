@@ -114,7 +114,7 @@ export type ListDesignsResponse = z.output<typeof listDesignsResponseSchema>;
 /**
  * Create a design: from a template (`templateId`, with placeholder text in `locale`, default
  * Thai: designTemplateDoc), from a document (`doc`, e.g. a duplicate), or blank (neither:
- * blankDesignDoc). Never the default; revision 1. DESIGN_LIMIT_REACHED at DESIGN_MAX_PER_OWNER
+ * blankDesignDoc); revision 1. The default when the owner has no default design (ADR 0028). DESIGN_LIMIT_REACHED at DESIGN_MAX_PER_OWNER
  * designs (counted in the insert's transaction under a per-owner lock, so two creates can't both
  * pass).
  */

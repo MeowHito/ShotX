@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { PAYMENT_EVENT_TYPES, PAYMENT_GATEWAYS, type PaymentGateway } from '../domain';
+import {
+  type PackagePaymentGatewayName,
+  PAYMENT_EVENT_TYPES,
+  PAYMENT_GATEWAYS,
+  type PaymentGateway,
+} from '../domain';
 import { satangSchema } from './money';
 
 /**
@@ -125,3 +130,90 @@ export type NormalizedPaymentEvent = z.output<typeof normalizedPaymentEventSchem
  * The studio page polls GET /billing/payments/:id; the return itself proves nothing.
  */
 export const BILLING_CARD_RETURN_PATH = '/studio/billing/return';
+
+// --- Package payments (ADR 0026) ------------------------------------------------------------------
+
+/**
+ * The package payment gateway adapter (ADR 0026 §5). Types only: implementations (`fake` and the
+ * `mpay` skeleton) live in apps/api, selected by PACKAGE_GATEWAY (loadPackageGatewayConfig; `off`
+ * means no adapter). The buyer pays on the gateway's hosted page: card and QR data never touch
+ * Snap. Separate from PaymentGatewayAdapter (subscription billing, switched off).
+ */
+export interface PackagePaymentGateway {
+  readonly name: PackagePaymentGatewayName;
+  /**
+   * Starts a hosted checkout for one order. Idempotent by `orderId` (the order's id is our
+   * reference on the gateway's side), so a retry returns the same checkout.
+   */
+  createCheckout(input: PackageCheckoutInput): Promise<PackageCheckoutResult>;
+  /**
+   * Checks the callback's signature over the exact raw body bytes, before anything is parsed.
+   * False for a missing, malformed, wrong or stale signature (WEBHOOK_SIGNATURE_INVALID). The mpay
+   * skeleton answers false until the merchant documentation arrives, so nothing is applied.
+   */
+  verifyCallback(request: RawWebhookRequest): Promise<boolean>;
+  /**
+   * The verified callback as one normalized result (packageCallbackSchema). Throws for a body it
+   * can't read.
+   */
+  parseCallback(request: RawWebhookRequest): PackageCallback;
+  /**
+   * Optional: asks the gateway for the state of a checkout (GET /package-orders/:id calls it once
+   * an order has been pending for PACKAGE_ORDER_INQUIRE_AFTER_SECONDS). Null when the gateway
+   * doesn't know the reference. The result goes through the same transaction as a callback.
+   */
+  inquire?(gatewayRef: string): Promise<PackageCallback | null>;
+}
+
+export interface PackageCheckoutInput {
+  /** `package_orders.id`. */
+  orderId: string;
+  /** `package_orders.total_satang` (VAT included). */
+  amountSatang: number;
+  currency: 'THB';
+  /** Short ASCII description shown by the gateway, e.g. `Snap 7 Days`. */
+  description: string;
+  /** PUBLIC_BASE_URL + PACKAGE_CHECKOUT_RETURN_PATH: where the browser comes back. */
+  returnUrl: string;
+  /** API base URL + `/api/package-payments/webhooks/{gateway}`: the server-to-server callback. */
+  callbackUrl: string;
+  /** For the gateway's own receipt and fraud checks. */
+  customerEmail: string;
+}
+
+export interface PackageCheckoutResult {
+  /** The gateway's id of the checkout, when it gives one at creation (else from the callback). */
+  gatewayRef: string | null;
+  /** The gateway's hosted page (https), or the web's fake page with the fake gateway. */
+  redirectUrl: string;
+}
+
+/**
+ * A gateway callback (or an inquiry answer) as Snap understands it. `orderId` is what Snap sent
+ * as the reference; `amountSatang` is what the gateway says was paid (checked against
+ * `total_satang`: a difference is `amount_mismatch`).
+ */
+export const PACKAGE_CALLBACK_STATUSES = ['paid', 'failed', 'pending'] as const;
+export type PackageCallbackStatus = (typeof PACKAGE_CALLBACK_STATUSES)[number];
+
+export const packageCallbackSchema = z.object({
+  gatewayRef: z.string().min(1).max(255),
+  orderId: z.uuid(),
+  status: z.enum(PACKAGE_CALLBACK_STATUSES),
+  amountSatang: satangSchema,
+});
+export type PackageCallback = z.output<typeof packageCallbackSchema>;
+
+/**
+ * Thrown by an adapter that can't work yet: the mpay skeleton until the merchant documentation
+ * and credentials arrive. The api answers PAYMENT_GATEWAY_ERROR for it.
+ */
+export class PaymentGatewayNotConfiguredError extends Error {
+  readonly gateway: PackagePaymentGatewayName;
+
+  constructor(gateway: PackagePaymentGatewayName) {
+    super(`The ${gateway} payment gateway is not configured yet`);
+    this.name = 'PaymentGatewayNotConfiguredError';
+    this.gateway = gateway;
+  }
+}

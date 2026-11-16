@@ -19,6 +19,12 @@ export const MS_PER_DAY = 24 * MS_PER_HOUR;
 export const int = (min: number, max: number) => z.coerce.number().int().min(min).max(max);
 
 /**
+ * VAT_RATE_BASIS_POINTS (700 = 7%). One definition for every loader that reads it: billing
+ * (VAT-inclusive plan prices) and packages (VAT on top of VAT-exclusive prices, ADR 0026).
+ */
+export const vatRateBasisPoints = () => int(0, 10_000).default(700);
+
+/**
  * A comma-separated list of distinct integers in [min, max], e.g. `14,7,1`. Whitespace around
  * items is ignored.
  */

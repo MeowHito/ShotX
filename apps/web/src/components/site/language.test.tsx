@@ -56,7 +56,7 @@ describe('language switcher (ADR 0011)', () => {
   it('is one compact menu button: the current flag (no short text), a 44px target', () => {
     bar('th');
     const nav = screen.getByRole('navigation', { name: MESSAGES.th.publicNav.label });
-    expect(within(nav).getByRole('link', { name: /หน้าแรก/ })).toHaveAttribute('href', '/');
+    expect(within(nav).queryByRole('link')).toBeNull();
     const button = within(nav).getByRole('button', { name: 'ภาษา ไทย' });
     expect(button).toHaveAttribute('type', 'button');
     expect(button).toHaveAttribute('aria-haspopup', 'menu');

@@ -3,76 +3,123 @@ import type { StudioMessages } from './public';
 /** English for home, pricing, login, password, settings and the studio (see messages/public). */
 export const enStudio: StudioMessages = {
   home: {
-    eyebrow: 'For event photographers',
-    headingLine1: 'Deliver event photos to everyone',
-    headingLine2: 'and let each guest find their own',
-    lead: 'Upload photos and videos into folders, share one link with guests, and let each person scan their face to find the photos they are in. They download straight to their phone.',
-    start: 'Sign in to the studio',
-    pricing: 'See plans and prices',
-    micro: 'New photographer? Contact the administrator to open an account.',
-    stepsLabel: 'How it works',
-    steps: {
-      upload: {
-        title: 'Upload into folders',
-        body: 'Drag in whole folders. Viewing and sharing sizes are prepared automatically.',
-      },
-      share: {
-        title: 'Share one link',
-        body: 'Add a password, an expiry date or a sign-in requirement, and turn the link off at any time.',
-      },
-      find: {
-        title: 'Guests find their own photos',
-        body: 'They scan their face on their phone, see only the photos they are in, and save them.',
-      },
-    },
-    featuresEyebrow: 'What you get',
-    featuresTitle: 'Everything a photographer needs to deliver event photos, in one place',
+    metaTitle: 'SNAP packages | Find and share event photos',
+    metaDescription:
+      'Choose a SNAP package by duration and number of photos. Every package includes face search, gallery sharing and downloads.',
+    eyebrow: 'SNAP PRICING',
+    headingLine1: 'Every photo of the event,',
+    headingLine2: 'delivered to the right people',
+    lead: 'Choose a package by how long you need it and how many photos you upload.',
+    featuresTitle: 'Every package has every feature',
+    featuresLead: 'These features come with every package, Free included.',
     features: {
-      drive: {
-        title: 'A folder-based drive',
-        body: 'Organise photos in folders, rename, move, copy, and restore from the trash.',
+      face: { title: 'Face search', body: 'Guests find their own photos, on every package.' },
+      upload: {
+        title: 'Automatic web upload',
+        body: 'Add photos from the browser; nothing to install.',
       },
-      share: {
-        title: 'Share links you control',
-        body: 'Choose whether downloads are allowed and at what size, add a password, and see stats for each link.',
+      watermark: {
+        title: 'Your logo or watermark',
+        body: 'Give the event’s photos your own look, easily.',
       },
-      face: {
-        title: 'Face search',
-        body: 'Guests take a selfie to find the photos they are in, sorted into “This is you” and “Might be you”.',
-      },
+      qr: { title: 'QR codes, ready to go', body: 'Guests scan it to open the gallery.' },
+      stats: { title: 'Usage reports', body: 'See how each event’s photos are used.' },
       download: {
-        title: 'Easy downloads on phones',
-        body: 'Download one photo, a zip of many, or save several straight to Photos on iPhone.',
+        title: 'Choose what to download',
+        body: 'Download only the selected photos, or every photo found.',
       },
-      privacy: {
-        title: 'Built with privacy in mind',
-        body: 'Guests are told before they use it, and selfies are never saved.',
-      },
-      pricing: {
-        title: 'Prices in Thai baht',
-        body: 'Prices include VAT. Pay by PromptPay or card, and change plans at any time.',
+      gallery: {
+        title: 'Online gallery sharing',
+        body: 'All the event’s photos in one place for guests to see.',
       },
     },
-    privacyEyebrow: 'Faces are sensitive data',
-    privacyTitle: 'We designed face search to respect every guest',
-    privacy: {
-      consent:
-        'Organisers tell guests about face search before the event; a tap on scan starts the search.',
-      noSelfie:
-        'A selfie is used for that one search only and is never saved on the device or in our system.',
-      delete:
-        'Anyone can have their face removed from the search system by contacting the photographer or the organiser.',
+    packagesTitle: 'Choose the package that fits your event',
+    packagesLead: 'Compare by duration and the number of photos you upload.',
+    packagesLabel: 'SNAP packages',
+    who: {
+      free: 'Try SNAP',
+      d3: 'For small events',
+      d7: 'For events that need more time to deliver photos',
+      d15: 'For events with more photos',
+      d30: 'For sharing photos for longer',
     },
-    ctaTitle: 'Ready for your next event?',
-    ctaBody:
-      'New photographers: contact the administrator to open an account, then sign in with the email and password you receive.',
+    featured: 'Recommended',
+    days: 'days',
+    photos: '{count, number} photos',
+    photosLabel: 'Maximum photos uploaded',
+    choose: 'Choose this package',
+    footnote: 'Prices exclude {rate}% VAT · Pay once for the period you choose',
+    loadError: 'Couldn’t load the packages. Please try again later.',
+    empty: 'No packages are on sale right now.',
+    faq: {
+      title: 'Terms and frequently asked questions',
+      lead: 'Details of SNAP packages and how they work',
+      items: {
+        perAccount: {
+          question: 'How many events can one package be used for?',
+          answer:
+            'A package belongs to your account, not to one event, so you can use it for every event in your account until it expires. The photo limit counts uploads across all your events.',
+        },
+        period: {
+          question: 'When does the period start, and what happens when it expires?',
+          answer:
+            'It starts as soon as your payment goes through, or when you confirm the Free sign-up link, and the studio always shows the expiry date. Buying again before it expires adds the days and photos on top. When it expires, share links close and uploads stop until you renew, but you can still sign in, browse and download your own photos, and nothing is deleted.',
+        },
+        counting: {
+          question: 'How are photos counted?',
+          answer:
+            'Each uploaded file counts as one photo (videos too). Viewing or downloading doesn’t count. Deleting a photo doesn’t give it back, but an upload cancelled before it finishes does.',
+        },
+        faceSearch: {
+          question: 'Does every package include face search?',
+          answer:
+            'Yes, every package, Free included, has face search. Results may be incomplete or include photos that aren’t a match, so check them before downloading.',
+        },
+        downloads: {
+          question: 'How do I download photos?',
+          answer:
+            'Pick the photos you want, or download every photo found. “All” on the search results means the photos found, not every photo of the event.',
+        },
+        files: {
+          question: 'Which file types and sizes are supported?',
+          answer:
+            'Photos: {imageTypes}, up to {imageMax} per file. Videos: {videoTypes}, up to {videoMax} per file.',
+          answerNoLimits:
+            'Photos: {imageTypes}. Videos: {videoTypes}. You’ll be told before uploading if a file is too large.',
+        },
+        vat: {
+          question: 'Do the prices include VAT?',
+          answer: 'The prices on the package cards exclude {rate}% VAT.',
+          totalsIntro: 'Totals with VAT:',
+          total: '{name}: {total}',
+          answerNoData:
+            'The prices on the package cards exclude VAT. The package summary always shows the total with VAT before you pay.',
+        },
+        more: {
+          question: 'Can I upgrade, renew or add photos?',
+          answer:
+            'Yes. Sign in and buy any paid package again: its days and photos are added to your current package. If your package has already expired, a new period starts on the day you pay.',
+        },
+        payment: {
+          question: 'What if there’s a payment problem or I want a refund?',
+          answer:
+            'If you were charged twice, paid but can’t use the service, got a different package than you ordered, or want a refund, please contact the team and we’ll look into it.',
+        },
+        faceData: {
+          question: 'How are face data and selfies handled?',
+          answer:
+            'Your selfie is not stored: it is used only for that search and discarded right away. Face data from event photos is kept only for searching, and is deleted when the photographer permanently deletes the photo, when face search is turned off, or when the event’s face index expires. Anyone who wants their face deleted can ask the photographer or organiser for that event’s “Delete my face” link.',
+        },
+      },
+    },
   },
   site: {
     navLabel: 'Site menu',
-    footerLabel: 'Footer links',
-    pricing: 'Pricing',
+    homeLabel: 'SNAP home',
+    packages: 'Packages and pricing',
     login: 'Sign in',
-    tagline: 'Photo storage, share links and face search for photographers',
+    studio: 'Go to the studio',
+    footer: 'SNAP · Event photo galleries and face search',
   },
   pricing: {
     title: 'Plans and pricing',
@@ -93,18 +140,76 @@ export const enStudio: StudioMessages = {
     listLabel: 'Plans',
     recommended: 'Recommended',
     eyebrow: 'Pricing',
-    offline: {
-      eyebrow: 'For photographers',
-      title: 'Open a photographer account',
-      subtitle:
-        'Plans can’t be bought online yet. Photographers who want to use the service, please contact the administrator to pay and open an account.',
-      steps: {
-        contact: 'Contact the administrator to pay and open a photographer account.',
-        receive: 'Receive your email and a temporary password from the administrator.',
-        signIn: 'Sign in to the studio and set your own password the first time.',
-      },
-      stepsLabel: 'How to open an account',
-      login: 'Sign in to the studio',
+  },
+  packageDialog: {
+    title: 'Package summary',
+    freeSummary: '{name} package · Free of charge',
+    paidSummary: '{name} package',
+    terms: '{days, plural, one {# day} other {# days}} · up to {photos, number} photos',
+    price: 'Package price',
+    vat: 'VAT {rate}%',
+    total: 'Total',
+    name: 'Name',
+    email: 'Email',
+    nameMissing: 'Please enter your name.',
+    emailInvalid: 'Please enter a valid email address.',
+    freeIntro:
+      'Enter your name and email. We’ll send you a confirmation link to set your password and start the Free package.',
+    freeSubmit: 'Send the confirmation link',
+    sending: 'Sending…',
+    freeSentTitle: 'We sent a confirmation link to your email',
+    freeSentBody:
+      'Open the email sent to {email} and follow the link to set your password (check your spam folder too).',
+    paidIntro:
+      'Enter the name and email for your account. After payment we’ll email a link to set your password. If you already have an account, please sign in before buying.',
+    paidSignedIn: 'This package will be added to the account you are signed in with.',
+    pay: 'Pay',
+    paying: 'Going to the payment page…',
+    paymentSoon: 'Online payment is coming soon. Please contact our team.',
+    contactTeam: 'Please contact our team.',
+    captchaRequired: 'Please confirm you are not a robot, and we’ll send the confirmation link.',
+    close: 'Close',
+  },
+  signup: {
+    title: 'Set your SNAP password',
+    body: 'Set a password to open your account and start the Free package. You’ll go straight to the studio.',
+    save: 'Set password and start',
+    saving: 'Saving…',
+    linkInvalid:
+      'This confirmation link no longer works (it expired, was already used, or the email already has an account). Choose a package to sign up again, or sign in.',
+    backToPackages: 'Back to the packages',
+    login: 'Sign in',
+  },
+  checkout: {
+    title: 'Payment result',
+    pending: 'Waiting for the payment result. This page updates by itself.',
+    timeout:
+      'We haven’t received the payment result yet. If you have paid, a confirmation email is on its way, or contact our team.',
+    checkAgain: 'Check again',
+    paidTitle: 'Payment successful',
+    accountCreated: 'We sent a link to set your password to {email}.',
+    accountCreatedHint: 'Open the email and follow the link to set your password and get started.',
+    added: 'Package added',
+    goStudio: 'Go to the studio',
+    package: '{name} package',
+    expiresAt: 'Valid until {date}',
+    total: 'Paid {amount}',
+    failedTitle: 'Payment failed',
+    failedBody: 'This payment didn’t go through. Choose a package and try paying again.',
+    mismatchTitle: 'The amount paid doesn’t match the order',
+    mismatchBody: 'The package hasn’t been added yet. Our team will look into this order.',
+    retry: 'Choose a package again',
+    contact: 'For any payment problem, please contact our team.',
+    notFoundTitle: 'Order not found',
+    notFoundBody:
+      'There’s no order in this browser. If you have paid, a confirmation email is on its way, or contact our team.',
+    backToPackages: 'See the packages',
+    fake: {
+      title: 'Test payment page',
+      body: 'For testing only. No real money is charged.',
+      paid: 'Payment succeeded',
+      failed: 'Payment failed',
+      sending: 'Sending the result…',
     },
   },
   billing: {
@@ -359,6 +464,17 @@ export const enStudio: StudioMessages = {
       full: 'Storage is full',
       add: 'Get more storage',
     },
+    package: {
+      title: 'Package',
+      name: '{name} package',
+      daysLeft: '{days, plural, one {# day left} other {# days left}}',
+      expired: 'Expired',
+      photos: '{used, number} / {limit, number} photos used',
+      expiresAt: 'Valid until {date}',
+      renew: 'Renew',
+      expiredBanner:
+        'Your package has expired and your share links are closed for now. Renew to keep going.',
+    },
   },
   search: {
     label: 'Search in Drive',
@@ -606,6 +722,10 @@ export const enStudio: StudioMessages = {
         'The Snap folder was deleted or moved to the trash. Stop syncing and choose another folder.',
       otherTab: 'Another tab is already syncing. Close it, then press Resume.',
       browser: 'The browser couldn’t save the sync settings. Try reloading the page.',
+      planExpired:
+        'Your package has expired, so syncing has stopped. Renew it, then resume syncing.',
+      photoLimitReached:
+        'You have uploaded all the photos your package allows, so syncing has stopped. Renew or add a package, then resume syncing.',
     },
     recentTitle: 'Latest files',
     recentEmpty: 'No new files yet. Export from Lightroom and they show up here.',
@@ -1049,6 +1169,15 @@ export const enStudio: StudioMessages = {
       linkStatus: 'Status: {status}',
       createLink: 'Create link and publish',
       settingsSaved: 'Link settings saved',
+      cover: 'Event cover',
+      coverHint: 'A portrait 2:3 image. An uploaded image is cropped to fit automatically.',
+      coverUpload: 'Upload cover',
+      coverUploading: 'Uploading…',
+      coverPick: 'Choose from event photos',
+      coverAuto: 'Use the first photo',
+      coverChoose: 'Use {name} as the cover',
+      coverEmpty: 'This event has no photos yet',
+      coverSaved: 'Cover saved',
     },
     qrDialog: {
       save: 'Save QR code',
@@ -1153,6 +1282,10 @@ export const enStudio: StudioMessages = {
         'Uploads are paused because your plan isn’t active. Existing files and share links still work. Renew your plan to keep uploading.',
       QUOTA_EXCEEDED:
         'Storage is full, so you can’t upload more. Delete files (including emptying the trash) or upgrade your plan.',
+      PLAN_EXPIRED:
+        'Your package has expired. You can’t upload or create share links, and your share links are closed for now. Your files are all still here. Renew your package to keep going.',
+      PHOTO_LIMIT_REACHED:
+        'You have uploaded all the photos your package allows. Share links still work. Renew or add a package to upload more.',
     },
   },
   upload: {

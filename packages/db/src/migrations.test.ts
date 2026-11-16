@@ -256,6 +256,74 @@ describe('migrations', () => {
     );
   });
 
+  it('0016 is packages_self_signup: additive, keeps the audit CHECK name, seeds five packages', () => {
+    expect(journal.entries[16]?.tag).toBe('0016_packages_self_signup');
+    const list = statements(sqlOf('0016_packages_self_signup'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    // Only the audit actor CHECK is dropped, and it comes back under the same name, wider.
+    expect(list.filter((s) => /\bDROP\b/.test(s))).toEqual([
+      'ALTER TABLE "audit_log" DROP CONSTRAINT "audit_log_actor_unless_auth_event";',
+    ]);
+    expect(list.some((s) => /RENAME/.test(s))).toBe(false);
+    expect(list[at('ADD CONSTRAINT "audit_log_actor_unless_auth_event"')]).toContain(
+      `LIKE 'package.%'`,
+    );
+    // Nothing touches the switched-off subscription billing.
+    expect(list.some((s) => /"(plans|subscriptions|payments)"/.test(s))).toBe(false);
+    expect(at('CREATE TYPE "public"."package_order_status"')).toBeLessThan(
+      at('CREATE TABLE "package_orders"'),
+    );
+    // The seed runs last, after the table and its checks exist, and never overwrites edits.
+    const seed = list.at(-1) ?? '';
+    expect(seed).toMatch(/^INSERT INTO "packages" /);
+    expect(seed).toContain('ON CONFLICT ("code") DO NOTHING');
+    for (const row of [
+      `('free', 'Free', 3, 100, 0, true, 10)`,
+      `('d3', '3 Days', 3, 1000, 39900, true, 20)`,
+      `('d7', '7 Days', 7, 3000, 59900, true, 30)`,
+      `('d15', '15 Days', 15, 5000, 79900, true, 40)`,
+      `('d30', '30 Days', 30, 10000, 129900, true, 50)`,
+    ]) {
+      expect(seed, row).toContain(row);
+    }
+  });
+
+  it('0017 is admin_finance_audit_log: additive apart from rebuilding one audit index', () => {
+    expect(journal.entries[17]?.tag).toBe('0017_admin_finance_audit_log');
+    const list = statements(sqlOf('0017_admin_finance_audit_log'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    expect(list.filter((s) => /\bDROP\b/.test(s))).toEqual(['DROP INDEX "audit_log_created_idx";']);
+    expect(list.some((s) => /RENAME|ALTER COLUMN|^UPDATE |^DELETE /.test(s))).toBe(false);
+    expect(at('DROP INDEX "audit_log_created_idx"')).toBeLessThan(
+      at('CREATE INDEX "audit_log_created_idx"'),
+    );
+    expect(list[at('CREATE INDEX "audit_log_created_idx"')]).toContain(
+      '("created_at" DESC NULLS LAST,"id" DESC NULLS LAST)',
+    );
+    expect(list[at('CREATE INDEX "audit_log_action_idx"')]).toContain('"action" text_pattern_ops');
+    expect(list[at('CREATE INDEX "package_orders_paid_idx"')]).toContain(
+      `WHERE "package_orders"."status" = 'paid'`,
+    );
+    expect(at('CREATE TYPE "public"."expense_category"')).toBeLessThan(
+      at('CREATE TABLE "expenses"'),
+    );
+    // Nothing touches the switched-off subscription billing.
+    expect(list.some((s) => /"(plans|subscriptions|payments)"/.test(s))).toBe(false);
+  });
+
+  it('0018 is event_cover_asset: additive, clearing only cover_asset_id on delete', () => {
+    expect(journal.entries[18]?.tag).toBe('0018_event_cover_asset');
+    const list = statements(sqlOf('0018_event_cover_asset'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    expect(list.some((s) => /\bDROP\b|RENAME|ALTER COLUMN|^UPDATE |^DELETE /.test(s))).toBe(false);
+    expect(list[at('"folders_cover_asset_same_owner_fk"')]).toContain(
+      'ON DELETE SET NULL ("cover_asset_id")',
+    );
+    expect(at('ADD COLUMN "cover_asset_id"')).toBeLessThan(
+      at('"folders_cover_asset_same_owner_fk"'),
+    );
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

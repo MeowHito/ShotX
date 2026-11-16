@@ -165,14 +165,34 @@ export const designAssetMessageSchema = z.object({
 export type DesignAssetMessage = z.output<typeof designAssetMessageSchema>;
 
 /**
+ * "Render this file's web.jpg again" (ADR 0028; BullMQ job name `media.web-rerender`). Sent by
+ * media.sweep for `ready` image files with `web_size_bytes` over MEDIA_WEB_MAX_BYTES (rendered
+ * before the cap, or under a larger one). No outbox mark: the sweep re-sends until the row is
+ * under the cap, and the worker re-checks the row first, so a duplicate is a no-op.
+ *
+ * The worker loads the `files` row by `fileId` and requires `owner_id = photographerId`, `ready`,
+ * an image, `web_key` set, not purge-requested and `web_size_bytes` still over the cap; then it
+ * downloads the original, renders web.jpg under the cap (renderWebJpeg), overwrites `web_key` and
+ * sets `web_size_bytes` in a guarded UPDATE (same `web_key`, still `ready`, not purge-requested).
+ * An original that no longer decodes is logged and left as it is.
+ */
+export const webRerenderMessageSchema = z.object({
+  kind: z.literal('web.rerender'),
+  fileId: z.uuid(),
+  photographerId: z.uuid(),
+});
+export type WebRerenderMessage = z.output<typeof webRerenderMessageSchema>;
+
+/**
  * Body of a `media` queue message: an `original.completed` message (API and media.sweep), a
- * `file.copy` message (Wave 7), a `design.asset` message (ADR 0013), or what S3 bucket
- * notifications send (AWS stacks, kept until infra/ is removed).
+ * `file.copy` message (Wave 7), a `design.asset` message (ADR 0013), a `web.rerender` message
+ * (ADR 0028), or what S3 bucket notifications send (AWS stacks, kept until infra/ is removed).
  */
 export const mediaQueueMessageSchema = z.union([
   originalCompletedMessageSchema,
   fileCopyMessageSchema,
   designAssetMessageSchema,
+  webRerenderMessageSchema,
   s3EventNotificationSchema,
   s3TestEventSchema,
 ]);
@@ -185,6 +205,11 @@ export function isFileCopy(message: MediaQueueMessage): message is FileCopyMessa
 /** Handle before mediaOriginals and createdObjects, which throw on it (it is not an original). */
 export function isDesignAsset(message: MediaQueueMessage): message is DesignAssetMessage {
   return 'kind' in message && message.kind === 'design.asset';
+}
+
+/** Handle before mediaOriginals and createdObjects, which throw on it (it is not an original). */
+export function isWebRerender(message: MediaQueueMessage): message is WebRerenderMessage {
+  return 'kind' in message && message.kind === 'web.rerender';
 }
 
 export function isS3TestEvent(message: MediaQueueMessage): message is S3TestEvent {
@@ -234,6 +259,9 @@ export function createdObjects(message: MediaQueueMessage): CreatedObject[] {
   }
   if (isDesignAsset(message)) {
     throw new RangeError('design.asset carries no S3 event records; handle it with isDesignAsset');
+  }
+  if (isWebRerender(message)) {
+    throw new RangeError('web.rerender carries no S3 event records; handle it with isWebRerender');
   }
   if (isS3TestEvent(message)) return [];
   return message.Records.map((r) => ({
@@ -344,6 +372,9 @@ export function mediaOriginals(
   if (isDesignAsset(message)) {
     // Same: a worker release that predates ADR 0013 fails (and retries) the job, never drops it.
     throw new RangeError('design.asset is not an original; handle it with isDesignAsset first');
+  }
+  if (isWebRerender(message)) {
+    throw new RangeError('web.rerender is not an original; handle it with isWebRerender first');
   }
   if (isOriginalCompleted(message)) {
     const parsed = parseS3Key(message.key);

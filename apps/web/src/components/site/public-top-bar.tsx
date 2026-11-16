@@ -1,14 +1,14 @@
 'use client';
 
 import { cn } from '@shotx/ui';
-import { HomeIcon } from 'lucide-react';
-import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { useEffect, useState } from 'react';
 import { LanguageSwitcher } from './language-switcher';
 
 /**
- * The public pages' top bar (ADR 0011): a home link and the language switcher. `overlay` (a
+ * The public pages' top bar (ADR 0011): the product name and the language switcher. The name is
+ * not a link: viewers of a share link never land on the home page from it (owner, 2026-11-16,
+ * ADR 0028), so it carries no home icon either. `overlay` (a
  * share page's designed first screen, owner 2026-11-13): it floats over the design, transparent,
  * so it never hides the design's top (the event logo); once the page is scrolled past most of
  * the first screen it turns solid again over the photos.
@@ -39,14 +39,9 @@ export function PublicTopBar({ overlay = false }: { overlay?: boolean }) {
         aria-label={t('publicNav.label')}
         className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-2 px-3 sm:px-6"
       >
-        <Link
-          href="/"
-          className="flex h-11 items-center gap-2 rounded-md px-1 text-base font-bold tracking-[-0.015em] outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <HomeIcon className="size-5 text-primary" aria-hidden />
-          <span>{t('common.appName')}</span>
-          <span className="sr-only">{t('publicNav.home')}</span>
-        </Link>
+        <span className="flex h-11 items-center px-1 text-base font-bold tracking-[-0.015em]">
+          {t('common.appName')}
+        </span>
         <LanguageSwitcher />
       </nav>
     </header>

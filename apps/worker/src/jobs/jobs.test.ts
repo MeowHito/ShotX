@@ -5,6 +5,8 @@ import {
   faces,
   files,
   folders,
+  packages,
+  photographerPackages,
   shares,
   storageUsage,
   zipJobEntries,
@@ -469,6 +471,50 @@ describe('scheduled jobs', () => {
         ),
       ).toBe(false);
       expect(await usageOf(db, ownerId)).toEqual({ usedBytes: 160, reservedBytes: 70 });
+    });
+
+    it("gives an abandoned upload's photo back to the package (ADR 0026), never below 0", async () => {
+      const store = new MemoryObjectStore();
+      const ownerId = await createPhotographer(db, { reservedBytes: 80 });
+      const unlimitedId = await createPhotographer(db, { reservedBytes: 40 });
+      const [free] = await db.select().from(packages).where(eq(packages.code, 'free'));
+      const now = Date.now();
+      await db.insert(photographerPackages).values({
+        photographerId: ownerId,
+        packageId: free!.id,
+        startsAt: new Date(now - 86_400_000),
+        expiresAt: new Date(now + 86_400_000),
+        photoLimit: 100,
+        photosUsed: 1,
+      });
+      for (const [owner, name] of [
+        [ownerId, 'a.jpg'],
+        [ownerId, 'b.jpg'],
+        [unlimitedId, 'c.jpg'],
+      ] as const) {
+        await createFileRow(db, owner, {
+          sizeBytes: 40,
+          uploadId: `mpu-${name}`,
+          uploadExpiresAt: new Date(now - 3_600_000),
+          originalName: name,
+        });
+      }
+
+      const result = await runQuotaReconcile(jobContext(db, store, newProvider()));
+      expect(result.uploadsExpired).toBe(3);
+      const [pkg] = await db
+        .select()
+        .from(photographerPackages)
+        .where(eq(photographerPackages.photographerId, ownerId));
+      // Two abandoned uploads, one photo counted: floored at 0.
+      expect(pkg?.photosUsed).toBe(0);
+      expect(
+        await db
+          .select()
+          .from(photographerPackages)
+          .where(eq(photographerPackages.photographerId, unlimitedId)),
+      ).toEqual([]);
+      expect(await usageOf(db, ownerId)).toEqual({ usedBytes: 0, reservedBytes: 0 });
     });
 
     it('creates a missing storage_usage row from the files', async () => {

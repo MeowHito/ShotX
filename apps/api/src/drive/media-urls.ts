@@ -22,6 +22,7 @@ export function toDriveFolder(row: Folder): DriveFolder {
     faceIndexEnabled: row.faceIndexEnabled,
     faceIndexExpiresAt: isoOrNull(row.faceIndexExpiresAt),
     coverFileId: row.coverFileId,
+    coverAssetId: row.coverAssetId,
   };
 }
 

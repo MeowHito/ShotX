@@ -1,18 +1,26 @@
 'use client';
 
-import { type DriveFile, folderRefFromId, type UploadNameConflictMode } from '@shotx/shared';
+import {
+  type DriveFile,
+  ErrorCode,
+  folderRefFromId,
+  type UploadNameConflictMode,
+} from '@shotx/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   createContext,
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   useSyncExternalStore,
 } from 'react';
 import { useApiClient } from '@/components/providers';
+import { isApiError } from '@/lib/api/errors';
 import { driveKeys } from '@/lib/drive/queries';
+import { packageKeys } from '@/lib/packages/queries';
 import type { ClientUploadConfig } from '@/lib/server/config';
 import type { PickedFile } from '@/lib/upload/dropped-files';
 import { precheckFile } from '@/lib/upload/precheck';
@@ -107,6 +115,7 @@ export function UploadProvider({
           queryKey: driveKeys.children(folderRefFromId(file.folderId)),
         });
         void queryClient.invalidateQueries({ queryKey: driveKeys.usage });
+        void queryClient.invalidateQueries({ queryKey: packageKeys.mine });
       },
       onFoldersCreated: (folders) => {
         for (const folder of folders) {
@@ -122,6 +131,26 @@ export function UploadProvider({
   // the whole studio session (uploads continue while the user browses folders).
 
   const { uppy } = uploader;
+
+  // ADR 0026: an upload refused by the package (expired, or the photo limit used up) means the
+  // usage meter, the package chip and the "uploads blocked" notice are out of date.
+  useEffect(() => {
+    const onError = (file: DriveUppyFile | undefined) => {
+      if (file === undefined) return;
+      const error = uploader.errorFor(file.id);
+      if (
+        isApiError(error, ErrorCode.PLAN_EXPIRED) ||
+        isApiError(error, ErrorCode.PHOTO_LIMIT_REACHED)
+      ) {
+        void queryClient.invalidateQueries({ queryKey: driveKeys.usage });
+        void queryClient.invalidateQueries({ queryKey: packageKeys.mine });
+      }
+    };
+    uppy.on('upload-error', onError);
+    return () => {
+      uppy.off('upload-error', onError);
+    };
+  }, [uppy, uploader, queryClient]);
   const subscribe = useCallback(
     (onChange: () => void) => {
       uppy.on('state-update', onChange);

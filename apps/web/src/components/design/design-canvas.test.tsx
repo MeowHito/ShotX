@@ -162,7 +162,7 @@ describe('DesignCanvas: the one renderer (ADR 0013)', () => {
     expect(screen.getByTestId('design-canvas').style.background).toContain('34, 34, 34');
   });
 
-  it('gallery shows both scan buttons and the help button; face_only the camera button alone', async () => {
+  it('both scan buttons and the help button, in gallery and face_only (ADR 0028)', async () => {
     const onCamera = vi.fn();
     const onChoosePhoto = vi.fn();
     const onHelp = vi.fn();
@@ -199,8 +199,9 @@ describe('DesignCanvas: the one renderer (ADR 0013)', () => {
         />
       </NextIntlClientProvider>,
     );
+    // ADR 0028 (owner, 2026-11-16): a scan-only page offers "use a photo" too.
     expect(screen.getByRole('button', { name: th.share.design.camera })).toBeInTheDocument();
-    expect(screen.queryByText(th.share.design.choosePhoto)).toBeNull();
+    expect(screen.getByRole('button', { name: th.share.design.choosePhoto })).toBeInTheDocument();
   });
 
   it('in the editor and previews the buttons are inert; labels follow the UI language', () => {

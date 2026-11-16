@@ -1,6 +1,7 @@
 import {
   ACCOUNT_STATUSES,
   ACTIVITY_TYPES,
+  PACKAGE_ORDER_STATUSES,
   AUTH_POOLS,
   BILLING_ACTORS,
   BILLING_MODES,
@@ -8,6 +9,7 @@ import {
   CHECKOUT_STATUSES,
   CONSENT_PURPOSES,
   DOWNLOAD_SIZES,
+  EXPENSE_CATEGORIES,
   FACE_FEEDBACK_VERDICTS,
   FILE_STATUSES,
   PAYMENT_EVENT_TYPES,
@@ -73,6 +75,10 @@ describe('schema', () => {
         'cash_payments',
         'share_designs',
         'design_assets',
+        'packages',
+        'photographer_packages',
+        'package_orders',
+        'expenses',
       ].sort(),
     );
   });
@@ -323,6 +329,141 @@ describe('schema', () => {
     expect(schema.subscriptionNoticeKind.enumValues).toEqual([...SUBSCRIPTION_NOTICE_KINDS]);
     expect(schema.billingActor.enumValues).toEqual([...BILLING_ACTORS]);
     expect(schema.accountStatus.enumValues).toEqual([...ACCOUNT_STATUSES]);
+    expect(schema.packageOrderStatus.enumValues).toEqual([...PACKAGE_ORDER_STATUSES]);
+    expect(schema.expenseCategory.enumValues).toEqual([...EXPENSE_CATEGORIES]);
+  });
+
+  it('has the expenses ledger and the finance indexes of migration 0017 (ADR 0027)', () => {
+    expect(config('expenses').columns.map((c) => c.name)).toEqual([
+      'id',
+      'spent_on',
+      'amount_satang',
+      'category',
+      'note',
+      'recorded_by_id',
+      'recorded_by_pool',
+      'created_at',
+      'deleted_at',
+    ]);
+    expect(config('expenses').checks.map((c) => c.name)).toEqual(
+      expect.arrayContaining([
+        'expenses_recorded_by_pool',
+        'expenses_amount_positive',
+        'expenses_note_length',
+        'expenses_spent_on_not_future',
+      ]),
+    );
+    expect(config('expenses').foreignKeys.map((f) => f.getName())).toEqual([
+      'expenses_recorded_by_admin_fk',
+    ]);
+    const indexes = (table: string) => config(table).indexes.map((i) => i.config.name);
+    expect(indexes('expenses')).toEqual(['expenses_spent_on_idx']);
+    expect(indexes('package_orders')).toContain('package_orders_paid_idx');
+    expect(indexes('audit_log')).toEqual(
+      expect.arrayContaining([
+        'audit_log_created_idx',
+        'audit_log_action_idx',
+        'audit_log_actor_created_idx',
+        'audit_log_target_id_idx',
+      ]),
+    );
+    expect(indexes('cash_payments')).toContain('cash_payments_paid_idx');
+  });
+
+  it('has the package tables of migration 0016 (ADR 0026)', () => {
+    const names = (table: string) => config(table).columns.map((c) => c.name);
+    expect(names('packages')).toEqual([
+      'id',
+      'code',
+      'name',
+      'days',
+      'photo_limit',
+      'price_satang',
+      'is_active',
+      'sort_order',
+    ]);
+    expect(names('photographer_packages')).toEqual(
+      expect.arrayContaining([
+        'photographer_id',
+        'package_id',
+        'starts_at',
+        'expires_at',
+        'photo_limit',
+        'photos_used',
+        'updated_at',
+      ]),
+    );
+    expect(names('package_orders')).toEqual(
+      expect.arrayContaining([
+        'id',
+        'package_id',
+        'photographer_id',
+        'email',
+        'name',
+        'price_satang',
+        'vat_satang',
+        'total_satang',
+        'gateway',
+        'gateway_ref',
+        'status',
+        'access_token_hash',
+        'idempotency_key',
+        'paid_at',
+        'applied_at',
+        'created_at',
+        'updated_at',
+      ]),
+    );
+    for (const [table, col] of [
+      ['packages', 'price_satang'],
+      ['package_orders', 'price_satang'],
+      ['package_orders', 'vat_satang'],
+      ['package_orders', 'total_satang'],
+    ] as const) {
+      expect(column(table, col).getSQLType(), `${table}.${col}`).toBe('integer');
+    }
+    expect(config('photographer_packages').primaryKeys).toEqual([]);
+    expect(column('photographer_packages', 'photographer_id').primary).toBe(true);
+    expect(column('package_orders', 'photographer_id').notNull).toBe(false);
+    expect(column('package_orders', 'status').getSQLType()).toBe('package_order_status');
+    const uniques = (table: string) =>
+      config(table).uniqueConstraints.map((u) => [u.name, u.columns.map((c) => c.name)]);
+    expect(uniques('package_orders')).toEqual(
+      expect.arrayContaining([
+        ['package_orders_gateway_ref_unique', ['gateway', 'gateway_ref']],
+        ['package_orders_idempotency_key_unique', ['idempotency_key']],
+      ]),
+    );
+    expect(uniques('packages')).toContainEqual(['packages_code_unique', ['code']]);
+    const checks = (table: string) => config(table).checks.map((c) => c.name);
+    expect(checks('packages')).toEqual(
+      expect.arrayContaining([
+        'packages_days_positive',
+        'packages_photo_limit_positive',
+        'packages_price_nonnegative',
+      ]),
+    );
+    expect(checks('photographer_packages')).toEqual(
+      expect.arrayContaining([
+        'photographer_packages_period_order',
+        'photographer_packages_photos_used_nonnegative',
+      ]),
+    );
+    // Extensions can leave photos_used above an old limit for a moment: the guard is the UPDATE.
+    expect(checks('photographer_packages').join(' ')).not.toMatch(/photos_used_within/);
+    expect(checks('package_orders')).toEqual(
+      expect.arrayContaining([
+        'package_orders_amounts_valid',
+        'package_orders_total_is_price_plus_vat',
+        'package_orders_access_token_hash_hex',
+      ]),
+    );
+    expect(config('package_orders').indexes.map((i) => i.config.name)).toEqual(
+      expect.arrayContaining([
+        'package_orders_photographer_created_idx',
+        'package_orders_email_idx',
+      ]),
+    );
   });
 
   it('has the account columns, keys and checks of migration 0011 (ADR 0010)', () => {

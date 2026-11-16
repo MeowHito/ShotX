@@ -95,8 +95,11 @@ describe('error message map', () => {
   it('says "ลิงก์นี้หมดอายุ" for every SHARE_EXPIRED reason', () => {
     for (const reason of SHARE_UNAVAILABLE_REASONS) {
       const text = render(messageForCode(ErrorCode.SHARE_EXPIRED, { reason }));
-      // ADR 0016: an unpublished event isn't expired; the same link opens again later.
+      // ADR 0016: an unpublished event isn't expired; the same link opens again later. ADR 0026:
+      // neither is a link whose photographer's package ran out (it opens again on renewal).
       if (reason === 'paused') expect(text).toContain('ลิงก์นี้ยังไม่เปิดให้ดู');
+      else if (reason === 'plan_expired')
+        expect(text).toBe('ลิงก์นี้ปิดชั่วคราว ลองเปิดอีกครั้งภายหลัง');
       else expect(text, reason).toContain('ลิงก์นี้หมดอายุ');
     }
     expect(render(messageForCode(ErrorCode.SHARE_EXPIRED, undefined))).toBe('ลิงก์นี้หมดอายุ');
@@ -125,6 +128,32 @@ describe('error message map', () => {
     expect(render(messageForCode(ErrorCode.PASSWORD_INCORRECT, undefined))).toBe(
       'รหัสผ่านไม่ถูกต้อง',
     );
+  });
+
+  it('gives the package codes (ADR 0026) Thai messages, with their details', () => {
+    expect(
+      render(messageForCode(ErrorCode.PLAN_EXPIRED, { expiresAt: '2026-11-20T05:00:00.000Z' })),
+    ).toMatch(/^แพ็กเกจหมดอายุเมื่อ .*2569.* ต่ออายุแพ็กเกจเพื่อใช้งานต่อ$/);
+    expect(
+      render(
+        messageForCode(ErrorCode.PHOTO_LIMIT_REACHED, {
+          photoLimit: 1000,
+          photosUsed: 1000,
+          requested: 1,
+        }),
+      ),
+    ).toBe('อัปโหลดครบ 1,000 ภาพตามแพ็กเกจแล้ว ต่ออายุหรือเลือกแพ็กเกจเพิ่มเพื่ออัปโหลดต่อ');
+    expect(render(messageForCode(ErrorCode.PAYMENT_UNAVAILABLE, undefined))).toBe(
+      'ระบบชำระเงินออนไลน์จะเปิดใช้งานเร็วๆ นี้ กรุณาติดต่อทีมงาน',
+    );
+    for (const code of [
+      ErrorCode.PACKAGE_UNAVAILABLE,
+      ErrorCode.EMAIL_UNAVAILABLE,
+      ErrorCode.SIGNUP_LINK_INVALID,
+      ErrorCode.ORDER_NOT_FOUND,
+    ]) {
+      expect(render(messageForCode(code, undefined)), code).toBe(th.errors.codes[code]);
+    }
   });
 
   it('gives the billing codes Thai messages, with reasons and pending details', () => {

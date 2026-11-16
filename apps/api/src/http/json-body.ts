@@ -20,10 +20,11 @@ export function isDesignDocumentWrite(method: string, path: string): boolean {
 }
 
 /**
- * `POST /api/billing/webhooks/:gateway` (RouteContract.rawBody): the exact bytes, unparsed, because
- * the gateway's signature covers them. Same limit as JSON bodies.
+ * `POST /api/billing/webhooks/:gateway` and (ADR 0026) `POST /api/package-payments/webhooks/:gateway`
+ * (RouteContract.rawBody): the exact bytes, unparsed, because the gateway's signature covers them.
+ * Same limit as JSON bodies.
  */
-export const WEBHOOK_PATH = /^\/api\/billing\/webhooks\/[^/]+$/;
+export const WEBHOOK_PATH = /^\/api\/(?:billing|package-payments)\/webhooks\/[^/]+$/;
 
 /** The raw webhook body the middleware kept (empty when none was sent). */
 export function rawBodyOf(body: unknown): Buffer {

@@ -20,6 +20,7 @@ import {
   ADMIN_AUDIT_ACTIONS,
   AUTH_AUDIT_ACTIONS,
   DESIGN_TEMPLATES,
+  FINANCE_AUDIT_ACTIONS,
   designDocSchema,
   driveNameKey,
   isCoveredByFaceIndex,
@@ -40,7 +41,14 @@ import {
   searchableFaceSql,
   shareFaceSearchAvailableSql,
 } from './share-scope';
-import type { NewDriveFile, NewShare, NewUser, NewZipJob } from './types';
+import type {
+  NewDriveFile,
+  NewPackageOrder,
+  NewPhotographerPackage,
+  NewShare,
+  NewUser,
+  NewZipJob,
+} from './types';
 
 // Migrations and seed against a real PostgreSQL. Two backends run the same tests:
 // - PGlite: PostgreSQL 18 compiled to WASM, in process, with the ltree extension. Always runs.
@@ -1680,6 +1688,229 @@ for (const backend of backends) {
       });
     });
 
+    describe('packages (migration 0016, ADR 0026)', () => {
+      const pkg = async (code: string) =>
+        one(await db().select().from(schema.packages).where(eq(schema.packages.code, code)));
+
+      const sha = () => randomBytes(32).toString('hex');
+      const newOrder = async (values: Partial<NewPackageOrder> = {}) =>
+        db()
+          .insert(schema.packageOrders)
+          .values({
+            packageId: (await pkg('d7')).id,
+            email: 'buyer@example.com',
+            name: 'ผู้ซื้อ',
+            priceSatang: 59_900,
+            vatSatang: 4_193,
+            totalSatang: 64_093,
+            vatRateBasisPoints: 700,
+            gateway: 'fake',
+            accessTokenHash: sha(),
+            idempotencyKey: randomUUID(),
+            requestSha256: sha(),
+            ...values,
+          })
+          .returning();
+
+      it('seeds the five packages with VAT-exclusive satang prices', async () => {
+        const stored = await db()
+          .select({
+            code: schema.packages.code,
+            name: schema.packages.name,
+            days: schema.packages.days,
+            photoLimit: schema.packages.photoLimit,
+            priceSatang: schema.packages.priceSatang,
+            isActive: schema.packages.isActive,
+          })
+          .from(schema.packages)
+          .orderBy(schema.packages.sortOrder);
+        expect(stored).toEqual([
+          { code: 'free', name: 'Free', days: 3, photoLimit: 100, priceSatang: 0, isActive: true },
+          {
+            code: 'd3',
+            name: '3 Days',
+            days: 3,
+            photoLimit: 1_000,
+            priceSatang: 39_900,
+            isActive: true,
+          },
+          {
+            code: 'd7',
+            name: '7 Days',
+            days: 7,
+            photoLimit: 3_000,
+            priceSatang: 59_900,
+            isActive: true,
+          },
+          {
+            code: 'd15',
+            name: '15 Days',
+            days: 15,
+            photoLimit: 5_000,
+            priceSatang: 79_900,
+            isActive: true,
+          },
+          {
+            code: 'd30',
+            name: '30 Days',
+            days: 30,
+            photoLimit: 10_000,
+            priceSatang: 129_900,
+            isActive: true,
+          },
+        ]);
+        await b.migrateAgain();
+        expect(await db().select().from(schema.packages)).toHaveLength(5);
+      });
+
+      it('rejects packages that break the rules', async () => {
+        const insert = (values: Partial<typeof schema.packages.$inferInsert>) =>
+          db()
+            .insert(schema.packages)
+            .values({ code: 'x1', name: 'X', days: 1, photoLimit: 1, priceSatang: 1, ...values });
+        expect(await pgError(insert({ code: 'd7' }))).toEqual({
+          code: UNIQUE,
+          constraint: 'packages_code_unique',
+        });
+        expect(await pgError(insert({ days: 0 }))).toEqual({
+          code: CHECK,
+          constraint: 'packages_days_positive',
+        });
+        expect(await pgError(insert({ photoLimit: 0 }))).toEqual({
+          code: CHECK,
+          constraint: 'packages_photo_limit_positive',
+        });
+        expect(await pgError(insert({ priceSatang: -1 }))).toEqual({
+          code: CHECK,
+          constraint: 'packages_price_nonnegative',
+        });
+        expect(
+          await pgError(
+            db()
+              .update(schema.packages)
+              .set({ priceSatang: 100 })
+              .where(eq(schema.packages.code, 'free')),
+          ),
+        ).toEqual({
+          code: CHECK,
+          constraint: 'packages_free_costs_nothing',
+        });
+      });
+
+      it('keeps one package row per photographer, never for an admin', async () => {
+        const photographer = await newUser();
+        const admin = await newUser({
+          authPool: 'admins',
+          role: 'admin',
+          authSubject: `admin:${randomUUID()}`,
+        });
+        const now = new Date();
+        const later = new Date(now.getTime() + 3 * 86_400_000);
+        const row = (photographerId: string, values: Partial<NewPhotographerPackage> = {}) =>
+          db()
+            .insert(schema.photographerPackages)
+            .values({
+              photographerId,
+              packageId: '',
+              startsAt: now,
+              expiresAt: later,
+              photoLimit: 100,
+              ...values,
+            });
+        const freeId = (await pkg('free')).id;
+        await row(photographer.id, { packageId: freeId });
+        expect(await pgError(row(photographer.id, { packageId: freeId }))).toMatchObject({
+          code: UNIQUE,
+        });
+        expect(await pgError(row(admin.id, { packageId: freeId }))).toEqual({
+          code: FOREIGN_KEY,
+          constraint: 'photographer_packages_photographer_fk',
+        });
+        const other = await newUser();
+        expect(await pgError(row(other.id, { packageId: freeId, expiresAt: now }))).toEqual({
+          code: CHECK,
+          constraint: 'photographer_packages_period_order',
+        });
+        expect(await pgError(row(other.id, { packageId: freeId, photosUsed: -1 }))).toEqual({
+          code: CHECK,
+          constraint: 'photographer_packages_photos_used_nonnegative',
+        });
+        // No photos_used <= photo_limit CHECK: the guard is the api's UPDATE.
+        await row(other.id, { packageId: freeId, photosUsed: 101 });
+      });
+
+      it('keeps orders idempotent, unique per gateway reference, and their amounts consistent', async () => {
+        const key = randomUUID();
+        const [order] = await newOrder({ idempotencyKey: key, gatewayRef: 'ref-1' });
+        expect(order?.status).toBe('pending');
+        expect(await pgError(newOrder({ idempotencyKey: key }))).toEqual({
+          code: UNIQUE,
+          constraint: 'package_orders_idempotency_key_unique',
+        });
+        expect(await pgError(newOrder({ gatewayRef: 'ref-1' }))).toEqual({
+          code: UNIQUE,
+          constraint: 'package_orders_gateway_ref_unique',
+        });
+        // Orders without a gateway reference yet don't collide.
+        await newOrder();
+        await newOrder();
+        expect(await pgError(newOrder({ totalSatang: 64_000 }))).toEqual({
+          code: CHECK,
+          constraint: 'package_orders_total_is_price_plus_vat',
+        });
+        expect(await pgError(newOrder({ accessTokenHash: 'not-hex' }))).toEqual({
+          code: CHECK,
+          constraint: 'package_orders_access_token_hash_hex',
+        });
+        // `paid` needs paid_at, applied_at and the account, together.
+        expect(
+          await pgError(
+            db()
+              .update(schema.packageOrders)
+              .set({ status: 'paid', paidAt: new Date() })
+              .where(eq(schema.packageOrders.idempotencyKey, key)),
+          ),
+        ).toEqual({ code: CHECK, constraint: 'package_orders_paid_iff_applied' });
+        expect(
+          await pgError(
+            db()
+              .update(schema.packageOrders)
+              .set({ status: 'paid', paidAt: new Date(), appliedAt: new Date() })
+              .where(eq(schema.packageOrders.idempotencyKey, key)),
+          ),
+        ).toEqual({ code: CHECK, constraint: 'package_orders_applied_has_photographer' });
+        const buyer = await newUser({
+          authSubject: `password:${randomUUID()}`,
+          email: 'buyer@example.com',
+        });
+        const [paid] = await db()
+          .update(schema.packageOrders)
+          .set({
+            status: 'paid',
+            paidAt: new Date(),
+            appliedAt: new Date(),
+            photographerId: buyer.id,
+            accountCreated: true,
+          })
+          .where(eq(schema.packageOrders.idempotencyKey, key))
+          .returning();
+        expect(paid?.status).toBe('paid');
+      });
+
+      it('lets package gateway events be audited without an actor, other actions not', async () => {
+        const entry = (action: string) =>
+          db()
+            .insert(schema.auditLog)
+            .values({ action, targetType: 'package_order', targetId: randomUUID() });
+        await entry('package.order_amount_mismatch');
+        await entry('auth.photographer.sign_in_failed');
+        expect(await pgError(entry('account.self_signup'))).toEqual({
+          code: CHECK,
+          constraint: 'audit_log_actor_unless_auth_event',
+        });
+      });
+    });
+
     it('partitions activity_events by UTC month with a default partition', async () => {
       const strategy = await rows<{ partstrat: string }>(
         db(),
@@ -2550,6 +2781,55 @@ describe('admin-provisioned accounts (migration 0011, PGlite)', () => {
       code: FOREIGN_KEY,
       constraint: 'cash_payments_photographer_fk',
     });
+  });
+
+  it('records expenses from an admin in satang, soft-deleted, never in the future (migration 0017)', async () => {
+    const admin = await newAdmin();
+    const p = await newPhotographer();
+    const spend = (values: Record<string, unknown> = {}) =>
+      db()
+        .insert(schema.expenses)
+        .values({
+          spentOn: '2026-11-16',
+          amountSatang: 129_900,
+          category: 'server',
+          recordedById: admin.id,
+          ...values,
+        })
+        .returning();
+    const [row] = await spend({ note: 'VPS' });
+    expect(row).toMatchObject({ recordedByPool: 'admins', deletedAt: null, category: 'server' });
+    expect(await pgError(spend({ recordedById: p.id }))).toEqual({
+      code: FOREIGN_KEY,
+      constraint: 'expenses_recorded_by_admin_fk',
+    });
+    const tomorrowPlus2 = new Date(Date.now() + 7 * 3_600_000 + 2 * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+    for (const [values, constraint] of [
+      [{ amountSatang: 0 }, 'expenses_amount_positive'],
+      [{ note: '' }, 'expenses_note_length'],
+      [{ note: 'x'.repeat(501) }, 'expenses_note_length'],
+      [{ spentOn: tomorrowPlus2 }, 'expenses_spent_on_not_future'],
+      [{ deletedAt: new Date('2000-01-01T00:00:00Z') }, 'expenses_deleted_after_created'],
+    ] as const) {
+      expect(await pgError(spend(values)), constraint).toEqual({ code: CHECK, constraint });
+    }
+    await expect(spend({ category: 'rent' })).rejects.toThrow();
+    await db()
+      .update(schema.expenses)
+      .set({ deletedAt: new Date() })
+      .where(eq(schema.expenses.id, row?.id ?? ''));
+    for (const action of FINANCE_AUDIT_ACTIONS) {
+      expect(
+        await pgError(
+          db()
+            .insert(schema.auditLog)
+            .values({ actorId: null, action, targetType: 'expense', targetId: row?.id ?? '' }),
+        ),
+        action,
+      ).toEqual({ code: CHECK, constraint: 'audit_log_actor_unless_auth_event' });
+    }
   });
 
   it('allows admin user-management audit rows only with an actor', async () => {

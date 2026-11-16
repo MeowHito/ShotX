@@ -1146,7 +1146,14 @@ export function DriveBrowser({
           onMove={move}
         />
         <EventDialog
-          folder={editingEvent}
+          // The listing's current row (a cover change refetches it), else the one clicked.
+          folder={
+            editingEvent === null
+              ? null
+              : (items.find(
+                  (i): i is DriveFolder => i.kind === 'folder' && i.id === editingEvent.id,
+                ) ?? editingEvent)
+          }
           onOpenChange={(open) => !open && setEditingEvent(null)}
           onPublishedChange={(published, name) =>
             setNotice({

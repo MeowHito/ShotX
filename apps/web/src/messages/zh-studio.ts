@@ -3,72 +3,110 @@ import type { StudioMessages } from './public';
 /** Simplified Chinese for home, pricing, login, password, settings and the studio. */
 export const zhStudio: StudioMessages = {
   home: {
-    eyebrow: '为活动摄影师打造',
-    headingLine1: '把活动照片送到每个人手中',
-    headingLine2: '让每位来宾找到自己的照片',
-    lead: '把照片和视频上传到文件夹，向来宾分享一个链接，每个人扫描自己的脸就能找到有自己的照片，并直接下载到手机。',
-    start: '登录工作室',
-    pricing: '查看套餐与价格',
-    micro: '新摄影师？请联系管理员开通账号。',
-    stepsLabel: '使用步骤',
-    steps: {
-      upload: {
-        title: '上传到文件夹',
-        body: '整个文件夹直接拖进来，系统自动准备浏览和分享尺寸。',
-      },
-      share: {
-        title: '分享一个链接',
-        body: '可设置密码、有效期或要求登录后查看，并随时关闭链接。',
-      },
-      find: {
-        title: '来宾找到自己的照片',
-        body: '在手机上扫描人脸，只看到有自己的照片，并保存到手机。',
-      },
-    },
-    featuresEyebrow: '功能一览',
-    featuresTitle: '摄影师交付活动照片所需的一切，尽在一处',
+    metaTitle: 'SNAP 套餐 | 查找和分享活动照片',
+    metaDescription:
+      '按使用天数和照片数量选择 SNAP 套餐。每个套餐都包含人脸搜索、相册分享和照片下载。',
+    eyebrow: 'SNAP 价格',
+    headingLine1: '活动的每一张照片，',
+    headingLine2: '都送到对的人手中',
+    lead: '按所需的天数和照片数量选择套餐。',
+    featuresTitle: '每个套餐功能齐全',
+    featuresLead: '以下功能包含在每个套餐中，包括免费套餐。',
     features: {
-      drive: {
-        title: '文件夹式云盘',
-        body: '用文件夹整理照片，可重命名、移动、复制，并从回收站恢复。',
-      },
-      share: {
-        title: '可控的分享链接',
-        body: '选择是否允许下载及下载尺寸，设置密码，并查看每个链接的统计。',
-      },
-      face: {
-        title: '人脸搜索',
-        body: '来宾自拍即可找到有自己的照片，分为“是你”和“可能是你”。',
-      },
-      download: {
-        title: '手机轻松下载',
-        body: '单张下载、打包成 zip，或在 iPhone 上一次保存多张到“照片”。',
-      },
-      privacy: {
-        title: '重视个人隐私',
-        body: '来宾在使用前已获告知，自拍照不会保存在系统中。',
-      },
-      pricing: {
-        title: '以泰铢计价',
-        body: '价格已含增值税，可用 PromptPay 或银行卡支付，随时更换套餐。',
+      face: { title: '人脸搜索', body: '每个套餐都能让参与者找到自己的照片。' },
+      upload: { title: '网页自动上传', body: '在浏览器中添加照片，无需安装软件。' },
+      watermark: { title: '添加标志或水印', body: '轻松为活动照片加上你的风格。' },
+      qr: { title: '一键生成二维码', body: '参与者扫码即可打开相册。' },
+      stats: { title: '使用统计报告', body: '方便查看每场活动的使用情况。' },
+      download: { title: '选择下载照片', body: '只下载选中的照片，或下载找到的全部照片。' },
+      gallery: { title: '在线分享相册', body: '把活动照片集中起来供参与者查看。' },
+    },
+    packagesTitle: '选择适合你活动的套餐',
+    packagesLead: '按使用天数和上传照片数量比较。',
+    packagesLabel: 'SNAP 套餐',
+    who: {
+      free: '试用 SNAP',
+      d3: '适合小型活动',
+      d7: '适合需要更多时间交付照片的活动',
+      d15: '适合照片更多的活动',
+      d30: '适合需要更长时间分享照片的活动',
+    },
+    featured: '推荐套餐',
+    days: '天',
+    photos: '{count, number} 张照片',
+    photosLabel: '最多上传照片数',
+    choose: '选择此套餐',
+    footnote: '价格不含 {rate}% 增值税 · 按所选期限一次性付款',
+    loadError: '套餐加载失败，请稍后再试。',
+    empty: '目前没有在售套餐。',
+    faq: {
+      title: '条款与常见问题',
+      lead: 'SNAP 套餐与使用说明',
+      items: {
+        perAccount: {
+          question: '一个套餐可以用于几场活动？',
+          answer:
+            '套餐属于你的账户，而不是某一场活动，因此在到期前可用于账户中的所有活动。上传照片数量按账户内所有活动合计。',
+        },
+        period: {
+          question: '从什么时候开始计算天数？到期后会怎样？',
+          answer:
+            '付款成功后立即开始计算，免费套餐则在确认注册链接时开始，工作室会一直显示到期日期。到期前再次购买，天数和照片数量会叠加到原有套餐上。到期后，分享链接会关闭，并且无法上传，直到续费为止；但你仍可登录、浏览和下载自己的照片，系统也不会删除任何内容。',
+        },
+        counting: {
+          question: '照片数量如何计算？',
+          answer:
+            '每上传一个文件计为一张照片（视频也一样）。查看或下载不计数。删除的照片不会退回数量，但在完成前取消的上传会退回。',
+        },
+        faceSearch: {
+          question: '每个套餐都能使用人脸搜索吗？',
+          answer:
+            '可以，包括免费套餐在内的每个套餐都有人脸搜索。搜索结果可能不完整或混有不匹配的照片，请在下载前检查。',
+        },
+        downloads: {
+          question: '如何下载照片？',
+          answer:
+            '可以只下载选中的照片，也可以下载找到的全部照片。搜索结果页中的“全部”指找到的照片，而不是活动中的所有照片。',
+        },
+        files: {
+          question: '支持哪些文件类型和大小？',
+          answer:
+            '照片：{imageTypes}，每个文件不超过 {imageMax}；视频：{videoTypes}，每个文件不超过 {videoMax}。',
+          answerNoLimits:
+            '照片：{imageTypes}；视频：{videoTypes}。如果文件过大，上传前系统会提示。',
+        },
+        vat: {
+          question: '价格含增值税吗？',
+          answer: '套餐卡片上的价格不含 {rate}% 增值税。',
+          totalsIntro: '含增值税的应付金额：',
+          total: '{name}：{total}',
+          answerNoData: '套餐卡片上的价格不含增值税。付款前，套餐摘要都会显示含增值税的应付金额。',
+        },
+        more: {
+          question: '可以升级、续费或增加照片数量吗？',
+          answer:
+            '可以。登录后再次购买任意付费套餐，其天数和照片数量会叠加到当前套餐。如果套餐已经到期，则从付款当天开始新的周期。',
+        },
+        payment: {
+          question: '付款出现问题或想要退款怎么办？',
+          answer:
+            '如果被重复扣款、付款后无法使用、收到的套餐与订单不符，或想申请退款，请联系团队核查。',
+        },
+        faceData: {
+          question: '人脸数据和自拍照如何处理？',
+          answer:
+            '自拍照不会被保存，只用于那一次搜索，随后立即删除。活动照片中的人脸数据仅用于搜索，并会在摄影师永久删除照片、关闭人脸搜索或活动的人脸索引到期时删除。想删除自己人脸的人，可以向摄影师或主办方索取该活动的“删除我的人脸”链接。',
+        },
       },
     },
-    privacyEyebrow: '人脸属于敏感数据',
-    privacyTitle: '我们设计的人脸搜索尊重每一位来宾',
-    privacy: {
-      consent: '主办方在活动前告知来宾人脸搜索功能，点击扫描即可开始搜索。',
-      noSelfie: '自拍照只用于当次搜索，不会保存在设备或系统中。',
-      delete: '任何人都可以联系摄影师或主办方，要求从搜索系统中删除自己的人脸。',
-    },
-    ctaTitle: '准备好迎接下一场活动了吗？',
-    ctaBody: '新摄影师请联系管理员开通账号，然后用收到的邮箱和密码登录。',
   },
   site: {
     navLabel: '网站菜单',
-    footerLabel: '页脚链接',
-    pricing: '价格',
+    homeLabel: 'SNAP 首页',
+    packages: '套餐与价格',
     login: '登录',
-    tagline: '为摄影师提供照片存储、分享链接和人脸搜索',
+    studio: '进入工作室',
+    footer: 'SNAP · 活动照片相册与人脸搜索',
   },
   pricing: {
     title: '套餐与价格',
@@ -88,17 +126,72 @@ export const zhStudio: StudioMessages = {
     listLabel: '套餐列表',
     recommended: '推荐套餐',
     eyebrow: '套餐价格',
-    offline: {
-      eyebrow: '面向摄影师',
-      title: '开通摄影师账号',
-      subtitle: '目前尚未开放在线购买套餐。想使用本服务的摄影师，请联系管理员付费并开通账号。',
-      steps: {
-        contact: '联系管理员付费并开通摄影师账号。',
-        receive: '从管理员处收到邮箱和临时密码。',
-        signIn: '登录工作室，并在首次登录时设置自己的密码。',
-      },
-      stepsLabel: '开通账号的步骤',
-      login: '登录工作室',
+  },
+  packageDialog: {
+    title: '套餐摘要',
+    freeSummary: '{name} 套餐 · 免费',
+    paidSummary: '{name} 套餐',
+    terms: '{days, number} 天 · 最多上传 {photos, number} 张照片',
+    price: '套餐价格',
+    vat: '增值税 {rate}%',
+    total: '应付金额',
+    name: '姓名',
+    email: '邮箱',
+    nameMissing: '请输入姓名。',
+    emailInvalid: '请输入有效的邮箱地址。',
+    freeIntro: '填写姓名和邮箱，我们会发送确认链接，用于设置密码并开始使用免费套餐。',
+    freeSubmit: '发送确认链接',
+    sending: '正在发送…',
+    freeSentTitle: '确认链接已发送到你的邮箱',
+    freeSentBody: '打开发送到 {email} 的邮件，点击链接设置密码（也请查看垃圾邮件文件夹）。',
+    paidIntro:
+      '填写你的账号姓名和邮箱。付款后我们会把设置密码的链接发送到此邮箱。如果你已有账号，请先登录再购买。',
+    paidSignedIn: '此套餐将添加到当前登录的账号。',
+    pay: '付款',
+    paying: '正在前往付款页面…',
+    paymentSoon: '在线支付即将开放，请联系我们的团队。',
+    contactTeam: '请联系我们的团队。',
+    captchaRequired: '请确认你不是机器人，我们随后会发送确认链接。',
+    close: '关闭',
+  },
+  signup: {
+    title: '设置 SNAP 账号密码',
+    body: '设置密码以开通账号并开始免费套餐，随后将直接进入工作室。',
+    save: '设置密码并开始使用',
+    saving: '正在保存…',
+    linkInvalid:
+      '此确认链接已失效（已过期、已使用，或该邮箱已有账号）。请选择套餐重新注册，或直接登录。',
+    backToPackages: '返回套餐页面',
+    login: '登录',
+  },
+  checkout: {
+    title: '付款结果',
+    pending: '正在等待付款结果，此页面会自动更新。',
+    timeout: '尚未收到付款结果。如果已付款，系统会发送确认邮件，或请联系我们的团队。',
+    checkAgain: '再次查询',
+    paidTitle: '付款成功',
+    accountCreated: '设置密码的链接已发送到 {email}。',
+    accountCreatedHint: '打开邮件并点击链接，设置密码后即可开始使用。',
+    added: '套餐已添加',
+    goStudio: '进入工作室',
+    package: '{name} 套餐',
+    expiresAt: '有效期至 {date}',
+    total: '已付 {amount}',
+    failedTitle: '付款失败',
+    failedBody: '此笔付款未成功。请重新选择套餐并再次付款。',
+    mismatchTitle: '付款金额与订单不符',
+    mismatchBody: '套餐尚未添加，我们的团队会核查此订单。',
+    retry: '重新选择套餐',
+    contact: '如有付款问题，请联系我们的团队。',
+    notFoundTitle: '找不到订单',
+    notFoundBody: '此浏览器中没有订单。如果已付款，系统会发送确认邮件，或请联系我们的团队。',
+    backToPackages: '查看套餐',
+    fake: {
+      title: '测试付款页面',
+      body: '仅供测试，不会真实扣款。',
+      paid: '付款成功',
+      failed: '付款失败',
+      sending: '正在发送结果…',
     },
   },
   billing: {
@@ -334,6 +427,16 @@ export const zhStudio: StudioMessages = {
       nearlyFull: '存储空间快满了',
       full: '存储空间已满',
       add: '增加存储空间',
+    },
+    package: {
+      title: '套餐',
+      name: '{name} 套餐',
+      daysLeft: '剩余 {days, number} 天',
+      expired: '已过期',
+      photos: '已用 {used, number} / {limit, number} 张照片',
+      expiresAt: '有效期至 {date}',
+      renew: '续费',
+      expiredBanner: '套餐已过期，分享链接暂时关闭。请续费后继续使用。',
     },
   },
   search: {
@@ -577,6 +680,8 @@ export const zhStudio: StudioMessages = {
       destinationMissing: 'Snap 中的目标文件夹已被删除或移到回收站。请停止同步后选择其他文件夹。',
       otherTab: '另一个标签页正在同步。关闭那个标签页后点击继续同步。',
       browser: '浏览器无法保存同步设置，请刷新页面重试。',
+      planExpired: '套餐已过期，同步已停止。请续费后继续同步。',
+      photoLimitReached: '已上传套餐允许的全部照片，同步已停止。请续费或增加套餐后继续同步。',
     },
     recentTitle: '最新文件',
     recentEmpty: '还没有新文件。从 Lightroom 导出后会显示在这里。',
@@ -1013,6 +1118,15 @@ export const zhStudio: StudioMessages = {
       linkStatus: '状态：{status}',
       createLink: '创建链接并发布',
       settingsSaved: '链接设置已保存',
+      cover: '活动封面',
+      coverHint: '2:3 竖版图片。上传的图片会自动裁剪为此比例。',
+      coverUpload: '上传封面',
+      coverUploading: '正在上传…',
+      coverPick: '从活动照片中选择',
+      coverAuto: '自动使用第一张照片',
+      coverChoose: '使用 {name} 作为封面',
+      coverEmpty: '此活动还没有照片',
+      coverSaved: '封面已保存',
     },
     qrDialog: {
       save: '保存二维码',
@@ -1110,6 +1224,10 @@ export const zhStudio: StudioMessages = {
       SUBSCRIPTION_INACTIVE:
         '套餐未生效，暂时无法上传。原有文件和分享链接仍可使用，请续费后继续上传。',
       QUOTA_EXCEEDED: '存储空间已满，无法继续上传。请删除文件（包括清空回收站）或升级套餐。',
+      PLAN_EXPIRED:
+        '套餐已过期，无法上传或创建新的分享链接，原有分享链接暂时关闭。你的文件都还在。请续费后继续使用。',
+      PHOTO_LIMIT_REACHED:
+        '已上传套餐允许的全部照片，分享链接仍可正常使用。请续费或增加套餐后继续上传。',
     },
   },
   upload: {

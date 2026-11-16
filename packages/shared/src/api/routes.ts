@@ -51,6 +51,17 @@ import {
 } from './billing';
 import { API_PREFIX, idParamsSchema } from './common';
 import {
+  adminUserFinanceResponseSchema,
+  createExpenseBodySchema,
+  expenseSchema,
+  financeQuerySchema,
+  financeResponseSchema,
+  listAuditLogQuerySchema,
+  listAuditLogResponseSchema,
+  listExpensesQuerySchema,
+  listExpensesResponseSchema,
+} from './finance';
+import {
   createFolderBodySchema,
   ownerDownloadQuerySchema,
   signedDownloadSchema,
@@ -82,6 +93,19 @@ import {
   updateDesignBodySchema,
 } from './designs';
 import { meResponseSchema } from './me';
+import {
+  createPackageOrderBodySchema,
+  createPackageOrderHeadersSchema,
+  createPackageOrderResponseSchema,
+  myPackageResponseSchema,
+  packageOrderFakeResultBodySchema,
+  packageOrderTokenHeadersSchema,
+  packageOrderViewSchema,
+  packagesResponseSchema,
+  packageWebhookParamsSchema,
+  signupFreeBodySchema,
+  signupFreeConfirmBodySchema,
+} from './packages';
 import {
   copyFileBodySchema,
   copyFileResponseSchema,
@@ -239,6 +263,13 @@ export interface RouteContract {
    * must refuse it like `bff` routes.
    */
   serverOnly?: true;
+  /**
+   * Added (ADR 0026): on a `bff` route, the user token the route accepts but doesn't require. When
+   * the BFF forwards a bearer token it must be a valid token of this role (else UNAUTHENTICATED),
+   * and the account checks of that role apply (ACCOUNT_DISABLED, PASSWORD_CHANGE_REQUIRED);
+   * without one the request is anonymous. Today only POST /package-orders (`photographer`).
+   */
+  optionalAuth?: 'photographer';
   /** Every error code the route can return. */
   errors: readonly ErrorCode[];
 }
@@ -377,6 +408,8 @@ export const DRIVE_ROUTES = {
       ErrorCode.NOT_FOUND,
       ErrorCode.FEATURE_DISABLED,
       ErrorCode.SUBSCRIPTION_INACTIVE,
+      // ADR 0026: turning indexing on with an expired package (turning it off always works).
+      ErrorCode.PLAN_EXPIRED,
     ),
   },
   /** Added (Phase 3): the owner's own download (any subscription status). */
@@ -519,6 +552,9 @@ export const UPLOAD_ROUTES = {
       ErrorCode.FOLDER_DEPTH_EXCEEDED,
       ErrorCode.IDEMPOTENCY_KEY_REUSED,
       ErrorCode.CONFLICT,
+      // ADR 0026: package expired, or one more photo would pass the package's photo limit.
+      ErrorCode.PLAN_EXPIRED,
+      ErrorCode.PHOTO_LIMIT_REACHED,
     ),
   },
   /** Added: presigned URLs for more parts (Uppy `signPart`). */
@@ -630,6 +666,7 @@ export const SHARE_ROUTES = {
       ErrorCode.FEATURE_DISABLED,
       ErrorCode.LOGIN_PROVIDER_UNAVAILABLE,
       ErrorCode.DESIGN_NOT_FOUND,
+      ErrorCode.PLAN_EXPIRED,
     ),
   },
   /** Added: the studio's share list (optionally of one file or folder). */
@@ -667,6 +704,8 @@ export const SHARE_ROUTES = {
       ErrorCode.FEATURE_DISABLED,
       ErrorCode.LOGIN_PROVIDER_UNAVAILABLE,
       ErrorCode.DESIGN_NOT_FOUND,
+      // ADR 0026: re-activating or un-pausing with an expired package (other edits still work).
+      ErrorCode.PLAN_EXPIRED,
     ),
   },
   /** Added: revoke (is_active = false), final and idempotent. */
@@ -1440,6 +1479,196 @@ export const ADMIN_ROUTES = {
     response: cashPaymentSchema,
     errors: adminErrors(ErrorCode.NOT_FOUND, ErrorCode.IDEMPOTENCY_KEY_REUSED),
   },
+  /** ADR 0027 §1: the audit log, newest first, with filters. Read-only, not audited. */
+  auditLog: {
+    method: 'GET',
+    path: '/admin/audit-log',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    query: listAuditLogQuerySchema,
+    response: listAuditLogResponseSchema,
+    errors: adminErrors(),
+  },
+  /** ADR 0027 §2: the expenses ledger (live rows), newest `spent_on` first. */
+  listExpenses: {
+    method: 'GET',
+    path: '/admin/expenses',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    query: listExpensesQuerySchema,
+    response: listExpensesResponseSchema,
+    errors: adminErrors(),
+  },
+  /** ADR 0027 §2: record an expense (audited `finance.expense_created`). */
+  createExpense: {
+    method: 'POST',
+    path: '/admin/expenses',
+    status: 201,
+    auth: 'admin',
+    bffKey: 'admins',
+    body: createExpenseBodySchema,
+    response: expenseSchema,
+    errors: adminErrors(),
+  },
+  /** ADR 0027 §2: soft-delete an expense (audited `finance.expense_deleted`; again: no-op). */
+  deleteExpense: {
+    method: 'DELETE',
+    path: '/admin/expenses/:id',
+    status: 204,
+    auth: 'admin',
+    bffKey: 'admins',
+    params: idParamsSchema,
+    errors: adminErrors(ErrorCode.NOT_FOUND),
+  },
+  /** ADR 0027 §3: income, expenses and profit over a range. Read-only, not audited. */
+  finance: {
+    method: 'GET',
+    path: '/admin/finance',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    query: financeQuerySchema,
+    response: financeResponseSchema,
+    errors: adminErrors(),
+  },
+  /** ADR 0027 §4: one photographer's orders, payments and estimated cost. Read-only. */
+  userFinance: {
+    method: 'GET',
+    path: '/admin/users/:id/finance',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    params: idParamsSchema,
+    response: adminUserFinanceResponseSchema,
+    errors: adminErrors(ErrorCode.NOT_FOUND),
+  },
+} as const satisfies Record<string, RouteContract>;
+
+/**
+ * Packages, Free sign-up and package orders (ADR 0026; api/packages for the shapes). With
+ * PACKAGE_SALES=off, `signupFree`, `signupFreeConfirm` and `createOrder` answer NOT_FOUND; the
+ * others keep working (prices on the home page, a buyer's order result, the photographer's
+ * package, late gateway callbacks).
+ */
+export const PACKAGE_ROUTES = {
+  /** Public price list for the home page (packagesResponseSchema). */
+  list: {
+    method: 'GET',
+    path: '/packages',
+    status: 200,
+    auth: 'public',
+    response: packagesResponseSchema,
+    errors: errors(),
+  },
+  /**
+   * Free sign-up step 1: always 204 for a well-formed body (no account enumeration).
+   * FEATURE_DISABLED without an account email provider (ACCOUNT_EMAIL_PROVIDER=off).
+   */
+  signupFree: {
+    method: 'POST',
+    path: '/signup/free',
+    status: 204,
+    auth: 'bff',
+    bffKey: 'users',
+    body: signupFreeBodySchema,
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.FEATURE_DISABLED),
+  },
+  /**
+   * Free sign-up step 2: creates the account, applies `free` and answers a new normal session
+   * (authTokenResponseSchema, as photographer sign-in and password-reset confirm do).
+   */
+  signupFreeConfirm: {
+    method: 'POST',
+    path: '/signup/free/confirm',
+    status: 200,
+    auth: 'bff',
+    bffKey: 'users',
+    body: signupFreeConfirmBodySchema,
+    response: authTokenResponseSchema,
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.SIGNUP_LINK_INVALID, ErrorCode.PASSWORD_TOO_WEAK),
+  },
+  /**
+   * Start a paid order (Idempotency-Key required). Anonymous, or for the signed-in photographer
+   * when the BFF forwards their token (`optionalAuth`). The response carries the order's access
+   * token: like every `bff` route it is called from web's server code only, which sets
+   * PACKAGE_ORDER_COOKIE.
+   */
+  createOrder: {
+    method: 'POST',
+    path: '/package-orders',
+    status: 201,
+    auth: 'bff',
+    bffKey: 'users',
+    optionalAuth: 'photographer',
+    headers: createPackageOrderHeadersSchema,
+    body: createPackageOrderBodySchema,
+    response: createPackageOrderResponseSchema,
+    errors: errors(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.PACKAGE_UNAVAILABLE,
+      ErrorCode.PAYMENT_UNAVAILABLE,
+      ErrorCode.EMAIL_UNAVAILABLE,
+      ErrorCode.IDEMPOTENCY_KEY_REUSED,
+      ErrorCode.PAYMENT_GATEWAY_ERROR,
+      ...SIGNED_IN_ROUTE_ERRORS,
+    ),
+  },
+  /** Poll one order with its access token (ORDER_TOKEN_HEADER). */
+  getOrder: {
+    method: 'GET',
+    path: '/package-orders/:id',
+    status: 200,
+    auth: 'bff',
+    bffKey: 'users',
+    params: idParamsSchema,
+    headers: packageOrderTokenHeadersSchema,
+    response: packageOrderViewSchema,
+    errors: errors(ErrorCode.ORDER_NOT_FOUND),
+  },
+  /** PACKAGE_GATEWAY=fake only (otherwise NOT_FOUND): the fake page's paid / failed buttons. */
+  fakeResult: {
+    method: 'POST',
+    path: '/package-orders/:id/fake-result',
+    status: 200,
+    auth: 'bff',
+    bffKey: 'users',
+    params: idParamsSchema,
+    headers: packageOrderTokenHeadersSchema,
+    body: packageOrderFakeResultBodySchema,
+    response: packageOrderViewSchema,
+    errors: errors(ErrorCode.NOT_FOUND, ErrorCode.ORDER_NOT_FOUND),
+  },
+  /**
+   * Gateway callbacks: verify the raw body, then apply in one transaction with the order
+   * `FOR UPDATE` (idempotent), answer 2xx.
+   */
+  webhook: {
+    method: 'POST',
+    path: '/package-payments/webhooks/:gateway',
+    status: 200,
+    auth: 'webhook',
+    params: packageWebhookParamsSchema,
+    rawBody: true,
+    response: webhookResponseSchema,
+    errors: [
+      ErrorCode.VALIDATION_FAILED,
+      ErrorCode.NOT_FOUND,
+      ErrorCode.WEBHOOK_SIGNATURE_INVALID,
+      ErrorCode.PAYLOAD_TOO_LARGE,
+      ErrorCode.INTERNAL_ERROR,
+    ],
+  },
+  /** The signed-in photographer's package; JSON `null` when the account is unlimited. */
+  myPackage: {
+    method: 'GET',
+    path: '/me/package',
+    status: 200,
+    auth: 'photographer',
+    response: myPackageResponseSchema,
+    errors: signedIn(),
+  },
 } as const satisfies Record<string, RouteContract>;
 
 /**
@@ -1473,6 +1702,7 @@ export const API_ROUTES = {
   auth: AUTH_ROUTES,
   photographerAccount: PHOTOGRAPHER_ACCOUNT_ROUTES,
   admin: ADMIN_ROUTES,
+  packages: PACKAGE_ROUTES,
 } as const;
 
 /** Every route as a flat list, e.g. for OpenAPI generation. */

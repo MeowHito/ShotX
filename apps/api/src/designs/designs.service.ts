@@ -190,8 +190,9 @@ export class DesignsService {
   // --- POST /designs ---------------------------------------------------------------------------
 
   /**
-   * From a template (with placeholder text in `locale`), a document, or blank. Never the
-   * default; revision 1. The owner's designs are counted under the per-owner lock in the insert's
+   * From a template (with placeholder text in `locale`), a document, or blank; revision 1. It
+   * becomes the default when the owner has none (ADR 0028), so a first design is "แบบหลัก" and new
+   * links start on it. The owner's designs are counted under the per-owner lock in the insert's
    * transaction (DESIGN_LIMIT_REACHED at DESIGN_MAX_PER_OWNER).
    */
   async create(ownerId: string, body: CreateBody): Promise<Design> {
@@ -214,9 +215,22 @@ export class DesignsService {
         });
       }
       const assets = await this.lockReferencedAssets(tx, ownerId, doc);
+      // Under the per-owner lock, so two first designs can't both become the default.
+      const [currentDefault] = await tx
+        .select({ id: shareDesigns.id })
+        .from(shareDesigns)
+        .where(and(eq(shareDesigns.ownerId, ownerId), eq(shareDesigns.isDefault, true)))
+        .limit(1);
       const [row] = await tx
         .insert(shareDesigns)
-        .values({ ownerId, name: body.name, doc, createdAt: now, updatedAt: now })
+        .values({
+          ownerId,
+          name: body.name,
+          doc,
+          isDefault: currentDefault === undefined,
+          createdAt: now,
+          updatedAt: now,
+        })
         .returning();
       if (row === undefined) throw new Error('Design insert returned no row');
       return this.toDesign(row, assets);

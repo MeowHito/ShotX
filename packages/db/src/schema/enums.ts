@@ -9,8 +9,10 @@ import {
   CHECKOUT_STATUSES,
   CONSENT_PURPOSES,
   DOWNLOAD_SIZES,
+  EXPENSE_CATEGORIES,
   FACE_FEEDBACK_VERDICTS,
   FILE_STATUSES,
+  PACKAGE_ORDER_STATUSES,
   PAYMENT_EVENT_TYPES,
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
@@ -53,3 +55,7 @@ export const billingActor = pgEnum('billing_actor', BILLING_ACTORS);
 export const uiLocale = pgEnum('ui_locale', SUPPORTED_LOCALES);
 // Migration 0011 (ADR 0010).
 export const accountStatus = pgEnum('account_status', ACCOUNT_STATUSES);
+// Migration 0016 (ADR 0026).
+export const packageOrderStatus = pgEnum('package_order_status', PACKAGE_ORDER_STATUSES);
+// Migration 0017 (ADR 0027).
+export const expenseCategory = pgEnum('expense_category', EXPENSE_CATEGORIES);

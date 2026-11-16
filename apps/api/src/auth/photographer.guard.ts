@@ -152,6 +152,42 @@ export class PhotographerGuard implements CanActivate {
   }
 }
 
+/**
+ * ADR 0026 (RouteContract `optionalAuth: 'photographer'`, today only POST /package-orders): runs
+ * after BffGuard. Without an Authorization header the request is anonymous. With one, everything
+ * PhotographerGuard checks applies (UNAUTHENTICATED, ACCOUNT_DISABLED, PASSWORD_CHANGE_REQUIRED,
+ * FORBIDDEN for a viewer). Read the result with OptionalPhotographer.
+ */
+@Injectable()
+export class OptionalPhotographerGuard implements CanActivate {
+  constructor(
+    @Inject(TOKEN_VERIFIER) private readonly verifier: TokenVerifier,
+    @Inject(DATABASE) private readonly db: Db,
+    @Inject(CLOCK) private readonly clock: Clock,
+  ) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const req = context.switchToHttp().getRequest<AuthedRequest>();
+    if (req.headers.authorization === undefined) return true;
+    const user = await authenticateUser(req, this.verifier, this.db, this.clock);
+    if (user.role !== 'photographer') {
+      throw new ApiError('FORBIDDEN', 'Only photographers may use this route');
+    }
+    return true;
+  }
+}
+
+/**
+ * The photographer OptionalPhotographerGuard resolved, or null for an anonymous request. Use only
+ * on routes behind OptionalPhotographerGuard.
+ */
+export const OptionalPhotographer = createParamDecorator(
+  (_data: unknown, context: ExecutionContext): Photographer | null => {
+    const user = context.switchToHttp().getRequest<AuthedRequest>()[PRINCIPAL];
+    return user === undefined ? null : { id: user.id };
+  },
+);
+
 function principal(context: ExecutionContext): UserPrincipal {
   const user = context.switchToHttp().getRequest<AuthedRequest>()[PRINCIPAL];
   if (user === undefined) throw new Error('UserGuard or PhotographerGuard did not run');

@@ -2,6 +2,7 @@ import {
   type IgnoredMediaReason,
   isDesignAsset,
   isFileCopy,
+  isWebRerender,
   mediaOriginals,
   parseQueueMessage,
 } from '@shotx/shared';
@@ -9,8 +10,9 @@ import type { MessageHandler } from '../sqs/consumer';
 import { type FileCopyDeps, processFileCopy } from './copy-file';
 import { type DesignAssetDeps, processDesignAsset } from './design-asset';
 import { processOriginal } from './process-original';
+import { processWebRerender, type WebRerenderDeps } from './web-rerender';
 
-export interface MediaHandlerDeps extends FileCopyDeps, DesignAssetDeps {
+export interface MediaHandlerDeps extends FileCopyDeps, DesignAssetDeps, WebRerenderDeps {
   /** The media bucket; S3 event records for any other bucket are ignored. */
   bucket: string;
   /** Upper bound for one message (ffmpeg is killed after it), below SQS's 12 h cap. */
@@ -20,7 +22,8 @@ export interface MediaHandlerDeps extends FileCopyDeps, DesignAssetDeps {
 /**
  * Consumer of the `media` queue: `original.completed` (the API after `POST /uploads/:id/complete`,
  * media.sweep, upload recovery), `file.copy` (`POST /drive/files/:id/copy`, media.sweep),
- * `design.asset` (ADR 0013: `POST /designs/assets/:id/complete`, media.sweep) and, on AWS, S3
+ * `design.asset` (ADR 0013: `POST /designs/assets/:id/complete`, media.sweep), `web.rerender`
+ * (ADR 0028: media.sweep) and, on AWS, S3
  * ObjectCreated events on `originals/`. Validates
  * the body with the shared schema (an invalid body throws QueueMessageError, which the consumer
  * treats as permanent) and processes each original `mediaOriginals` finds, in order. Both variants
@@ -40,6 +43,18 @@ export function createMediaHandler(deps: MediaHandlerDeps): MessageHandler {
       const signal = AbortSignal.any([context.signal, AbortSignal.timeout(deps.maxProcessingMs)]);
       const outcome = await processDesignAsset(message, deps, log, signal);
       log.info('design asset processed', { outcome });
+      return;
+    }
+    if (isWebRerender(message)) {
+      // Before mediaOriginals, which throws on it (ADR 0028: web.jpg again, under the cap).
+      const log = context.log.child({
+        fileId: message.fileId,
+        photographerId: message.photographerId,
+        source: 'web.rerender',
+      });
+      const signal = AbortSignal.any([context.signal, AbortSignal.timeout(deps.maxProcessingMs)]);
+      const outcome = await processWebRerender(message, deps, log, signal);
+      log.info('web rerender processed', { outcome });
       return;
     }
     if (isFileCopy(message)) {

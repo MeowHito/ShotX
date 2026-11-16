@@ -3,6 +3,7 @@ import { DRIVE_ITEMS_BATCH_MAX, DRIVE_PAGE_SIZE_LIMIT } from '../config/drive';
 import { DOWNLOAD_SIZES, FILE_STATUSES, SHARE_STATUSES, SUBSCRIPTION_STATUSES } from '../domain';
 import { DRIVE_CURSOR_MAX_LENGTH, DRIVE_SORTS, SORT_ORDERS } from '../drive/cursor';
 import { driveNameSchema } from '../drive/names';
+import type { ErrorCode } from '../errors';
 import { MEDIA_KINDS } from '../media-types';
 import { byteCountSchema, idSchema, isoDateTimeSchema, signedUrlSchema } from './common';
 
@@ -57,14 +58,20 @@ export const driveFolderSchema = z.object({
    */
   coverFileId: idSchema.nullable(),
   /**
+   * An uploaded event cover (ADR 0028): a design image (POST /designs/assets) cropped to 2:3 in
+   * the browser. It wins over `coverFileId`; at most one of the two is set.
+   */
+  coverAssetId: idSchema.nullable(),
+  /**
    * The folder as an event (ADR 0016: every folder is an "Event" in the studio). Only in
    * `GET /drive/folders/:id/children`; absent from other responses.
    */
   event: z
     .object({
       /**
-       * Signed thumb.webp URL of the cover: the chosen cover while it is a live, ready image in
-       * the folder's subtree, else its first ready image (share-page order). Null: no image yet.
+       * Signed URL of the cover: the uploaded cover's web.webp while it is `ready` (ADR 0028),
+       * else thumb.webp of the chosen cover while it is a live, ready image in the folder's
+       * subtree, else of its first ready image (share-page order). Null: no image yet.
        */
       coverThumbUrl: signedUrlSchema.nullable(),
       /** The newest share of the folder that isn't revoked; null when there is none. */
@@ -172,15 +179,25 @@ const atLeastOne = (keys: readonly string[]) => (value: Record<string, unknown>)
  * The database enforces only the same owner (`folders_cover_file_same_owner_fk`) and clears the
  * column when the file row is purged (ON DELETE SET NULL). Later moves or trashing of the file are
  * handled at read time (share meta falls back to the default); the API need not clear the column.
+ *
+ * `coverAssetId` (ADR 0028): an uploaded cover, a design image of the caller's (POST
+ * /designs/assets; uploading or processing is fine, it shows once `ready`), else
+ * DESIGN_ASSET_NOT_FOUND. Setting either cover to an id clears the other; `null` for either
+ * clears both (back to the default). Both set to ids in one body is VALIDATION_FAILED.
  */
 export const updateFolderBodySchema = z
   .object({
     name: driveNameSchema.optional(),
     parentId: idSchema.nullable().optional(),
     coverFileId: idSchema.nullable().optional(),
+    coverAssetId: idSchema.nullable().optional(),
   })
-  .refine(atLeastOne(['name', 'parentId', 'coverFileId']), {
-    error: 'name, parentId or coverFileId is required',
+  .refine(atLeastOne(['name', 'parentId', 'coverFileId', 'coverAssetId']), {
+    error: 'name, parentId, coverFileId or coverAssetId is required',
+  })
+  .refine((b) => !(b.coverFileId != null && b.coverAssetId != null), {
+    error: 'coverFileId and coverAssetId cannot both be set',
+    path: ['coverAssetId'],
   });
 export type UpdateFolderBody = z.input<typeof updateFolderBodySchema>;
 
@@ -265,6 +282,15 @@ export type EmptyTrashResponse = z.output<typeof emptyTrashResponseSchema>;
 
 // --- GET /drive/usage ---------------------------------------------------------------------
 
+/** Values of `uploadsBlockedBy` (error codes the next POST /uploads/init would answer). */
+export const DRIVE_UPLOADS_BLOCKED_BY = [
+  'SUBSCRIPTION_INACTIVE',
+  'QUOTA_EXCEEDED',
+  'PLAN_EXPIRED',
+  'PHOTO_LIMIT_REACHED',
+] as const satisfies readonly ErrorCode[];
+export type DriveUploadsBlockedBy = (typeof DRIVE_UPLOADS_BLOCKED_BY)[number];
+
 /** The storage meter in the studio. Quota counts originals, trash included. */
 export const driveUsageResponseSchema = z.object({
   usedBytes: byteCountSchema,
@@ -287,10 +313,12 @@ export const driveUsageResponseSchema = z.object({
     })
     .nullable(),
   /**
-   * Why uploads are blocked right now (uploadsBlockedBy), or null. Always null while
-   * BILLING_MODE=offline and STORAGE_QUOTA_ENFORCED=false (ADR 0010).
+   * Why uploads are blocked right now, or null. `SUBSCRIPTION_INACTIVE` / `QUOTA_EXCEEDED`
+   * (uploadsBlockedBy) never occur while BILLING_MODE=offline and STORAGE_QUOTA_ENFORCED=false
+   * (ADR 0010). ADR 0026: `PLAN_EXPIRED` / `PHOTO_LIMIT_REACHED` (packageUploadsBlockedBy, checked
+   * first) for an account with a package; never for an unlimited one (no package row).
    */
-  uploadsBlockedBy: z.enum(['SUBSCRIPTION_INACTIVE', 'QUOTA_EXCEEDED']).nullable(),
+  uploadsBlockedBy: z.enum(DRIVE_UPLOADS_BLOCKED_BY).nullable(),
 });
 export type DriveUsageResponse = z.output<typeof driveUsageResponseSchema>;
 

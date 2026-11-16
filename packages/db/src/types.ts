@@ -7,12 +7,16 @@ import type {
   checkoutSessions,
   consents,
   dailyStats,
+  expenses,
   faceDeletions,
   faceFeedback,
   faces,
   files,
   folders,
+  packageOrders,
+  packages,
   paymentWebhookEvents,
+  photographerPackages,
   payments,
   plans,
   shareDailyStats,
@@ -80,3 +84,11 @@ export type UserPasswordCredentials = typeof userPasswordCredentials.$inferSelec
 export type NewUserPasswordCredentials = typeof userPasswordCredentials.$inferInsert;
 export type CashPayment = typeof cashPayments.$inferSelect;
 export type NewCashPayment = typeof cashPayments.$inferInsert;
+export type Package = typeof packages.$inferSelect;
+export type NewPackage = typeof packages.$inferInsert;
+export type PhotographerPackage = typeof photographerPackages.$inferSelect;
+export type NewPhotographerPackage = typeof photographerPackages.$inferInsert;
+export type PackageOrder = typeof packageOrders.$inferSelect;
+export type NewPackageOrder = typeof packageOrders.$inferInsert;
+export type Expense = typeof expenses.$inferSelect;
+export type NewExpense = typeof expenses.$inferInsert;

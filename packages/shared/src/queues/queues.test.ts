@@ -4,6 +4,7 @@ import {
   createdObjects,
   createdOriginals,
   isDesignAsset,
+  isWebRerender,
   isFileCopy,
   isOriginalCompleted,
   isS3TestEvent,
@@ -451,6 +452,23 @@ describe('jobs queue', () => {
     { type: 'trash.purge.daily', scheduledTime: 'yesterday' },
   ])('rejects %j', (body) => {
     expect(() => parseQueueMessage('jobs', JSON.stringify(body))).toThrow(QueueMessageError);
+  });
+});
+
+describe('media queue: web.rerender (ADR 0028)', () => {
+  const fileId = '0195f3a2-9e3a-7f6c-9d4b-5e6f7a8b9c0e';
+  const message = { kind: 'web.rerender', fileId, photographerId } as const;
+
+  it('round-trips, is told apart from the other variants and has its job name', () => {
+    const parsed = parseQueueMessage('media', serializeQueueMessage('media', message));
+    expect(parsed).toEqual(message);
+    expect(isWebRerender(parsed)).toBe(true);
+    expect(isDesignAsset(parsed)).toBe(false);
+    expect(isFileCopy(parsed)).toBe(false);
+    expect(isOriginalCompleted(parsed)).toBe(false);
+    expect(queueJobName('media', parsed)).toBe('media.web-rerender');
+    expect(() => mediaOriginals(parsed, 'bucket')).toThrow(RangeError);
+    expect(() => createdObjects(parsed)).toThrow(RangeError);
   });
 });
 

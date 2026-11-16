@@ -13,9 +13,12 @@ import {
   noFaceDetectedDetailsSchema,
   type PasswordPolicyReason,
   passwordTooWeakDetailsSchema,
+  photoLimitReachedDetailsSchema,
+  planExpiredDetailsSchema,
   quotaExceededDetailsSchema,
   rateLimitedDetailsSchema,
   shareExpiredDetailsSchema,
+  type ShareUnavailableReason,
   subscriptionInactiveDetailsSchema,
   unsupportedFileTypeDetailsSchema,
   zipTooLargeDetailsSchema,
@@ -148,7 +151,8 @@ export function messageForCode(
       break;
     }
     case ErrorCode.SHARE_EXPIRED: {
-      // Every reason reads "this link has expired"; the reason adds why.
+      // Every reason reads "this link has expired" (plan_expired: "closed for now"); the reason
+      // adds why.
       const d = shareExpiredDetailsSchema.safeParse(details);
       if (d.success) {
         const keys = {
@@ -156,8 +160,32 @@ export function messageForCode(
           paused: 'details.sharePaused',
           expired: 'details.shareExpired',
           unavailable: 'details.shareUnavailable',
-        } as const;
+          plan_expired: 'details.sharePlanExpired',
+        } as const satisfies Record<ShareUnavailableReason, ErrorMessageKey>;
         return { key: keys[d.data.reason] };
+      }
+      break;
+    }
+    case ErrorCode.PLAN_EXPIRED: {
+      // ADR 0026: when the package ran out (the studio says to renew).
+      const d = planExpiredDetailsSchema.safeParse(details);
+      if (d.success) {
+        return {
+          key: 'details.planExpired',
+          values: {
+            date: new Intl.DateTimeFormat(intl, {
+              dateStyle: 'medium',
+              timeZone: TIME_ZONE,
+            }).format(new Date(d.data.expiresAt)),
+          },
+        };
+      }
+      break;
+    }
+    case ErrorCode.PHOTO_LIMIT_REACHED: {
+      const d = photoLimitReachedDetailsSchema.safeParse(details);
+      if (d.success) {
+        return { key: 'details.photoLimitReached', values: { limit: d.data.photoLimit } };
       }
       break;
     }

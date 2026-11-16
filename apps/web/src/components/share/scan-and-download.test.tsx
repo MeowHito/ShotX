@@ -206,12 +206,14 @@ describe('scan', () => {
     expect(line.getUserMedia).not.toHaveBeenCalled();
   });
 
-  it('face_only: no gallery pick; a denied camera falls back to the camera app input', async () => {
+  it('face_only: gallery pick too (ADR 0028); a denied camera falls back to the camera app input', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = scanShare(fake, { consented: true, mode: 'face_only' });
     renderSharePage(fake, share.token, { nav: fakeNavigator({ camera: 'denied' }).nav });
     await userEvent.click(await screen.findByRole('button', { name: th.share.scan }));
-    expect(screen.queryByLabelText(th.capture.chooseFromGallery)).not.toBeInTheDocument();
+    expect(await screen.findByLabelText(th.capture.chooseFromGallery)).not.toHaveAttribute(
+      'capture',
+    );
     // The camera tries to start by itself; refused, the camera-app input takes over.
     expect(await screen.findByText(th.capture.cameraBlocked)).toBeInTheDocument();
     expect(screen.getByLabelText(th.capture.useCameraApp)).toHaveAttribute('capture', 'user');

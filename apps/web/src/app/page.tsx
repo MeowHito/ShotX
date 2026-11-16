@@ -1,153 +1,91 @@
-import { buttonVariants, cn } from '@shotx/ui';
-import {
-  ArrowRightIcon,
-  DownloadIcon,
-  FolderTreeIcon,
-  LinkIcon,
-  type LucideIcon,
-  ReceiptTextIcon,
-  ScanFaceIcon,
-  ShieldCheckIcon,
-} from 'lucide-react';
-import Link from 'next/link';
+import { type CaptchaClientConfig, loadCaptchaClientConfig } from '@shotx/shared';
+import { Alert } from '@shotx/ui';
+import type { Metadata } from 'next';
 import { getTranslations } from 'next-intl/server';
+import { FeatureGrid } from '@/components/packages/feature-grid';
+import { PackageCards } from '@/components/packages/package-cards';
+import { PackageFaq } from '@/components/packages/package-faq';
 import { SiteFooter, SiteHeader } from '@/components/site/site-header';
-import { AUTH_PATHS } from '@/lib/auth/handlers';
-import { billingOffline } from '@/lib/server/config';
+import { requestServerCallContext, viewerState } from '@/lib/server/auth';
+import { clientUploadConfig, webConfig } from '@/lib/server/config';
+import { fetchPackages } from '@/lib/server/packages';
 
-const STEPS = ['upload', 'share', 'find'] as const;
+/** The per-file upload limits for the FAQ (UPLOAD_MAX_*_BYTES); null when the config is broken. */
+function uploadLimits(): { image: number; video: number } | null {
+  try {
+    return clientUploadConfig().maxBytes;
+  } catch {
+    return null;
+  }
+}
 
-const FEATURES: {
-  id: 'drive' | 'share' | 'face' | 'download' | 'privacy' | 'pricing';
-  icon: LucideIcon;
-}[] = [
-  { id: 'drive', icon: FolderTreeIcon },
-  { id: 'share', icon: LinkIcon },
-  { id: 'face', icon: ScanFaceIcon },
-  { id: 'download', icon: DownloadIcon },
-  { id: 'privacy', icon: ShieldCheckIcon },
-  { id: 'pricing', icon: ReceiptTextIcon },
-];
+/** The Free sign-up's captcha (CAPTCHA_PROVIDER); a misconfiguration never takes the page down. */
+function signupCaptcha(): CaptchaClientConfig {
+  try {
+    return loadCaptchaClientConfig(process.env);
+  } catch {
+    return { provider: 'none' };
+  }
+}
+
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations('home');
+  return { title: t('metaTitle'), description: t('metaDescription') };
+}
 
 /**
- * The public home page: a calm editorial hero for photographers, how it works, what is
- * included, and how faces are handled. Only honest copy: no numbers, logos or quotes. No sign-up
- * or trial (ADR 0010: an admin opens each photographer's account), and nothing about plans or
- * payment while BILLING_MODE=offline.
+ * The public home page (ADR 0026): the owner's package page (`snap-pricing 2.html`). Hero, the
+ * features every package has, and the package cards (id `packages`, the target of `/pricing`
+ * and the studio's "renew") with prices from GET /packages, rendered on the server, then the
+ * FAQ (ADR 0027 §6). Light, in the mockup's colours, on every device.
  */
 export default async function HomePage() {
   const t = await getTranslations('home');
-  const offline = billingOffline();
-  const features = offline ? FEATURES.filter((f) => f.id !== 'pricing') : FEATURES;
+  const [packages, viewer] = await Promise.all([
+    fetchPackages({
+      apiInternalUrl: webConfig().apiInternalUrl,
+      context: await requestServerCallContext(),
+    }),
+    viewerState(),
+  ]);
   return (
-    <>
+    <div className="flex min-h-dvh flex-col bg-[#f3f7fb] leading-[1.6] text-[#14293b]">
       <SiteHeader />
-      <main>
-        <section className="mx-auto grid max-w-6xl gap-12 px-6 pt-16 pb-[clamp(4rem,5.8vw,5.5rem)] sm:pt-24 lg:grid-cols-[1.1fr_1fr] lg:items-center">
-          <div className="space-y-6">
-            <p className="eyebrow">{t('eyebrow')}</p>
-            <h1 className="text-[clamp(2.3rem,3.6vw+1rem,3.75rem)] leading-[1.16]">
-              {t('headingLine1')}
-              <br />
-              {t('headingLine2')}
-            </h1>
-            <p className="max-w-xl text-base text-muted-foreground sm:text-lg sm:leading-[1.75]">
-              {t('lead')}
-            </p>
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-              <Link
-                href={AUTH_PATHS.loginPage}
-                className={cn(buttonVariants({ size: 'lg' }), 'h-12 rounded-full px-6 text-base')}
-              >
-                {t('start')}
-                <ArrowRightIcon aria-hidden />
-              </Link>
-              {offline ? null : (
-                <Link
-                  href="/pricing"
-                  className="text-sm font-semibold text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
-                >
-                  {t('pricing')}
-                </Link>
-              )}
-            </div>
-            <p className="text-sm text-muted-foreground">{t('micro')}</p>
-          </div>
-          <ol
-            className="space-y-3 rounded-3xl border bg-sidebar p-4 sm:p-6"
-            aria-label={t('stepsLabel')}
-          >
-            {STEPS.map((step, i) => (
-              <li key={step} className="flex gap-4 rounded-xl border bg-background p-5 shadow-card">
-                <span
-                  aria-hidden
-                  className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent text-sm font-bold text-primary tabular-nums"
-                >
-                  {String(i + 1).padStart(2, '0')}
-                </span>
-                <div className="space-y-1">
-                  <h2 className="text-base">{t(`steps.${step}.title`)}</h2>
-                  <p className="text-sm text-muted-foreground">{t(`steps.${step}.body`)}</p>
-                </div>
-              </li>
-            ))}
-          </ol>
+      <main id="top" className="mx-auto w-full max-w-[1200px] flex-1 px-[18px] sm:px-6">
+        <section className="pt-10 pb-7 text-center sm:pt-[62px] sm:pb-[35px]">
+          <p className="text-sm font-extrabold tracking-[0.08em] text-[#0875e9]">{t('eyebrow')}</p>
+          <h1 className="my-3 text-[clamp(32px,5vw,54px)] leading-[1.2] font-bold tracking-[-0.03em] text-[#092e50]">
+            {t('headingLine1')}
+            <br />
+            {t('headingLine2')}
+          </h1>
+          <p className="text-lg text-[#667888]">{t('lead')}</p>
         </section>
 
-        <section className="border-y bg-sidebar">
-          <div className="mx-auto max-w-6xl space-y-10 px-6 py-[clamp(4rem,5.8vw,5.5rem)]">
-            <div className="max-w-2xl space-y-3">
-              <p className="eyebrow">{t('featuresEyebrow')}</p>
-              <h2 className="text-[clamp(1.6rem,2vw+0.6rem,2rem)] leading-tight">
-                {t('featuresTitle')}
-              </h2>
-            </div>
-            <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {features.map(({ id, icon: Icon }) => (
-                <li key={id} className="space-y-3 rounded-xl border bg-background p-6 shadow-card">
-                  <Icon className="size-6 text-primary" strokeWidth={1.75} aria-hidden />
-                  <h3 className="text-lg">{t(`features.${id}.title`)}</h3>
-                  <p className="text-sm text-muted-foreground">{t(`features.${id}.body`)}</p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </section>
+        <FeatureGrid />
 
-        <section className="bg-band text-band-foreground">
-          <div className="mx-auto grid max-w-6xl gap-8 px-6 py-[clamp(4rem,5.8vw,5.5rem)] lg:grid-cols-2 lg:items-center">
-            <div className="space-y-3">
-              <p className="text-xs font-bold tracking-[0.02em] text-[#9fc2d8]">
-                {t('privacyEyebrow')}
-              </p>
-              <h2 className="text-[clamp(1.6rem,2vw+0.6rem,2rem)] leading-tight text-band-foreground">
-                {t('privacyTitle')}
-              </h2>
-            </div>
-            <ul className="divide-y divide-white/10 border-y border-white/10">
-              {(['consent', 'noSelfie', 'delete'] as const).map((id) => (
-                <li key={id} className="py-4 text-sm leading-[1.75] text-[#cfd8de]">
-                  {t(`privacy.${id}`)}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </section>
-
-        <section className="mx-auto max-w-3xl space-y-5 px-6 py-[clamp(4rem,5.8vw,5.5rem)] text-center">
-          <h2 className="text-[clamp(1.6rem,2vw+0.6rem,2rem)] leading-tight">{t('ctaTitle')}</h2>
-          <p className="text-muted-foreground">{t('ctaBody')}</p>
-          <div className="flex flex-wrap justify-center gap-3">
-            <Link
-              href={AUTH_PATHS.loginPage}
-              className={cn(buttonVariants({ size: 'lg' }), 'h-12 rounded-full px-6 text-base')}
+        <section id="packages" aria-labelledby="packages-title" className="scroll-mt-6">
+          <div className="mb-[22px] text-center">
+            <h2
+              id="packages-title"
+              className="mb-[5px] text-[clamp(26px,3vw,34px)] leading-[1.3] font-bold text-[#092e50]"
             >
-              {t('start')}
-            </Link>
+              {t('packagesTitle')}
+            </h2>
+            <p className="text-[#667888]">{t('packagesLead')}</p>
           </div>
+          {packages === null ? (
+            <Alert variant="destructive" className="mx-auto mb-[55px] max-w-md text-center">
+              {t('loadError')}
+            </Alert>
+          ) : (
+            <PackageCards data={packages} signedIn={viewer.signedIn} captcha={signupCaptcha()} />
+          )}
         </section>
+
+        <PackageFaq data={packages} maxBytes={uploadLimits()} />
       </main>
       <SiteFooter />
-    </>
+    </div>
   );
 }

@@ -46,7 +46,13 @@ describe('admin sign-in API calls', () => {
 
 describe('providers', () => {
   it('reads the admin MFA mode with the admin BFF key', async () => {
-    const answer = { oidc: [], devLogin: false, adminLogin: true, adminMfaMode: 'off' };
+    const answer = {
+      oidc: [],
+      devLogin: false,
+      adminLogin: true,
+      adminMfaMode: 'off',
+      passwordReset: false,
+    };
     const calls: string[] = [];
     const fetchImpl = vi.fn((input: RequestInfo | URL) => {
       calls.push(urlOf(input));

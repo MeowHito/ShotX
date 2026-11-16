@@ -51,7 +51,10 @@ export type DesignCanvasLayout =
 export interface DesignCanvasProps {
   doc: DesignDoc;
   assets: DesignCanvasAssets;
-  /** `face_only` shows the camera button alone (ADR 0011: choosing a photo is gallery-only). */
+  /**
+   * The share's mode. Both scan buttons show in every mode (owner, 2026-11-16, ADR 0028: a
+   * scan-only page offers "use a photo" too); kept for callers and future use.
+   */
   mode: ShareMode;
   layout: DesignCanvasLayout;
   /** The share page's handlers; without them the buttons are inert (editor, previews). */
@@ -331,21 +334,18 @@ function DesignButton({
 
 function ScanButtons({
   e,
-  mode,
   actions,
   buttonsRef,
 }: {
   e: DesignElementOf<'scanButtons'>;
-  mode: ShareMode;
   actions: DesignCanvasActions | null;
   buttonsRef?: Ref<HTMLDivElement>;
 }) {
   const t = useTranslations('share.design');
-  const both = mode === 'gallery';
   const photoInput = useRef<HTMLInputElement>(null);
   // The contract's box rule: each button `height` tall, as wide as the box (column) or half the
-  // box minus the gap (row), centred vertically in the box. One button (face_only) spans the box.
-  const width = !both || e.layout === 'column' ? '100%' : `calc(50% - ${du(e.gap / 2)})`;
+  // box minus the gap (row), centred vertically in the box.
+  const width = e.layout === 'column' ? '100%' : `calc(50% - ${du(e.gap / 2)})`;
   const font = du(Math.min(17, e.height * 0.34));
   const icon = {
     width: du(Math.min(20, e.height * 0.4)),
@@ -366,7 +366,7 @@ function ScanButtons({
         width: '100%',
         height: '100%',
         display: 'flex',
-        flexDirection: both && e.layout === 'row' ? 'row' : 'column',
+        flexDirection: e.layout === 'row' ? 'row' : 'column',
         alignItems: 'center',
         justifyContent: 'center',
         gap: du(e.gap),
@@ -379,22 +379,20 @@ function ScanButtons({
         <CameraIcon style={icon} aria-hidden />
         {t('camera')}
       </DesignButton>
-      {both ? (
-        <DesignButton
-          onClick={actions === null ? undefined : () => photoInput.current?.click()}
-          style={{
-            ...base,
-            background: e.secondary.bg,
-            color: e.secondary.fg,
-            border:
-              e.secondary.border !== null ? `${du(1.5)} solid ${e.secondary.border}` : undefined,
-          }}
-        >
-          <ImageIcon style={icon} aria-hidden />
-          {t('choosePhoto')}
-        </DesignButton>
-      ) : null}
-      {both && actions !== null ? (
+      <DesignButton
+        onClick={actions === null ? undefined : () => photoInput.current?.click()}
+        style={{
+          ...base,
+          background: e.secondary.bg,
+          color: e.secondary.fg,
+          border:
+            e.secondary.border !== null ? `${du(1.5)} solid ${e.secondary.border}` : undefined,
+        }}
+      >
+        <ImageIcon style={icon} aria-hidden />
+        {t('choosePhoto')}
+      </DesignButton>
+      {actions !== null ? (
         <input
           ref={photoInput}
           type="file"
@@ -469,9 +467,7 @@ function ElementView({ e, props }: { e: DesignElement; props: DesignCanvasProps 
       break;
     case 'scanButtons':
       if (props.scanAvailable === false) return null;
-      content = (
-        <ScanButtons e={e} mode={props.mode} actions={actions} buttonsRef={props.scanButtonsRef} />
-      );
+      content = <ScanButtons e={e} actions={actions} buttonsRef={props.scanButtonsRef} />;
       break;
     case 'helpButton':
       content = <HelpButton e={e} actions={actions} />;

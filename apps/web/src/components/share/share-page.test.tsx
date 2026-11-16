@@ -76,7 +76,9 @@ describe('share page: states', () => {
     const nav = screen.getByRole('navigation', { name: th.publicNav.label });
     // No design: the usual solid, sticky bar.
     expect(nav.closest('header')).not.toHaveAttribute('data-overlay');
-    expect(within(nav).getByRole('link', { name: /หน้าแรก/ })).toHaveAttribute('href', '/');
+    // ADR 0028: the name is not a link to the home page.
+    expect(within(nav).getByText(th.common.appName)).toBeInTheDocument();
+    expect(within(nav).queryByRole('link')).toBeNull();
     expect(
       within(nav).getByRole('button', { name: new RegExp(th.publicNav.language) }),
     ).toHaveAttribute('aria-haspopup', 'menu');

@@ -10,6 +10,7 @@ import {
   type ConsentPolicyVersion,
   type ConsentPurpose,
   DOWNLOAD_SIZES,
+  DRIVE_UPLOADS_BLOCKED_BY,
   PAYMENT_STATUSES,
   PLAN_CHANGE_INVALID_REASONS,
   FILE_STATUSES,
@@ -76,10 +77,7 @@ describe('Thai messages', () => {
       [...SUBSCRIPTION_STATUSES].sort(),
     );
     expect(Object.keys(th.drive.fileStatus).sort()).toEqual([...FILE_STATUSES].sort());
-    expect(Object.keys(th.usage.blocked).sort()).toEqual([
-      'QUOTA_EXCEEDED',
-      'SUBSCRIPTION_INACTIVE',
-    ]);
+    expect(Object.keys(th.usage.blocked).sort()).toEqual([...DRIVE_UPLOADS_BLOCKED_BY].sort());
     const same = (record: object, values: readonly string[]) =>
       expect(Object.keys(record).sort()).toEqual([...values].sort());
     same(th.shares.status, SHARE_STATUSES);

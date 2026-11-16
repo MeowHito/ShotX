@@ -185,19 +185,24 @@ describe('share page with a design (ADR 0013), phone viewport', () => {
     expect(getUserMedia).not.toHaveBeenCalled();
   });
 
-  it('face_only: the card is all there is, with the camera button alone', async () => {
+  it('face_only: the card is all there is, with both scan buttons and no bottom room', async () => {
     const fake = new FakeApi({ faceSearch: true });
     const share = designedShare(fake, { mode: 'face_only' });
     renderSharePage(fake, share.token);
     const card = await screen.findByRole('region', { name: th.share.design.label });
     expect(within(card).getByRole('button', { name: th.share.design.camera })).toBeInTheDocument();
-    expect(within(card).queryByRole('button', { name: th.share.design.choosePhoto })).toBeNull();
+    // ADR 0028: "use a photo" on a scan-only page too.
+    expect(
+      within(card).getByRole('button', { name: th.share.design.choosePhoto }),
+    ).toBeInTheDocument();
     expect(screen.queryByText(th.share.faceOnly.body)).toBeNull();
     expect(screen.queryByRole('list', { name: th.share.galleryLabel })).toBeNull();
     // No photos below (a face_only share, or a design with "show photos" off, ADR 0019): no
     // "scroll down" strip, and the card fills the screen.
     expect(screen.queryByRole('button', { name: th.share.design.seeAll })).toBeNull();
     expect(card.className).toContain('min-h-svh');
+    // ADR 0028: no blank strip under the card (the page keeps no room for bottom bars).
+    expect(card.closest('main')?.className ?? '').not.toContain('pb-36');
   });
 
   it('after a scan the card is hidden and the found photos come first', async () => {

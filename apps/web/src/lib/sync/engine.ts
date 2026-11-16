@@ -38,7 +38,11 @@ export type SyncErrorCode =
   /** Another tab of this browser is syncing. */
   | 'otherTab'
   /** IndexedDB or another browser part failed. */
-  | 'browser';
+  | 'browser'
+  /** ADR 0026: the package has expired (PLAN_EXPIRED); renewing and resuming continues. */
+  | 'planExpired'
+  /** ADR 0026: the package's photo limit is used up (PHOTO_LIMIT_REACHED). */
+  | 'photoLimitReached';
 
 export type RecentOutcome = Exclude<LedgerOutcome, 'baseline' | 'pending'> | 'failed';
 
@@ -581,6 +585,11 @@ export class FolderSyncEngine {
       // The drive folder is gone: stop rather than fail every file.
       this.stopTimer();
       this.set({ status: 'error', error: 'destinationMissing' });
+    } else if (!outcome.ok && packageStop(outcome.error) !== null) {
+      // ADR 0026: no upload can succeed until the package is renewed. Stop rather than fail every
+      // file; the file stays pending and goes up when the photographer resumes.
+      this.stopTimer();
+      this.set({ status: 'error', error: packageStop(outcome.error) });
     } else {
       if (!outcome.ok && isApiError(outcome.error, ErrorCode.CONFLICT)) {
         // The saved key belongs to an upload that is over (completed, failed or expired): the
@@ -611,4 +620,11 @@ export class FolderSyncEngine {
       this.pushRecent(path, 'failed');
     }
   }
+}
+
+/** The sync error for an upload refused by the photographer's package, or null. */
+function packageStop(error: unknown): 'planExpired' | 'photoLimitReached' | null {
+  if (isApiError(error, ErrorCode.PLAN_EXPIRED)) return 'planExpired';
+  if (isApiError(error, ErrorCode.PHOTO_LIMIT_REACHED)) return 'photoLimitReached';
+  return null;
 }

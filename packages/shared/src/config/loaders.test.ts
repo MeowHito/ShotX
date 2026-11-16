@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadBillingConfig } from './billing';
-import { loadMediaConfig } from './media';
+import { loadMediaConfig, loadShareDownloadCapConfig } from './media';
 import { loadQueueUrls } from './queues';
 import { loadRetentionConfig } from './retention';
 import { loadShareConfig } from './share';
@@ -127,7 +127,7 @@ describe('loadMediaConfig', () => {
     expect(loadMediaConfig({})).toEqual({
       thumb: { longEdge: 400, webpQuality: 80 },
       preview: { longEdge: 2048, webpQuality: 80 },
-      web: { longEdge: 2560, jpegQuality: 85 },
+      web: { longEdge: 2560, jpegQuality: 85, minJpegQuality: 70, maxBytes: 1_500_000 },
       poster: { jpegQuality: 85 },
       videoPreview: { height: 720, crf: 23 },
     });
@@ -139,8 +139,18 @@ describe('loadMediaConfig', () => {
     );
   });
 
+  it('caps web.jpg at 1.5 MB by default; 0 turns the cap off (ADR 0028)', () => {
+    expect(loadShareDownloadCapConfig({})).toEqual({ imageMaxBytes: 1_500_000 });
+    expect(loadShareDownloadCapConfig({ MEDIA_WEB_MAX_BYTES: '0' })).toEqual({ imageMaxBytes: 0 });
+    expect(loadMediaConfig({ MEDIA_WEB_MAX_BYTES: '2000000' }).web.maxBytes).toBe(2_000_000);
+    expect(() =>
+      loadMediaConfig({ MEDIA_WEB_MIN_JPEG_QUALITY: '90', MEDIA_WEB_JPEG_QUALITY: '80' }),
+    ).toThrow(/MEDIA_WEB_MIN_JPEG_QUALITY must be less than or equal to MEDIA_WEB_JPEG_QUALITY/);
+  });
+
   it.each([
     ['MEDIA_WEB_JPEG_QUALITY', '101'],
+    ['MEDIA_WEB_MAX_BYTES', '-1'],
     ['MEDIA_VIDEO_PREVIEW_HEIGHT', '100'],
     ['MEDIA_VIDEO_PREVIEW_CRF', '52'],
   ])('rejects %s=%s', (key, value) => {

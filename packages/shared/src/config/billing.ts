@@ -2,14 +2,22 @@ import { z } from 'zod';
 import { PAYMENT_GATEWAYS, type PaymentGateway } from '../domain';
 import { AWS_CLIENT_ENV, loadAwsClientConfig } from './aws-clients';
 import { type Env, parseEnv } from './env';
-import { GiB, int, intList, SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE } from './fields';
+import {
+  GiB,
+  int,
+  intList,
+  SECONDS_PER_DAY,
+  SECONDS_PER_HOUR,
+  SECONDS_PER_MINUTE,
+  vatRateBasisPoints,
+} from './fields';
 
 // Plan prices and quotas live in the `plans` table (seeded by packages/db, edited by admins).
 const billingEnvSchema = z.object({
   /** Prepaid periods PromptPay can buy, in months (spec: 1, 3, 6 or 12). */
   BILLING_PREPAID_MONTHS: intList(1, 36).default([1, 3, 6, 12]),
   /** VAT included in every price, in basis points (700 = 7%). Prices are VAT-inclusive. */
-  VAT_RATE_BASIS_POINTS: int(0, 10_000).default(700),
+  VAT_RATE_BASIS_POINTS: vatRateBasisPoints(),
   /** Alert admins when an account's monthly egress exceeds this multiple of its stored bytes. */
   EGRESS_ANOMALY_MULTIPLIER: z.coerce.number().positive().max(10_000).default(20),
   /**

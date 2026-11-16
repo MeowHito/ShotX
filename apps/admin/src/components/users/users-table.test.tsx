@@ -62,6 +62,8 @@ describe('UsersTable', () => {
       'พื้นที่ที่ใช้',
       'เข้าสู่ระบบล่าสุด',
       'จำนวนรูป',
+      'แพ็กเกจ',
+      'ยอดชำระ',
       'จัดการ',
     ]);
 
@@ -84,8 +86,116 @@ describe('UsersTable', () => {
     const me = within(rowOf('me@example.com'));
     expect(me.getByText('แอดมิน')).toBeInTheDocument();
     expect(me.getByText('คุณ')).toBeInTheDocument();
-    // Admins have no storage or photos.
-    expect(me.getAllByText('–')).toHaveLength(2);
+    // Admins have no storage, photos, package or payments.
+    expect(me.getAllByText('–')).toHaveLength(4);
+  });
+
+  it('shows the package, its expiry and photos used, unlimited without one, and self sign-ups', () => {
+    const running = makeUser({
+      email: 'free@example.com',
+      createdById: null,
+      selfSignup: true,
+      package: {
+        code: 'free',
+        name: 'Free',
+        startsAt: '2026-11-09T00:00:00.000Z',
+        expiresAt: '2026-11-12T00:00:00.000Z',
+        photoLimit: 100,
+        photosUsed: 42,
+        expired: false,
+      },
+    });
+    const expired = makeUser({
+      email: 'old@example.com',
+      createdById: null,
+      selfSignup: true,
+      package: {
+        code: 'd7',
+        name: '7 Days',
+        startsAt: '2026-10-01T00:00:00.000Z',
+        expiresAt: '2026-10-08T00:00:00.000Z',
+        photoLimit: 3000,
+        photosUsed: 3000,
+        expired: true,
+      },
+    });
+    // Expired since the answer: judged against `now` too.
+    const lapsed = makeUser({
+      email: 'lapsed@example.com',
+      package: {
+        code: 'd3',
+        name: '3 Days',
+        startsAt: '2026-11-06T00:00:00.000Z',
+        expiresAt: '2026-11-09T00:00:00.000Z',
+        photoLimit: 1000,
+        photosUsed: 0,
+        expired: false,
+      },
+    });
+    renderWithProviders(
+      <UsersTable
+        users={[running, expired, lapsed, photographer, self]}
+        currentAdminId={SELF_ID}
+        now={Date.parse('2026-11-10T00:00:00Z')}
+        onAction={vi.fn()}
+      />,
+      { fetch: vi.fn() },
+    );
+    const r = within(rowOf('free@example.com'));
+    expect(r.getByText('Free')).toBeInTheDocument();
+    expect(r.getByText('สมัครเอง')).toBeInTheDocument();
+    expect(r.getByText(/^ถึง 12 พ\.ย\. 2569/)).toBeInTheDocument();
+    expect(r.getByText('42/100 รูป')).toBeInTheDocument();
+    expect(r.queryByText('หมดอายุ')).toBeNull();
+
+    const e = within(rowOf('old@example.com'));
+    expect(e.getByText('7 Days')).toBeInTheDocument();
+    expect(e.getByText('หมดอายุ')).toBeInTheDocument();
+    expect(e.getByText(/^หมดอายุเมื่อ 8 ต\.ค\. 2569/)).toBeInTheDocument();
+    expect(e.getByText('3,000/3,000 รูป')).toBeInTheDocument();
+
+    const l = within(rowOf('lapsed@example.com'));
+    expect(l.getByText('หมดอายุ')).toBeInTheDocument();
+    // Admin-created: no self sign-up mark.
+    expect(l.queryByText('สมัครเอง')).toBeNull();
+
+    // No package row: unlimited.
+    const p = within(rowOf('photo@example.com'));
+    expect(p.getByText('ไม่จำกัด')).toBeInTheDocument();
+    expect(p.queryByText('สมัครเอง')).toBeNull();
+    expect(within(rowOf('me@example.com')).queryByText('ไม่จำกัด')).toBeNull();
+  });
+
+  it('shows paid orders and the amount paid in THB for photographers; – for admins (ADR 0027)', () => {
+    const paying = makeUser({ email: 'paying@example.com', ordersPaid: 3, paidSatang: 371_050 });
+    const never = makeUser({ email: 'never@example.com', ordersPaid: 0, paidSatang: 0 });
+    // An older api build sends neither field.
+    const older = makeUser({ email: 'older@example.com' });
+    const admin = makeUser({
+      email: 'admin2@example.com',
+      role: 'admin',
+      usedBytes: null,
+      photoCount: null,
+      ordersPaid: null,
+      paidSatang: null,
+    });
+    renderWithProviders(
+      <UsersTable
+        users={[paying, never, older, admin]}
+        currentAdminId={SELF_ID}
+        now={Date.parse('2026-11-10T00:00:00Z')}
+        onAction={vi.fn()}
+      />,
+      { fetch: vi.fn() },
+    );
+    const paidColumn = screen
+      .getAllByRole('columnheader')
+      .findIndex((h) => h.textContent === 'ยอดชำระ');
+    const cell = (email: string) => within(rowOf(email)).getAllByRole('cell')[paidColumn];
+    expect(cell('paying@example.com')).toHaveTextContent('3 ครั้ง · ฿3,710.50');
+    expect(cell('never@example.com')).toHaveTextContent('0 ครั้ง · ฿0');
+    expect(cell('older@example.com')).toHaveTextContent('–');
+    expect(cell('admin2@example.com')).toHaveTextContent(/^–$/);
   });
 
   it('offers rename, reset and disable, but never disable or reset of oneself', async () => {

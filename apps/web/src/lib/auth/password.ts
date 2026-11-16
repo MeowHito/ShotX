@@ -52,7 +52,7 @@ function json(status: number, body: unknown, cookies: readonly string[] = []): R
   return new Response(JSON.stringify(body), { status, headers });
 }
 
-function errorResponse(
+export function errorResponse(
   status: number,
   code: ErrorCode,
   details?: unknown,
@@ -67,7 +67,7 @@ function errorResponse(
 }
 
 /** The API's answer as the browser gets it; transport failures are a 502. */
-function providerErrorResponse(error: unknown, cookies: readonly string[] = []): Response {
+export function providerErrorResponse(error: unknown, cookies: readonly string[] = []): Response {
   if (
     error instanceof AuthProviderError &&
     error.code !== undefined &&
@@ -79,7 +79,7 @@ function providerErrorResponse(error: unknown, cookies: readonly string[] = []):
 }
 
 /** The JSON body, or undefined when it is too large or not JSON. */
-async function readBody(request: Request): Promise<unknown> {
+export async function readBody(request: Request): Promise<unknown> {
   const text = await request.text();
   if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) return undefined;
   try {

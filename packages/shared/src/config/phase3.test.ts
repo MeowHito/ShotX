@@ -76,6 +76,7 @@ describe('loadWorkerSettings', () => {
           uploadingAgeSeconds: 3_600,
           maxRequeues: 3,
           batchSize: 500,
+          webMaxBytes: 1_500_000,
         },
         faces: {
           deletionAgeSeconds: 3_600,
@@ -209,9 +210,7 @@ describe('loadConsentConfig', () => {
       for (const stage of [{}, { APP_STAGE: 'prod' }, { APP_STAGE: 'staging' }]) {
         expect(() =>
           loadConsentConfig({ ...stage, IP_HASH_SECRET: secret, CONSENT_POLICY_VERSION: retired }),
-        ).toThrow(
-          new RegExp(`CONSENT_POLICY_VERSION ${retired} is retired; .* is 2026-11-12`),
-        );
+        ).toThrow(new RegExp(`CONSENT_POLICY_VERSION ${retired} is retired; .* is 2026-11-12`));
       }
       expect(
         loadConsentConfig({

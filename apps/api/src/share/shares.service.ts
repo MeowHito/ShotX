@@ -32,6 +32,7 @@ import { type ApiConfig, billingOnline } from '../config';
 import { type Db, isUniqueViolation, pgErrorInfo, type Queryable } from '../db/db';
 import { currentSubscription } from '../drive/account';
 import { liveFolder } from '../drive/folders';
+import { assertPackageActive } from '../packages/package-state';
 import { ApiError, notFound } from '../http/api-error';
 import { validationError } from '../http/zod';
 import { API_CONFIG, CLOCK, type Clock, DATABASE } from '../tokens';
@@ -199,6 +200,8 @@ export class SharesService {
           });
         }
       }
+      // ADR 0026: no new shares once the package has expired (no package row: unlimited).
+      await assertPackageActive(tx, ownerId, this.clock.now());
       let target: { targetFileId: string | null; targetFolderId: string | null };
       let targetName: string;
       if (body.target.type === 'file') {
@@ -340,6 +343,16 @@ export class SharesService {
         body.expiresAt === undefined
           ? undefined
           : this.expiry(body.expiresAt, ['body', 'expiresAt']);
+      // ADR 0026: with an expired package a share can't come back online: neither un-pausing it
+      // nor giving an expired share a new expiry. Other edits still work.
+      const now = this.clock.now();
+      const unpausing = body.paused === false && share.pausedAt !== null;
+      // `expiry` only accepts a future date or null, so any new expiry re-opens an expired share.
+      const reactivating =
+        expiresAt !== undefined &&
+        share.expiresAt !== null &&
+        share.expiresAt.getTime() <= now.getTime();
+      if (unpausing || reactivating) await assertPackageActive(tx, ownerId, now);
       if (body.designId !== undefined && body.designId !== null) {
         await this.assertOwnDesign(tx, ownerId, body.designId);
       }

@@ -29,7 +29,12 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   const t = await getTranslations();
   const result = await loadMeta(ref);
   const meta = result.kind === 'ok' ? result.meta : null;
-  const title = result.kind === 'expired' ? t('share.unavailable.title') : t('metadata.title');
+  const title =
+    result.kind !== 'expired'
+      ? t('metadata.title')
+      : result.reason === 'plan_expired'
+        ? t('share.unavailable.closedTitle')
+        : t('share.unavailable.title');
   const og = shareOpenGraph(meta, title);
   // ADR 0011: the page no longer names the photographer; the unfurl shows the event only.
   const description = t('metadata.shareDescription');

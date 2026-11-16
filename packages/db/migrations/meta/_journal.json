@@ -113,6 +113,27 @@
       "when": 1794546960833,
       "tag": "0015_act_as_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1794799357952,
+      "tag": "0016_packages_self_signup",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794803747954,
+      "tag": "0017_admin_finance_audit_log",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1794831893492,
+      "tag": "0018_event_cover_asset",
+      "breakpoints": true
     }
   ]
 }

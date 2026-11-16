@@ -1,7 +1,11 @@
-import { consents, files, folders, shares } from '@shotx/db';
+import { consents, designAssets, files, folders, shares } from '@shotx/db';
 import {
   apiPath,
+  createDesignAssetResponseSchema,
+  DESIGN_ROUTES,
+  DRIVE_ROOT,
   DRIVE_ROUTES as D,
+  listChildrenResponseSchema,
   driveFolderSchema,
   ownerShareSchema,
   PUBLIC_SHARE_ROUTES as P,
@@ -222,6 +226,75 @@ for (const backend of DATABASE_BACKENDS) {
         // Trashed later: back to the first image (the column isn't cleared).
         await api.db.update(files).set({ deletedAt: new Date() }).where(eq(files.id, chosen.id));
         expect(await coverUrl()).toContain(first.id);
+      });
+    });
+
+    describe('uploaded event cover (ADR 0028)', () => {
+      it('sets an uploaded 2:3 cover, clears the chosen photo, and serves it in listing and meta', async () => {
+        const { owner, folder, file: photo, share } = await folderShare(api, 'Poster');
+        const patch = (body: Record<string, unknown>) =>
+          api.request('PATCH', apiPath(D.updateFolder, { id: folder.id }), {
+            token: owner.token,
+            body,
+          });
+        const created = await api.request('POST', apiPath(DESIGN_ROUTES.createAsset), {
+          token: owner.token,
+          body: { fileName: 'poster-cover.jpg', mime: 'image/jpeg', sizeBytes: 4096 },
+        });
+        expect(created.status, JSON.stringify(created.body)).toBe(201);
+        const { assetId } = createDesignAssetResponseSchema.parse(created.body);
+
+        expect((await patch({ coverFileId: photo.id })).status).toBe(200);
+        // Still uploading is fine: it shows once ready. The chosen photo is cleared.
+        const set = await patch({ coverAssetId: assetId });
+        expect(set.status, JSON.stringify(set.body)).toBe(200);
+        expect(driveFolderSchema.parse(set.body)).toMatchObject({
+          coverAssetId: assetId,
+          coverFileId: null,
+        });
+
+        const listedCover = async () => {
+          const res = await api.request('GET', apiPath(D.listChildren, { id: DRIVE_ROOT }), {
+            token: owner.token,
+          });
+          const item = listChildrenResponseSchema
+            .parse(res.body)
+            .items.find((i) => i.kind === 'folder' && i.id === folder.id);
+          return item?.kind === 'folder' ? (item.event?.coverThumbUrl ?? null) : null;
+        };
+        const metaCover = async () =>
+          shareMetaResponseSchema.parse((await api.request('GET', publicPath(share.token))).body)
+            .details?.cover ?? null;
+        // Not ready yet: the first photo meanwhile.
+        expect(await listedCover()).toContain(photo.id);
+        await api.db
+          .update(designAssets)
+          .set({ status: 'ready', width: 1200, height: 1800, verifiedAt: api.clock.now() })
+          .where(eq(designAssets.id, assetId));
+        expect(await listedCover()).toContain(assetId);
+        expect(await metaCover()).toMatchObject({ width: 1200, height: 1800 });
+        expect((await metaCover())?.previewUrl).toContain(assetId);
+
+        // Both at once is invalid; a foreign or unknown image is DESIGN_ASSET_NOT_FOUND.
+        expect((await patch({ coverAssetId: assetId, coverFileId: photo.id })).status).toBe(400);
+        const other = await api.photographer();
+        const foreign = await api.request('POST', apiPath(DESIGN_ROUTES.createAsset), {
+          token: other.token,
+          body: { fileName: 'x.jpg', mime: 'image/jpeg', sizeBytes: 10 },
+        });
+        const foreignId = createDesignAssetResponseSchema.parse(foreign.body).assetId;
+        expect(await patch({ coverAssetId: foreignId })).toMatchObject({
+          status: 422,
+          body: { code: 'DESIGN_ASSET_NOT_FOUND', details: { assetIds: [foreignId] } },
+        });
+
+        // null clears both: back to the first photo.
+        const cleared = await patch({ coverFileId: null });
+        expect(driveFolderSchema.parse(cleared.body)).toMatchObject({
+          coverAssetId: null,
+          coverFileId: null,
+        });
+        expect(await listedCover()).toContain(photo.id);
       });
     });
 

@@ -95,6 +95,7 @@ describe('drive schemas', () => {
           faceIndexEnabled: true,
           faceIndexExpiresAt: now,
           coverFileId: null,
+          coverAssetId: null,
         },
         file,
         { ...file, id: folderId, status: 'processing', thumbUrl: undefined },
@@ -217,7 +218,7 @@ describe('upload schemas', () => {
 });
 
 describe('route table', () => {
-  it('covers every Phase 2, 3 and 4 route of the spec, the added ones, auth (ADR 0008), accounts (ADR 0010) and designs (ADR 0013)', () => {
+  it('covers every Phase 2, 3 and 4 route of the spec, the added ones, auth (ADR 0008), accounts (ADR 0010), designs (ADR 0013) and packages (ADR 0026)', () => {
     const routes = ALL_ROUTES.map((r) => `${r.method} ${r.path}`);
     expect(routes).toEqual([
       'GET /drive/folders/:id/children',
@@ -310,6 +311,22 @@ describe('route table', () => {
       'GET /admin/system',
       'GET /admin/cash-payments',
       'POST /admin/cash-payments',
+      // ADR 0027: audit log viewer and finance.
+      'GET /admin/audit-log',
+      'GET /admin/expenses',
+      'POST /admin/expenses',
+      'DELETE /admin/expenses/:id',
+      'GET /admin/finance',
+      'GET /admin/users/:id/finance',
+      // ADR 0026: packages, Free sign-up and package orders.
+      'GET /packages',
+      'POST /signup/free',
+      'POST /signup/free/confirm',
+      'POST /package-orders',
+      'GET /package-orders/:id',
+      'POST /package-orders/:id/fake-result',
+      'POST /package-payments/webhooks/:gateway',
+      'GET /me/package',
     ]);
     expect(new Set(routes).size).toBe(routes.length);
   });

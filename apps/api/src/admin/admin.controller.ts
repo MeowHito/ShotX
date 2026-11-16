@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Inject,
@@ -21,6 +22,9 @@ import { parseRequestPart, respond, ZodPipe } from '../http/zod';
 import { AdminUsersService } from './admin-users.service';
 import { CashPaymentsService } from './cash-payments.service';
 import { ActAsService } from './act-as.service';
+import { AuditLogService } from './audit-log.service';
+import { ExpensesService } from './expenses.service';
+import { FinanceService } from './finance.service';
 import { AdminSystemService } from './system.service';
 
 const R = ADMIN_ROUTES;
@@ -40,6 +44,9 @@ export class AdminController {
     @Inject(CashPaymentsService) private readonly cash: CashPaymentsService,
     @Inject(AdminSystemService) private readonly system: AdminSystemService,
     @Inject(ActAsService) private readonly actAs: ActAsService,
+    @Inject(AuditLogService) private readonly auditLog: AuditLogService,
+    @Inject(ExpensesService) private readonly expenses: ExpensesService,
+    @Inject(FinanceService) private readonly finance: FinanceService,
   ) {}
 
   /** ADR 0018: a one-time link that opens the photographer's studio as them. Audited. */
@@ -132,5 +139,61 @@ export class AdminController {
       R.createCashPayment.response,
       await this.cash.create(admin.id, headers[IDEMPOTENCY_KEY_HEADER], body),
     );
+  }
+
+  /** ADR 0027 §1: the audit log viewer. Read-only, so not audited. */
+  @Get(R.auditLog.path)
+  @HttpCode(R.auditLog.status)
+  async listAuditLog(
+    @Query(new ZodPipe(R.auditLog.query, 'query')) query: Out<typeof R.auditLog.query>,
+  ) {
+    return respond(R.auditLog.response, await this.auditLog.list(query));
+  }
+
+  @Get(R.listExpenses.path)
+  @HttpCode(R.listExpenses.status)
+  async listExpenses(
+    @Query(new ZodPipe(R.listExpenses.query, 'query')) query: Out<typeof R.listExpenses.query>,
+  ) {
+    return respond(R.listExpenses.response, await this.expenses.list(query));
+  }
+
+  /** ADR 0027 §2: audited `finance.expense_created` in the same transaction. Not idempotent. */
+  @Post(R.createExpense.path)
+  @HttpCode(R.createExpense.status)
+  async createExpense(
+    @CurrentAdmin() admin: AppUser,
+    @Body(new ZodPipe(R.createExpense.body, 'body')) body: Out<typeof R.createExpense.body>,
+  ) {
+    return respond(R.createExpense.response, await this.expenses.create(admin.id, body));
+  }
+
+  /** ADR 0027 §2: soft delete, audited `finance.expense_deleted`; again is a 204 no-op. */
+  @Delete(R.deleteExpense.path)
+  @HttpCode(R.deleteExpense.status)
+  async deleteExpense(
+    @CurrentAdmin() admin: AppUser,
+    @Param(new ZodPipe(R.deleteExpense.params, 'params'))
+    params: Out<typeof R.deleteExpense.params>,
+  ): Promise<void> {
+    await this.expenses.delete(admin.id, params.id);
+  }
+
+  /** ADR 0027 §3: income, expenses and profit over a range. Read-only. */
+  @Get(R.finance.path)
+  @HttpCode(R.finance.status)
+  async getFinance(
+    @Query(new ZodPipe(R.finance.query, 'query')) query: Out<typeof R.finance.query>,
+  ) {
+    return respond(R.finance.response, await this.finance.summary(query));
+  }
+
+  /** ADR 0027 §4: one photographer's orders, payments and estimated cost. Read-only. */
+  @Get(R.userFinance.path)
+  @HttpCode(R.userFinance.status)
+  async getUserFinance(
+    @Param(new ZodPipe(R.userFinance.params, 'params')) params: Out<typeof R.userFinance.params>,
+  ) {
+    return respond(R.userFinance.response, await this.finance.user(params.id));
   }
 }

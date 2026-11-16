@@ -269,6 +269,7 @@ describe('GET /drive/recent and GET /drive/search', () => {
       faceIndexEnabled: false,
       faceIndexExpiresAt: null,
       coverFileId: null,
+      coverAssetId: null,
     };
     const response = {
       items: [{ item: folder, ancestors: [] }],
@@ -336,6 +337,7 @@ describe('item info', () => {
         faceIndexEnabled: true,
         faceIndexExpiresAt: '2027-01-28T00:00:00Z',
         coverFileId: null,
+        coverAssetId: null,
       },
       ancestors: [],
       fileCount: 3,

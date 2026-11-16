@@ -9,6 +9,7 @@ import { ADMIN_LIST_PAGE_SIZE_LIMIT } from '../config/admin-console';
 import { CURSOR_MAX_LENGTH, decodeOpaqueCursor, encodeOpaqueCursor } from '../cursor-codec';
 import { ACCOUNT_ROLES, ACCOUNT_STATUSES, type AdminAuditAction } from '../domain';
 import { byteCountSchema, idSchema, isoDateTimeSchema } from './common';
+import { myPackageSchema } from './packages';
 import { IDEMPOTENCY_KEY_HEADER, idempotencyKeySchema } from './share-page';
 
 // Admin app routes (ADR 0010): user management and the optional cash-payment ledger. Every route
@@ -70,6 +71,30 @@ export const adminUserSchema = z.object({
    * only; null for admins.
    */
   photoCount: z.number().int().nonnegative().nullable(),
+  /**
+   * ADR 0026: the photographer's package (`photographer_packages` joined with `packages`), in the
+   * same shape as GET /me/package; `expired` is packageExpired(row, now) at the answer. Null when
+   * the photographer has no package row (unlimited, every admin-created account) and for admins.
+   * Optional so an older api build still parses.
+   */
+  package: myPackageSchema.nullable().optional(),
+  /**
+   * ADR 0026: a photographer account the system created (Free sign-up or a paid order): role
+   * `photographer`, an email + password account and `created_by` NULL. False for admin-created
+   * accounts, admins, and LINE/Google photographers from before ADR 0010. Optional so an older api
+   * build still parses.
+   */
+  selfSignup: z.boolean().optional(),
+  /**
+   * ADR 0027: paid package orders of the photographer (all time). Null for admins. Optional so an
+   * older api build still parses.
+   */
+  ordersPaid: z.number().int().nonnegative().nullable().optional(),
+  /**
+   * ADR 0027: what the photographer has paid, all time: Σ `total_satang` of paid package orders
+   * (VAT included) + Σ cash_payments. Null for admins. Optional so an older api build still parses.
+   */
+  paidSatang: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable().optional(),
 });
 export type AdminUser = z.output<typeof adminUserSchema>;
 

@@ -103,9 +103,18 @@ export type ActivitySource = (typeof ACTIVITY_SOURCES)[number];
  * - `expired`: `expires_at` has passed;
  * - `unavailable`: the target was trashed or purged, the owner's account is `disabled` (ADR 0010),
  *   or the owner's subscription is `expired` or `purged` (the spec's "ลิงก์นี้หมดอายุ"; only while
- *   BILLING_MODE=gateway).
+ *   BILLING_MODE=gateway);
+ * - `plan_expired` (ADR 0026): the owner's package has run out (`photographer_packages.expires_at`
+ *   passed). The share page says the link is closed for now; renewing the package reopens it.
+ *   Never for accounts without a package row (unlimited).
  */
-export const SHARE_UNAVAILABLE_REASONS = ['revoked', 'paused', 'expired', 'unavailable'] as const;
+export const SHARE_UNAVAILABLE_REASONS = [
+  'revoked',
+  'paused',
+  'expired',
+  'unavailable',
+  'plan_expired',
+] as const;
 export type ShareUnavailableReason = (typeof SHARE_UNAVAILABLE_REASONS)[number];
 
 /** Owner-facing state of a share, derived from `is_active`, `paused_at` and `expires_at`. */
@@ -135,7 +144,7 @@ export type Feature = (typeof FEATURES)[number];
 // --- Abuse controls (ADR 0008 section 7) ---------------------------------------------------------
 
 /** Turnstile `action` of each route a challenge guards (the widget's `action`, checked server-side). */
-export const CAPTCHA_ACTIONS = ['face_search', 'face_deletion'] as const;
+export const CAPTCHA_ACTIONS = ['face_search', 'face_deletion', 'signup_free'] as const;
 export type CaptchaAction = (typeof CAPTCHA_ACTIONS)[number];
 
 /**
@@ -339,3 +348,119 @@ export const ADMIN_AUDIT_TARGET_TYPES = {
 
 /** `audit_log.action` prefix that may go without an actor. */
 export const AUTH_AUDIT_ACTION_PREFIX = 'auth.';
+
+// --- Packages, self sign-up and online payment (ADR 0026) ---------------------------------------
+
+/**
+ * Code of the package Free sign-up applies (`packages.code`). It can't be ordered
+ * (POST /package-orders answers PACKAGE_UNAVAILABLE) and is taken once per email, only by an email
+ * without an account.
+ */
+export const FREE_PACKAGE_CODE = 'free';
+
+/**
+ * `package_orders.status`:
+ * - `pending`: created, waiting for the gateway;
+ * - `paid`: the gateway confirmed the full amount; the package was applied in the same transaction
+ *   (`paid_at`, `applied_at` and `photographer_id` set);
+ * - `failed`: the gateway said the payment failed (the buyer may start a new order);
+ * - `amount_mismatch`: the gateway reported a paid amount other than `total_satang`; nothing was
+ *   applied and the operator looks at it (audit `package.order_amount_mismatch`).
+ */
+export const PACKAGE_ORDER_STATUSES = ['pending', 'paid', 'failed', 'amount_mismatch'] as const;
+export type PackageOrderStatus = (typeof PACKAGE_ORDER_STATUSES)[number];
+
+/**
+ * Package payment gateways: `package_orders.gateway` and the `:gateway` of
+ * POST /package-payments/webhooks/:gateway. Separate from PAYMENT_GATEWAYS (the switched-off
+ * subscription billing). `fake` is for development and tests only (refused on APP_STAGE=prod).
+ */
+export const PACKAGE_PAYMENT_GATEWAYS = ['fake', 'mpay'] as const;
+export type PackagePaymentGatewayName = (typeof PACKAGE_PAYMENT_GATEWAYS)[number];
+
+/** PACKAGE_GATEWAY values: a gateway, or `off` (no online payment; the default). */
+export const PACKAGE_GATEWAY_MODES = ['off', ...PACKAGE_PAYMENT_GATEWAYS] as const;
+export type PackageGatewayMode = (typeof PACKAGE_GATEWAY_MODES)[number];
+
+/**
+ * `audit_log.action` of self sign-up and package orders (ADR 0026), written in the transaction of
+ * the change:
+ * - `account.self_signup`: Free confirm created a photographer. Actor: the new account;
+ *   `target_type` `user`; meta `{ package: 'free' }`.
+ * - `package.order_paid`: a paid order was applied. Actor: the order's account (always known once
+ *   applied); `target_type` `package_order`; meta `{ orderId, package, totalSatang,
+ *   accountCreated }`.
+ * - `package.order_amount_mismatch`: the gateway's paid amount differs from `total_satang`;
+ *   nothing applied. Actor: the order's photographer, or null when the buyer has no account yet
+ *   (the `audit_log_actor_unless_auth_event` CHECK allows `package.` actions without an actor);
+ *   `target_type` `package_order`; meta `{ orderId, package, totalSatang, paidSatang }`.
+ */
+export const PACKAGE_AUDIT_ACTIONS = [
+  'account.self_signup',
+  'package.order_paid',
+  'package.order_amount_mismatch',
+] as const;
+export type PackageAuditAction = (typeof PACKAGE_AUDIT_ACTIONS)[number];
+
+/** `audit_log.target_type` of PACKAGE_AUDIT_ACTIONS. */
+export const PACKAGE_AUDIT_TARGET_TYPES = {
+  user: 'user',
+  packageOrder: 'package_order',
+} as const;
+
+/** `audit_log.action` prefix written by the gateway callback, which may have no actor. */
+export const PACKAGE_AUDIT_ACTION_PREFIX = 'package.';
+
+// --- Admin finance and the audit log viewer (ADR 0027) ------------------------------------------
+
+/**
+ * `expenses.category` (enum `expense_category`, migration 0017): what a manually recorded expense
+ * was for. `payment_fee` is the gateway's fee on package orders; `other` needs no note but should
+ * have one.
+ */
+export const EXPENSE_CATEGORIES = [
+  'server',
+  'storage',
+  'payment_fee',
+  'domain',
+  'email',
+  'marketing',
+  'other',
+] as const;
+export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
+
+/**
+ * `audit_log.action` of the expenses ledger (ADR 0027), written in the transaction of the change,
+ * always with the acting admin as `actor_id`; `target_type` `expense`, `target_id` the expense id.
+ * Shapes (zod: FINANCE_AUDIT_META_SCHEMAS in api/finance):
+ * - `finance.expense_created`: `{ spentOn, amountSatang, category }` (the note is not copied);
+ * - `finance.expense_deleted`: `{ spentOn, amountSatang, category }` of the row soft-deleted.
+ */
+export const FINANCE_AUDIT_ACTIONS = [
+  'finance.expense_created',
+  'finance.expense_deleted',
+] as const;
+export type FinanceAuditAction = (typeof FINANCE_AUDIT_ACTIONS)[number];
+
+/** `audit_log.target_type` of FINANCE_AUDIT_ACTIONS. */
+export const FINANCE_AUDIT_TARGET_TYPES = { expense: 'expense' } as const;
+
+/**
+ * Every `audit_log.action` the system writes today, in display groups (auth, admin, package and
+ * self sign-up, finance), so the admin audit-log viewer can label each one (a test checks every
+ * action has a Thai label). Add a new action to its group's list above; it appears here by
+ * construction. Older rows may hold actions outside this list (e.g. `takedown.share` from tests);
+ * the viewer shows those raw.
+ */
+export const AUDIT_ACTIONS = [
+  ...AUTH_AUDIT_ACTIONS,
+  ...ADMIN_AUDIT_ACTIONS,
+  ...PACKAGE_AUDIT_ACTIONS,
+  ...FINANCE_AUDIT_ACTIONS,
+] as const;
+export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+
+/** True when `action` is one of AUDIT_ACTIONS. */
+export function isAuditAction(action: string): action is AuditAction {
+  return (AUDIT_ACTIONS as readonly string[]).includes(action);
+}

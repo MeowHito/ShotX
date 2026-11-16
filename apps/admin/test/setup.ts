@@ -2,10 +2,15 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { afterEach, vi } from 'vitest';
+import { resetFakeCharts } from './echarts-mock';
 
 afterEach(() => {
   cleanup();
+  resetFakeCharts();
 });
+
+// jsdom has no canvas: charts record their options instead (test/echarts-mock.ts).
+vi.mock('@/lib/charts/echarts', () => import('./echarts-mock'));
 
 // next/link needs the App Router; a plain anchor is enough for component tests.
 vi.mock('next/link', () => ({

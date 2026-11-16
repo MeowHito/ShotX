@@ -14,13 +14,16 @@ import { NestFactory } from '@nestjs/core';
 import { ExpressAdapter } from '@nestjs/platform-express';
 import express from 'express';
 import type { FaceProvider } from '@shotx/face';
-import type { EmailProvider, PaymentGatewayAdapter } from '@shotx/shared';
+import type { EmailProvider, PackagePaymentGateway, PaymentGatewayAdapter } from '@shotx/shared';
 import { AdminController } from './admin/admin.controller';
 import { AdminUsersService } from './admin/admin-users.service';
 import { CashPaymentsService } from './admin/cash-payments.service';
 import { type MetricsSource, nodeMetricsSource } from './admin/server-metrics';
 import { AdminSystemService, METRICS_SOURCE } from './admin/system.service';
 import { ActAsService } from './admin/act-as.service';
+import { AuditLogService } from './admin/audit-log.service';
+import { ExpensesService } from './admin/expenses.service';
+import { FinanceService } from './admin/finance.service';
 import { AdminGuard } from './auth/admin.guard';
 import { AdminSignIn } from './auth/admin-sign-in';
 import { AuthController } from './auth/auth.controller';
@@ -28,7 +31,7 @@ import { AuthService } from './auth/auth.service';
 import { BffGuard, BffKeyGuard } from './auth/bff.guard';
 import type { OidcDeps } from './auth/oidc';
 import { PhotographerAccountController } from './auth/photographer-account.controller';
-import { PhotographerGuard, UserGuard } from './auth/photographer.guard';
+import { OptionalPhotographerGuard, PhotographerGuard, UserGuard } from './auth/photographer.guard';
 import { PhotographerSignIn } from './auth/photographer-sign-in';
 import { createShotxAuth, SHOTX_AUTH } from './auth/shotx-auth';
 import { CAPTCHA_VERIFIER, type CaptchaVerifier, TurnstileVerifier } from './public/captcha';
@@ -56,6 +59,9 @@ import { ApiExceptionFilter, errorResponse } from './http/exception.filter';
 import { jsonBodyMiddleware } from './http/json-body';
 import { MeController } from './me/me.controller';
 import { MeService } from './me/me.service';
+import { createPackageGateway } from './packages/gateways';
+import { PackageSalesGuard, PackagesController } from './packages/packages.controller';
+import { PackagesService } from './packages/packages.service';
 import { SignedUrls } from './media/signed-urls';
 import { DownloadsService } from './public/downloads.service';
 import { FaceService } from './public/face.service';
@@ -80,6 +86,7 @@ import {
   type MediaUrlSigner,
   OBJECT_STORAGE,
   type ObjectStorage,
+  PACKAGE_GATEWAY,
   PAYMENT_GATEWAY,
   QUEUE_SENDER,
   type QueueSender,
@@ -113,6 +120,11 @@ export interface ApiDeps {
   email?: EmailProvider;
   /** ADR 0025: account emails; default createAccountMailer(config.accountEmail). */
   accountMailer?: AccountMailer;
+  /**
+   * ADR 0026: the package gateway; default createPackageGateway(config.packageGateway). Ignored
+   * with PACKAGE_GATEWAY=off (none is built). Tests pass a FakePackageGateway with a known secret.
+   */
+  packageGateway?: PackagePaymentGateway;
   /**
    * HTTP client and Google JWKS of the LINE/Google sign-in (AUTH_PROVIDER=shotx or local);
    * default: fetch and Google's remote JWKS. Tests pass local fakes (never the network).
@@ -173,6 +185,7 @@ export class AppModule {
         AuthController,
         PhotographerAccountController,
         AdminController,
+        PackagesController,
       ],
       providers: [
         { provide: API_CONFIG, useValue: deps.config },
@@ -201,6 +214,15 @@ export class AppModule {
                 createPaymentGateway(deps.config.paymentGateway, deps.clock)),
         },
         {
+          provide: PACKAGE_GATEWAY,
+          // PACKAGE_GATEWAY=off (ADR 0026): no adapter is built, whatever the caller passes.
+          useValue:
+            deps.config.packageGateway.gateway === 'off'
+              ? null
+              : (deps.packageGateway ??
+                createPackageGateway(deps.config.packageGateway, deps.config.app.publicBaseUrl)),
+        },
+        {
           provide: EMAIL_PROVIDER,
           useValue:
             deps.email ??
@@ -224,6 +246,7 @@ export class AppModule {
         { provide: SHUTDOWN, useValue: deps.onShutdown ?? (() => Promise.resolve()) },
         ShutdownHook,
         PhotographerGuard,
+        OptionalPhotographerGuard,
         UserGuard,
         PublicGuard,
         OriginGuard,
@@ -253,6 +276,11 @@ export class AppModule {
         CashPaymentsService,
         AdminSystemService,
         ActAsService,
+        AuditLogService,
+        ExpensesService,
+        FinanceService,
+        PackageSalesGuard,
+        PackagesService,
       ],
     };
   }

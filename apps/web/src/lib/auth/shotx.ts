@@ -6,6 +6,7 @@ import {
   type AuthTokenResponse,
   ErrorCode,
   opaqueTokenSchema,
+  PACKAGE_ROUTES,
   PHOTOGRAPHER_ACCOUNT_ROUTES,
 } from '@shotx/shared';
 import { createApiClient } from '../api/client';
@@ -275,6 +276,19 @@ export function createShotxAuthProvider(
             body: { token, newPassword },
             signal,
           }),
+        ),
+      );
+    },
+
+    async requestFreeSignup({ name, email, captchaToken }) {
+      const body = { name, email, ...(captchaToken !== undefined ? { captchaToken } : {}) };
+      await guarded(timeoutMs, (signal) => api.call(PACKAGE_ROUTES.signupFree, { body, signal }));
+    },
+
+    async confirmFreeSignup({ token, password }) {
+      return toTokens(
+        await guarded(timeoutMs, (signal) =>
+          api.call(PACKAGE_ROUTES.signupFreeConfirm, { body: { token, password }, signal }),
         ),
       );
     },

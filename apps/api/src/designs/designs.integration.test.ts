@@ -142,15 +142,17 @@ for (const backend of DATABASE_BACKENDS) {
       it('creates blank, from a template in a locale, and from a document', async () => {
         const owner = await api.photographer();
         const blank = await newDesign(owner.token, { name: '  Blank  ' });
+        // ADR 0028: the owner's first design becomes the default; later ones don't.
         expect(blank).toMatchObject({
           name: 'Blank',
-          isDefault: false,
+          isDefault: true,
           revision: 1,
           doc: blankDesignDoc(),
           assets: {},
         });
         const templateId = DESIGN_TEMPLATE_IDS[1] ?? DESIGN_TEMPLATE_IDS[0];
         const fromTemplate = await newDesign(owner.token, { templateId, locale: 'en' });
+        expect(fromTemplate.isDefault).toBe(false);
         expect(fromTemplate.doc).toEqual(designTemplateDoc(templateId, 'en'));
         const thai = await newDesign(owner.token, { templateId });
         expect(thai.doc).toEqual(designTemplateDoc(templateId, 'th'));
@@ -214,7 +216,7 @@ for (const backend of DATABASE_BACKENDS) {
           expect(res).toMatchObject({ status: 404, body: { code: 'NOT_FOUND' } });
         }
         const [row] = await api.db.select().from(shareDesigns).where(eq(shareDesigns.id, id));
-        expect(row).toMatchObject({ name: 'Event card', revision: 1, isDefault: false });
+        expect(row).toMatchObject({ name: 'Event card', revision: 1, isDefault: true });
         // Unknown ids too; and `assets` is never read as an id.
         expect((await getDesign(owner.token, randomUUID())).status).toBe(404);
         expect(
@@ -254,7 +256,8 @@ for (const backend of DATABASE_BACKENDS) {
           name: 'Saved',
           revision: 2,
           doc: doc2,
-          isDefault: false,
+          // The owner's first design (ADR 0028); a save never changes it.
+          isDefault: true,
         });
 
         const stale = await putDesign(owner.token, design.id, {

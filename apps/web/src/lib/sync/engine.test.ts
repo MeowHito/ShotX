@@ -409,6 +409,28 @@ describe('FolderSyncEngine', () => {
     expect(engine.getSnapshot()).toMatchObject({ status: 'error', error: 'destinationMissing' });
   });
 
+  it.each([
+    [ErrorCode.PLAN_EXPIRED, 'planExpired'],
+    [ErrorCode.PHOTO_LIMIT_REACHED, 'photoLimitReached'],
+  ] as const)(
+    'stops on %s (ADR 0026) and uploads the file again after resuming',
+    async (code, error) => {
+      const folder = fakeFolder('Export');
+      folder.put('IMG_1.jpg', 10);
+      const { engine, uploads } = makeEngine();
+      await setUp(engine, folder);
+      await engine.tick();
+      uploads.finish('IMG_1.jpg', { ok: false, error: apiError(code) });
+      await flush();
+      expect(engine.getSnapshot()).toMatchObject({ status: 'error', error });
+      expect(engine.getSnapshot().stats.failed).toBe(0);
+      await engine.resume();
+      expect(engine.getSnapshot().status).toBe('running');
+      await engine.tick(); // the second scan sees the file unchanged
+      expect(uploads.names()).toEqual(['IMG_1.jpg']);
+    },
+  );
+
   it('stops when the watched folder is gone', async () => {
     const folder = fakeFolder('Export');
     const { engine } = makeEngine();

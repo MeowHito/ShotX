@@ -21,6 +21,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { users } from './accounts';
+import { designAssets } from './designs';
 import { createdAt, driveNameKeySql, id, ltree, parentKeySql, timestamptz } from './columns';
 import { fileStatus } from './enums';
 
@@ -85,6 +86,15 @@ export const folders = pgTable(
      * and share meta re-checks it on read (see updateFolderBodySchema in @shotx/shared).
      */
     coverFileId: uuid('cover_file_id'),
+    /**
+     * An uploaded event cover (ADR 0028, migration 0018): a design image (`design_assets`) the
+     * photographer uploaded for this event, cropped to 2:3 in the browser. It wins over
+     * `cover_file_id`; the api sets one and clears the other. The foreign key on
+     * (cover_asset_id, owner_id) keeps it the owner's image and is cleared when the asset row is
+     * deleted (ON DELETE SET NULL of cover_asset_id only, hand-written in the migration); the
+     * design image orphan purge counts it as a reference.
+     */
+    coverAssetId: uuid('cover_asset_id'),
     /**
      * Outbox mark of `index.folder` (migration 0006, ADR 0008 "Lost jobs"): set by the API in the
      * transaction that enables indexing (when it sends `index.folder`), cleared by the worker when
@@ -164,6 +174,15 @@ export const folders = pgTable(
     index('folders_cover_file_idx')
       .on(t.coverFileId, t.ownerId)
       .where(sql`${t.coverFileId} IS NOT NULL`),
+    foreignKey({
+      name: 'folders_cover_asset_same_owner_fk',
+      columns: [t.coverAssetId, t.ownerId],
+      foreignColumns: [designAssets.id, designAssets.ownerId],
+    }).onDelete('set null'),
+    // The FK's ON DELETE when design images are deleted, and the orphan purge's reference check.
+    index('folders_cover_asset_idx')
+      .on(t.coverAssetId, t.ownerId)
+      .where(sql`${t.coverAssetId} IS NOT NULL`),
     check(
       'folders_name_valid',
       sql`length(${t.name}) BETWEEN 1 AND 255 AND strpos(${t.name}, '/') = 0`,

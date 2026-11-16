@@ -80,6 +80,18 @@ export interface AuthProvider {
   requestPasswordReset?: (email: string) => Promise<void>;
   /** ADR 0025: sets the new password with the emailed token; answers a new session. */
   confirmPasswordReset?: (input: { token: string; newPassword: string }) => Promise<AuthTokens>;
+  /**
+   * ADR 0026: Free sign-up step 1, emails a confirmation link (always resolves the same, whether
+   * or not the email has an account).
+   */
+  requestFreeSignup?: (input: {
+    name: string;
+    email: string;
+    /** A Turnstile token, when the API asked for a challenge. */
+    captchaToken?: string;
+  }) => Promise<void>;
+  /** ADR 0026: Free sign-up step 2, creates the account with the emailed token; a new session. */
+  confirmFreeSignup?: (input: { token: string; password: string }) => Promise<AuthTokens>;
 }
 
 export type PhotographerSignInStep = PhotographerSignInResponse['step'];

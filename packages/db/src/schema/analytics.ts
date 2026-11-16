@@ -136,7 +136,8 @@ export const shareDailyStats = pgTable(
  * Every admin action and every admin sign-in. Append-only by convention: nothing updates or
  * deletes rows. `actor_id` may be null only for sign-in events (`auth.` actions, see
  * AUTH_AUDIT_ACTIONS in @shotx/shared), e.g. a failed sign-in for an email that matches no admin
- * (migration 0005).
+ * (migration 0005), and package gateway events (`package.` actions, PACKAGE_AUDIT_ACTIONS, migration
+ * 0016), e.g. an amount mismatch on an order whose buyer has no account yet.
  */
 export const auditLog = pgTable(
   'audit_log',
@@ -152,10 +153,21 @@ export const auditLog = pgTable(
   (t) => [
     index('audit_log_actor_created_idx').on(t.actorId, t.createdAt),
     index('audit_log_target_idx').on(t.targetType, t.targetId),
-    index('audit_log_created_idx').on(t.createdAt),
+    // Migration 0017 (ADR 0027, the audit-log viewer): newest first with an id tiebreak (replaces
+    // the plain created_at index of the same name), the action filter (exact, or a `LIKE 'x.%'`
+    // prefix: text_pattern_ops), and target ids alone (audit_log_target_idx leads with the type).
+    index('audit_log_created_idx').on(t.createdAt.desc(), t.id.desc()),
+    index('audit_log_action_idx').on(
+      t.action.op('text_pattern_ops'),
+      t.createdAt.desc(),
+      t.id.desc(),
+    ),
+    index('audit_log_target_id_idx').on(t.targetId, t.createdAt.desc(), t.id.desc()),
+    // Migration 0016 (ADR 0026): `package.` actions (gateway callbacks) may have no actor too. The
+    // name is kept from migration 0005 so nothing that maps it changes.
     check(
       'audit_log_actor_unless_auth_event',
-      sql`${t.actorId} IS NOT NULL OR ${t.action} LIKE 'auth.%'`,
+      sql`${t.actorId} IS NOT NULL OR ${t.action} LIKE 'auth.%' OR ${t.action} LIKE 'package.%'`,
     ),
   ],
 );

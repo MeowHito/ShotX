@@ -96,6 +96,29 @@ for (const backend of DATABASE_BACKENDS) {
         expect(new URL(body.file.url).pathname).toContain('/media/originals/');
       });
 
+      it('serves web.jpg for an image original over 1.5 MB, even on an original share (ADR 0028)', async () => {
+        const {
+          share,
+          files: [small, big],
+        } = await shared({ downloadSize: 'original' });
+        await api.db
+          .update(files)
+          .set({ sizeBytes: 1_500_001 })
+          .where(eq(files.id, big?.id ?? ''));
+        const download = async (fileId: string | undefined) => {
+          const res = await api.request('POST', downloads(share.token), {
+            body: { fileIds: [fileId] },
+          });
+          const body = createDownloadResponseSchema.parse(res.body);
+          if (body.kind !== 'file') throw new Error('expected a file');
+          return body.file;
+        };
+        const capped = await download(big?.id);
+        expect(new URL(capped.url).pathname).toMatch(/\/media\/derived\/.+\/web\.jpg$/);
+        expect(capped.fileName).toBe('ภาพ 1.jpg');
+        expect(new URL((await download(small?.id)).url).pathname).toContain('/media/originals/');
+      });
+
       it('is DOWNLOAD_NOT_ALLOWED on a view-only share', async () => {
         const {
           share,

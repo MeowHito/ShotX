@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import { Providers } from '@/components/providers';
 import { GoogleAnalytics } from '@/components/site/google-analytics';
 import { processAnalyticsId } from '@/lib/server/config';
+import { analyticsAllowed, PATHNAME_HEADER } from '@/lib/site/analytics-paths';
 import { HTML_LANG } from '@/i18n/config';
 import './globals.css';
 
@@ -43,8 +44,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   // Every page renders per request: the CSP nonce from src/proxy.ts must reach Next's scripts.
   await connection();
   const locale = await getLocale();
-  const analytics = processAnalyticsId();
-  const nonce = analytics === null ? undefined : ((await headers()).get('x-nonce') ?? undefined);
+  const requestHeaders = await headers();
+  // ADR 0017, but never on the pages with a token in the URL (analyticsAllowed).
+  const analytics = analyticsAllowed(requestHeaders.get(PATHNAME_HEADER))
+    ? processAnalyticsId()
+    : null;
+  const nonce = analytics === null ? undefined : (requestHeaders.get('x-nonce') ?? undefined);
   return (
     <html
       lang={HTML_LANG[locale]}

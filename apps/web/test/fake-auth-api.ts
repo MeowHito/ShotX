@@ -12,7 +12,11 @@ import {
   ERROR_HTTP_STATUS,
   ErrorCode,
   type OidcProvider,
+  ORDER_TOKEN_HEADER,
+  PACKAGE_ROUTES,
+  type PackageOrderView,
   type RouteContract,
+  maskEmail,
 } from '@shotx/shared';
 import { randomToken } from '@/lib/auth/pkce';
 import { encodeJsonCookie } from '@/lib/auth/session';
@@ -101,6 +105,21 @@ export class FakeAuthApi {
 
   private readonly states = new Map<string, { provider: OidcProvider; redirectUri: string }>();
   private readonly refreshTokens = new Map<string, { family: Family; used: boolean }>();
+
+  // --- ADR 0026: Free sign-up and package orders -------------------------------------------
+  /** PACKAGE_SALES=on. Off: signupFree, signupFreeConfirm and createOrder answer NOT_FOUND. */
+  packageSales = true;
+  /** PACKAGE_GATEWAY. */
+  packageGateway: 'off' | 'fake' | 'mpay' = 'fake';
+  /** Emailed Free confirmation links: token -> name and email. */
+  readonly signupLinks = new Map<string, { name: string; email: string }>();
+  /** Every Free sign-up request (whether or not it sent a link). */
+  readonly signupRequests: { name: string; email: string; captchaToken?: string }[] = [];
+  /** Orders by id, with their access token and Idempotency-Key. */
+  readonly orders = new Map<
+    string,
+    { token: string; key: string; request: string; view: PackageOrderView }
+  >();
 
   /** The tokens of a fresh sign-in (also usable to seed a session in tests). */
   signIn(
@@ -198,9 +217,13 @@ export class FakeAuthApi {
       if (!changePassword && headers[BFF_KEY_HEADER] !== BFF_KEY) {
         throw new Fail(ErrorCode.UNAUTHENTICATED);
       }
-      const result = changePassword
-        ? this.changePassword(headers.authorization, body)
-        : this.handle(route, path, body);
+      const packages = changePassword ? undefined : this.handlePackages(route, path, headers, body);
+      const result =
+        packages !== undefined
+          ? packages.result
+          : changePassword
+            ? this.changePassword(headers.authorization, body)
+            : this.handle(route, path, body);
       if (route.status === 204) return new Response(null, { status: 204 });
       const checked = route.response?.parse(result);
       return Response.json(checked, { status: route.status });
@@ -311,6 +334,129 @@ export class FakeAuthApi {
       }
       default:
         throw new Fail(ErrorCode.NOT_FOUND);
+    }
+  }
+
+  /** The ADR 0026 `bff` routes; undefined for any other route. */
+  private handlePackages(
+    route: RouteContract,
+    path: string,
+    headers: Record<string, string>,
+    rawBody: unknown,
+  ): { result: unknown } | undefined {
+    const salesOnly = [
+      PACKAGE_ROUTES.signupFree,
+      PACKAGE_ROUTES.signupFreeConfirm,
+      PACKAGE_ROUTES.createOrder,
+    ] as RouteContract[];
+    const ours = [...salesOnly, PACKAGE_ROUTES.getOrder, PACKAGE_ROUTES.fakeResult];
+    if (!ours.includes(route)) return undefined;
+    if (salesOnly.includes(route) && !this.packageSales) throw new Fail(ErrorCode.NOT_FOUND);
+    const parsed = route.body?.safeParse(rawBody);
+    if (parsed !== undefined && !parsed.success) throw new Fail(ErrorCode.VALIDATION_FAILED);
+    const body = (parsed?.data ?? {}) as Record<string, string>;
+    const captchaToken = body.captchaToken;
+    const orderOf = () => {
+      const id = path.split('/')[2] ?? '';
+      const order = this.orders.get(id);
+      if (order === undefined || order.token !== headers[ORDER_TOKEN_HEADER]) {
+        throw new Fail(ErrorCode.ORDER_NOT_FOUND);
+      }
+      return order;
+    };
+    switch (route) {
+      case PACKAGE_ROUTES.signupFree: {
+        this.signupRequests.push({
+          name: body.name ?? '',
+          email: body.email ?? '',
+          ...(captchaToken !== undefined ? { captchaToken } : {}),
+        });
+        if (!this.accounts.has(normalizeAccountEmail(body.email ?? ''))) {
+          this.signupLinks.set(randomToken(32), { name: body.name ?? '', email: body.email ?? '' });
+        }
+        return { result: undefined };
+      }
+      case PACKAGE_ROUTES.signupFreeConfirm: {
+        const link = this.signupLinks.get(body.token ?? '');
+        if (link === undefined || this.accounts.has(normalizeAccountEmail(link.email))) {
+          throw new Fail(ErrorCode.SIGNUP_LINK_INVALID);
+        }
+        this.signupLinks.delete(body.token ?? '');
+        const account = this.addPhotographer({
+          email: link.email,
+          name: link.name,
+          password: body.password ?? '',
+          mustChange: false,
+        });
+        return {
+          result: this.signIn(account.subject, { email: account.email, name: account.name }),
+        };
+      }
+      case PACKAGE_ROUTES.createOrder: {
+        const key = headers['idempotency-key'];
+        if (key === undefined) throw new Fail(ErrorCode.VALIDATION_FAILED);
+        let email = body.email;
+        if (headers.authorization !== undefined) {
+          const family = this.accessTokens.get(headers.authorization.replace(/^Bearer /, ''));
+          if (family === undefined || family.revoked) throw new Fail(ErrorCode.UNAUTHENTICATED);
+          if (body.email !== undefined || body.name !== undefined) {
+            throw new Fail(ErrorCode.VALIDATION_FAILED);
+          }
+          email = family.user.email ?? undefined;
+        } else if (body.email === undefined || body.name === undefined) {
+          throw new Fail(ErrorCode.VALIDATION_FAILED);
+        }
+        if (body.packageCode === 'free') throw new Fail(ErrorCode.PACKAGE_UNAVAILABLE);
+        if (this.packageGateway === 'off') throw new Fail(ErrorCode.PAYMENT_UNAVAILABLE);
+        const request = JSON.stringify([body.packageCode, email]);
+        const token = randomToken(32);
+        const existing = [...this.orders.entries()].find(([, o]) => o.key === key);
+        if (existing !== undefined && existing[1].request !== request) {
+          throw new Fail(ErrorCode.IDEMPOTENCY_KEY_REUSED);
+        }
+        const id = existing?.[0] ?? crypto.randomUUID();
+        this.orders.set(id, {
+          token,
+          key,
+          request,
+          view: existing?.[1].view ?? {
+            status: 'pending',
+            packageCode: body.packageCode ?? '',
+            packageName: '7 Days',
+            totalSatang: 64_093,
+            emailMasked: maskEmail(email ?? ''),
+            accountCreated: false,
+            expiresAt: null,
+          },
+        });
+        return {
+          result: {
+            orderId: id,
+            accessToken: token,
+            redirectUrl: `https://photos.example.com/checkout/fake?order=${id}`,
+          },
+        };
+      }
+      case PACKAGE_ROUTES.getOrder:
+        return { result: orderOf().view };
+      case PACKAGE_ROUTES.fakeResult: {
+        if (this.packageGateway !== 'fake') throw new Fail(ErrorCode.NOT_FOUND);
+        const order = orderOf();
+        if (order.view.status === 'pending') {
+          order.view =
+            body.result === 'paid'
+              ? {
+                  ...order.view,
+                  status: 'paid',
+                  accountCreated: true,
+                  expiresAt: '2026-11-23T05:00:00.000Z',
+                }
+              : { ...order.view, status: 'failed' };
+        }
+        return { result: order.view };
+      }
+      default:
+        return undefined;
     }
   }
 

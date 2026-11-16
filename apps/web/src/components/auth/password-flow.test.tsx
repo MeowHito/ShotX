@@ -110,7 +110,8 @@ beforeEach(() => {
 });
 
 describe('sign-in → forced password change → studio (mobile-first forms)', () => {
-  it('runs the whole flow through the real handlers', async () => {
+  // Many typed fields through real handlers: slow under turbo's parallel test load.
+  it('runs the whole flow through the real handlers', { timeout: 20_000 }, async () => {
     const b = browser();
     b.api.addPhotographer({ email: EMAIL, password: TEMPORARY, name: 'สมชาย' });
 

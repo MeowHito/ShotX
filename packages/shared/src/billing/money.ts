@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 /**
  * Money is integer satang (1 THB = 100 satang) everywhere: database, API, gateway calls. Every
- * plan price is VAT-inclusive (7%). These helpers are the only place amounts are derived, so api,
+ * plan price is VAT-inclusive (7%); package prices (ADR 0026) are VAT-exclusive (vatOnTop). These helpers are the only place amounts are derived, so api,
  * worker, web (display only) and admin rollups agree to the satang.
  */
 
@@ -59,7 +59,52 @@ export function splitVat(totalSatang: number, vatRateBasisPoints: number): Amoun
   return { totalSatang, vatSatang, netSatang: totalSatang - vatSatang, vatRateBasisPoints };
 }
 
+/**
+ * VAT charged on top of a VAT-exclusive price (ADR 0026 packages), in satang:
+ * `round_half_up(price × rate / 10000)` with the rate in basis points. Example at 7%: 39,900 →
+ * 2,793 (total 42,693); 129,900 → 9,093 (total 138,993).
+ */
+export function vatOnTop(priceSatang: number, vatRateBasisPoints: number): number {
+  assertSatang('priceSatang', priceSatang);
+  assertBasisPoints(vatRateBasisPoints);
+  return mulDivRoundHalfUp(priceSatang, vatRateBasisPoints, BASIS_POINTS);
+}
+
+/** A VAT-exclusive price with the VAT added on top (packageTotal). */
+export interface PackageTotal {
+  /** `packages.price_satang`: VAT-exclusive. */
+  priceSatang: number;
+  /** vatOnTop(price, rate). */
+  vatSatang: number;
+  /** What the buyer pays: `price + vat`. */
+  totalSatang: number;
+  vatRateBasisPoints: number;
+}
+
+/**
+ * The amounts of a package order: the VAT-exclusive price, the VAT on top and the total charged.
+ * `package_orders` stores exactly these (`package_orders_total_is_price_plus_vat`). Throws when the
+ * total would exceed MAX_AMOUNT_SATANG.
+ */
+export function packageTotal(priceSatang: number, vatRateBasisPoints: number): PackageTotal {
+  const vatSatang = vatOnTop(priceSatang, vatRateBasisPoints);
+  const totalSatang = priceSatang + vatSatang;
+  assertSatang('totalSatang', totalSatang);
+  return { priceSatang, vatSatang, totalSatang, vatRateBasisPoints };
+}
+
 export const satangSchema = z.number().int().nonnegative().max(MAX_AMOUNT_SATANG);
+
+export const packageTotalSchema = z
+  .object({
+    priceSatang: satangSchema,
+    vatSatang: satangSchema,
+    totalSatang: satangSchema,
+    vatRateBasisPoints: z.number().int().min(0).max(BASIS_POINTS),
+  })
+  .refine((t) => t.totalSatang === t.priceSatang + t.vatSatang, {
+    error: 'totalSatang must be priceSatang + vatSatang',
+  });
 
 export const amountBreakdownSchema = z.object({
   totalSatang: satangSchema,

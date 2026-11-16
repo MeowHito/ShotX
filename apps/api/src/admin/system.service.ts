@@ -13,6 +13,7 @@ import {
   OBJECT_STORAGE,
   type ObjectStorage,
 } from '../tokens';
+import type { MonthlyCostEstimate } from './finance-math';
 import { type MetricsSource, readServerMetrics } from './server-metrics';
 
 /** The server-metrics reader; tests replace it with fixed kernel files. */
@@ -65,6 +66,30 @@ export class AdminSystemService {
         r2FreeStorageGb: cost.r2FreeStorageGb,
         vpsThbMonth: cost.vpsMonthThb,
       },
+    };
+  }
+
+  /**
+   * ADR 0027: the overview's monthly cost (`cost` above) in satang, for the finance summary and
+   * per-user cost. Storage is R2 above the free GB at the current bucket size
+   * (estimateR2StorageUsdMonth × USD_THB); when the bucket can't be listed, the recorded
+   * originals (Σ storage_usage.used_bytes) stand in for it. Server is VPS_MONTH_THB.
+   */
+  async monthlyCost(): Promise<MonthlyCostEstimate> {
+    const cost = this.config.cost;
+    const bucket = await this.bucketUsage();
+    let bytes: number;
+    if (bucket?.usage == null) {
+      const [usage] = await this.db
+        .select({ bytes: sql<string>`coalesce(sum(${storageUsage.usedBytes}), 0)::text` })
+        .from(storageUsage);
+      bytes = Number(usage?.bytes ?? 0);
+    } else {
+      bytes = bucket.usage.totalBytes;
+    }
+    return {
+      storageSatangMonth: estimateR2StorageUsdMonth(bytes, cost) * cost.usdThb * 100,
+      serverSatangMonth: cost.vpsMonthThb * 100,
     };
   }
 

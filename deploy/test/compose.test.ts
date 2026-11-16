@@ -318,10 +318,14 @@ describe.skipIf(!hasCompose)('docker compose config', () => {
     expect(published).toEqual(['proxy']);
   });
 
-  it('trusts exactly the proxy address for X-Forwarded-For', () => {
-    const proxyNet = (services.proxy?.networks as Record<string, { ipv4_address?: string }>).edge;
-    expect(env('api').TRUSTED_PROXY_ADDRESSES).toBe(proxyNet?.ipv4_address);
-    expect(env('api').TRUSTED_PROXY_ADDRESSES).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+  it('trusts exactly the proxy addresses for X-Forwarded-For', () => {
+    // ADR 0019: the edge network is dual-stack, so the proxy's IPv4 and IPv6 addresses are listed.
+    const proxyNet = (
+      services.proxy?.networks as Record<string, { ipv4_address?: string; ipv6_address?: string }>
+    ).edge;
+    const expected = [proxyNet?.ipv4_address, proxyNet?.ipv6_address].filter(Boolean).join(',');
+    expect(env('api').TRUSTED_PROXY_ADDRESSES).toBe(expected);
+    expect(proxyNet?.ipv4_address).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
   });
 
   it('runs api and worker on BullMQ, API-issued auth, presigned R2 URLs and no AWS endpoint', () => {

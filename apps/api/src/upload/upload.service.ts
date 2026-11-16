@@ -37,6 +37,11 @@ import {
   uploadGate,
 } from '../drive/account';
 import { insertFolder, liveFolder, newId } from '../drive/folders';
+import {
+  assertPackageAllowsUpload,
+  returnPackagePhotos,
+  takePackagePhotos,
+} from '../packages/package-state';
 import { DriveFileMapper, toDriveFolder } from '../drive/media-urls';
 import { folderParentIs, withFreeName } from '../drive/names';
 import { ApiError, notFound } from '../http/api-error';
@@ -199,6 +204,10 @@ export class UploadService {
           }
         }
 
+        // ADR 0026: a cheap unlocked pre-check, so a blocked account doesn't open a multipart
+        // upload; takePackagePhotos below is what decides.
+        await assertPackageAllowsUpload(tx, ownerId, 1, now);
+
         let parent: Folder | null = null;
         if (body.folderId !== null) {
           parent = await liveFolder(tx, ownerId, body.folderId, 'share');
@@ -222,6 +231,13 @@ export class UploadService {
           contentType: fileType.mime,
         });
         opened = { key, uploadId };
+
+        // ADR 0026: one accepted file is one photo against the package (PLAN_EXPIRED,
+        // PHOTO_LIMIT_REACHED; no package row: unlimited). Counted in this transaction, so any
+        // later failure of the init gives it back with the rollback. After the storage call, so
+        // the package row is never held across it; lock order: photographer_packages, then
+        // storage_usage (as abort and the worker's abandoned-upload cleanup).
+        await takePackagePhotos(tx, ownerId, 1, now);
 
         if (!(await reserveQuotaBytes(tx, ownerId, body.size, quotaBytes)) && quotaBytes !== null) {
           const again = reserveQuota(
@@ -616,8 +632,9 @@ export class UploadService {
   // --- DELETE /uploads/:id -------------------------------------------------------------------
 
   /**
-   * Aborts an open upload: S3 AbortMultipartUpload, then deletes the row and releases its
-   * reservation in one transaction (guarded as in drive/quota). A completed upload is CONFLICT.
+   * Aborts an open upload: S3 AbortMultipartUpload, then deletes the row, releases its
+   * reservation and gives its photo back to the package (ADR 0026) in one transaction (guarded as
+   * in drive/quota). A completed upload is CONFLICT.
    * Deleting the row frees its clientUploadId.
    */
   async abort(ownerId: string, id: string): Promise<void> {
@@ -640,6 +657,9 @@ export class UploadService {
         )
         .returning({ sizeBytes: files.sizeBytes });
       if (deleted === undefined) return false;
+      // ADR 0026: the aborted file's photo goes back to the package (no row: nothing to do).
+      // Before storage_usage: the lock order of init.
+      await returnPackagePhotos(tx, ownerId, 1, this.clock.now());
       await tx
         .update(storageUsage)
         .set({

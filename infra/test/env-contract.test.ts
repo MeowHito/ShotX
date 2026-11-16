@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs';
 import {
+  loadPackageGatewayConfig,
+  loadPackagesConfig,
+  loadPackagesWebConfig,
   type Env,
   loadApiLimitsConfig,
   loadAdminBffAuthConfig,
@@ -265,6 +268,19 @@ const ALL_LOADERS: Loader[] = [
   // Turnstile (ADR 0008 section 7) as on APP_STAGE=local, where Cloudflare's test keys are allowed.
   (e) => loadCaptchaConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
   (e) => loadCaptchaClientConfig({ ...e, APP_STAGE: 'local', NODE_ENV: 'development' }),
+  // ADR 0026: packages, Free sign-up and paid orders (api), and the checkout poll (web), VPS only.
+  // mpay's settings are read as with PACKAGE_GATEWAY=mpay.
+  loadPackagesConfig,
+  loadPackagesWebConfig,
+  loadPackageGatewayConfig,
+  (e) =>
+    loadPackageGatewayConfig({
+      ...e,
+      PACKAGE_GATEWAY: 'mpay',
+      MPAY_API_URL: e.MPAY_API_URL ?? 'https://mpay.example.test',
+      MPAY_MERCHANT_ID: e.MPAY_MERCHANT_ID ?? 'merchant',
+      MPAY_SECRET_KEY: e.MPAY_SECRET_KEY ?? 'secret-secret-secret',
+    }),
 ];
 
 const throws = (loader: Loader, env: Env) => {

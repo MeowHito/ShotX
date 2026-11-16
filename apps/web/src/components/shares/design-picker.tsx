@@ -13,8 +13,9 @@ import { assetUrls, useDesigns } from '@/lib/design/queries';
 const PREVIEW_WIDTH = 56;
 
 /**
- * The share form's share page picker (ADR 0013): "no design" (designId null: the plain layout)
- * or one of the owner's designs, each with a small live preview; the default design is badged.
+ * The share form's share page picker (ADR 0013): one of the owner's designs, each with a small
+ * live preview, or "no design" (designId null: the plain layout). The default design is badged
+ * and listed first; "manage designs" is a button (ADR 0028).
  * A new share starts on the default design (`preselectDefault`), once, when the list arrives;
  * setting a default later never changes existing shares.
  */
@@ -30,7 +31,11 @@ export function DesignPicker({
   const t = useTranslations('shareForm');
   const id = useId();
   const designs = useDesigns();
-  const items = useMemo(() => designs.data?.items ?? [], [designs.data]);
+  // The default design comes first, ahead of "no design" (owner, 2026-11-16, ADR 0028).
+  const items = useMemo(() => {
+    const list = designs.data?.items ?? [];
+    return [...list.filter((d) => d.isDefault), ...list.filter((d) => !d.isDefault)];
+  }, [designs.data]);
   const assets = useMemo(() => assetUrls(designs.data?.assets ?? {}), [designs.data]);
   const fallback = items.find((d) => d.isDefault) ?? null;
   const preselected = useRef(!preselectDefault);
@@ -83,13 +88,6 @@ export function DesignPicker({
     <fieldset className="grid gap-2">
       <legend className="mb-1 text-sm font-medium">{t('design')}</legend>
       <div className="grid max-h-80 gap-2 overflow-y-auto sm:grid-cols-2">
-        {option(
-          'none',
-          null,
-          t('designNone'),
-          <span className="text-xs text-muted-foreground">{t('designNoneHint')}</span>,
-          null,
-        )}
         {items.map((d) =>
           option(
             d.id,
@@ -108,6 +106,13 @@ export function DesignPicker({
             <DesignPreview doc={d.doc} assets={assets} width={PREVIEW_WIDTH} />,
           ),
         )}
+        {option(
+          'none',
+          null,
+          t('designNone'),
+          <span className="text-xs text-muted-foreground">{t('designNoneHint')}</span>,
+          null,
+        )}
       </div>
       {designs.isError ? <p className="text-xs text-destructive">{t('designLoadError')}</p> : null}
       {designs.data !== undefined && items.length === 0 ? (
@@ -122,12 +127,12 @@ export function DesignPicker({
           </Button>
         </div>
       ) : (
-        <Link
-          href={DESIGNS_HREF}
-          className="text-xs text-primary underline-offset-4 hover:underline"
-        >
-          {t('designManage')}
-        </Link>
+        <Button asChild size="sm" variant="outline" className="justify-self-start">
+          <Link href={DESIGNS_HREF}>
+            <PaletteIcon aria-hidden />
+            {t('designManage')}
+          </Link>
+        </Button>
       )}
     </fieldset>
   );

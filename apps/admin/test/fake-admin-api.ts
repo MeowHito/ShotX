@@ -2,6 +2,15 @@ import {
   type AccountRole,
   ADMIN_ROUTES,
   type AdminCashPayment,
+  type AdminExpense,
+  type AdminUserFinanceResponse,
+  type AuditLogEntry,
+  createExpenseBodySchema,
+  type FinanceResponse,
+  financeQuerySchema,
+  isAuditActionPrefix,
+  listAuditLogQuerySchema,
+  listExpensesQuerySchema,
   type AdminSystemResponse,
   type AdminUser,
   createAdminUserBodySchema,
@@ -68,6 +77,109 @@ export function makeUser(overrides: Partial<AdminUser> = {}): AdminUser {
   };
 }
 
+/** A FinanceResponse whose totals add up (the schema's refines): a loss of ฿300. */
+export function makeFinance(overrides: Partial<FinanceResponse> = {}): FinanceResponse {
+  return {
+    range: { from: '2026-11-14', to: '2026-11-16', bucket: 'day' },
+    totals: {
+      incomeSatang: 371_000,
+      packageIncomeSatang: 321_000,
+      cashIncomeSatang: 50_000,
+      vatSatang: 21_000,
+      netIncomeSatang: 350_000,
+      manualExpenseSatang: 350_000,
+      estimatedCostSatang: 30_000,
+      expenseSatang: 380_000,
+      profitSatang: -30_000,
+      ordersPaid: 3,
+      buyers: 2,
+      freeSignups: 4,
+      paidSignups: 1,
+    },
+    series: [
+      {
+        bucket: '2026-11-14',
+        vatSatang: 7_000,
+        packageIncomeSatang: 107_000,
+        cashIncomeSatang: 0,
+        manualExpenseSatang: 50_000,
+        estimatedCostSatang: 10_000,
+      },
+      {
+        bucket: '2026-11-15',
+        vatSatang: 0,
+        packageIncomeSatang: 0,
+        cashIncomeSatang: 50_000,
+        manualExpenseSatang: 0,
+        estimatedCostSatang: 10_000,
+      },
+      {
+        bucket: '2026-11-16',
+        vatSatang: 14_000,
+        packageIncomeSatang: 214_000,
+        cashIncomeSatang: 0,
+        manualExpenseSatang: 300_000,
+        estimatedCostSatang: 10_000,
+      },
+    ],
+    packageMix: [
+      { code: 'd3', name: '3 Days', orders: 1, incomeSatang: 107_000 },
+      { code: 'd7', name: '7 Days', orders: 2, incomeSatang: 214_000 },
+    ],
+    topCustomers: [
+      {
+        userId: '00000000-0000-4000-8000-0000000000c1',
+        email: 'big@example.com',
+        name: 'ลูกค้าใหญ่',
+        orders: 2,
+        paidSatang: 214_000,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+/** A photographer's money with profit on the contract's basis (net + cash − cost). */
+export function makeUserFinance(
+  overrides: Partial<AdminUserFinanceResponse> = {},
+): AdminUserFinanceResponse {
+  const base: AdminUserFinanceResponse = {
+    orders: [
+      {
+        id: '00000000-0000-4000-8000-0000000000a1',
+        packageCode: 'd7',
+        packageName: '7 Days',
+        status: 'paid',
+        totalSatang: 107_000,
+        vatSatang: 7_000,
+        createdAt: '2026-11-10T03:00:00.000Z',
+        paidAt: '2026-11-10T03:05:00.000Z',
+      },
+      {
+        id: '00000000-0000-4000-8000-0000000000a2',
+        packageCode: 'd3',
+        packageName: '3 Days',
+        status: 'pending',
+        totalSatang: 53_500,
+        vatSatang: 3_500,
+        createdAt: '2026-11-12T03:00:00.000Z',
+        paidAt: null,
+      },
+    ],
+    ordersPaid: 1,
+    paidSatang: 107_000,
+    netPaidSatang: 100_000,
+    cashPaidSatang: 50_000,
+    firstPaidAt: '2026-11-08T03:00:00.000Z',
+    lastPaidAt: '2026-11-10T03:05:00.000Z',
+    usage: { storageBytes: 3 * 1024 ** 3, bytesServed: 40 * 1024 ** 3, photosUploaded: 1200 },
+    estimatedCostSatang: { storage: 2_000, server: 8_000, total: 10_000 },
+    // 100,000 + 50,000 − 10,000
+    profitSatang: 140_000,
+  };
+  return { ...base, ...overrides };
+}
+
 class Fail extends Error {
   constructor(
     readonly code: ErrorCode,
@@ -120,6 +232,14 @@ export class FakeAdminApi {
     // 150 GB in R2: (150 − 10) × $0.015 = $2.10; the VPS 1,529 THB.
     cost: { usdThb: 33, r2StorageUsdMonth: 2.1, r2FreeStorageGb: 10, vpsThbMonth: 1529 },
   };
+  /** GET /admin/audit-log rows, newest first. */
+  auditLog: AuditLogEntry[] = [];
+  /** GET /admin/expenses rows (live), newest spent_on first. */
+  expenses: AdminExpense[] = [];
+  /** GET /admin/finance (its range echoes the query when one is given). */
+  finance: FinanceResponse = makeFinance();
+  /** GET /admin/users/:id/finance by user id (others: NOT_FOUND). */
+  userFinance = new Map<string, AdminUserFinanceResponse>();
   private readonly idempotency = new Map<string, { body: string; payment: AdminCashPayment }>();
 
   constructor(users: AdminUser[] = []) {
@@ -169,6 +289,7 @@ export class FakeAdminApi {
     try {
       const { status, value } = this.handle(route, path, url.searchParams, headers, body);
       const parsed = route.response?.parse(value);
+      if (status === 204) return new Response(null, { status });
       return new Response(JSON.stringify(parsed), {
         status,
         headers: { 'content-type': 'application/json' },
@@ -338,6 +459,62 @@ export class FakeAdminApi {
         this.payments.unshift(payment);
         this.idempotency.set(key, { body: fingerprint, payment });
         return { status: 201, value: payment };
+      }
+      case ADMIN_ROUTES.auditLog: {
+        const q = listAuditLogQuerySchema.parse(Object.fromEntries(search));
+        const items = this.auditLog.filter(
+          (e) =>
+            (q.action === undefined ||
+              q.action.some((filter) =>
+                isAuditActionPrefix(filter) ? e.action.startsWith(filter) : e.action === filter,
+              )) &&
+            (q.actorId === undefined || e.actorId === q.actorId) &&
+            (q.targetId === undefined || e.targetId === q.targetId),
+        );
+        return { status: 200, value: this.page(items, q.cursor ?? null, (e) => `c-${e.id}`) };
+      }
+      case ADMIN_ROUTES.listExpenses: {
+        const q = listExpensesQuerySchema.parse(Object.fromEntries(search));
+        const items = this.expenses.filter(
+          (e) =>
+            (q.from === undefined || e.spentOn >= q.from) &&
+            (q.to === undefined || e.spentOn <= q.to),
+        );
+        return { status: 200, value: this.page(items, q.cursor ?? null, (e) => `c-${e.id}`) };
+      }
+      case ADMIN_ROUTES.createExpense: {
+        const b = createExpenseBodySchema.parse(body);
+        const expense: AdminExpense = {
+          id: nextId(),
+          spentOn: b.spentOn,
+          amountSatang: b.amountSatang,
+          category: b.category,
+          note: b.note ?? null,
+          recordedById: SELF_ID,
+          createdAt: '2026-11-16T07:00:00.000Z',
+        };
+        this.expenses.unshift(expense);
+        return { status: 201, value: expense };
+      }
+      case ADMIN_ROUTES.deleteExpense: {
+        const before = this.expenses.length;
+        this.expenses = this.expenses.filter((e) => e.id !== id);
+        if (this.expenses.length === before) throw new Fail(ErrorCode.NOT_FOUND);
+        return { status: 204, value: undefined };
+      }
+      case ADMIN_ROUTES.finance: {
+        const q = financeQuerySchema.parse(Object.fromEntries(search));
+        const range = {
+          from: q.from ?? this.finance.range.from,
+          to: q.to ?? this.finance.range.to,
+          bucket: q.bucket ?? this.finance.range.bucket,
+        };
+        return { status: 200, value: { ...this.finance, range } };
+      }
+      case ADMIN_ROUTES.userFinance: {
+        const finance = this.userFinance.get(id);
+        if (finance === undefined) throw new Fail(ErrorCode.NOT_FOUND);
+        return { status: 200, value: finance };
       }
       default:
         throw new Fail(ErrorCode.NOT_FOUND);

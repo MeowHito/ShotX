@@ -37,6 +37,9 @@ export const AUTH_PATHS = {
   /** ADR 0025: the emailed link's page (PHOTOGRAPHER_PASSWORD_RESET_PATH) and its JSON route. */
   resetPasswordPage: '/reset-password',
   passwordResetConfirm: '/auth/password-reset/confirm',
+  /** ADR 0026: Free sign-up's JSON routes (src/lib/auth/signup). */
+  signupFree: '/auth/signup/free',
+  signupConfirm: '/auth/signup/confirm',
   /** infra `auth.logoutPath`. */
   afterLogout: '/',
 } as const;

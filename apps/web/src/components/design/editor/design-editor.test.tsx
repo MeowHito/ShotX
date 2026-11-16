@@ -277,6 +277,7 @@ describe('design editor', () => {
       'face_only',
     );
     expect(within(frame).getByText('Take a selfie')).toBeInTheDocument();
-    expect(within(frame).queryByText('Use a photo')).toBeNull();
+    // ADR 0028: both buttons in face_only too.
+    expect(within(frame).getByText('Use a photo')).toBeInTheDocument();
   });
 });

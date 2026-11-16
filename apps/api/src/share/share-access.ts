@@ -1,9 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { files, folders, shareDesigns, shares, users } from '@shotx/db';
+import { files, folders, photographerPackages, shareDesigns, shares, users } from '@shotx/db';
 import {
   type AccountStatus,
   faceScanResultKey,
   isOpaqueCookieToken,
+  packageExpired,
   parseShareRef,
   SHARE_UNLOCK_COOKIE,
   shareAccessGate,
@@ -51,10 +52,20 @@ export interface LoadedShare extends ShareRow {
   /** The owner's account status (ADR 0010): a disabled photographer's shares don't serve. */
   ownerStatus: AccountStatus;
   /**
+   * ADR 0026: when the owner's package runs out (`photographer_packages.expires_at`), or null for
+   * an unlimited account (no package row). Read in the same query as the share (a left join).
+   */
+  ownerPackageExpiresAt: Date | null;
+  /**
    * Folder shares: the target folder's chosen cover (ADR 0011), not re-checked here (share meta
    * does); null for file shares or the default cover.
    */
   coverFileId: string | null;
+  /**
+   * Folder shares: the target folder's uploaded cover (ADR 0028), a design image id, not
+   * re-checked here (share meta shows it only while it is `ready`); null otherwise.
+   */
+  coverAssetId: string | null;
   /**
    * The share's own design (`shares.design_id`; the owner's default is never applied at view
    * time, ADR 0013) has "show photos" off (`doc.showPhotos === false`). A folder share in `gallery` mode is then
@@ -94,9 +105,11 @@ async function loadShare(
       folderName: folders.name,
       folderPath: folders.path,
       folderCoverFileId: folders.coverFileId,
+      folderCoverAssetId: folders.coverAssetId,
       folderLive: sql<boolean>`(${folders.id} IS NOT NULL AND ${folders.deletedAt} IS NULL AND ${folders.purgeRequestedAt} IS NULL)`,
       ownerName: users.name,
       ownerStatus: users.status,
+      ownerPackageExpiresAt: photographerPackages.expiresAt,
       // ADR 0019: the share's own design (the only one meta shows, ADR 0013) hides photos.
       designHidesPhotos: sql<boolean>`coalesce((
         SELECT (${shareDesigns.doc} ->> 'showPhotos') = 'false'
@@ -107,6 +120,7 @@ async function loadShare(
     })
     .from(shares)
     .innerJoin(users, eq(users.id, shares.ownerId))
+    .leftJoin(photographerPackages, eq(photographerPackages.photographerId, shares.ownerId))
     .leftJoin(files, and(eq(files.id, shares.targetFileId), eq(files.ownerId, shares.ownerId)))
     .leftJoin(
       folders,
@@ -129,7 +143,9 @@ async function loadShare(
     ownerName: row.ownerName,
     subscriptionStatus: subscription?.status ?? null,
     ownerStatus: row.ownerStatus,
+    ownerPackageExpiresAt: row.ownerPackageExpiresAt,
     coverFileId: isFile ? null : row.folderCoverFileId,
+    coverAssetId: isFile ? null : row.folderCoverAssetId,
   };
 }
 
@@ -198,11 +214,13 @@ export class ShareAccess {
   }
 
   /**
-   * SHARE_EXPIRED unless the share serves (revoked, expired, then unavailable). ADR 0010: a
-   * disabled owner makes it `unavailable`, and the subscription gates only with
-   * BILLING_MODE=gateway.
+   * SHARE_EXPIRED unless the share serves (revoked, expired, then unavailable, then plan_expired).
+   * ADR 0010: a disabled owner makes it `unavailable`, and the subscription gates only with
+   * BILLING_MODE=gateway. ADR 0026: an owner whose package has run out makes it `plan_expired`
+   * (never for an unlimited owner without a package row).
    */
   assertAvailable(share: LoadedShare): void {
+    const now = this.clock.now();
     const availability = shareAvailability(
       {
         isActive: share.isActive,
@@ -213,11 +231,19 @@ export class ShareAccess {
         subscriptionGates: billingOnline(this.config),
         subscriptionStatus: share.subscriptionStatus,
       },
-      this.clock.now(),
+      now,
     );
     if (!availability.ok) {
       throw new ApiError('SHARE_EXPIRED', 'This share link no longer works', {
         reason: availability.reason,
+      });
+    }
+    if (
+      share.ownerPackageExpiresAt !== null &&
+      packageExpired({ expiresAt: share.ownerPackageExpiresAt }, now)
+    ) {
+      throw new ApiError('SHARE_EXPIRED', 'This share link is closed for now', {
+        reason: 'plan_expired',
       });
     }
   }

@@ -1,4 +1,4 @@
-import { designAssets, files, storageUsage } from '@shotx/db';
+import { designAssets, files, photographerPackages, storageUsage } from '@shotx/db';
 import {
   designAssetKey,
   designAssetsPrefix,
@@ -35,9 +35,9 @@ export interface QuotaReconcileResult {
  * Upload sessions past `upload_expires_at` that never completed: abort the multipart upload, then
  * HeadObject. An object of exactly the declared size means CompleteMultipartUpload succeeded and
  * the API's markCompleted was lost: the row is completed and sent to the media pipeline
- * (recoverCompletedUpload), never deleted. Otherwise delete the row and release its reservation
- * in one guarded transaction (the same guard as `DELETE /uploads/:id`), then delete any object
- * that made it to storage.
+ * (recoverCompletedUpload), never deleted. Otherwise delete the row, give its photo back to the
+ * package (ADR 0026) and release its reservation in one guarded transaction (the same guard and
+ * lock order as `DELETE /uploads/:id`), then delete any object that made it to storage.
  */
 async function expireAbandonedUploads(
   ctx: JobContext,
@@ -94,6 +94,16 @@ async function expireAbandonedUploads(
             .where(and(eq(files.id, upload.id), abandoned))
             .returning({ ownerId: files.ownerId, sizeBytes: files.sizeBytes });
           if (row === undefined) return false;
+          // ADR 0026: an abandoned upload counts as an abort: its photo goes back to the package
+          // (never below 0; no package row: unlimited, nothing to do). Before storage_usage, the
+          // api's lock order (photographer_packages, then storage_usage).
+          await tx
+            .update(photographerPackages)
+            .set({
+              photosUsed: sql`greatest(0, ${photographerPackages.photosUsed} - 1)`,
+              updatedAt: now,
+            })
+            .where(eq(photographerPackages.photographerId, row.ownerId));
           await applyQuotaMove(tx, row.ownerId, 'releaseReserved', row.sizeBytes, log);
           return true;
         });

@@ -46,6 +46,8 @@ import {
   loadFeatureFlags,
   loadMediaStorageConfig,
   loadMediaUrlSignerConfig,
+  loadPackageGatewayConfig,
+  loadPackagesConfig,
   loadPaymentGatewayConfig,
   loadQueueBackendConfig,
   loadRedisConfig,
@@ -55,6 +57,7 @@ import {
   loadSentryConfig,
   loadServerConfig,
   loadShareConfig,
+  loadShareDownloadCapConfig,
   loadSharePasswordHashConfig,
   loadShotxAuthConfig,
   loadStorageQuotaConfig,
@@ -62,6 +65,8 @@ import {
   loadUploadConfig,
   loadWorkerSettings,
   type MediaStorageConfig,
+  type PackageGatewayConfig,
+  type PackagesConfig,
   type PaymentGatewayConfig,
   type QueueBackendConfig,
   type RedisConfig,
@@ -69,6 +74,7 @@ import {
   type SentryConfig,
   type ServerConfig,
   type ShareConfig,
+  type ShareDownloadCapConfig,
   type SharePasswordHashConfig,
   type ShotxAuthConfig,
   type StorageQuotaConfig,
@@ -130,6 +136,8 @@ export interface ApiConfig {
   upload: UploadConfig;
   drive: DriveConfig;
   share: ShareConfig;
+  /** MEDIA_WEB_MAX_BYTES (ADR 0028): share viewers get images of at most this size. */
+  shareDownloadCap: ShareDownloadCapConfig;
   retention: RetentionConfig;
   /** `s3-presign` only on APP_STAGE=local (LocalStack has no CloudFront). */
   mediaUrls: MediaUrlSignerConfig;
@@ -219,6 +227,16 @@ export interface ApiConfig {
    * `POST /designs` and `PUT /designs/:id`, and the design image upload settings.
    */
   design: DesignConfig;
+  /**
+   * ADR 0026: PACKAGE_SALES (the kill switch of Free sign-up and package orders), the featured
+   * card, VAT on top of package prices, sign-up and order rate limits and link TTLs.
+   */
+  packages: PackagesConfig;
+  /**
+   * ADR 0026: PACKAGE_GATEWAY (`off` builds no adapter; `fake` is refused on APP_STAGE=prod) and
+   * the MPAY_* settings. Secret (MPAY_SECRET_KEY): never log it.
+   */
+  packageGateway: PackageGatewayConfig;
 }
 
 /** Everything the API reads from the environment, through the shared loaders only. */
@@ -234,6 +252,7 @@ export function loadApiConfig(env: Env): ApiConfig {
     upload: loadUploadConfig(env),
     drive: loadDriveConfig(env),
     share: loadShareConfig(env),
+    shareDownloadCap: loadShareDownloadCapConfig(env),
     retention: loadRetentionConfig(env),
     mediaUrls,
     cloudFront: mediaUrls.signer === 'cloudfront' ? loadCloudFrontSigningConfig(env) : null,
@@ -264,6 +283,8 @@ export function loadApiConfig(env: Env): ApiConfig {
     email: loadEmailConfig(env),
     accountEmail: loadAccountEmailConfig(env),
     design: loadDesignConfig(env),
+    packages: loadPackagesConfig(env),
+    packageGateway: loadPackageGatewayConfig(env),
   };
 }
 

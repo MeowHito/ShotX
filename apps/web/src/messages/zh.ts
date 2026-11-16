@@ -57,12 +57,14 @@ export const zh: PublicMessages = {
     unavailable: {
       title: '此链接已过期',
       pausedTitle: '此链接暂未开放',
+      closedTitle: '此链接暂时关闭',
       body: '如需新链接，请联系摄影师。',
       reasons: {
         revoked: '摄影师已关闭此链接。',
         paused: '摄影师目前尚未开放查看此活动，请稍后再试。',
         expired: '此链接已超过有效期。',
         unavailable: '此链接中的照片已不再开放查看。',
+        plan_expired: '摄影师尚未续费套餐，请稍后再打开此链接。',
       },
     },
     login: {
@@ -351,6 +353,13 @@ export const zh: PublicMessages = {
       DESIGN_LIMIT_REACHED: '设计数量已达上限，请先删除不用的设计。',
       DESIGN_DOC_TOO_LARGE: '此设计过大，请删除部分元素后重试。',
       DESIGN_NOT_FOUND: '找不到所选设计，可能已被删除。',
+      PLAN_EXPIRED: '你的套餐已过期，请续费后继续使用。',
+      PHOTO_LIMIT_REACHED: '已上传套餐允许的全部照片。请续费或增加套餐后继续上传。',
+      PACKAGE_UNAVAILABLE: '此套餐已停止销售，请选择其他套餐。',
+      PAYMENT_UNAVAILABLE: '在线支付即将开放，请联系我们的团队。',
+      EMAIL_UNAVAILABLE: '此邮箱无法在线购买套餐，请联系我们的团队。',
+      SIGNUP_LINK_INVALID: '此确认链接已失效（已过期、已使用，或该邮箱已有账号）。',
+      ORDER_NOT_FOUND: '找不到此订单。',
     },
     details: {
       quotaExceeded: '空间不足：此文件需要 {requested}，但只剩 {available}。',
@@ -365,6 +374,9 @@ export const zh: PublicMessages = {
       sharePaused: '摄影师目前尚未开放查看此活动。',
       shareExpired: '此链接已过期',
       shareUnavailable: '此链接已过期，其中的照片已不再开放查看。',
+      sharePlanExpired: '此链接暂时关闭，请稍后再试。',
+      planExpired: '你的套餐已于 {date} 过期，请续费后继续使用。',
+      photoLimitReached: '已上传套餐允许的 {limit, number} 张照片。请续费或增加套餐后继续上传。',
       zipTooLarge:
         '一次最多下载 {maxFiles, number} 张、总计 {maxBytes}（你选择了 {files, number} 张，{bytes}）。',
       noFaceDetected: '你发送的照片中未检测到人脸（{count, number} 张）。',
