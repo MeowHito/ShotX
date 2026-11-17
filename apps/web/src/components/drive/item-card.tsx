@@ -261,10 +261,10 @@ export function ItemCard({
         'relative flex shrink-0 items-center justify-center overflow-hidden bg-muted',
         list
           ? event !== null
-            ? 'aspect-[16/10] w-20 rounded-lg sm:w-28'
+            ? 'aspect-[2/3] w-12 rounded-lg sm:w-14'
             : 'size-10 rounded-md'
           : event !== null
-            ? 'aspect-[4/3] w-full rounded-lg'
+            ? 'aspect-[2/3] w-full rounded-lg'
             : 'aspect-square w-full rounded-lg',
       )}
     >

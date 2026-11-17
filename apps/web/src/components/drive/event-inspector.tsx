@@ -62,7 +62,7 @@ export function EventInspector({
         <EventStatusBadge folder={folder} />
       </div>
 
-      <div className="relative aspect-[16/10] overflow-hidden rounded-xl border border-border bg-muted dark:border-white/5">
+      <div className="relative aspect-[2/3] overflow-hidden rounded-xl border border-border bg-muted dark:border-white/5">
         {cover !== null ? (
           // The cover's signed thumbnail (CDN).
           // eslint-disable-next-line @next/next/no-img-element

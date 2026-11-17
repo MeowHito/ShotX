@@ -8,7 +8,7 @@ import {
   isSupportedLocale,
   rateLimitedDetailsSchema,
 } from '@shotx/shared';
-import { Alert, Button } from '@shotx/ui';
+import { Alert, Button, cn } from '@shotx/ui';
 import { XIcon } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -152,6 +152,14 @@ export function ScanFlow({
   useEffect(() => {
     void loadDetector();
   }, [loadDetector]);
+
+  // The digging cat (SearchProgress) is fetched now, while the camera opens: fetched only when the
+  // search starts, it waited behind the selfie upload on phones and the search ran catless.
+  useEffect(() => {
+    const sprite = new Image();
+    sprite.decoding = 'async';
+    sprite.src = CAT_DIG_URL;
+  }, []);
 
   const processor = useMemo(
     () => ({
@@ -413,7 +421,7 @@ export function ScanFlow({
 
   return (
     <section
-      className="animate-pop-in space-y-4 rounded-2xl border bg-background p-5 shadow-card sm:p-6"
+      className="animate-pop-in space-y-4 rounded-2xl bg-background p-5 sm:p-6"
       aria-label={title}
     >
       <div className="flex items-center justify-between gap-2">
@@ -522,10 +530,14 @@ export function SearchProgress({ label }: { label: string }) {
         data-testid="search-cat"
         className="relative size-24 [--dig:720ms] motion-reduce:[--dig:1200ms]"
       >
-        {CAT_DIG_FRAMES.map((frame) => (
+        {CAT_DIG_FRAMES.map((frame, index) => (
           <div
             key={frame.position}
-            className="absolute inset-0 animate-snap-dig bg-no-repeat opacity-0"
+            // The first frame shows even before (or without) the animation: the others wait.
+            className={cn(
+              'absolute inset-0 animate-snap-dig bg-no-repeat',
+              index === 0 ? 'opacity-100' : 'opacity-0',
+            )}
             style={{
               backgroundImage: `url(${CAT_DIG_URL})`,
               backgroundSize: '300% 100%',
