@@ -70,10 +70,14 @@ export function errorJson(
   return json(options.status ?? ERROR_HTTP_STATUS[code], body, options.cookies);
 }
 
-/** True for a same-origin request (CSRF guard for state-changing requests). */
+/**
+ * True for a same-origin request (CSRF guard for state-changing requests). A plain form POST
+ * (the sign-out button) arrives with `Origin: null`, because the app sends Referrer-Policy:
+ * no-referrer; then Sec-Fetch-Site decides, which a sandboxed or cross-site page can't fake.
+ */
 export function isSameOrigin(request: Request, adminBaseUrl: string): boolean {
   const origin = request.headers.get('origin');
-  if (origin !== null) return origin === new URL(adminBaseUrl).origin;
+  if (origin !== null && origin !== 'null') return origin === new URL(adminBaseUrl).origin;
   return request.headers.get('sec-fetch-site') === 'same-origin';
 }
 

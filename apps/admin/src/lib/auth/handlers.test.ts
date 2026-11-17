@@ -314,6 +314,29 @@ describe('logout', () => {
     for (const c of cookies) expect(c).toContain('Max-Age=0');
   });
 
+  it('accepts the sign-out form, sent with Origin: null under no-referrer', async () => {
+    const response = await handleLogout(
+      new Request(`${ORIGIN}/auth/logout`, {
+        method: 'POST',
+        headers: { origin: 'null', 'sec-fetch-site': 'same-origin' },
+      }),
+      deps(fakeApi()),
+    );
+    expect(response.status).toBe(303);
+  });
+
+  it('refuses Origin: null from anywhere but the admin app', async () => {
+    for (const site of ['cross-site', 'same-site', 'none', null]) {
+      const headers: Record<string, string> = { origin: 'null' };
+      if (site !== null) headers['sec-fetch-site'] = site;
+      const response = await handleLogout(
+        new Request(`${ORIGIN}/auth/logout`, { method: 'POST', headers }),
+        deps(fakeApi()),
+      );
+      expect(response.status).toBe(403);
+    }
+  });
+
   it('refuses a cross-site logout', async () => {
     const response = await handleLogout(
       new Request(`${ORIGIN}/auth/logout`, { method: 'POST', headers: { origin: 'https://x.y' } }),

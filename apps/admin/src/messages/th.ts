@@ -199,6 +199,8 @@ export const th = {
     subtitleTotp: 'ใช้อีเมล รหัสผ่าน และรหัสจากแอปยืนยันตัวตน (เช่น Google Authenticator)',
     email: 'อีเมล',
     password: 'รหัสผ่าน',
+    showPassword: 'แสดงรหัสผ่าน',
+    hidePassword: 'ซ่อนรหัสผ่าน',
     submit: 'ถัดไป',
     submitting: 'กำลังตรวจสอบ…',
     startOver: 'เริ่มใหม่',

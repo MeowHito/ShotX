@@ -1,6 +1,6 @@
 'use client';
 
-import { Alert, Button, Input, Label } from '@shotx/ui';
+import { Alert, Button, Input, Label, PasswordInput } from '@shotx/ui';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { type FormEvent, useId, useState } from 'react';
@@ -28,6 +28,7 @@ export function PasswordSignInForm({
   fetch?: typeof fetch;
 }) {
   const t = useTranslations('login');
+  const tc = useTranslations('common');
   const describe = useErrorMessage();
   const emailId = useId();
   const passwordId = useId();
@@ -92,10 +93,11 @@ export function PasswordSignInForm({
             </Link>
           ) : null}
         </div>
-        <Input
+        <PasswordInput
           id={passwordId}
           name="password"
-          type="password"
+          showLabel={tc('showPassword')}
+          hideLabel={tc('hidePassword')}
           autoComplete="current-password"
           required
           maxLength={1024}

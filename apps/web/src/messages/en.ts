@@ -23,6 +23,8 @@ export const en: PublicMessages = {
     close: 'Close',
     loading: 'Loading…',
     retry: 'Try again',
+    showPassword: 'Show password',
+    hidePassword: 'Hide password',
     duration: {
       hours: '{count, plural, one {# hour} other {# hours}}',
       minutes: '{count, plural, one {# minute} other {# minutes}}',

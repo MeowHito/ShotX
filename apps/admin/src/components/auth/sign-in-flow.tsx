@@ -1,6 +1,6 @@
 'use client';
 
-import { Alert, Button, Input, Label } from '@shotx/ui';
+import { Alert, Button, Input, Label, PasswordInput } from '@shotx/ui';
 import { useTranslations } from 'next-intl';
 import { type FormEvent, type ReactNode, useId, useState } from 'react';
 import { ApiError } from '@/lib/api/errors';
@@ -164,9 +164,10 @@ function CredentialsStep({
       </div>
       <div className="space-y-2">
         <Label htmlFor={`${id}-password`}>{t('password')}</Label>
-        <Input
+        <PasswordInput
           id={`${id}-password`}
-          type="password"
+          showLabel={t('showPassword')}
+          hideLabel={t('hidePassword')}
           autoComplete="current-password"
           required
           maxLength={1024}
@@ -210,9 +211,10 @@ function ChangePasswordStep({
       <form className="space-y-4" onSubmit={submit}>
         <div className="space-y-2">
           <Label htmlFor={`${id}-new`}>{t('newPassword')}</Label>
-          <Input
+          <PasswordInput
             id={`${id}-new`}
-            type="password"
+            showLabel={tl('showPassword')}
+            hideLabel={tl('hidePassword')}
             autoComplete="new-password"
             required
             maxLength={256}
@@ -222,9 +224,10 @@ function ChangePasswordStep({
         </div>
         <div className="space-y-2">
           <Label htmlFor={`${id}-confirm`}>{t('confirmPassword')}</Label>
-          <Input
+          <PasswordInput
             id={`${id}-confirm`}
-            type="password"
+            showLabel={tl('showPassword')}
+            hideLabel={tl('hidePassword')}
             autoComplete="new-password"
             required
             maxLength={256}

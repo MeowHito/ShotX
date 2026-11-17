@@ -544,6 +544,8 @@ export const th = {
     close: 'ปิด',
     loading: 'กำลังโหลด…',
     retry: 'ลองอีกครั้ง',
+    showPassword: 'แสดงรหัสผ่าน',
+    hidePassword: 'ซ่อนรหัสผ่าน',
     duration: {
       hours: '{count, number} ชั่วโมง',
       minutes: '{count, number} นาที',

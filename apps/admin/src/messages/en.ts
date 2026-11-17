@@ -32,6 +32,8 @@ export const en: TranslatedMessages = {
       'Use your email, password and a code from your authenticator app (such as Google Authenticator)',
     email: 'Email',
     password: 'Password',
+    showPassword: 'Show password',
+    hidePassword: 'Hide password',
     submit: 'Next',
     submitting: 'Checking…',
     startOver: 'Start over',

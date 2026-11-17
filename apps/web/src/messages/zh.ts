@@ -23,6 +23,8 @@ export const zh: PublicMessages = {
     close: '关闭',
     loading: '加载中…',
     retry: '重试',
+    showPassword: '显示密码',
+    hidePassword: '隐藏密码',
     duration: {
       hours: '{count, number} 小时',
       minutes: '{count, number} 分钟',

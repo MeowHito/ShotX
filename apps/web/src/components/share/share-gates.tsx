@@ -1,7 +1,7 @@
 'use client';
 
 import type { ShareUnavailableReason } from '@shotx/shared';
-import { Alert, Button, buttonVariants, cn, Input, Label } from '@shotx/ui';
+import { Alert, Button, buttonVariants, cn, Label, PasswordInput } from '@shotx/ui';
 import { LockIcon, LogInIcon, TimerOffIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { type FormEvent, useId, useState } from 'react';
@@ -99,6 +99,7 @@ export function LoginRequired({
 
 export function PasswordForm({ token }: { token: string }) {
   const tp = useTranslations('share.password');
+  const tc = useTranslations('common');
   const describe = useErrorMessage();
   const inputId = useId();
   const unlock = useUnlockShare(token);
@@ -127,9 +128,10 @@ export function PasswordForm({ token }: { token: string }) {
       <p className="text-muted-foreground">{tp('body')}</p>
       <div className="grid gap-2">
         <Label htmlFor={inputId}>{tp('label')}</Label>
-        <Input
+        <PasswordInput
           id={inputId}
-          type="password"
+          showLabel={tc('showPassword')}
+          hideLabel={tc('hidePassword')}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           autoComplete="off"

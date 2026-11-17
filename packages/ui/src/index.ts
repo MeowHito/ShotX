@@ -42,6 +42,7 @@ export {
 } from './components/dropdown-menu';
 export { Input } from './components/input';
 export { Label } from './components/label';
+export { PasswordInput } from './components/password-input';
 export { Popover, PopoverClose, PopoverContent, PopoverTrigger } from './components/popover';
 export { Progress } from './components/progress';
 export {

@@ -31,6 +31,8 @@ export const zh: TranslatedMessages = {
     subtitleTotp: '使用邮箱、密码以及身份验证器应用（如 Google Authenticator）中的验证码',
     email: '邮箱',
     password: '密码',
+    showPassword: '显示密码',
+    hidePassword: '隐藏密码',
     submit: '下一步',
     submitting: '正在验证…',
     startOver: '重新开始',

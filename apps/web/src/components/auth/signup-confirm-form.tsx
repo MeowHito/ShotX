@@ -8,7 +8,7 @@ import {
   passwordPolicyViolation,
   passwordTooWeakDetailsSchema,
 } from '@shotx/shared';
-import { Alert, Button, Input, Label } from '@shotx/ui';
+import { Alert, Button, Label, PasswordInput } from '@shotx/ui';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { type FormEvent, useEffect, useId, useState, useSyncExternalStore } from 'react';
@@ -66,6 +66,7 @@ export function SignupConfirmForm({
   const t = useTranslations('signup');
   const tp = useTranslations('password');
   const tErrors = useTranslations('errors');
+  const tc = useTranslations('common');
   const describe = useErrorMessage();
   const ids = { new: useId(), confirm: useId(), hint: useId(), error: useId() };
   // undefined: not read yet (the server render).
@@ -154,10 +155,11 @@ export function SignupConfirmForm({
       </div>
       <div className="grid gap-2">
         <Label htmlFor={ids.new}>{tp('newPassword')}</Label>
-        <Input
+        <PasswordInput
           id={ids.new}
           name="newPassword"
-          type="password"
+          showLabel={tc('showPassword')}
+          hideLabel={tc('hidePassword')}
           autoComplete="new-password"
           maxLength={PASSWORD_MAX_LENGTH}
           value={next}
@@ -172,10 +174,11 @@ export function SignupConfirmForm({
       </div>
       <div className="grid gap-2">
         <Label htmlFor={ids.confirm}>{tp('confirm')}</Label>
-        <Input
+        <PasswordInput
           id={ids.confirm}
           name="confirmPassword"
-          type="password"
+          showLabel={tc('showPassword')}
+          hideLabel={tc('hidePassword')}
           autoComplete="new-password"
           maxLength={PASSWORD_MAX_LENGTH}
           value={confirm}
