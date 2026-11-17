@@ -148,6 +148,21 @@ export class PackagesController {
     return respond(R.getOrder.response, await this.packages.getOrder(params.id, orderToken(req)));
   }
 
+  /** ADR 0029: one payment attempt from the pay page (a PromptPay QR or a card form). */
+  @Post(R.pay.path)
+  @HttpCode(R.pay.status)
+  @UseGuards(BffGuard)
+  async pay(
+    @Param(new ZodPipe(R.pay.params, 'params')) params: Out<typeof R.pay.params>,
+    @Req() req: Request,
+    @Body(new ZodPipe(R.pay.body, 'body')) body: Out<typeof R.pay.body>,
+  ) {
+    return respond(
+      R.pay.response,
+      await this.packages.startPayment(params.id, orderToken(req), body.method),
+    );
+  }
+
   @Post(R.fakeResult.path)
   @HttpCode(R.fakeResult.status)
   @UseGuards(BffGuard)

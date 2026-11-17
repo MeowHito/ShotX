@@ -19,6 +19,8 @@ import {
   packageOrderViewSchema,
   packagesResponseSchema,
   packageWebhookParamsSchema,
+  startPackagePaymentBodySchema,
+  startPackagePaymentResponseSchema,
   parsePackageOrderCookie,
   signupFreeBodySchema,
   signupFreeConfirmBodySchema,
@@ -118,6 +120,7 @@ describe('package routes (ADR 0026)', () => {
       createOrder: 'POST /package-orders 201 bff/users',
       getOrder: 'GET /package-orders/:id 200 bff/users',
       fakeResult: 'POST /package-orders/:id/fake-result 200 bff/users',
+      pay: 'POST /package-orders/:id/pay 200 bff/users',
       webhook: 'POST /package-payments/webhooks/:gateway 200 webhook',
       myPackage: 'GET /me/package 200 photographer',
     });
@@ -216,10 +219,30 @@ describe('package routes (ADR 0026)', () => {
           emailMasked: 'b***@example.com',
           accountCreated: status === 'paid',
           expiresAt: status === 'paid' ? '2026-11-23T03:00:00.000Z' : null,
+          paymentMethods: status === 'pending' ? ['qr', 'card'] : [],
         }).success,
         status,
       ).toBe(true);
     }
+    // ADR 0029: the pay page's attempt.
+    expect(startPackagePaymentBodySchema.safeParse({ method: 'qr' }).success).toBe(true);
+    expect(startPackagePaymentBodySchema.safeParse({ method: 'cash' }).success).toBe(false);
+    const qr = {
+      method: 'qr',
+      qrImage: 'data:image/png;base64,iVBORw0KGgo=',
+      expiresAt: '2026-11-17T10:10:00.000Z',
+    };
+    expect(startPackagePaymentResponseSchema.safeParse(qr).success).toBe(true);
+    expect(
+      startPackagePaymentResponseSchema.safeParse({ ...qr, qrImage: 'javascript:alert(1)' })
+        .success,
+    ).toBe(false);
+    const card = { method: 'card', redirectUrl: 'https://pay.mpay.example/form/1' };
+    expect(startPackagePaymentResponseSchema.safeParse(card).success).toBe(true);
+    expect(
+      startPackagePaymentResponseSchema.safeParse({ ...card, redirectUrl: 'http://x.example' })
+        .success,
+    ).toBe(false);
     expect(packageOrderFakeResultBodySchema.safeParse({ result: 'paid' }).success).toBe(true);
     expect(packageOrderFakeResultBodySchema.safeParse({ result: 'pending' }).success).toBe(false);
     expect(packageWebhookParamsSchema.safeParse({ gateway: 'mpay' }).success).toBe(true);

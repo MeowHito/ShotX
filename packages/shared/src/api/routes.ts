@@ -99,6 +99,8 @@ import {
   createPackageOrderResponseSchema,
   myPackageResponseSchema,
   packageOrderFakeResultBodySchema,
+  startPackagePaymentBodySchema,
+  startPackagePaymentResponseSchema,
   packageOrderTokenHeadersSchema,
   packageOrderViewSchema,
   packagesResponseSchema,
@@ -1639,6 +1641,23 @@ export const PACKAGE_ROUTES = {
     body: packageOrderFakeResultBodySchema,
     response: packageOrderViewSchema,
     errors: errors(ErrorCode.NOT_FOUND, ErrorCode.ORDER_NOT_FOUND),
+  },
+  /** ADR 0029: one payment attempt from the pay page (a PromptPay QR or a card form). */
+  pay: {
+    method: 'POST',
+    path: '/package-orders/:id/pay',
+    status: 200,
+    auth: 'bff',
+    bffKey: 'users',
+    params: idParamsSchema,
+    headers: packageOrderTokenHeadersSchema,
+    body: startPackagePaymentBodySchema,
+    response: startPackagePaymentResponseSchema,
+    errors: errors(
+      ErrorCode.ORDER_NOT_FOUND,
+      ErrorCode.PAYMENT_UNAVAILABLE,
+      ErrorCode.PAYMENT_GATEWAY_ERROR,
+    ),
   },
   /**
    * Gateway callbacks: verify the raw body, then apply in one transaction with the order

@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import type { RateLimitRule } from './face';
-import { PACKAGE_GATEWAY_MODES, type PackageGatewayMode } from '../domain';
+import {
+  PACKAGE_GATEWAY_MODES,
+  PACKAGE_PAYMENT_METHODS,
+  type PackageGatewayMode,
+  type PackagePaymentMethod,
+} from '../domain';
 import { LOCAL_DEV_APP_STAGE } from './stage-gate';
 import { type Env, parseEnv } from './env';
 import {
@@ -75,6 +80,12 @@ const packagesEnvSchema = z.object({
   PACKAGE_ORDER_INQUIRE_AFTER_SECONDS: int(5, SECONDS_PER_HOUR).default(30),
   /** ... and then at most once per order this often, however often the page polls (default 20). */
   PACKAGE_ORDER_INQUIRE_INTERVAL_SECONDS: int(1, SECONDS_PER_HOUR).default(20),
+  /**
+   * POST /package-orders/:id/pay (ADR 0029: a new QR or card form) per order and window (default
+   * 10 per 10 minutes).
+   */
+  PACKAGE_PAY_RATE_PER_ORDER: int(1, 1000).default(10),
+  PACKAGE_PAY_RATE_PER_ORDER_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
   /** `Cache-Control: public, max-age` of GET /packages (default 60 seconds). */
   PACKAGES_CACHE_MAX_AGE_SECONDS: int(0, SECONDS_PER_DAY).default(SECONDS_PER_MINUTE),
 });
@@ -95,6 +106,8 @@ export interface PackagesConfig {
     setPasswordTtlSeconds: number;
     inquireAfterSeconds: number;
     inquireIntervalSeconds: number;
+    /** POST /package-orders/:id/pay per order (PACKAGE_PAY_RATE_PER_ORDER*). */
+    payRatePerOrder: RateLimitRule;
   };
   /** GET /packages Cache-Control max-age, seconds. */
   listCacheMaxAgeSeconds: number;
@@ -132,6 +145,10 @@ export function loadPackagesConfig(env: Env): PackagesConfig {
       setPasswordTtlSeconds: e.PACKAGE_SET_PASSWORD_TTL_SECONDS,
       inquireAfterSeconds: e.PACKAGE_ORDER_INQUIRE_AFTER_SECONDS,
       inquireIntervalSeconds: e.PACKAGE_ORDER_INQUIRE_INTERVAL_SECONDS,
+      payRatePerOrder: {
+        limit: e.PACKAGE_PAY_RATE_PER_ORDER,
+        windowSeconds: e.PACKAGE_PAY_RATE_PER_ORDER_WINDOW_SECONDS,
+      },
     },
     listCacheMaxAgeSeconds: e.PACKAGES_CACHE_MAX_AGE_SECONDS,
   };
@@ -156,10 +173,34 @@ const packageGatewayEnvSchema = z
     MPAY_MERCHANT_ID: z.string().trim().min(1).max(128).optional(),
     /** mpay secret key. Required with PACKAGE_GATEWAY=mpay. Secret: never logged. */
     MPAY_SECRET_KEY: secret().optional(),
+    /** mPAY's `service_id` of Snap's service (digits). Required with PACKAGE_GATEWAY=mpay. */
+    MPAY_SERVICE_ID: z
+      .string()
+      .trim()
+      .regex(/^[0-9]{1,36}$/, { error: 'must be mPAY digits' })
+      .optional(),
+    /**
+     * The pay page's methods, comma separated, in this order (ADR 0029): `qr` (PromptPay) and/or
+     * `card`. Default `qr,card`; list only what mPAY has switched on for the service.
+     */
+    MPAY_METHODS: z
+      .string()
+      .default('qr,card')
+      .transform((v) => [...new Set(v.split(',').map((m) => m.trim()))])
+      .pipe(z.array(z.enum(PACKAGE_PAYMENT_METHODS)).min(1)),
+    /** How long one PromptPay QR can be paid (default 10 minutes). */
+    MPAY_QR_EXPIRE_SECONDS: int(60, 3600).default(600),
+    /** One call to mPAY may take this long (default 15 s). */
+    MPAY_TIMEOUT_MS: int(1000, 60_000).default(15_000),
   })
   .superRefine((e, ctx) => {
     if (e.PACKAGE_GATEWAY !== 'mpay') return;
-    for (const key of ['MPAY_API_URL', 'MPAY_MERCHANT_ID', 'MPAY_SECRET_KEY'] as const) {
+    for (const key of [
+      'MPAY_API_URL',
+      'MPAY_MERCHANT_ID',
+      'MPAY_SECRET_KEY',
+      'MPAY_SERVICE_ID',
+    ] as const) {
       if (e[key] === undefined) {
         ctx.addIssue({
           code: 'custom',
@@ -175,6 +216,12 @@ export interface MpayGatewaySettings {
   merchantId: string;
   /** Secret: never log this object. */
   secretKey: string;
+  /** MPAY_SERVICE_ID. */
+  serviceId: string;
+  /** MPAY_METHODS, in the pay page's order. */
+  methods: readonly PackagePaymentMethod[];
+  qrExpireSeconds: number;
+  timeoutMs: number;
 }
 
 /**
@@ -189,8 +236,9 @@ export type PackageGatewayConfig =
   { gateway: 'off' } | { gateway: 'fake' } | { gateway: 'mpay'; mpay: MpayGatewaySettings };
 
 /**
- * Reads PACKAGE_GATEWAY (default `off`) and, for `mpay`, MPAY_API_URL, MPAY_MERCHANT_ID and
- * MPAY_SECRET_KEY (each required then; optional otherwise, but validated when set). Throws for
+ * Reads PACKAGE_GATEWAY (default `off`) and, for `mpay`, MPAY_API_URL, MPAY_MERCHANT_ID,
+ * MPAY_SECRET_KEY and MPAY_SERVICE_ID (each required then; optional otherwise, but validated when
+ * set) plus MPAY_METHODS, MPAY_QR_EXPIRE_SECONDS and MPAY_TIMEOUT_MS. Throws for
  * `fake` unless APP_STAGE is in FAKE_PACKAGE_GATEWAY_STAGES (NODE_ENV doesn't matter). api only.
  * Error messages never repeat values.
  */
@@ -210,12 +258,33 @@ export function loadPackageGatewayConfig(env: Env): PackageGatewayConfig {
     case 'fake':
       return { gateway: 'fake' };
     case 'mpay': {
-      const { MPAY_API_URL: apiUrl, MPAY_MERCHANT_ID: merchantId, MPAY_SECRET_KEY: secretKey } = e;
-      if (apiUrl === undefined || merchantId === undefined || secretKey === undefined) {
+      const {
+        MPAY_API_URL: apiUrl,
+        MPAY_MERCHANT_ID: merchantId,
+        MPAY_SECRET_KEY: secretKey,
+        MPAY_SERVICE_ID: serviceId,
+      } = e;
+      if (
+        apiUrl === undefined ||
+        merchantId === undefined ||
+        secretKey === undefined ||
+        serviceId === undefined
+      ) {
         // Unreachable: the schema requires them with `mpay`.
         throw new Error('Invalid package gateway configuration: mpay settings are missing');
       }
-      return { gateway: 'mpay', mpay: { apiUrl, merchantId, secretKey } };
+      return {
+        gateway: 'mpay',
+        mpay: {
+          apiUrl,
+          merchantId,
+          secretKey,
+          serviceId,
+          methods: e.MPAY_METHODS,
+          qrExpireSeconds: e.MPAY_QR_EXPIRE_SECONDS,
+          timeoutMs: e.MPAY_TIMEOUT_MS,
+        },
+      };
     }
   }
 }

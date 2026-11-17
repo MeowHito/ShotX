@@ -11,6 +11,7 @@ import {
   packageOrderCookieValue,
   packageOrderFakeResultBodySchema,
   parsePackageOrderCookie,
+  startPackagePaymentBodySchema,
 } from '@shotx/shared';
 import { z } from 'zod';
 import { createApiClient } from '../api/client';
@@ -31,6 +32,8 @@ import { type CreateOrderResult, PACKAGE_ORDER_COOKIE_PATH } from './paths';
  *   gets only `{ redirectUrl }`, the gateway's page to go to.
  * - GET /checkout/order (PACKAGE_ORDER_PATHS.order): PACKAGE_ROUTES.getOrder for the order in the cookie,
  *   with its token in ORDER_TOKEN_HEADER (no cookie: ORDER_NOT_FOUND).
+ * - POST /checkout/order/pay `{ orderId, method }`: PACKAGE_ROUTES.pay (ADR 0029, the pay page's
+ *   PromptPay QR or card form), for the order in the cookie only.
  * - POST /checkout/order/fake-result `{ orderId, result }`: the test gateway's buttons
  *   (PACKAGE_ROUTES.fakeResult; NOT_FOUND unless the API runs PACKAGE_GATEWAY=fake), for the
  *   order in the cookie only.
@@ -50,6 +53,11 @@ export interface PackageOrderDeps {
 }
 
 const createRequestSchema = createPackageOrderBodySchema;
+
+const payRequestSchema = z.strictObject({
+  orderId: idSchema,
+  method: startPackagePaymentBodySchema.shape.method,
+});
 
 const fakeResultRequestSchema = z.strictObject({
   orderId: idSchema,
@@ -183,6 +191,33 @@ export async function handleFakeResult(
       signal: AbortSignal.timeout(deps.timeoutMs),
     });
     return json(200, view);
+  } catch (error) {
+    return apiErrorResponse(error);
+  }
+}
+
+/** POST /checkout/order/pay: one payment attempt from the pay page (ADR 0029). */
+export async function handleStartPayment(
+  request: Request,
+  deps: PackageOrderDeps,
+): Promise<Response> {
+  if (!isSameOrigin(request, deps.auth.publicBaseUrl)) {
+    return errorResponse(403, ErrorCode.FORBIDDEN);
+  }
+  const parsed = payRequestSchema.safeParse(await readBody(request));
+  if (!parsed.success) return errorResponse(400, ErrorCode.VALIDATION_FAILED);
+  const order = orderFromCookies(request.headers.get('cookie'));
+  if (order === null || order.orderId !== parsed.data.orderId) {
+    return errorResponse(404, ErrorCode.ORDER_NOT_FOUND);
+  }
+  try {
+    const start = await api(deps).call(PACKAGE_ROUTES.pay, {
+      params: { id: order.orderId },
+      headers: { [ORDER_TOKEN_HEADER]: order.accessToken },
+      body: { method: parsed.data.method },
+      signal: AbortSignal.timeout(deps.timeoutMs),
+    });
+    return json(200, start);
   } catch (error) {
     return apiErrorResponse(error);
   }

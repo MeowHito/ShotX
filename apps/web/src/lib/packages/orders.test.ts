@@ -20,6 +20,7 @@ import {
   handleCreateOrder,
   handleFakeResult,
   handleOrderStatus,
+  handleStartPayment,
   type PackageOrderDeps,
 } from './orders';
 
@@ -263,6 +264,63 @@ describe('GET /checkout/order and the test gateway', () => {
     );
     expect(response.status).toBe(404);
     expect(((await response.json()) as { code: string }).code).toBe(ErrorCode.NOT_FOUND);
+  });
+});
+
+describe('mPAY pay page routes (ADR 0029)', () => {
+  it("starts a payment only for the order in this browser's cookie, same-origin only", async () => {
+    const ctx = setup();
+    ctx.api.packageGateway = 'mpay';
+    const created = await handleCreateOrder(
+      post(
+        '/checkout/order',
+        { packageCode: 'd3', name: 'Somchai', email: 'somchai@example.com' },
+        { [IDEMPOTENCY_KEY_HEADER]: crypto.randomUUID() },
+      ),
+      ctx.deps,
+    );
+    const value = cookiesOf(created).get(PACKAGE_ORDER_COOKIE)?.value ?? '';
+    const parsed = parsePackageOrderCookie(value);
+    if (parsed === null) throw new Error('no order cookie');
+    const cookie = `${PACKAGE_ORDER_COOKIE}=${value}`;
+
+    const qr = await handleStartPayment(
+      post('/checkout/order/pay', { orderId: parsed.orderId, method: 'qr' }, { cookie }),
+      ctx.deps,
+    );
+    expect(qr.status).toBe(200);
+    expect(await qr.json()).toMatchObject({ method: 'qr' });
+    const call = ctx.api.calls.find((c) => c.route === PACKAGE_ROUTES.pay);
+    expect(call?.headers[ORDER_TOKEN_HEADER]).toBe(parsed.accessToken);
+
+    const card = await handleStartPayment(
+      post('/checkout/order/pay', { orderId: parsed.orderId, method: 'card' }, { cookie }),
+      ctx.deps,
+    );
+    expect(await card.json()).toEqual({
+      method: 'card',
+      redirectUrl: 'https://pay.mpay.example.test/form/1',
+    });
+
+    const other = await handleStartPayment(
+      post('/checkout/order/pay', { orderId: crypto.randomUUID(), method: 'qr' }, { cookie }),
+      ctx.deps,
+    );
+    expect(other.status).toBe(404);
+    const bad = await handleStartPayment(
+      post('/checkout/order/pay', { orderId: parsed.orderId, method: 'cash' }, { cookie }),
+      ctx.deps,
+    );
+    expect(bad.status).toBe(400);
+    const cross = await handleStartPayment(
+      post(
+        '/checkout/order/pay',
+        { orderId: parsed.orderId, method: 'qr' },
+        { cookie, origin: 'https://evil.example' },
+      ),
+      ctx.deps,
+    );
+    expect(cross.status).toBe(403);
   });
 });
 

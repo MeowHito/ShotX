@@ -13,17 +13,20 @@ import {
   type MyPackageResponse,
   normalizeAccountEmail,
   PACKAGE_CHECKOUT_RETURN_PATH,
+  PACKAGE_GATEWAY_RETURN_PATH,
   type PackageAuditAction,
   type PackageCallback,
   type PackageOrderView,
   type PackagePaymentGateway,
   type PackagePaymentGatewayName,
+  type PackagePaymentMethod,
   type PackagesResponse,
   packageExpired,
   packagesClientConfigOf,
   packageTotal,
   type RateLimitedDetails,
   SIGNUP_CONFIRM_PATH,
+  type StartPackagePaymentResponse,
   TURNSTILE_ACTIONS,
 } from '@shotx/shared';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
@@ -54,7 +57,7 @@ import {
   RATE_LIMITER,
   type RateLimiter,
 } from '../tokens';
-import { fakePackageGatewayRef } from './gateways';
+import { fakePackageGatewayRef, newGatewayAttemptRef } from './gateways';
 import {
   accountExistsEmail,
   packageAddedEmail,
@@ -83,6 +86,7 @@ export const PACKAGE_EVENTS = {
   accountUnresolvable: 'package.account_unresolvable',
   amountMismatch: 'package.amount_mismatch',
   inquireFailed: 'package.inquire_failed',
+  paymentStartFailed: 'package.payment_start_failed',
   signupDailyCap: 'package.signup_daily_cap',
 } as const;
 
@@ -92,6 +96,10 @@ const SIGNUP_EMAILS_WINDOW_SECONDS = 3600;
 const SIGNUP_EMAILS_DAY_SECONDS = 24 * 3600;
 /** GET /package-orders/:id asks the gateway at most once per order per this key's TTL. */
 const inquireKey = (orderId: string) => `package-order:inquire:${orderId}`;
+/** POST /package-orders/:id/pay per order (PACKAGE_PAY_RATE_PER_ORDER). */
+const payKey = (orderId: string) => `package-order:pay:${orderId}`;
+/** `package_orders.gateway_attempts` keeps this many attempt ids (newest first). */
+export const PACKAGE_ORDER_MAX_ATTEMPTS = 10;
 
 /**
  * The rate-limit key of one sign-up address: base64url HMAC-SHA256 of the normalized email under a
@@ -811,7 +819,84 @@ export class PackagesService {
       emailMasked: maskEmail(order.email),
       accountCreated: order.accountCreated,
       expiresAt: current?.expiresAt.toISOString() ?? null,
+      paymentMethods: this.payableMethods(order),
     };
+  }
+
+  /** ADR 0029: what the pay page may offer for `order` now (packageOrderViewSchema). */
+  private payableMethods(order: OrderRow): PackagePaymentMethod[] {
+    const gateway = this.gateway;
+    if (gateway === null || gateway.name !== order.gateway) return [];
+    if (order.status !== 'pending' && order.status !== 'failed') return [];
+    if (gateway.startPayment === undefined) return [];
+    return [...(gateway.paymentMethods ?? [])];
+  }
+
+  // --- POST /package-orders/:id/pay (ADR 0029) --------------------------------------------------
+
+  /**
+   * One payment attempt from the pay page: a new gateway attempt id is stored in
+   * `gateway_attempts` (newest first, at most PACKAGE_ORDER_MAX_ATTEMPTS) before the gateway is
+   * called, so GET /package-orders/:id can ask about it even if the answer is lost.
+   */
+  async startPayment(
+    id: string,
+    token: string,
+    method: PackagePaymentMethod,
+  ): Promise<StartPackagePaymentResponse> {
+    const order = await this.orderByToken(id, token);
+    const gateway = this.gateway;
+    if (
+      gateway === null ||
+      gateway.startPayment === undefined ||
+      !this.payableMethods(order).includes(method)
+    ) {
+      throw new ApiError(ErrorCode.PAYMENT_UNAVAILABLE, 'This order can not be paid this way');
+    }
+    const rule = this.config.packages.orders.payRatePerOrder;
+    const rate = await this.limiter.hit(payKey(order.id), rule.limit, rule.windowSeconds);
+    if (!rate.allowed) throw rateLimited(rate.retryAfterSeconds);
+
+    const [pkg] = await this.db
+      .select()
+      .from(packages)
+      .where(eq(packages.id, order.packageId))
+      .limit(1);
+    if (pkg === undefined) throw new Error('Order without its package');
+    const attemptRef = newGatewayAttemptRef();
+    await this.db
+      .update(packageOrders)
+      .set({
+        gatewayAttempts: sql`(array_prepend(${attemptRef}::text, ${packageOrders.gatewayAttempts}))[1:${sql.raw(String(PACKAGE_ORDER_MAX_ATTEMPTS))}]`,
+        updatedAt: this.clock.now(),
+      })
+      .where(eq(packageOrders.id, order.id));
+    try {
+      const start = await gateway.startPayment({
+        orderId: order.id,
+        attemptRef,
+        method,
+        amountSatang: order.totalSatang,
+        currency: 'THB',
+        description: checkoutDescription(pkg),
+        returnUrl: this.webUrl(PACKAGE_GATEWAY_RETURN_PATH),
+      });
+      return start.method === 'qr'
+        ? {
+            method: 'qr',
+            qrImage: `data:image/png;base64,${start.qrPngBase64}`,
+            expiresAt: start.expiresAt.toISOString(),
+          }
+        : { method: 'card', redirectUrl: start.redirectUrl };
+    } catch (error) {
+      this.events.warn(PACKAGE_EVENTS.paymentStartFailed, {
+        orderId: order.id,
+        gateway: gateway.name,
+        method,
+        error: error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+      });
+      throw new ApiError('PAYMENT_GATEWAY_ERROR', 'The payment gateway is not available');
+    }
   }
 
   /**
@@ -826,7 +911,7 @@ export class PackagesService {
     const pendingMs = this.clock.now().getTime() - order.createdAt.getTime();
     if (
       order.status === 'pending' &&
-      order.gatewayRef !== null &&
+      (order.gatewayRef !== null || order.gatewayAttempts.length > 0) &&
       gateway?.inquire !== undefined &&
       gateway.name === order.gateway &&
       pendingMs >= this.config.packages.orders.inquireAfterSeconds * 1000 &&
@@ -840,7 +925,11 @@ export class PackagesService {
       ).allowed
     ) {
       try {
-        const answer = await gateway.inquire(order.gatewayRef);
+        const answer = await gateway.inquire({
+          orderId: order.id,
+          gatewayRef: order.gatewayRef,
+          attemptRefs: order.gatewayAttempts,
+        });
         if (answer !== null && answer.orderId === order.id && answer.status !== 'pending') {
           await this.applyCallback(gateway.name, answer);
         }

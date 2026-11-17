@@ -7,7 +7,11 @@ import {
 import { opaqueTokenSchema } from '../account/tokens';
 import { packageTotalSchema, satangSchema } from '../billing/money';
 import { PACKAGE_CODE_PATTERN, packagesClientConfigSchema } from '../config/packages';
-import { PACKAGE_ORDER_STATUSES, PACKAGE_PAYMENT_GATEWAYS } from '../domain';
+import {
+  PACKAGE_ORDER_STATUSES,
+  PACKAGE_PAYMENT_GATEWAYS,
+  PACKAGE_PAYMENT_METHODS,
+} from '../domain';
 import { idSchema, isoDateTimeSchema } from './common';
 import { captchaTokenSchema, IDEMPOTENCY_KEY_HEADER, idempotencyKeySchema } from './share-page';
 
@@ -30,6 +34,18 @@ export const PACKAGE_CHECKOUT_RETURN_PATH = '/checkout/return';
 
 /** The fake gateway's "hosted page" in web (`?order=<id>`), dev and tests only. */
 export const PACKAGE_FAKE_CHECKOUT_PATH = '/checkout/fake';
+
+/**
+ * ADR 0029: Snap's own pay page (`?order=<id>`) for gateways with `paymentMethods` (mPAY): the
+ * buyer picks PromptPay QR or card. `createCheckout` answers it as the `redirectUrl`.
+ */
+export const PACKAGE_PAY_PATH = '/checkout/pay';
+
+/**
+ * ADR 0029: where the gateway's card form sends the browser back (GET or POST); web answers 303
+ * to PACKAGE_CHECKOUT_RETURN_PATH. The outcome is never read from this request.
+ */
+export const PACKAGE_GATEWAY_RETURN_PATH = '/checkout/back';
 
 /** Where "ต่ออายุ" and `/pricing` send people: the package cards on the home page. */
 export const PACKAGES_SECTION_PATH = '/#packages';
@@ -197,6 +213,11 @@ export const packageOrderViewSchema = z.object({
   accountCreated: z.boolean(),
   /** The account's current package expiry once `paid`; null otherwise. */
   expiresAt: isoDateTimeSchema.nullable(),
+  /**
+   * ADR 0029: what the pay page (PACKAGE_PAY_PATH) may offer now: the gateway's `paymentMethods`
+   * while the order is `pending` or `failed` and its gateway is the configured one; else empty.
+   */
+  paymentMethods: z.array(z.enum(PACKAGE_PAYMENT_METHODS)),
 });
 export type PackageOrderView = z.output<typeof packageOrderViewSchema>;
 
@@ -209,6 +230,34 @@ export const packageOrderFakeResultBodySchema = z.strictObject({
   result: z.enum(['paid', 'failed']),
 });
 export type PackageOrderFakeResultBody = z.input<typeof packageOrderFakeResultBodySchema>;
+
+// --- POST /package-orders/:id/pay (bff) ---------------------------------------------------------------
+
+/**
+ * ADR 0029: one payment attempt from the pay page. PAYMENT_UNAVAILABLE when the method isn't in
+ * the order's `paymentMethods` (or the order is paid); RATE_LIMITED past PACKAGE_PAY_RATE_PER_ORDER;
+ * PAYMENT_GATEWAY_ERROR when the gateway refuses or doesn't answer.
+ */
+export const startPackagePaymentBodySchema = z.strictObject({
+  method: z.enum(PACKAGE_PAYMENT_METHODS),
+});
+export type StartPackagePaymentBody = z.input<typeof startPackagePaymentBodySchema>;
+
+export const startPackagePaymentResponseSchema = z.discriminatedUnion('method', [
+  z.object({
+    method: z.literal('qr'),
+    /** `data:image/png;base64,...`: the PromptPay QR to show. */
+    qrImage: z.string().regex(/^data:image\/png;base64,[A-Za-z0-9+/=]+$/),
+    /** The QR can't be paid after this. */
+    expiresAt: isoDateTimeSchema,
+  }),
+  z.object({
+    method: z.literal('card'),
+    /** The gateway's hosted card form. */
+    redirectUrl: z.url({ protocol: /^https$/ }),
+  }),
+]);
+export type StartPackagePaymentResponse = z.output<typeof startPackagePaymentResponseSchema>;
 
 // --- POST /package-payments/webhooks/:gateway (webhook) -----------------------------------------------
 

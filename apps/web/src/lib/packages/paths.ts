@@ -10,11 +10,13 @@ export const PACKAGE_ORDER_PATHS = {
   order: '/checkout/order',
   /** POST: the test gateway's result buttons. */
   fakeResult: '/checkout/order/fake-result',
+  /** POST `{ orderId, method }`: one payment attempt from the pay page (ADR 0029). */
+  pay: '/checkout/order/pay',
 } as const;
 
 /**
- * The Path of PACKAGE_ORDER_COOKIE: every reader is under it (the routes above, the return page
- * and the test gateway's page), so the browser sends the order's token nowhere else on the site.
+ * The Path of PACKAGE_ORDER_COOKIE: every reader is under it (the routes above, the return page,
+ * the pay page and the test gateway's page), so the browser sends the order's token nowhere else on the site.
  */
 export const PACKAGE_ORDER_COOKIE_PATH = '/checkout';
 

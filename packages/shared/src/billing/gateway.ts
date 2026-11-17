@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   type PackagePaymentGatewayName,
+  type PackagePaymentMethod,
   PAYMENT_EVENT_TYPES,
   PAYMENT_GATEWAYS,
   type PaymentGateway,
@@ -158,12 +159,56 @@ export interface PackagePaymentGateway {
    */
   parseCallback(request: RawWebhookRequest): PackageCallback;
   /**
-   * Optional: asks the gateway for the state of a checkout (GET /package-orders/:id calls it once
-   * an order has been pending for PACKAGE_ORDER_INQUIRE_AFTER_SECONDS). Null when the gateway
-   * doesn't know the reference. The result goes through the same transaction as a callback.
+   * Optional: asks the gateway for the state of an order (GET /package-orders/:id calls it once
+   * an order has been pending for PACKAGE_ORDER_INQUIRE_AFTER_SECONDS and has a `gatewayRef` or
+   * payment attempts). Null when the gateway knows of no final payment. The result goes through
+   * the same transaction as a callback.
    */
-  inquire?(gatewayRef: string): Promise<PackageCallback | null>;
+  inquire?(order: PackageInquiry): Promise<PackageCallback | null>;
+  /**
+   * ADR 0029: the methods of Snap's own pay page (PACKAGE_PAY_PATH), in order. Absent (or empty)
+   * for a gateway whose `createCheckout` page is the gateway's own.
+   */
+  readonly paymentMethods?: readonly PackagePaymentMethod[];
+  /**
+   * ADR 0029, with `paymentMethods`: starts one payment attempt of an order on the pay page. The
+   * api picks `attemptRef` (unique, stored in `package_orders.gateway_attempts` before the call).
+   */
+  startPayment?(input: PackagePaymentStartInput): Promise<PackagePaymentStart>;
 }
+
+/** What `inquire` gets: the order and the gateway's ids it knows for it, newest first. */
+export interface PackageInquiry {
+  orderId: string;
+  gatewayRef: string | null;
+  attemptRefs: readonly string[];
+}
+
+export interface PackagePaymentStartInput {
+  orderId: string;
+  /** The gateway's id of this attempt (mPAY `order_id`, 20 characters at most). */
+  attemptRef: string;
+  method: PackagePaymentMethod;
+  amountSatang: number;
+  currency: 'THB';
+  /** Short description shown by the gateway, e.g. `Snap 7 Days`. */
+  description: string;
+  /** Card: PUBLIC_BASE_URL + PACKAGE_GATEWAY_RETURN_PATH (the gateway may come back with a POST). */
+  returnUrl: string;
+}
+
+export type PackagePaymentStart =
+  | {
+      method: 'qr';
+      /** The QR as a PNG, base64 (no `data:` prefix). */
+      qrPngBase64: string;
+      expiresAt: Date;
+    }
+  | {
+      method: 'card';
+      /** The gateway's hosted card form (https). */
+      redirectUrl: string;
+    };
 
 export interface PackageCheckoutInput {
   /** `package_orders.id`. */
@@ -189,7 +234,9 @@ export interface PackageCheckoutResult {
 }
 
 /**
- * A gateway callback (or an inquiry answer) as Snap understands it. `orderId` is what Snap sent
+ * A gateway callback (or an inquiry answer) as Snap understands it. A gateway that lets the buyer
+ * try again after a failed attempt (mPAY, ADR 0029) reports failures as `pending`, so the order
+ * stays payable. `orderId` is what Snap sent
  * as the reference; `amountSatang` is what the gateway says was paid (checked against
  * `total_satang`: a difference is `amount_mismatch`).
  */

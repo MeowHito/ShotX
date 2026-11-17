@@ -1,4 +1,3 @@
-import { PaymentGatewayNotConfiguredError } from '@shotx/shared';
 import { describe, expect, it } from 'vitest';
 import { testConfig } from '../testing/fakes';
 import { packageSalesSummary } from '../wiring';
@@ -25,6 +24,7 @@ const MPAY = {
   MPAY_API_URL: 'https://mpay.example.test/api',
   MPAY_MERCHANT_ID: 'merchant-test',
   MPAY_SECRET_KEY: 'mpay-test-secret-0123456789',
+  MPAY_SERVICE_ID: '19100061935133847',
 };
 
 const encode = (text: string) => new TextEncoder().encode(text);
@@ -86,30 +86,28 @@ describe('FakePackageGateway', () => {
   });
 });
 
-describe('MpayPackageGateway (skeleton)', () => {
-  const config = testConfig(MPAY);
-  const gateway = createPackageGateway(config.packageGateway, config.app.publicBaseUrl);
-
-  it('is built from MPAY_* and refuses everything until the merchant docs arrive', async () => {
+describe('MpayPackageGateway wiring', () => {
+  it("is built from MPAY_* and sends the order to Snap's pay page", async () => {
+    const config = testConfig(MPAY);
+    const gateway = createPackageGateway(config.packageGateway, config.app.publicBaseUrl);
     expect(gateway).toBeInstanceOf(MpayPackageGateway);
     if (!(gateway instanceof MpayPackageGateway)) return;
     expect(gateway.apiOrigin).toBe('https://mpay.example.test');
-    await expect(
-      gateway.createCheckout({
-        orderId: '0190a0a0-0000-7000-8000-000000000001',
-        amountSatang: 1,
-        currency: 'THB',
-        description: 'x',
-        returnUrl: 'https://snap.example.test/checkout/return',
-        callbackUrl: 'https://snap.example.test/api/package-payments/webhooks/mpay',
-        customerEmail: 'buyer@example.test',
-      }),
-    ).rejects.toBeInstanceOf(PaymentGatewayNotConfiguredError);
-    expect(await gateway.verifyCallback({ rawBody: encode('{}'), headers: {} })).toBe(false);
-    expect(() => gateway.parseCallback({ rawBody: encode('{}'), headers: {} })).toThrow(
-      PaymentGatewayNotConfiguredError,
+    expect(gateway.paymentMethods).toEqual(['qr', 'card']);
+    const checkout = await gateway.createCheckout({
+      orderId: '0190a0a0-0000-7000-8000-000000000001',
+      amountSatang: 1,
+      currency: 'THB',
+      description: 'x',
+      returnUrl: 'https://snap.example.test/checkout/return',
+      callbackUrl: 'https://snap.example.test/api/package-payments/webhooks/mpay',
+      customerEmail: 'buyer@example.test',
+    });
+    expect(checkout.gatewayRef).toBeNull();
+    expect(new URL(checkout.redirectUrl).pathname).toBe('/checkout/pay');
+    expect(new URL(checkout.redirectUrl).searchParams.get('order')).toBe(
+      '0190a0a0-0000-7000-8000-000000000001',
     );
-    await expect(gateway.inquire('ref')).rejects.toBeInstanceOf(PaymentGatewayNotConfiguredError);
   });
 });
 

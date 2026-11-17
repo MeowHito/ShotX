@@ -133,6 +133,14 @@ export const packageOrders = pgTable(
     gateway: text('gateway').notNull(),
     gatewayRef: text('gateway_ref'),
     redirectUrl: text('redirect_url'),
+    /**
+     * Migration 0019 (ADR 0029): the gateway's ids of each payment attempt (mPAY `order_id`,
+     * newest first, at most PACKAGE_ORDER_MAX_ATTEMPTS), asked by GET /package-orders/:id.
+     */
+    gatewayAttempts: text('gateway_attempts')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     status: packageOrderStatus('status').notNull().default('pending'),
     accessTokenHash: text('access_token_hash').notNull(),
     idempotencyKey: text('idempotency_key').notNull(),

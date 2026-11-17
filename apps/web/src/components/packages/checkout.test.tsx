@@ -54,6 +54,7 @@ function order(overrides: Partial<PackageOrderView> = {}): PackageOrderView {
     emailMasked: 's***@example.com',
     accountCreated: false,
     expiresAt: null,
+    paymentMethods: [],
     ...overrides,
   };
 }

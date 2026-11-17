@@ -13,6 +13,7 @@ const mpayEnv = {
   MPAY_API_URL: 'https://api.mpay.example/v1/',
   MPAY_MERCHANT_ID: 'merchant-123',
   MPAY_SECRET_KEY: 'super-secret-mpay-key-value',
+  MPAY_SERVICE_ID: '23173462600000000',
 };
 
 describe('loadPackagesConfig (ADR 0026)', () => {
@@ -32,6 +33,7 @@ describe('loadPackagesConfig (ADR 0026)', () => {
         setPasswordTtlSeconds: 7 * 86_400,
         inquireAfterSeconds: 30,
         inquireIntervalSeconds: 20,
+        payRatePerOrder: { limit: 10, windowSeconds: 600 },
       },
       listCacheMaxAgeSeconds: 60,
     });
@@ -52,6 +54,8 @@ describe('loadPackagesConfig (ADR 0026)', () => {
       PACKAGE_SET_PASSWORD_TTL_SECONDS: '172800',
       PACKAGE_ORDER_INQUIRE_AFTER_SECONDS: '60',
       PACKAGE_ORDER_INQUIRE_INTERVAL_SECONDS: '15',
+      PACKAGE_PAY_RATE_PER_ORDER: '4',
+      PACKAGE_PAY_RATE_PER_ORDER_WINDOW_SECONDS: '300',
       PACKAGES_CACHE_MAX_AGE_SECONDS: '0',
     };
     expect(loadPackagesConfig(env)).toEqual({
@@ -69,6 +73,7 @@ describe('loadPackagesConfig (ADR 0026)', () => {
         setPasswordTtlSeconds: 172_800,
         inquireAfterSeconds: 60,
         inquireIntervalSeconds: 15,
+        payRatePerOrder: { limit: 4, windowSeconds: 300 },
       },
       listCacheMaxAgeSeconds: 0,
     });
@@ -117,9 +122,18 @@ describe('loadPackageGatewayConfig (ADR 0026 §5)', () => {
         apiUrl: 'https://api.mpay.example/v1',
         merchantId: 'merchant-123',
         secretKey: 'super-secret-mpay-key-value',
+        serviceId: '23173462600000000',
+        methods: ['qr', 'card'],
+        qrExpireSeconds: 600,
+        timeoutMs: 15_000,
       },
     });
-    for (const key of ['MPAY_API_URL', 'MPAY_MERCHANT_ID', 'MPAY_SECRET_KEY'] as const) {
+    for (const key of [
+      'MPAY_API_URL',
+      'MPAY_MERCHANT_ID',
+      'MPAY_SECRET_KEY',
+      'MPAY_SERVICE_ID',
+    ] as const) {
       expect(() => loadPackageGatewayConfig({ ...mpayEnv, [key]: undefined }), key).toThrow(
         new RegExp(`required with PACKAGE_GATEWAY=mpay[\\s\\S]*${key}`),
       );
@@ -128,6 +142,20 @@ describe('loadPackageGatewayConfig (ADR 0026 §5)', () => {
     expect(loadPackageGatewayConfig({ PACKAGE_GATEWAY: 'fake', APP_STAGE: 'test' })).toEqual({
       gateway: 'fake',
     });
+  });
+
+  it('reads the pay page methods in order, without duplicates, and only known ones', () => {
+    const methods = (MPAY_METHODS: string) => {
+      const config = loadPackageGatewayConfig({ ...mpayEnv, MPAY_METHODS });
+      return config.gateway === 'mpay' ? config.mpay.methods : null;
+    };
+    expect(methods('card, qr')).toEqual(['card', 'qr']);
+    expect(methods('qr,qr')).toEqual(['qr']);
+    expect(() => methods('qr,cash')).toThrow(/MPAY_METHODS/);
+    expect(() => methods(' , ')).toThrow(/MPAY_METHODS/);
+    expect(() => loadPackageGatewayConfig({ ...mpayEnv, MPAY_SERVICE_ID: 'abc' })).toThrow(
+      /MPAY_SERVICE_ID/,
+    );
   });
 
   it('wants an https mpay URL and never repeats the secret in errors', () => {

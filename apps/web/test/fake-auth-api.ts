@@ -349,7 +349,12 @@ export class FakeAuthApi {
       PACKAGE_ROUTES.signupFreeConfirm,
       PACKAGE_ROUTES.createOrder,
     ] as RouteContract[];
-    const ours = [...salesOnly, PACKAGE_ROUTES.getOrder, PACKAGE_ROUTES.fakeResult];
+    const ours = [
+      ...salesOnly,
+      PACKAGE_ROUTES.getOrder,
+      PACKAGE_ROUTES.fakeResult,
+      PACKAGE_ROUTES.pay,
+    ];
     if (!ours.includes(route)) return undefined;
     if (salesOnly.includes(route) && !this.packageSales) throw new Fail(ErrorCode.NOT_FOUND);
     const parsed = route.body?.safeParse(rawBody);
@@ -427,6 +432,7 @@ export class FakeAuthApi {
             emailMasked: maskEmail(email ?? ''),
             accountCreated: false,
             expiresAt: null,
+            paymentMethods: [],
           },
         });
         return {
@@ -454,6 +460,21 @@ export class FakeAuthApi {
               : { ...order.view, status: 'failed' };
         }
         return { result: order.view };
+      }
+      case PACKAGE_ROUTES.pay: {
+        // ADR 0029: mPAY's pay page; a QR (the card form is an https URL).
+        if (this.packageGateway !== 'mpay') throw new Fail(ErrorCode.PAYMENT_UNAVAILABLE);
+        orderOf();
+        return {
+          result:
+            body.method === 'card'
+              ? { method: 'card', redirectUrl: 'https://pay.mpay.example.test/form/1' }
+              : {
+                  method: 'qr',
+                  qrImage: 'data:image/png;base64,iVBORw0KGgo=',
+                  expiresAt: '2026-11-17T10:10:00.000Z',
+                },
+        };
       }
       default:
         return undefined;

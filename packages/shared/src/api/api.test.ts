@@ -325,6 +325,7 @@ describe('route table', () => {
       'POST /package-orders',
       'GET /package-orders/:id',
       'POST /package-orders/:id/fake-result',
+      'POST /package-orders/:id/pay',
       'POST /package-payments/webhooks/:gateway',
       'GET /me/package',
     ]);

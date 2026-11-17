@@ -15,11 +15,13 @@ import {
   createPackageOrderResponseSchema,
   myPackageResponseSchema,
   ORDER_TOKEN_HEADER,
+  loadPackageGatewayConfig,
   PACKAGE_ROUTES as R,
   type PackageCallback,
   packageOrderViewSchema,
   packagesResponseSchema,
   SIGNUP_CONFIRM_PATH,
+  startPackagePaymentResponseSchema,
 } from '@shotx/shared';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -31,7 +33,13 @@ import { DATABASE_BACKENDS, type TestDatabase } from '../testing/database';
 import { OFFLINE_ACCOUNTS_ENV } from '../testing/fakes';
 import { TestApi, type TestResponse } from '../testing/harness';
 import { bffKeyFor, shotxEnv } from '../testing/shotx-auth';
-import { FAKE_PACKAGE_SIGNATURE_HEADER, FakePackageGateway } from './gateways';
+import {
+  FAKE_PACKAGE_SIGNATURE_HEADER,
+  FakePackageGateway,
+  MPAY_HEADERS,
+  MPAY_PATHS,
+  MpayPackageGateway,
+} from './gateways';
 import { orderTokenHash, PackagesService } from './packages.service';
 
 // ADR 0026 end to end: Free sign-up by email, paid orders through the fake gateway (fake-result,
@@ -384,6 +392,8 @@ for (const backend of DATABASE_BACKENDS) {
           emailMasked: `${email[0]}***@example.test`,
           accountCreated: false,
           expiresAt: null,
+          // The fake gateway has its own page: nothing for Snap's pay page.
+          paymentMethods: [],
         });
         for (const token of [undefined, 'B'.repeat(43), 'short']) {
           expect(await getOrder(created.orderId, token)).toMatchObject({
@@ -904,6 +914,254 @@ for (const backend of DATABASE_BACKENDS) {
         } finally {
           await off.close();
         }
+      });
+    });
+
+    describe('mPAY (ADR 0029)', () => {
+      const MPAY_ENV = {
+        ...ENV,
+        PACKAGE_GATEWAY: 'mpay',
+        MPAY_API_URL: 'https://mpay.example.test/prod',
+        MPAY_MERCHANT_ID: '5396508',
+        MPAY_SECRET_KEY: 'mpay-integration-secret-0123',
+        MPAY_SERVICE_ID: '19100061935133847',
+        PACKAGE_PAY_RATE_PER_ORDER: '4',
+      };
+      const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAMgAAADIAQAAAACFI5Mz';
+      /** mPAY answers by path, in turn; what Snap sent is kept. */
+      const answers = new Map<string, { status?: number; body: unknown }[]>();
+      const sent: { path: string; body: Record<string, unknown> }[] = [];
+      const fetchFn = ((input: string | URL | Request, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : input.toString();
+        const path = new URL(url).pathname.replace(/^\/prod/, '');
+        const raw = typeof init?.body === 'string' ? init.body : '{}';
+        sent.push({ path, body: JSON.parse(raw) as Record<string, unknown> });
+        const answer = answers.get(path)?.shift() ?? { status: 500, body: {} };
+        return Promise.resolve(
+          new Response(JSON.stringify(answer.body), { status: answer.status ?? 200 }),
+        );
+      }) as typeof fetch;
+      const answer = (path: string, ...list: { status?: number; body: unknown }[]) =>
+        answers.set(path, [...(answers.get(path) ?? []), ...list]);
+
+      let mpayApi: TestApi;
+      let mpay: MpayPackageGateway;
+
+      beforeAll(async () => {
+        const config = loadPackageGatewayConfig(MPAY_ENV);
+        if (config.gateway !== 'mpay') throw new Error('not mpay');
+        mpay = new MpayPackageGateway(config.mpay, 'http://localhost:3000', fetchFn, () =>
+          mpayApi.clock.now(),
+        );
+        mpayApi = await TestApi.start(database.db, {
+          env: MPAY_ENV,
+          accountMailer: mailer,
+          packageGateway: mpay,
+        });
+      }, 120_000);
+      afterAll(async () => {
+        await mpayApi?.close();
+      });
+
+      const call = <T = unknown>(
+        method: string,
+        path: string,
+        body: unknown,
+        headers: Record<string, string> = {},
+      ) =>
+        mpayApi.request<T>(method, path, {
+          ...(body === undefined ? {} : { body }),
+          headers: {
+            'x-shotx-bff-key': bffKeyFor(path, body),
+            'x-shotx-client-ip': nextIp(),
+            ...headers,
+          },
+        });
+      async function mpayOrder() {
+        const res = await call(
+          'POST',
+          apiPath(R.createOrder),
+          {
+            packageCode: 'd3',
+            email: newEmail('mpay'),
+            name: 'ผู้ซื้อ mPAY',
+          },
+          { 'idempotency-key': randomUUID() },
+        );
+        expect(res.status, JSON.stringify(res.body)).toBe(201);
+        return createPackageOrderResponseSchema.parse(res.body);
+      }
+      const pay = (id: string, token: string, method: string) =>
+        call('POST', apiPath(R.pay, { id }), { method }, { [ORDER_TOKEN_HEADER]: token });
+      const view = async (id: string, token: string) =>
+        packageOrderViewSchema.parse(
+          (
+            await call('GET', apiPath(R.getOrder, { id }), undefined, {
+              [ORDER_TOKEN_HEADER]: token,
+            })
+          ).body,
+        );
+      const notify = async (body: Record<string, unknown>) => {
+        const raw = JSON.stringify(body);
+        const nonce = randomUUID();
+        const res = await mpayApi.request('POST', apiPath(R.webhook, { gateway: 'mpay' }), {
+          rawBody: raw,
+          headers: {
+            [MPAY_HEADERS.nonce]: nonce,
+            [MPAY_HEADERS.merchantId]: '5396508',
+            [MPAY_HEADERS.signature]: mpay.sign(raw, nonce),
+          },
+        });
+        await mpayApi.app.get(PackagesService).settled();
+        return res;
+      };
+
+      it('sends the buyer to the pay page, then a QR or a card form per attempt', async () => {
+        const created = await mpayOrder();
+        expect(created.redirectUrl).toBe(
+          `http://localhost:3000/checkout/pay?order=${created.orderId}`,
+        );
+        expect(await orderRow(created.orderId)).toMatchObject({
+          gateway: 'mpay',
+          gatewayRef: null,
+          gatewayAttempts: [],
+        });
+        expect((await view(created.orderId, created.accessToken)).paymentMethods).toEqual([
+          'qr',
+          'card',
+        ]);
+
+        answer(MPAY_PATHS.qr, { body: { txn_id: 'T1', qr_img: PNG } });
+        const qr = await pay(created.orderId, created.accessToken, 'qr');
+        expect(qr.status, JSON.stringify(qr.body)).toBe(200);
+        expect(startPackagePaymentResponseSchema.parse(qr.body)).toEqual({
+          method: 'qr',
+          qrImage: `data:image/png;base64,${PNG}`,
+          expiresAt: new Date(mpayApi.clock.now().getTime() + 600_000).toISOString(),
+        });
+        const first = sent.at(-1);
+        expect(first?.path).toBe(MPAY_PATHS.qr);
+        expect(first?.body).toMatchObject({
+          amount: 426.93,
+          currency: 'THB',
+          ref_1: created.orderId,
+          service_id: '19100061935133847',
+          product_name: 'Snap 3 Days',
+          sof: 'PROMPTPAY',
+        });
+
+        answer(MPAY_PATHS.card, { body: { form_url: 'https://pay.mpay.example.test/f/1' } });
+        const card = await pay(created.orderId, created.accessToken, 'card');
+        expect(card.body).toEqual({
+          method: 'card',
+          redirectUrl: 'https://pay.mpay.example.test/f/1',
+        });
+        expect(sent.at(-1)?.body).toMatchObject({
+          '3ds': { '3ds_url_success': 'http://localhost:3000/checkout/back' },
+        });
+        const row = await orderRow(created.orderId);
+        // Newest first, each its own mPAY order_id.
+        expect(row?.gatewayAttempts).toEqual([sent.at(-1)?.body.order_id, first?.body.order_id]);
+
+        // mPAY refusing (a channel not switched on) is PAYMENT_GATEWAY_ERROR, logged by code.
+        answer(MPAY_PATHS.qr, { body: { error_code: 'INVALID_REQUEST', error: 'SofId inActive' } });
+        expect(await pay(created.orderId, created.accessToken, 'qr')).toMatchObject({
+          status: 502,
+          body: { code: 'PAYMENT_GATEWAY_ERROR' },
+        });
+        expect(mpayApi.events.entries.at(-1)).toMatchObject({
+          event: 'package.payment_start_failed',
+        });
+        // PACKAGE_PAY_RATE_PER_ORDER (4 here).
+        answer(MPAY_PATHS.qr, { body: { qr_img: PNG } });
+        expect((await pay(created.orderId, created.accessToken, 'qr')).status).toBe(200);
+        expect(await pay(created.orderId, created.accessToken, 'qr')).toMatchObject({
+          status: 429,
+          body: { code: 'RATE_LIMITED' },
+        });
+        expect(await pay(created.orderId, 'B'.repeat(43), 'qr')).toMatchObject({
+          status: 404,
+          body: { code: 'ORDER_NOT_FOUND' },
+        });
+      });
+
+      it('a signed Payment Notify settles the order; failures keep it payable', async () => {
+        const created = await mpayOrder();
+        answer(MPAY_PATHS.qr, { body: { qr_img: PNG } });
+        await pay(created.orderId, created.accessToken, 'qr');
+        const attempt = sent.at(-1)?.body.order_id;
+        const base = {
+          order_id: attempt,
+          txn_type: 'PAYMENT',
+          status_code: 'SR0000',
+          amount: 426.93,
+          amount_net: 426.93,
+          amount_cust_fee: 0,
+          currency: 'THB',
+          ref_1: created.orderId,
+          sof_type: 'SOF_PROMPTPAY',
+        };
+        const failed = await notify({ ...base, txn_id: 'TFAIL1', status: 'FAIL' });
+        expect(failed.status).toBe(200);
+        expect(await orderRow(created.orderId)).toMatchObject({
+          status: 'pending',
+          gatewayRef: null,
+        });
+
+        // A forged notify (wrong signature) is refused before anything is read.
+        const forged = await mpayApi.request('POST', apiPath(R.webhook, { gateway: 'mpay' }), {
+          rawBody: JSON.stringify({ ...base, txn_id: 'TX', status: 'SUCCESS' }),
+          headers: { [MPAY_HEADERS.nonce]: 'n', [MPAY_HEADERS.signature]: '0'.repeat(64) },
+        });
+        expect(forged).toMatchObject({ status: 401, body: { code: 'WEBHOOK_SIGNATURE_INVALID' } });
+
+        const paid = await notify({ ...base, txn_id: 'TPAID1', status: 'SUCCESS' });
+        expect(paid.status).toBe(200);
+        expect(await orderRow(created.orderId)).toMatchObject({
+          status: 'paid',
+          gatewayRef: 'TPAID1',
+          accountCreated: true,
+        });
+        expect((await view(created.orderId, created.accessToken)).paymentMethods).toEqual([]);
+        expect(await pay(created.orderId, created.accessToken, 'qr')).toMatchObject({
+          status: 409,
+          body: { code: 'PAYMENT_UNAVAILABLE' },
+        });
+        // mPAY sends again: a duplicate, still 200.
+        expect((await notify({ ...base, txn_id: 'TPAID1', status: 'SUCCESS' })).status).toBe(200);
+        expect(await audits('package.order_paid', created.orderId)).toHaveLength(1);
+      });
+
+      it('asks mPAY about the attempts when the notify is late', async () => {
+        const created = await mpayOrder();
+        answer(MPAY_PATHS.qr, { body: { qr_img: PNG } }, { body: { qr_img: PNG } });
+        await pay(created.orderId, created.accessToken, 'qr');
+        await pay(created.orderId, created.accessToken, 'qr');
+        const [newest, older] = (await orderRow(created.orderId))?.gatewayAttempts ?? [];
+        mpayApi.clock.advance(31_000);
+        answer(
+          MPAY_PATHS.enquiry,
+          { status: 400, body: { error_code: 'TXN_NOT_FOUND' } },
+          {
+            body: {
+              order_id: older,
+              txn_id: 'TENQ1',
+              txn_type: 'PAYMENT',
+              status: 'SUCCESS',
+              amount: 426.93,
+              currency: 'THB',
+              ref_1: created.orderId,
+            },
+          },
+        );
+        const polled = await view(created.orderId, created.accessToken);
+        await mpayApi.app.get(PackagesService).settled();
+        expect(polled.status).toBe('paid');
+        expect(sent.slice(-2).map((r) => r.body)).toEqual([
+          { order_id: newest },
+          { order_id: older },
+        ]);
+        expect(await orderRow(created.orderId)).toMatchObject({ gatewayRef: 'TENQ1' });
       });
     });
 

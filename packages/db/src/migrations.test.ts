@@ -324,6 +324,15 @@ describe('migrations', () => {
     );
   });
 
+  it('0019 is package_order_attempts: one additive column with a default', () => {
+    expect(journal.entries[19]?.tag).toBe('0019_package_order_attempts');
+    const list = statements(sqlOf('0019_package_order_attempts'));
+    expect(list).toHaveLength(1);
+    expect(list[0]).toContain('ADD COLUMN "gateway_attempts" text[]');
+    expect(list[0]).toContain('NOT NULL');
+    expect(list[0]).toContain("DEFAULT '{}'::text[]");
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

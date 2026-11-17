@@ -1,6 +1,11 @@
 'use client';
 
-import { ErrorCode, PACKAGES_SECTION_PATH, type PackageOrderView } from '@shotx/shared';
+import {
+  ErrorCode,
+  PACKAGE_PAY_PATH,
+  PACKAGES_SECTION_PATH,
+  type PackageOrderView,
+} from '@shotx/shared';
 import {
   CheckCircle2Icon,
   Loader2Icon,
@@ -19,8 +24,9 @@ import { fetchPackageOrder } from '@/lib/packages/client';
 const STUDIO_PATH = '/studio';
 
 export type CheckoutReturnState =
-  | { kind: 'checking' }
-  | { kind: 'timeout' }
+  /** `payable`: still pending and the pay page can take another attempt (ADR 0029). */
+  | { kind: 'checking'; payable?: boolean }
+  | { kind: 'timeout'; payable?: boolean }
   | { kind: 'notFound' }
   | { kind: 'order'; order: PackageOrderView };
 
@@ -59,9 +65,11 @@ export function CheckoutReturn({
     const startedAt = Date.now();
     const poll = async () => {
       let next: CheckoutReturnState | null = null;
+      let payable = false;
       try {
         const order = await fetchPackageOrder(fetchImpl);
         if (order.status !== 'pending') next = { kind: 'order', order };
+        payable = order.status === 'pending' && order.paymentMethods.length > 0;
       } catch (error) {
         if (isApiError(error, ErrorCode.ORDER_NOT_FOUND)) next = { kind: 'notFound' };
         // Anything else (offline, the API restarting) is asked again on the next round.
@@ -72,9 +80,10 @@ export function CheckoutReturn({
         return;
       }
       if (Date.now() - startedAt + intervalMs > timeoutMs) {
-        setState({ kind: 'timeout' });
+        setState({ kind: 'timeout', payable });
         return;
       }
+      if (payable) setState({ kind: 'checking', payable });
       timer = setTimeout(() => void poll(), intervalMs);
     };
     void poll();
@@ -128,6 +137,14 @@ export function CheckoutReturnView({
           <button type="button" onClick={onCheckAgain} className={SECONDARY_LINK}>
             {t('checkAgain')}
           </button>
+        ) : null}
+        {state.payable === true ? (
+          <>
+            <p className={`text-sm ${muted}`}>{t('payAgainHint')}</p>
+            <Link href={PACKAGE_PAY_PATH} className={SECONDARY_LINK}>
+              {t('payAgain')}
+            </Link>
+          </>
         ) : null}
       </Panel>
     );

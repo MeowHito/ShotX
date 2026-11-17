@@ -204,6 +204,33 @@ export const enStudio: StudioMessages = {
     notFoundBody:
       'There’s no order in this browser. If you have paid, a confirmation email is on its way, or contact our team.',
     backToPackages: 'See the packages',
+    payAgain: 'Pay again',
+    payAgainHint:
+      'If the payment failed or was cancelled, you can pay again or use another method.',
+    pay: {
+      title: 'Payment',
+      loading: 'Loading your order…',
+      package: '{name} package',
+      vatIncluded: 'Includes 7% VAT',
+      choose: 'Choose how to pay',
+      methods: {
+        qr: 'Scan a PromptPay QR',
+        card: 'Credit / debit card',
+      },
+      starting: 'Preparing the payment…',
+      secure: 'Payments go through mPAY (AIS). We never see or store your card details.',
+      qrTitle: 'Scan to pay',
+      qrAlt: 'PromptPay QR for this order',
+      qrHint: 'Scan with any banking app, or save the QR image and open it in your banking app.',
+      qrWaiting: 'Waiting for payment · the QR expires in {time}',
+      qrExpired: 'This QR has expired',
+      qrNew: 'Make a new QR',
+      qrSave: 'Save the QR image',
+      otherMethod: 'Use another method',
+      unavailable:
+        'This order can’t be paid online right now. Please try again later or contact our team.',
+      backToPackages: 'See the packages',
+    },
     fake: {
       title: 'Test payment page',
       body: 'For testing only. No real money is charged.',

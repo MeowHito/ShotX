@@ -2,7 +2,10 @@ import {
   type CreatePackageOrderBody,
   IDEMPOTENCY_KEY_HEADER,
   type PackageOrderView,
+  type PackagePaymentMethod,
   packageOrderViewSchema,
+  type StartPackagePaymentResponse,
+  startPackagePaymentResponseSchema,
 } from '@shotx/shared';
 import type { z } from 'zod';
 import { ContractError, errorFromResponse, NetworkError } from '../api/errors';
@@ -104,4 +107,13 @@ export async function sendFakeResult(
     fetchImpl,
   );
   return parsed(response, packageOrderViewSchema);
+}
+
+/** One payment attempt from the pay page (ADR 0029): a PromptPay QR, or the card form's URL. */
+export async function startPackagePayment(
+  input: { orderId: string; method: PackagePaymentMethod },
+  fetchImpl?: typeof fetch,
+): Promise<StartPackagePaymentResponse> {
+  const response = await send(PACKAGE_ORDER_PATHS.pay, { method: 'POST', body: input }, fetchImpl);
+  return parsed(response, startPackagePaymentResponseSchema);
 }

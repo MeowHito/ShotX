@@ -280,6 +280,7 @@ const ALL_LOADERS: Loader[] = [
       MPAY_API_URL: e.MPAY_API_URL ?? 'https://mpay.example.test',
       MPAY_MERCHANT_ID: e.MPAY_MERCHANT_ID ?? 'merchant',
       MPAY_SECRET_KEY: e.MPAY_SECRET_KEY ?? 'secret-secret-secret',
+      MPAY_SERVICE_ID: e.MPAY_SERVICE_ID ?? '19100061935133847',
     }),
 ];
 

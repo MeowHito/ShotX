@@ -378,6 +378,13 @@ export type PackageOrderStatus = (typeof PACKAGE_ORDER_STATUSES)[number];
 export const PACKAGE_PAYMENT_GATEWAYS = ['fake', 'mpay'] as const;
 export type PackagePaymentGatewayName = (typeof PACKAGE_PAYMENT_GATEWAYS)[number];
 
+/**
+ * How a buyer pays on Snap's own pay page (ADR 0029): `qr` = a PromptPay QR shown on the page,
+ * `card` = the gateway's hosted card form. Gateways with a hosted page of their own offer none.
+ */
+export const PACKAGE_PAYMENT_METHODS = ['qr', 'card'] as const;
+export type PackagePaymentMethod = (typeof PACKAGE_PAYMENT_METHODS)[number];
+
 /** PACKAGE_GATEWAY values: a gateway, or `off` (no online payment; the default). */
 export const PACKAGE_GATEWAY_MODES = ['off', ...PACKAGE_PAYMENT_GATEWAYS] as const;
 export type PackageGatewayMode = (typeof PACKAGE_GATEWAY_MODES)[number];
