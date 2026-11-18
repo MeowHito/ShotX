@@ -169,6 +169,15 @@ export const enStudio: StudioMessages = {
     contactTeam: 'Please contact our team.',
     captchaRequired: 'Please confirm you are not a robot, and we’ll send the confirmation link.',
     close: 'Close',
+    coupon: 'Discount code',
+    couponPlaceholder: 'Optional',
+    couponApply: 'Apply',
+    couponChecking: 'Checking the code…',
+    couponRemove: 'Remove code',
+    couponInvalid: 'Please enter a valid discount code',
+    couponApplied: 'Code {code} applied: {percent, number}% off',
+    discount: 'Discount {percent, number}%',
+    getFree: 'Get the package',
   },
   signup: {
     title: 'Set your SNAP password',
@@ -212,6 +221,7 @@ export const enStudio: StudioMessages = {
       loading: 'Loading your order…',
       package: '{name} package',
       vatIncluded: 'Includes 7% VAT',
+      coupon: 'Code {code} applied · was {total}',
       choose: 'Choose how to pay',
       methods: {
         qr: 'Scan a PromptPay QR',

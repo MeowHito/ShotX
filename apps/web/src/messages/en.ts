@@ -385,6 +385,8 @@ export const en: PublicMessages = {
       SIGNUP_LINK_INVALID:
         'This confirmation link no longer works (it expired, was already used, or the email already has an account).',
       ORDER_NOT_FOUND: 'This order wasn’t found.',
+      COUPON_INVALID: 'This discount code can’t be used (unknown, switched off or expired).',
+      COUPON_USED_UP: 'This discount code has been used up.',
     },
     details: {
       quotaExceeded: 'Not enough space: this file needs {requested} but only {available} is left.',

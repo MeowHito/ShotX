@@ -309,6 +309,13 @@ export const ErrorCode = {
    * X-Order-Token. One code for both, so the answer never confirms that an order id exists.
    */
   ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
+  /**
+   * ADR 0030: a coupon code that is unknown, switched off or past its expiry. One code for all of
+   * them, so the answer never says which codes exist.
+   */
+  COUPON_INVALID: 'COUPON_INVALID',
+  /** ADR 0030: the coupon's uses (paid orders plus orders still holding one) are all taken. */
+  COUPON_USED_UP: 'COUPON_USED_UP',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -385,6 +392,8 @@ export const ERROR_HTTP_STATUS = {
   EMAIL_UNAVAILABLE: 409,
   SIGNUP_LINK_INVALID: 400,
   ORDER_NOT_FOUND: 404,
+  COUPON_INVALID: 422,
+  COUPON_USED_UP: 409,
 } as const satisfies Record<ErrorCode, number>;
 
 /** Body of every API error response. */

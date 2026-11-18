@@ -316,6 +316,10 @@ describe('route table', () => {
       'GET /admin/expenses',
       'POST /admin/expenses',
       'DELETE /admin/expenses/:id',
+      // ADR 0030: coupons.
+      'GET /admin/coupons',
+      'POST /admin/coupons',
+      'PATCH /admin/coupons/:id',
       'GET /admin/finance',
       'GET /admin/users/:id/finance',
       // ADR 0026: packages, Free sign-up and package orders.
@@ -323,6 +327,7 @@ describe('route table', () => {
       'POST /signup/free',
       'POST /signup/free/confirm',
       'POST /package-orders',
+      'POST /package-coupons/check',
       'GET /package-orders/:id',
       'POST /package-orders/:id/fake-result',
       'POST /package-orders/:id/pay',

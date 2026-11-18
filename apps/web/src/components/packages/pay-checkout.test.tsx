@@ -47,6 +47,7 @@ function order(overrides: Partial<PackageOrderView> = {}): PackageOrderView {
     accountCreated: false,
     expiresAt: null,
     paymentMethods: ['qr', 'card'],
+    coupon: null,
     ...overrides,
   };
 }

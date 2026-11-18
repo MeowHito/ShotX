@@ -101,6 +101,8 @@ const errorCodes = {
   SIGNUP_LINK_INVALID:
     'ลิงก์ยืนยันนี้ใช้ไม่ได้แล้ว (หมดอายุ ถูกใช้ไปแล้ว หรืออีเมลนี้มีบัญชีอยู่แล้ว)',
   ORDER_NOT_FOUND: 'ไม่พบรายการสั่งซื้อนี้',
+  COUPON_INVALID: 'โค้ดส่วนลดนี้ใช้ไม่ได้ (ไม่มีโค้ดนี้ ปิดใช้แล้ว หรือหมดอายุ)',
+  COUPON_USED_UP: 'โค้ดส่วนลดนี้ถูกใช้ครบจำนวนแล้ว',
 } as const satisfies Record<ErrorCode, string>;
 
 /** Why a file can't be a folder's cover (COVER_FILE_INVALID details.reason). */
@@ -713,6 +715,15 @@ export const th = {
     contactTeam: 'กรุณาติดต่อทีมงาน',
     captchaRequired: 'กรุณายืนยันว่าคุณไม่ใช่บอท แล้วระบบจะส่งลิงก์ยืนยันให้',
     close: 'ปิด',
+    coupon: 'โค้ดส่วนลด',
+    couponPlaceholder: 'ถ้ามี',
+    couponApply: 'ใช้โค้ด',
+    couponChecking: 'กำลังตรวจโค้ด…',
+    couponRemove: 'ไม่ใช้โค้ด',
+    couponInvalid: 'กรุณาใส่โค้ดส่วนลดให้ถูกต้อง',
+    couponApplied: 'ใช้โค้ด {code} ลด {percent, number}%',
+    discount: 'ส่วนลด {percent, number}%',
+    getFree: 'รับแพ็กเกจ',
   },
   /** `/signup/confirm#token=…`: the Free sign-up's emailed link (ADR 0026). */
   signup: {
@@ -756,6 +767,7 @@ export const th = {
       loading: 'กำลังโหลดรายการสั่งซื้อ…',
       package: 'แพ็กเกจ {name}',
       vatIncluded: 'รวม VAT 7% แล้ว',
+      coupon: 'ใช้โค้ด {code} · จากปกติ {total}',
       choose: 'เลือกวิธีชำระเงิน',
       methods: {
         qr: 'สแกน QR พร้อมเพย์',

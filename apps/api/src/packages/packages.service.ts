@@ -6,13 +6,16 @@ import {
   applyPackage,
   type AuthTokenResponse,
   type CaptchaRejectReason,
+  type CheckPackageCouponResponse,
   type CreatePackageOrderResponse,
+  discountedPackageTotal,
   ErrorCode,
   FREE_PACKAGE_CODE,
   maskEmail,
   type MyPackageResponse,
   normalizeAccountEmail,
   PACKAGE_CHECKOUT_RETURN_PATH,
+  PACKAGE_COUPON_SETTLEMENT,
   PACKAGE_GATEWAY_RETURN_PATH,
   type PackageAuditAction,
   type PackageCallback,
@@ -57,6 +60,7 @@ import {
   RATE_LIMITER,
   type RateLimiter,
 } from '../tokens';
+import { type CouponRow, usableCoupon } from './coupons';
 import { fakePackageGatewayRef, newGatewayAttemptRef } from './gateways';
 import {
   accountExistsEmail,
@@ -154,14 +158,18 @@ export function orderRequestHash(input: {
   email: string;
   name: string | null;
   photographerId: string | null;
+  /** ADR 0030; without one the hash is the same as before coupons. */
+  couponCode?: string | null | undefined;
 }): string {
-  const canonical = JSON.stringify([
-    'v1',
+  const fields = [
     input.packageCode,
     normalizeAccountEmail(input.email),
     input.name ?? '',
     input.photographerId ?? '',
-  ]);
+  ];
+  const canonical = JSON.stringify(
+    input.couponCode == null ? ['v1', ...fields] : ['v2', ...fields, input.couponCode],
+  );
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
 }
 
@@ -582,10 +590,20 @@ export class PackagesService {
    * (PACKAGE_GATEWAY=off), EMAIL_UNAVAILABLE (an admin's, a disabled account's or an unlimited
    * photographer's email). The order is stored `pending` before the gateway is asked; a gateway
    * failure is PAYMENT_GATEWAY_ERROR and a retry with the same key asks again.
+   *
+   * ADR 0030: with `couponCode` the order is priced with discountedPackageTotal and holds one of
+   * the coupon's uses (checked again with the coupon row locked in the insert's transaction):
+   * COUPON_INVALID, COUPON_USED_UP. A 100% coupon needs no gateway: the order (`gateway` `coupon`)
+   * is settled at once and `redirectUrl` is the return page.
    */
   async createOrder(
     buyerId: string | null,
-    body: { packageCode: string; email?: string | undefined; name?: string | undefined },
+    body: {
+      packageCode: string;
+      email?: string | undefined;
+      name?: string | undefined;
+      couponCode?: string | undefined;
+    },
     idempotencyKey: string,
     ipHash: string,
   ): Promise<CreatePackageOrderResponse> {
@@ -617,43 +635,57 @@ export class PackagesService {
       if (body.name === undefined) throw validationError(['body', 'name'], 'is required');
       buyer = { photographerId: null, email: body.email, name: body.name };
     }
-    const requestSha256 = orderRequestHash({ packageCode: body.packageCode, ...buyer });
+    const couponCode = body.couponCode ?? null;
+    const requestSha256 = orderRequestHash({ packageCode: body.packageCode, ...buyer, couponCode });
     const replay = await this.replayOrder(idempotencyKey, requestSha256);
     if (replay !== null) return replay;
 
-    const pkg = await this.packageByCode(this.db, body.packageCode);
-    if (pkg === null || !pkg.isActive || pkg.code === FREE_PACKAGE_CODE || pkg.priceSatang <= 0) {
-      throw new ApiError(ErrorCode.PACKAGE_UNAVAILABLE, 'This package cannot be bought online');
-    }
+    const pkg = await this.buyablePackage(body.packageCode);
+    const now = this.clock.now();
+    const { holdSeconds } = this.config.packages.coupons;
+    // ADR 0030: checked here for the price, and again with the row locked when the order goes in.
+    const coupon =
+      couponCode === null ? null : await usableCoupon(this.db, couponCode, now, holdSeconds);
+    const amounts = this.orderAmounts(pkg, coupon);
+    // A 100% coupon needs no gateway: the order is settled as it is created.
+    const free = coupon !== null && amounts.totalSatang === 0;
     const gateway = this.gateway;
-    if (gateway === null) {
+    if (!free && gateway === null) {
       throw new ApiError(ErrorCode.PAYMENT_UNAVAILABLE, 'Online payment is not open yet');
     }
     await this.assertEmailCanBuy(buyer);
 
-    const amounts = packageTotal(pkg.priceSatang, this.config.packages.vatRateBasisPoints);
     const accessToken = newOpaqueToken();
+    const values = {
+      packageId: pkg.id,
+      photographerId: buyer.photographerId,
+      email: buyer.email,
+      name: buyer.name,
+      priceSatang: amounts.priceSatang,
+      vatSatang: amounts.vatSatang,
+      totalSatang: amounts.totalSatang,
+      vatRateBasisPoints: amounts.vatRateBasisPoints,
+      couponId: coupon?.id ?? null,
+      couponCode: coupon?.code ?? null,
+      discountSatang: amounts.discountSatang,
+      gateway: free || gateway === null ? PACKAGE_COUPON_SETTLEMENT : gateway.name,
+      redirectUrl: free ? this.webUrl(PACKAGE_CHECKOUT_RETURN_PATH) : null,
+      accessTokenHash: orderTokenHash(accessToken),
+      idempotencyKey,
+      requestSha256,
+      createdAt: now,
+      updatedAt: now,
+    };
     let order: OrderRow | undefined;
     try {
-      [order] = await this.db
-        .insert(packageOrders)
-        .values({
-          packageId: pkg.id,
-          photographerId: buyer.photographerId,
-          email: buyer.email,
-          name: buyer.name,
-          priceSatang: amounts.priceSatang,
-          vatSatang: amounts.vatSatang,
-          totalSatang: amounts.totalSatang,
-          vatRateBasisPoints: amounts.vatRateBasisPoints,
-          gateway: gateway.name,
-          accessTokenHash: orderTokenHash(accessToken),
-          idempotencyKey,
-          requestSha256,
-          createdAt: this.clock.now(),
-          updatedAt: this.clock.now(),
-        })
-        .returning();
+      [order] =
+        coupon === null
+          ? await this.db.insert(packageOrders).values(values).returning()
+          : await this.db.transaction(async (tx) => {
+              // The coupon locked: two orders at once can't both take its last use.
+              await usableCoupon(tx, coupon.code, now, holdSeconds, { lock: true });
+              return tx.insert(packageOrders).values(values).returning();
+            });
     } catch (error) {
       if (!isUniqueViolation(error, 'package_orders_idempotency_key_unique')) throw error;
       // The same key raced in from another request.
@@ -662,7 +694,79 @@ export class PackagesService {
       throw error;
     }
     if (order === undefined) throw new Error('Order insert returned no row');
+    if (free) await this.settleFreeOrder(order);
     return this.checkout(order, accessToken, pkg);
+  }
+
+  /** PACKAGE_UNAVAILABLE unless `code` can be bought online (active, not free, priced). */
+  private async buyablePackage(code: string): Promise<PackageRow> {
+    const pkg = await this.packageByCode(this.db, code);
+    if (pkg === null || !pkg.isActive || pkg.code === FREE_PACKAGE_CODE || pkg.priceSatang <= 0) {
+      throw new ApiError(ErrorCode.PACKAGE_UNAVAILABLE, 'This package cannot be bought online');
+    }
+    return pkg;
+  }
+
+  /** The order amounts of `pkg`, with the coupon's discount when there is one (ADR 0030). */
+  private orderAmounts(pkg: PackageRow, coupon: CouponRow | null) {
+    const rate = this.config.packages.vatRateBasisPoints;
+    return coupon === null
+      ? { ...packageTotal(pkg.priceSatang, rate), discountSatang: 0 }
+      : discountedPackageTotal(pkg.priceSatang, coupon.percentOff, rate);
+  }
+
+  /**
+   * ADR 0030: a 100% coupon's order, settled through the paid-callback transaction (account,
+   * package, audit, emails) with nothing to pay. Again for a replay of one still pending.
+   */
+  private async settleFreeOrder(order: OrderRow): Promise<void> {
+    if (order.gateway !== PACKAGE_COUPON_SETTLEMENT || order.totalSatang !== 0) return;
+    if (order.status !== 'pending') return;
+    await this.applyCallback(PACKAGE_COUPON_SETTLEMENT, {
+      gatewayRef: `coupon-${order.id}`,
+      orderId: order.id,
+      status: 'paid',
+      amountSatang: 0,
+    });
+  }
+
+  // --- POST /package-coupons/check (ADR 0030) ---------------------------------------------------
+
+  /**
+   * What `couponCode` makes `packageCode` cost, for the buy dialog. Holds nothing; the order takes
+   * a use when it is created. Rate-limited per IP (PACKAGE_COUPON_CHECK_RATE_PER_IP), so codes
+   * can't be guessed quickly.
+   */
+  async checkCoupon(
+    body: { packageCode: string; couponCode: string },
+    ipHash: string,
+  ): Promise<CheckPackageCouponResponse> {
+    const rule = this.config.packages.coupons.checkRatePerIp;
+    const rate = await this.limiter.hit(
+      `package-coupon:ip:${ipHash}`,
+      rule.limit,
+      rule.windowSeconds,
+    );
+    if (!rate.allowed) throw rateLimited(rate.retryAfterSeconds);
+    const pkg = await this.buyablePackage(body.packageCode);
+    const coupon = await usableCoupon(
+      this.db,
+      body.couponCode,
+      this.clock.now(),
+      this.config.packages.coupons.holdSeconds,
+    );
+    const amounts = this.orderAmounts(pkg, coupon);
+    return {
+      couponCode: coupon.code,
+      percentOff: coupon.percentOff,
+      listTotalSatang: packageTotal(pkg.priceSatang, amounts.vatRateBasisPoints).totalSatang,
+      price: {
+        priceSatang: amounts.priceSatang,
+        vatSatang: amounts.vatSatang,
+        totalSatang: amounts.totalSatang,
+        vatRateBasisPoints: amounts.vatRateBasisPoints,
+      },
+    };
   }
 
   /**
@@ -718,6 +822,7 @@ export class PackagesService {
       .where(eq(packages.id, existing.packageId))
       .limit(1);
     if (pkg === undefined) throw new Error('Order without its package');
+    await this.settleFreeOrder(existing);
     return this.checkout(existing, accessToken, pkg);
   }
 
@@ -806,6 +911,7 @@ export class PackagesService {
           email: order.email,
           name: order.name,
           photographerId: order.photographerId,
+          couponCode: order.couponCode,
         }) === order.requestSha256);
     const current =
       order.status === 'paid' && order.photographerId !== null && ownAccount
@@ -820,6 +926,16 @@ export class PackagesService {
       accountCreated: order.accountCreated,
       expiresAt: current?.expiresAt.toISOString() ?? null,
       paymentMethods: this.payableMethods(order),
+      coupon:
+        order.couponCode === null
+          ? null
+          : {
+              code: order.couponCode,
+              listTotalSatang: packageTotal(
+                order.priceSatang + order.discountSatang,
+                order.vatRateBasisPoints,
+              ).totalSatang,
+            },
     };
   }
 
@@ -1014,7 +1130,7 @@ export class PackagesService {
    * After the commit a new account gets the "ตั้งรหัสผ่าน" email, an existing one "เพิ่มแพ็กเกจแล้ว".
    */
   async applyCallback(
-    gatewayName: PackagePaymentGatewayName,
+    gatewayName: PackagePaymentGatewayName | typeof PACKAGE_COUPON_SETTLEMENT,
     callback: PackageCallback,
   ): Promise<PackageCallbackOutcome> {
     if (callback.status === 'pending') return { kind: 'pending' };

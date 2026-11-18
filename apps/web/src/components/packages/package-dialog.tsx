@@ -5,6 +5,8 @@ import {
   accountNameSchema,
   type CaptchaAction,
   type CaptchaClientConfig,
+  type CheckPackageCouponResponse,
+  couponCodeSchema,
   ErrorCode,
   PACKAGES_SECTION_PATH,
   type PackagesClientConfig,
@@ -31,7 +33,7 @@ import { changePasswordPageHref } from '@/lib/auth/password-client';
 import { navigateTo } from '@/lib/browser/navigate';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useFormatSatang } from '@/lib/i18n/use-format';
-import { createPackageOrder, requestFreeSignup } from '@/lib/packages/client';
+import { checkPackageCoupon, createPackageOrder, requestFreeSignup } from '@/lib/packages/client';
 import { CaptchaChallenge, type CaptchaFailure } from '../share/scan/captcha-challenge';
 import { vatPercent } from './vat';
 
@@ -138,7 +140,13 @@ function PackageDialogBody({
   const te = useTranslations('errors');
   const describe = useErrorMessage();
   const formatSatang = useFormatSatang();
-  const ids = { name: useId(), email: useId(), error: useId() };
+  const ids = {
+    name: useId(),
+    email: useId(),
+    error: useId(),
+    coupon: useId(),
+    couponStatus: useId(),
+  };
   /**
    * The Idempotency-Key of the order being asked for: the same while the request is the same (a
    * retried click after a lost answer is the same order), a new one once the package, name or
@@ -160,6 +168,12 @@ function PackageDialogBody({
   const [error, setError] = useState<{ text: string; field: 'name' | 'email' | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
+  // ADR 0030: the coupon typed, the one the API priced, and what went wrong with it.
+  const [couponText, setCouponText] = useState('');
+  const [coupon, setCoupon] = useState<CheckPackageCouponResponse | null>(null);
+  const [couponBusy, setCouponBusy] = useState(false);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const price = coupon?.price ?? pkg.price;
 
   const askIdentity = mode === 'free' || (mode === 'paid' && !signedIn);
   const rate = vatPercent(pkg.price.vatRateBasisPoints);
@@ -179,8 +193,33 @@ function PackageDialogBody({
     return { name: n.data, email: e.data };
   }
 
+  /** ADR 0030: prices the typed coupon (the API checks it; nothing is held yet). */
+  async function applyCoupon(): Promise<void> {
+    const code = couponCodeSchema.safeParse(couponText);
+    if (!code.success) {
+      setCoupon(null);
+      setCouponError(t('couponInvalid'));
+      return;
+    }
+    setCouponBusy(true);
+    setCouponError(null);
+    try {
+      setCoupon(await checkPackageCoupon({ packageCode: pkg.code, couponCode: code.data }));
+    } catch (err) {
+      setCoupon(null);
+      setCouponError(describe(err));
+    } finally {
+      setCouponBusy(false);
+    }
+  }
+
   function fail(err: unknown) {
     setBusy(false);
+    if (isApiError(err, ErrorCode.COUPON_INVALID) || isApiError(err, ErrorCode.COUPON_USED_UP)) {
+      setCoupon(null);
+      setCouponError(describe(err));
+      return;
+    }
     if (isApiError(err, ErrorCode.PAYMENT_UNAVAILABLE)) {
       setError(null);
       setMode('soon');
@@ -264,8 +303,13 @@ function PackageDialogBody({
 
   /** A paid order; a new key and one more try when the API says the key was used for another. */
   async function sendOrder(who: { name: string; email: string } | null) {
-    const request = JSON.stringify([pkg.code, who?.name ?? null, who?.email ?? null]);
-    const body = { packageCode: pkg.code, ...(who !== null ? who : {}) };
+    const couponCode = coupon?.couponCode ?? null;
+    const request = JSON.stringify([pkg.code, who?.name ?? null, who?.email ?? null, couponCode]);
+    const body = {
+      packageCode: pkg.code,
+      ...(who !== null ? who : {}),
+      ...(couponCode !== null ? { couponCode } : {}),
+    };
     setBusy(true);
     try {
       let order;
@@ -299,6 +343,11 @@ function PackageDialogBody({
     setError(null);
     if (mode === 'free') {
       if (who !== null) await sendFree(who);
+      return;
+    }
+    // A code typed but not applied: price it first, so the buyer sees the total before paying.
+    if (couponText.trim() !== '' && coupon === null) {
+      await applyCoupon();
       return;
     }
     await sendOrder(who);
@@ -340,13 +389,26 @@ function PackageDialogBody({
         <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5 rounded-xl bg-[#f3f7fb] px-4 py-3 text-sm">
           <dt className="text-[#667888]">{t('price')}</dt>
           <dd className="text-right tabular-nums">{formatSatang(pkg.price.priceSatang)}</dd>
+          {coupon !== null ? (
+            <>
+              <dt className="text-[#0f7a43]">{t('discount', { percent: coupon.percentOff })}</dt>
+              <dd className="text-right text-[#0f7a43] tabular-nums">
+                −{formatSatang(pkg.price.priceSatang - coupon.price.priceSatang)}
+              </dd>
+            </>
+          ) : null}
           <dt className="text-[#667888]">{t('vat', { rate })}</dt>
-          <dd className="text-right tabular-nums">{formatSatang(pkg.price.vatSatang)}</dd>
+          <dd className="text-right tabular-nums">{formatSatang(price.vatSatang)}</dd>
           <dt className="border-t border-[#dce6ee] pt-1.5 font-bold text-[#092e50]">
             {t('total')}
           </dt>
           <dd className="border-t border-[#dce6ee] pt-1.5 text-right text-base font-extrabold text-[#092e50] tabular-nums">
-            {formatSatang(pkg.price.totalSatang)}
+            {coupon !== null ? (
+              <s className="mr-2 text-sm font-normal text-[#667888]">
+                {formatSatang(pkg.price.totalSatang)}
+              </s>
+            ) : null}
+            {formatSatang(price.totalSatang)}
           </dd>
         </dl>
       )}
@@ -408,6 +470,64 @@ function PackageDialogBody({
         <p className="text-sm text-[#667888]">{t('paidSignedIn')}</p>
       ) : null}
 
+      {mode === 'paid' && !pkg.free ? (
+        <div className="grid gap-2">
+          <Label htmlFor={ids.coupon} className="text-[#14293b]">
+            {t('coupon')}
+          </Label>
+          <div className="flex gap-2">
+            <Input
+              id={ids.coupon}
+              name="coupon"
+              autoComplete="off"
+              autoCapitalize="characters"
+              spellCheck={false}
+              maxLength={32}
+              placeholder={t('couponPlaceholder')}
+              value={couponText}
+              onChange={(e) => {
+                setCouponText(e.target.value);
+                setCoupon(null);
+                setCouponError(null);
+              }}
+              aria-invalid={couponError !== null ? true : undefined}
+              aria-describedby={ids.couponStatus}
+              className={`${FIELD} min-w-0 flex-1 uppercase placeholder:normal-case`}
+            />
+            {coupon !== null ? (
+              <button
+                type="button"
+                className={`${SECONDARY} shrink-0`}
+                onClick={() => {
+                  setCoupon(null);
+                  setCouponText('');
+                }}
+              >
+                {t('couponRemove')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={`${SECONDARY} shrink-0`}
+                disabled={couponBusy || couponText.trim() === ''}
+                onClick={() => void applyCoupon()}
+              >
+                {couponBusy ? t('couponChecking') : t('couponApply')}
+              </button>
+            )}
+          </div>
+          <div id={ids.couponStatus} aria-live="polite">
+            {couponError !== null ? (
+              <p className="text-sm text-[#b42318]">{couponError}</p>
+            ) : coupon !== null ? (
+              <p className="text-sm text-[#0f7a43]">
+                {t('couponApplied', { code: coupon.couponCode, percent: coupon.percentOff })}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {error !== null ? (
         <Alert id={ids.error} variant={challenge !== null ? 'warning' : 'destructive'}>
           {error.text}
@@ -454,8 +574,12 @@ function PackageDialogBody({
             {busy ? t('sending') : t('freeSubmit')}
           </button>
         ) : pkg.free ? null : (
-          <button type="submit" className={PRIMARY} disabled={busy || mode !== 'paid'}>
-            {busy ? t('paying') : t('pay')}
+          <button
+            type="submit"
+            className={PRIMARY}
+            disabled={busy || couponBusy || mode !== 'paid'}
+          >
+            {busy ? t('paying') : price.totalSatang === 0 ? t('getFree') : t('pay')}
           </button>
         )}
       </div>

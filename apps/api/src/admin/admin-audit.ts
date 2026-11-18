@@ -42,12 +42,20 @@ export async function writeAdminAudit<A extends AdminAuditAction>(
  */
 export async function writeFinanceAudit<A extends FinanceAuditAction>(
   q: Queryable,
-  entry: { actorId: string; action: A; targetId: string; meta: FinanceAuditMeta<A>; now: Date },
+  entry: {
+    actorId: string;
+    action: A;
+    /** Default `expense`; ADR 0030 coupons write `coupon`. */
+    target?: keyof typeof FINANCE_AUDIT_TARGET_TYPES;
+    targetId: string;
+    meta: FinanceAuditMeta<A>;
+    now: Date;
+  },
 ): Promise<void> {
   await q.insert(auditLog).values({
     actorId: entry.actorId,
     action: entry.action,
-    targetType: FINANCE_AUDIT_TARGET_TYPES.expense,
+    targetType: FINANCE_AUDIT_TARGET_TYPES[entry.target ?? 'expense'],
     targetId: entry.targetId,
     meta: entry.meta,
     createdAt: entry.now,

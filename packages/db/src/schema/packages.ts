@@ -93,6 +93,50 @@ export const photographerPackages = pgTable(
   ],
 );
 
+/**
+ * Coupons (ADR 0030, migration 0020): an admin-made code worth `percent_off` (1-100) off a
+ * package's VAT-exclusive price, for at most `max_redemptions` orders. Never deleted (orders keep
+ * their coupon); `is_active` switches one off. Uses are counted from package_orders (paid, plus
+ * pending or failed ones younger than PACKAGE_COUPON_HOLD_SECONDS) with this row locked, so no
+ * counter can drift.
+ *
+ * - `code`: stored upper-case (COUPON_CODE_PATTERN); typed codes are upper-cased first.
+ * - (created_by_id, created_by_pool) references users (id, auth_pool) with the pool fixed to
+ *   `admins` (as expenses).
+ */
+export const packageCoupons = pgTable(
+  'package_coupons',
+  {
+    id: id(),
+    code: text('code').notNull(),
+    percentOff: integer('percent_off').notNull(),
+    maxRedemptions: integer('max_redemptions').notNull(),
+    expiresAt: timestamptz('expires_at'),
+    isActive: boolean('is_active').notNull().default(true),
+    note: text('note'),
+    createdById: uuid('created_by_id').notNull(),
+    createdByPool: authPool('created_by_pool').notNull().default('admins'),
+    createdAt: createdAt(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    unique('package_coupons_code_unique').on(t.code),
+    foreignKey({
+      name: 'package_coupons_created_by_admin_fk',
+      columns: [t.createdById, t.createdByPool],
+      foreignColumns: [users.id, users.authPool],
+    }),
+    check('package_coupons_code_format', sql`${t.code} ~ '^[A-Z0-9][A-Z0-9_-]{2,31}$'`),
+    check('package_coupons_percent_off_range', sql`${t.percentOff} BETWEEN 1 AND 100`),
+    check('package_coupons_max_redemptions_positive', sql`${t.maxRedemptions} > 0`),
+    check('package_coupons_created_by_pool', sql`${t.createdByPool} = 'admins'`),
+    check(
+      'package_coupons_note_length',
+      sql`${t.note} IS NULL OR char_length(${t.note}) BETWEEN 1 AND 200`,
+    ),
+  ],
+);
+
 const gatewayFormat = (column: unknown) => sql`${column} ~ '^[a-z0-9_]{1,32}$'`;
 
 /**
@@ -141,6 +185,13 @@ export const packageOrders = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
+    /**
+     * Migration 0020 (ADR 0030): the order's coupon, its code as typed (upper-case) and what it took
+     * off the VAT-exclusive price; `price_satang` is the price after it (discountedPackageTotal).
+     */
+    couponId: uuid('coupon_id').references(() => packageCoupons.id),
+    couponCode: text('coupon_code'),
+    discountSatang: integer('discount_satang').notNull().default(0),
     status: packageOrderStatus('status').notNull().default('pending'),
     accessTokenHash: text('access_token_hash').notNull(),
     idempotencyKey: text('idempotency_key').notNull(),
@@ -168,6 +219,15 @@ export const packageOrders = pgTable(
     index('package_orders_paid_idx')
       .on(t.paidAt)
       .where(sql`${t.status} = 'paid'`),
+    // ADR 0030: the uses of a coupon (paid and recent pending orders).
+    index('package_orders_coupon_idx')
+      .on(t.couponId, t.createdAt)
+      .where(sql`${t.couponId} IS NOT NULL`),
+    check(
+      'package_orders_coupon_consistent',
+      sql`(${t.couponId} IS NULL) = (${t.couponCode} IS NULL) AND (${t.couponId} IS NOT NULL OR ${t.discountSatang} = 0)`,
+    ),
+    check('package_orders_discount_nonnegative', sql`${t.discountSatang} >= 0`),
     check(
       'package_orders_amounts_valid',
       sql`${t.priceSatang} >= 0 AND ${t.vatSatang} >= 0 AND ${t.totalSatang} >= 0`,

@@ -35,6 +35,7 @@ describe('loadPackagesConfig (ADR 0026)', () => {
         inquireIntervalSeconds: 20,
         payRatePerOrder: { limit: 10, windowSeconds: 600 },
       },
+      coupons: { holdSeconds: 1_800, checkRatePerIp: { limit: 30, windowSeconds: 600 } },
       listCacheMaxAgeSeconds: 60,
     });
   });
@@ -56,6 +57,9 @@ describe('loadPackagesConfig (ADR 0026)', () => {
       PACKAGE_ORDER_INQUIRE_INTERVAL_SECONDS: '15',
       PACKAGE_PAY_RATE_PER_ORDER: '4',
       PACKAGE_PAY_RATE_PER_ORDER_WINDOW_SECONDS: '300',
+      PACKAGE_COUPON_HOLD_SECONDS: '900',
+      PACKAGE_COUPON_CHECK_RATE_PER_IP: '5',
+      PACKAGE_COUPON_CHECK_RATE_PER_IP_WINDOW_SECONDS: '60',
       PACKAGES_CACHE_MAX_AGE_SECONDS: '0',
     };
     expect(loadPackagesConfig(env)).toEqual({
@@ -75,6 +79,7 @@ describe('loadPackagesConfig (ADR 0026)', () => {
         inquireIntervalSeconds: 15,
         payRatePerOrder: { limit: 4, windowSeconds: 300 },
       },
+      coupons: { holdSeconds: 900, checkRatePerIp: { limit: 5, windowSeconds: 60 } },
       listCacheMaxAgeSeconds: 0,
     });
     expect(loadBillingConfig(env).vatRateBasisPoints).toBe(1_000);

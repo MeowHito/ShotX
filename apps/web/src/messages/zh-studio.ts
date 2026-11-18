@@ -153,6 +153,15 @@ export const zhStudio: StudioMessages = {
     contactTeam: '请联系我们的团队。',
     captchaRequired: '请确认你不是机器人，我们随后会发送确认链接。',
     close: '关闭',
+    coupon: '优惠码',
+    couponPlaceholder: '可选',
+    couponApply: '使用',
+    couponChecking: '正在核对优惠码…',
+    couponRemove: '不使用优惠码',
+    couponInvalid: '请输入有效的优惠码',
+    couponApplied: '已使用优惠码 {code}：减 {percent, number}%',
+    discount: '折扣 {percent, number}%',
+    getFree: '领取套餐',
   },
   signup: {
     title: '设置 SNAP 账号密码',
@@ -193,6 +202,7 @@ export const zhStudio: StudioMessages = {
       loading: '正在加载订单…',
       package: '{name} 套餐',
       vatIncluded: '含 7% 增值税',
+      coupon: '已使用优惠码 {code} · 原价 {total}',
       choose: '选择付款方式',
       methods: {
         qr: '扫描 PromptPay 二维码',

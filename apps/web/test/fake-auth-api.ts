@@ -433,6 +433,7 @@ export class FakeAuthApi {
             accountCreated: false,
             expiresAt: null,
             paymentMethods: [],
+            coupon: null,
           },
         });
         return {

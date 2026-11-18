@@ -7,6 +7,7 @@ import {
   type LucideIcon,
   MenuIcon,
   ScrollTextIcon,
+  TicketPercentIcon,
   UsersIcon,
   WalletIcon,
 } from 'lucide-react';
@@ -17,18 +18,20 @@ import { LanguageMenu } from '@/components/language-switcher';
 import type { SessionUser } from '@/lib/auth/session';
 import { SIGN_IN_PATHS } from '@/lib/sign-in/protocol';
 
-type NavId = 'overview' | 'users' | 'finance' | 'auditLog';
+type NavId = 'overview' | 'users' | 'finance' | 'coupons' | 'auditLog';
 
 const NAV: { id: NavId; href: string; icon: LucideIcon }[] = [
   { id: 'overview', href: '/overview', icon: GaugeIcon },
   { id: 'users', href: '/users', icon: UsersIcon },
   { id: 'finance', href: '/finance', icon: WalletIcon },
+  { id: 'coupons', href: '/coupons', icon: TicketPercentIcon },
   { id: 'auditLog', href: '/audit-log', icon: ScrollTextIcon },
 ];
 
 export function activeNav(pathname: string): NavId | null {
   if (pathname === '/overview') return 'overview';
   if (pathname === '/finance') return 'finance';
+  if (pathname === '/coupons') return 'coupons';
   if (pathname === '/audit-log') return 'auditLog';
   return pathname === '/users' || pathname.startsWith('/users/') ? 'users' : null;
 }

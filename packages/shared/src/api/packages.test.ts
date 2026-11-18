@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { packageTotal } from '../billing/money';
+import { discountedPackageTotal, packageTotal } from '../billing/money';
+import { createCouponBodySchema, updateCouponBodySchema } from './coupons';
 import { SHARE_UNAVAILABLE_REASONS } from '../domain';
 import {
   ERROR_DETAILS_SCHEMAS,
@@ -24,6 +25,8 @@ import {
   parsePackageOrderCookie,
   signupFreeBodySchema,
   signupFreeConfirmBodySchema,
+  checkPackageCouponBodySchema,
+  couponCodeSchema,
 } from './packages';
 import {
   ALL_ROUTES,
@@ -118,6 +121,7 @@ describe('package routes (ADR 0026)', () => {
       signupFree: 'POST /signup/free 204 bff/users',
       signupFreeConfirm: 'POST /signup/free/confirm 200 bff/users',
       createOrder: 'POST /package-orders 201 bff/users',
+      checkCoupon: 'POST /package-coupons/check 200 bff/users',
       getOrder: 'GET /package-orders/:id 200 bff/users',
       fakeResult: 'POST /package-orders/:id/fake-result 200 bff/users',
       pay: 'POST /package-orders/:id/pay 200 bff/users',
@@ -151,6 +155,9 @@ describe('package routes (ADR 0026)', () => {
         ErrorCode.ACCOUNT_DISABLED,
         ErrorCode.PASSWORD_CHANGE_REQUIRED,
       ]),
+    );
+    expect(PACKAGE_ROUTES.createOrder.errors).toEqual(
+      expect.arrayContaining([ErrorCode.COUPON_INVALID, ErrorCode.COUPON_USED_UP]),
     );
     expect(PACKAGE_ROUTES.signupFreeConfirm.errors).toContain(ErrorCode.SIGNUP_LINK_INVALID);
     expect(PACKAGE_ROUTES.getOrder.errors).toContain(ErrorCode.ORDER_NOT_FOUND);
@@ -220,6 +227,7 @@ describe('package routes (ADR 0026)', () => {
           accountCreated: status === 'paid',
           expiresAt: status === 'paid' ? '2026-11-23T03:00:00.000Z' : null,
           paymentMethods: status === 'pending' ? ['qr', 'card'] : [],
+          coupon: status === 'paid' ? { code: 'TEST99', listTotalSatang: 64_093 } : null,
         }).success,
         status,
       ).toBe(true);
@@ -290,5 +298,72 @@ describe('package routes (ADR 0026)', () => {
     expect(parsePackageOrderCookie(`${orderId}.short`)).toBeNull();
     expect(parsePackageOrderCookie(`not-a-uuid.${token}`)).toBeNull();
     expect(() => packageOrderCookieValue('nope', token)).toThrow();
+  });
+});
+
+describe('coupons (ADR 0030)', () => {
+  it('reads codes case-insensitively and refuses malformed ones', () => {
+    expect(couponCodeSchema.parse('  test-99 ')).toBe('TEST-99');
+    expect(couponCodeSchema.parse('a_b')).toBe('A_B');
+    for (const bad of ['', 'ab', '-ABC', 'AB CD', 'ส่วนลด', 'A'.repeat(33)]) {
+      expect(couponCodeSchema.safeParse(bad).success, bad).toBe(false);
+    }
+    expect(createPackageOrderBodySchema.parse({ packageCode: 'd7', couponCode: 'save10' })).toEqual(
+      {
+        packageCode: 'd7',
+        couponCode: 'SAVE10',
+      },
+    );
+    expect(
+      checkPackageCouponBodySchema.safeParse({ packageCode: 'd7', couponCode: 'SAVE10' }).success,
+    ).toBe(true);
+  });
+
+  it('takes the percent off the VAT-exclusive price, then adds VAT', () => {
+    expect(discountedPackageTotal(39_900, 10, 700)).toEqual({
+      listPriceSatang: 39_900,
+      discountSatang: 3_990,
+      priceSatang: 35_910,
+      vatSatang: 2_514,
+      totalSatang: 38_424,
+      vatRateBasisPoints: 700,
+    });
+    expect(discountedPackageTotal(39_900, 99, 700)).toMatchObject({
+      priceSatang: 399,
+      vatSatang: 28,
+      totalSatang: 427,
+    });
+    expect(discountedPackageTotal(39_900, 100, 700)).toMatchObject({
+      discountSatang: 39_900,
+      priceSatang: 0,
+      vatSatang: 0,
+      totalSatang: 0,
+    });
+    // Half a satang rounds up.
+    expect(discountedPackageTotal(15, 10, 0).discountSatang).toBe(2);
+    for (const bad of [0, 101, 1.5]) {
+      expect(() => discountedPackageTotal(39_900, bad, 700), String(bad)).toThrow(RangeError);
+    }
+  });
+
+  it('validates the admin bodies', () => {
+    expect(
+      createCouponBodySchema.parse({
+        code: 'test99',
+        percentOff: 99,
+        maxRedemptions: 1,
+        note: ' ',
+      }),
+    ).toEqual({ code: 'TEST99', percentOff: 99, maxRedemptions: 1 });
+    expect(
+      createCouponBodySchema.safeParse({ code: 'TEST', percentOff: 0, maxRedemptions: 1 }).success,
+    ).toBe(false);
+    expect(
+      createCouponBodySchema.safeParse({ code: 'TEST', percentOff: 100, maxRedemptions: 0 })
+        .success,
+    ).toBe(false);
+    expect(updateCouponBodySchema.safeParse({}).success).toBe(false);
+    expect(updateCouponBodySchema.safeParse({ expiresAt: null }).success).toBe(true);
+    expect(updateCouponBodySchema.safeParse({ isActive: false }).success).toBe(true);
   });
 });

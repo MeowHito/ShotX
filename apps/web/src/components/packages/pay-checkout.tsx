@@ -170,6 +170,14 @@ export function PayCheckout({
       <p className="text-sm text-[#14293b]">{t('package', { name: order.packageName })}</p>
       <p className="text-2xl font-bold text-[#092e50]">{formatSatang(order.totalSatang)}</p>
       <p className={`text-xs ${MUTED}`}>{t('vatIncluded')}</p>
+      {order.coupon !== null ? (
+        <p className="mt-1 text-xs font-semibold text-[#0f7a43]">
+          {t('coupon', {
+            code: order.coupon.code,
+            total: formatSatang(order.coupon.listTotalSatang),
+          })}
+        </p>
+      ) : null}
     </div>
   );
 

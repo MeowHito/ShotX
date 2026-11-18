@@ -23,6 +23,7 @@ import { AdminUsersService } from './admin-users.service';
 import { CashPaymentsService } from './cash-payments.service';
 import { ActAsService } from './act-as.service';
 import { AuditLogService } from './audit-log.service';
+import { CouponsService } from './coupons.service';
 import { ExpensesService } from './expenses.service';
 import { FinanceService } from './finance.service';
 import { AdminSystemService } from './system.service';
@@ -47,6 +48,7 @@ export class AdminController {
     @Inject(AuditLogService) private readonly auditLog: AuditLogService,
     @Inject(ExpensesService) private readonly expenses: ExpensesService,
     @Inject(FinanceService) private readonly finance: FinanceService,
+    @Inject(CouponsService) private readonly coupons: CouponsService,
   ) {}
 
   /** ADR 0018: a one-time link that opens the photographer's studio as them. Audited. */
@@ -177,6 +179,35 @@ export class AdminController {
     params: Out<typeof R.deleteExpense.params>,
   ): Promise<void> {
     await this.expenses.delete(admin.id, params.id);
+  }
+
+  /** ADR 0030: every coupon with its use counts. Read-only. */
+  @Get(R.listCoupons.path)
+  @HttpCode(R.listCoupons.status)
+  async listCoupons() {
+    return respond(R.listCoupons.response, await this.coupons.list());
+  }
+
+  /** ADR 0030: audited `finance.coupon_created` in the same transaction. */
+  @Post(R.createCoupon.path)
+  @HttpCode(R.createCoupon.status)
+  async createCoupon(
+    @CurrentAdmin() admin: AppUser,
+    @Body(new ZodPipe(R.createCoupon.body, 'body')) body: Out<typeof R.createCoupon.body>,
+  ) {
+    return respond(R.createCoupon.response, await this.coupons.create(admin.id, body));
+  }
+
+  /** ADR 0030: audited `finance.coupon_updated` with only what changed. */
+  @Patch(R.updateCoupon.path)
+  @HttpCode(R.updateCoupon.status)
+  async updateCoupon(
+    @CurrentAdmin() admin: AppUser,
+    @Param(new ZodPipe(R.updateCoupon.params, 'params'))
+    params: Out<typeof R.updateCoupon.params>,
+    @Body(new ZodPipe(R.updateCoupon.body, 'body')) body: Out<typeof R.updateCoupon.body>,
+  ) {
+    return respond(R.updateCoupon.response, await this.coupons.update(admin.id, params.id, body));
   }
 
   /** ADR 0027 §3: income, expenses and profit over a range. Read-only. */

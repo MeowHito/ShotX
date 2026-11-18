@@ -362,6 +362,8 @@ export const zh: PublicMessages = {
       EMAIL_UNAVAILABLE: '此邮箱无法在线购买套餐，请联系我们的团队。',
       SIGNUP_LINK_INVALID: '此确认链接已失效（已过期、已使用，或该邮箱已有账号）。',
       ORDER_NOT_FOUND: '找不到此订单。',
+      COUPON_INVALID: '此优惠码无法使用（不存在、已停用或已过期）。',
+      COUPON_USED_UP: '此优惠码已用完。',
     },
     details: {
       quotaExceeded: '空间不足：此文件需要 {requested}，但只剩 {available}。',

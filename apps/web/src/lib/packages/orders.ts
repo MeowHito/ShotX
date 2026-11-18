@@ -1,4 +1,5 @@
 import {
+  checkPackageCouponBodySchema,
   createPackageOrderBodySchema,
   ErrorCode,
   IDEMPOTENCY_KEY_HEADER,
@@ -123,12 +124,14 @@ export async function handleCreateOrder(
     deps.auth,
   );
   if (unavailable === true) return errorResponse(502, ErrorCode.INTERNAL_ERROR);
-  const { packageCode, name, email } = parsed.data;
+  const { packageCode, name, email, couponCode } = parsed.data;
   if (session === null && (name === undefined || email === undefined)) {
     // The dialog asked for no name or email because the buyer looked signed in.
     return errorResponse(401, ErrorCode.UNAUTHENTICATED, undefined, setCookies);
   }
-  const body = session !== null ? { packageCode } : { packageCode, name, email };
+  const coupon = couponCode !== undefined ? { couponCode } : {};
+  const body =
+    session !== null ? { packageCode, ...coupon } : { packageCode, name, email, ...coupon };
 
   try {
     const order = await api(deps, session?.accessToken).call(PACKAGE_ROUTES.createOrder, {
@@ -145,6 +148,27 @@ export async function handleCreateOrder(
     return json(200, result, [...setCookies, cookie]);
   } catch (error) {
     return apiErrorResponse(error, setCookies);
+  }
+}
+
+/** POST /checkout/coupon (ADR 0030): what a coupon makes a package cost, for the buy dialog. */
+export async function handleCheckCoupon(
+  request: Request,
+  deps: PackageOrderDeps,
+): Promise<Response> {
+  if (!isSameOrigin(request, deps.auth.publicBaseUrl)) {
+    return errorResponse(403, ErrorCode.FORBIDDEN);
+  }
+  const parsed = checkPackageCouponBodySchema.safeParse(await readBody(request));
+  if (!parsed.success) return errorResponse(400, ErrorCode.VALIDATION_FAILED);
+  try {
+    const result = await api(deps).call(PACKAGE_ROUTES.checkCoupon, {
+      body: parsed.data,
+      signal: AbortSignal.timeout(deps.timeoutMs),
+    });
+    return json(200, result);
+  } catch (error) {
+    return apiErrorResponse(error);
   }
 }
 

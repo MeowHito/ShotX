@@ -147,6 +147,34 @@ describe('POST /checkout/order', () => {
     expect([...api.orders.values()][0]?.view.emailMasked).toBe('s***@example.com');
   });
 
+  it('forwards a coupon code, signed in or not (ADR 0030)', async () => {
+    const { api, deps } = setup();
+    const { cookie } = signedInCookie(api);
+    await handleCreateOrder(
+      post(
+        '/checkout/order',
+        { packageCode: 'd7', name: 'Somchai', email: 'somchai@example.com', couponCode: 'test99' },
+        { [IDEMPOTENCY_KEY_HEADER]: KEY },
+      ),
+      deps,
+    );
+    await handleCreateOrder(
+      post(
+        '/checkout/order',
+        { packageCode: 'd15', couponCode: 'TEST99' },
+        { [IDEMPOTENCY_KEY_HEADER]: 'other-key', cookie },
+      ),
+      deps,
+    );
+    const bodies = api.calls
+      .filter((c) => c.route === PACKAGE_ROUTES.createOrder)
+      .map((c) => c.body);
+    expect(bodies).toEqual([
+      { packageCode: 'd7', name: 'Somchai', email: 'somchai@example.com', couponCode: 'TEST99' },
+      { packageCode: 'd15', couponCode: 'TEST99' },
+    ]);
+  });
+
   it('without a session, name and email are required (UNAUTHENTICATED: the dialog asks them)', async () => {
     const { api, deps } = setup();
     const response = await handleCreateOrder(

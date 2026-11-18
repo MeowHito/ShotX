@@ -5,7 +5,10 @@ import {
   type AdminExpense,
   type AdminUserFinanceResponse,
   type AuditLogEntry,
+  type AdminCoupon,
+  createCouponBodySchema,
   createExpenseBodySchema,
+  updateCouponBodySchema,
   type FinanceResponse,
   financeQuerySchema,
   isAuditActionPrefix,
@@ -236,6 +239,8 @@ export class FakeAdminApi {
   auditLog: AuditLogEntry[] = [];
   /** GET /admin/expenses rows (live), newest spent_on first. */
   expenses: AdminExpense[] = [];
+  /** GET /admin/coupons rows, newest first (ADR 0030). */
+  coupons: AdminCoupon[] = [];
   /** GET /admin/finance (its range echoes the query when one is given). */
   finance: FinanceResponse = makeFinance();
   /** GET /admin/users/:id/finance by user id (others: NOT_FOUND). */
@@ -501,6 +506,42 @@ export class FakeAdminApi {
         this.expenses = this.expenses.filter((e) => e.id !== id);
         if (this.expenses.length === before) throw new Fail(ErrorCode.NOT_FOUND);
         return { status: 204, value: undefined };
+      }
+      case ADMIN_ROUTES.listCoupons:
+        return { status: 200, value: { items: this.coupons } };
+      case ADMIN_ROUTES.createCoupon: {
+        const b = createCouponBodySchema.parse(body);
+        if (this.coupons.some((c) => c.code === b.code)) throw new Fail(ErrorCode.CONFLICT);
+        const coupon: AdminCoupon = {
+          id: nextId(),
+          code: b.code,
+          percentOff: b.percentOff,
+          maxRedemptions: b.maxRedemptions,
+          paidCount: 0,
+          holdingCount: 0,
+          expiresAt: b.expiresAt ?? null,
+          isActive: true,
+          note: b.note ?? null,
+          createdById: SELF_ID,
+          createdAt: '2026-11-18T07:00:00.000Z',
+          updatedAt: '2026-11-18T07:00:00.000Z',
+        };
+        this.coupons.unshift(coupon);
+        return { status: 201, value: coupon };
+      }
+      case ADMIN_ROUTES.updateCoupon: {
+        const b = updateCouponBodySchema.parse(body);
+        const i = this.coupons.findIndex((c) => c.id === id);
+        const current = this.coupons[i];
+        if (current === undefined) throw new Fail(ErrorCode.NOT_FOUND);
+        const next: AdminCoupon = {
+          ...current,
+          ...(b.isActive !== undefined ? { isActive: b.isActive } : {}),
+          ...(b.maxRedemptions !== undefined ? { maxRedemptions: b.maxRedemptions } : {}),
+          ...(b.expiresAt !== undefined ? { expiresAt: b.expiresAt } : {}),
+        };
+        this.coupons[i] = next;
+        return { status: 200, value: next };
       }
       case ADMIN_ROUTES.finance: {
         const q = financeQuerySchema.parse(Object.fromEntries(search));

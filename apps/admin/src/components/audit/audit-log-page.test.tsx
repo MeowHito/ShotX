@@ -105,7 +105,13 @@ describe('AuditLogPage (ADR 0027 §1)', () => {
     const actions = within(within(form).getByLabelText('การกระทำ'))
       .getAllByRole('option')
       .map((o) => o.textContent);
-    expect(actions).toEqual(['ทุกการกระทำ', 'บันทึกรายจ่าย', 'ลบรายจ่าย']);
+    expect(actions).toEqual([
+      'ทุกการกระทำ',
+      'บันทึกรายจ่าย',
+      'ลบรายจ่าย',
+      'สร้างคูปองส่วนลด',
+      'แก้ไขคูปองส่วนลด',
+    ]);
     await user.selectOptions(within(form).getByLabelText('การกระทำ'), 'ลบรายจ่าย');
 
     await user.type(within(form).getByLabelText('รหัสผู้ทำ'), 'not-a-uuid');

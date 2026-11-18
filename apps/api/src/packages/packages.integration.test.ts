@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   auditLog,
+  packageCoupons,
   packageOrders,
   packages,
   photographerPackages,
@@ -11,6 +12,7 @@ import {
   apiPath,
   AUTH_ROUTES as AR,
   authTokenResponseSchema,
+  checkPackageCouponResponseSchema,
   type AuthTokenResponse,
   createPackageOrderResponseSchema,
   myPackageResponseSchema,
@@ -29,6 +31,7 @@ import { FakeAccountMailer } from '../auth/account-email';
 import { hashPassword } from '../auth/password';
 import { PhotographerSignIn } from '../auth/photographer-sign-in';
 import { FakeCaptchaVerifier } from '../public/captcha';
+import { CouponsService } from '../admin/coupons.service';
 import { DATABASE_BACKENDS, type TestDatabase } from '../testing/database';
 import { OFFLINE_ACCOUNTS_ENV } from '../testing/fakes';
 import { TestApi, type TestResponse } from '../testing/harness';
@@ -394,6 +397,7 @@ for (const backend of DATABASE_BACKENDS) {
           expiresAt: null,
           // The fake gateway has its own page: nothing for Snap's pay page.
           paymentMethods: [],
+          coupon: null,
         });
         for (const token of [undefined, 'B'.repeat(43), 'short']) {
           expect(await getOrder(created.orderId, token)).toMatchObject({
@@ -1162,6 +1166,196 @@ for (const backend of DATABASE_BACKENDS) {
           { order_id: older },
         ]);
         expect(await orderRow(created.orderId)).toMatchObject({ gatewayRef: 'TENQ1' });
+      });
+    });
+
+    describe('coupons (ADR 0030)', () => {
+      let adminId: string;
+      const HOLD_MS = 1800 * 1000;
+      beforeAll(async () => {
+        const [row] = await api.db
+          .insert(users)
+          .values({
+            email: newEmail('admin'),
+            name: 'แอดมินทดสอบ',
+            role: 'admin',
+            authPool: 'admins',
+            authSubject: `admin:${randomUUID()}`,
+          })
+          .returning({ id: users.id });
+        if (row === undefined) throw new Error('no admin');
+        adminId = row.id;
+      });
+      const coupons = () => api.app.get(CouponsService);
+      let n = 0;
+      const newCoupon = (body: Partial<{ percentOff: number; maxRedemptions: number }> = {}) =>
+        coupons().create(adminId, {
+          code: `TEST-${String(++n).padStart(3, '0')}-${randomUUID().slice(0, 4).toUpperCase()}`,
+          percentOff: body.percentOff ?? 10,
+          maxRedemptions: body.maxRedemptions ?? 5,
+        });
+      const anon = (couponCode: string, packageCode = 'd7') => ({
+        packageCode,
+        email: newEmail('coupon'),
+        name: 'ผู้ซื้อคูปอง',
+        couponCode,
+      });
+
+      it('prices an order with the coupon and shows it on the order', async () => {
+        const coupon = await newCoupon({ percentOff: 10 });
+        // d7: 59,900 + 7% VAT = 64,093. 10% off the price: 53,910 + 3,774 VAT = 57,684.
+        const check = await bff('POST', apiPath(R.checkCoupon), {
+          body: { packageCode: 'd7', couponCode: coupon.code.toLowerCase() },
+        });
+        expect(check.status, JSON.stringify(check.body)).toBe(200);
+        expect(checkPackageCouponResponseSchema.parse(check.body)).toEqual({
+          couponCode: coupon.code,
+          percentOff: 10,
+          listTotalSatang: 64_093,
+          price: {
+            priceSatang: 53_910,
+            vatSatang: 3_774,
+            totalSatang: 57_684,
+            vatRateBasisPoints: 700,
+          },
+        });
+        const created = await newOrder(anon(coupon.code));
+        expect(await orderRow(created.orderId)).toMatchObject({
+          couponId: coupon.id,
+          couponCode: coupon.code,
+          discountSatang: 5_990,
+          priceSatang: 53_910,
+          totalSatang: 57_684,
+          gateway: 'fake',
+        });
+        const view = packageOrderViewSchema.parse(
+          (await getOrder(created.orderId, created.accessToken)).body,
+        );
+        expect(view).toMatchObject({
+          totalSatang: 57_684,
+          coupon: { code: coupon.code, listTotalSatang: 64_093 },
+        });
+        const paid = await fakeResult(created.orderId, created.accessToken, 'paid');
+        expect(paid.body).toMatchObject({ status: 'paid' });
+      });
+
+      it('refuses unknown, switched-off and expired codes with one code', async () => {
+        const off = await newCoupon();
+        await coupons().update(adminId, off.id, { isActive: false });
+        const expired = await newCoupon();
+        await api.db
+          .update(packageCoupons)
+          .set({ expiresAt: new Date(api.clock.now().getTime() - 1000) })
+          .where(eq(packageCoupons.id, expired.id));
+        for (const code of ['NOPE-123', off.code, expired.code]) {
+          expect(await order(anon(code)), code).toMatchObject({
+            status: 422,
+            body: { code: 'COUPON_INVALID' },
+          });
+          expect(
+            await bff('POST', apiPath(R.checkCoupon), {
+              body: { packageCode: 'd7', couponCode: code },
+            }),
+          ).toMatchObject({ status: 422, body: { code: 'COUPON_INVALID' } });
+        }
+      });
+
+      it('counts paid orders and recent pending ones, and frees a hold after it ends', async () => {
+        const coupon = await newCoupon({ maxRedemptions: 2 });
+        const first = await newOrder(anon(coupon.code));
+        await fakeResult(first.orderId, first.accessToken, 'paid');
+        const second = await newOrder(anon(coupon.code));
+        expect(await order(anon(coupon.code))).toMatchObject({
+          status: 409,
+          body: { code: 'COUPON_USED_UP' },
+        });
+        expect((await coupons().list()).items.find((c) => c.id === coupon.id)).toMatchObject({
+          paidCount: 1,
+          holdingCount: 1,
+        });
+        // The pending order's hold ends: its use is free again.
+        await api.db
+          .update(packageOrders)
+          .set({ createdAt: new Date(api.clock.now().getTime() - HOLD_MS - 1000) })
+          .where(eq(packageOrders.id, second.orderId));
+        await newOrder(anon(coupon.code));
+        // A replay of the same request is the same order, not one more use.
+        const key = randomUUID();
+        const body = anon(coupon.code);
+        expect((await order(body, { key })).status).toBe(409);
+        // Raising the limit lets one more in; the replay then answers that one order.
+        await coupons().update(adminId, coupon.id, { maxRedemptions: 3 });
+        const a = await order(body, { key });
+        const b = await order(body, { key });
+        expect(a.status).toBe(201);
+        expect(createPackageOrderResponseSchema.parse(b.body).orderId).toBe(
+          createPackageOrderResponseSchema.parse(a.body).orderId,
+        );
+      });
+
+      it('gives the package at once for 100% off, without a gateway', async () => {
+        const coupon = await newCoupon({ percentOff: 100, maxRedemptions: 1 });
+        const body = anon(coupon.code, 'd3');
+        const created = await newOrder(body);
+        await settled();
+        expect(created.redirectUrl).toBe('http://localhost:3000/checkout/return');
+        const row = await orderRow(created.orderId);
+        expect(row).toMatchObject({
+          status: 'paid',
+          gateway: 'coupon',
+          totalSatang: 0,
+          priceSatang: 0,
+          vatSatang: 0,
+          discountSatang: 39_900,
+          accountCreated: true,
+        });
+        expect(gateway.checkouts.some((c) => c.orderId === created.orderId)).toBe(false);
+        expect(await packageRow(row!.photographerId!)).toBeDefined();
+        expect(mailer.sent.some((m) => m.to === body.email)).toBe(true);
+        expect(await audits('package.order_paid', created.orderId)).toHaveLength(1);
+        const view = packageOrderViewSchema.parse(
+          (await getOrder(created.orderId, created.accessToken)).body,
+        );
+        expect(view).toMatchObject({
+          status: 'paid',
+          totalSatang: 0,
+          paymentMethods: [],
+          coupon: { code: coupon.code, listTotalSatang: 42_693 },
+        });
+        // Its one use is taken.
+        expect(await order(anon(coupon.code, 'd3'))).toMatchObject({
+          status: 409,
+          body: { code: 'COUPON_USED_UP' },
+        });
+      });
+
+      it('audits admin changes with only what changed, and refuses a taken code', async () => {
+        const coupon = await newCoupon({ maxRedemptions: 5 });
+        expect(await audits('finance.coupon_created', coupon.id)).toMatchObject([
+          {
+            actorId: adminId,
+            targetType: 'coupon',
+            meta: { code: coupon.code, percentOff: 10, maxRedemptions: 5, expiresAt: null },
+          },
+        ]);
+        await coupons().update(adminId, coupon.id, { isActive: false, maxRedemptions: 5 });
+        await coupons().update(adminId, coupon.id, { isActive: false });
+        expect(await audits('finance.coupon_updated', coupon.id)).toMatchObject([
+          {
+            meta: { code: coupon.code, changes: { isActive: { from: true, to: false } } },
+          },
+        ]);
+        await expect(
+          coupons().create(adminId, { code: coupon.code, percentOff: 5, maxRedemptions: 1 }),
+        ).rejects.toMatchObject({ code: 'CONFLICT' });
+        await expect(
+          coupons().create(adminId, {
+            code: 'PAST-001',
+            percentOff: 5,
+            maxRedemptions: 1,
+            expiresAt: new Date(api.clock.now().getTime() - 1000).toISOString(),
+          }),
+        ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
       });
     });
 

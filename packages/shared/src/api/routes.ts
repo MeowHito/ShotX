@@ -62,6 +62,12 @@ import {
   listExpensesResponseSchema,
 } from './finance';
 import {
+  adminCouponSchema,
+  createCouponBodySchema,
+  listCouponsResponseSchema,
+  updateCouponBodySchema,
+} from './coupons';
+import {
   createFolderBodySchema,
   ownerDownloadQuerySchema,
   signedDownloadSchema,
@@ -94,6 +100,8 @@ import {
 } from './designs';
 import { meResponseSchema } from './me';
 import {
+  checkPackageCouponBodySchema,
+  checkPackageCouponResponseSchema,
   createPackageOrderBodySchema,
   createPackageOrderHeadersSchema,
   createPackageOrderResponseSchema,
@@ -1524,6 +1532,39 @@ export const ADMIN_ROUTES = {
     params: idParamsSchema,
     errors: adminErrors(ErrorCode.NOT_FOUND),
   },
+  /** ADR 0030: every coupon with its use counts, newest first. Read-only. */
+  listCoupons: {
+    method: 'GET',
+    path: '/admin/coupons',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    response: listCouponsResponseSchema,
+    errors: adminErrors(),
+  },
+  /** ADR 0030: create a coupon (audited `finance.coupon_created`); a taken code is CONFLICT. */
+  createCoupon: {
+    method: 'POST',
+    path: '/admin/coupons',
+    status: 201,
+    auth: 'admin',
+    bffKey: 'admins',
+    body: createCouponBodySchema,
+    response: adminCouponSchema,
+    errors: adminErrors(ErrorCode.CONFLICT),
+  },
+  /** ADR 0030: switch a coupon on or off, change its uses or expiry (audited). */
+  updateCoupon: {
+    method: 'PATCH',
+    path: '/admin/coupons/:id',
+    status: 200,
+    auth: 'admin',
+    bffKey: 'admins',
+    params: idParamsSchema,
+    body: updateCouponBodySchema,
+    response: adminCouponSchema,
+    errors: adminErrors(ErrorCode.NOT_FOUND),
+  },
   /** ADR 0027 §3: income, expenses and profit over a range. Read-only, not audited. */
   finance: {
     method: 'GET',
@@ -1614,7 +1655,25 @@ export const PACKAGE_ROUTES = {
       ErrorCode.EMAIL_UNAVAILABLE,
       ErrorCode.IDEMPOTENCY_KEY_REUSED,
       ErrorCode.PAYMENT_GATEWAY_ERROR,
+      ErrorCode.COUPON_INVALID,
+      ErrorCode.COUPON_USED_UP,
       ...SIGNED_IN_ROUTE_ERRORS,
+    ),
+  },
+  /** ADR 0030: what a coupon makes a package cost, for the buy dialog (holds nothing). */
+  checkCoupon: {
+    method: 'POST',
+    path: '/package-coupons/check',
+    status: 200,
+    auth: 'bff',
+    bffKey: 'users',
+    body: checkPackageCouponBodySchema,
+    response: checkPackageCouponResponseSchema,
+    errors: errors(
+      ErrorCode.NOT_FOUND,
+      ErrorCode.PACKAGE_UNAVAILABLE,
+      ErrorCode.COUPON_INVALID,
+      ErrorCode.COUPON_USED_UP,
     ),
   },
   /** Poll one order with its access token (ORDER_TOKEN_HEADER). */

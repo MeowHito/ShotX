@@ -86,6 +86,16 @@ const packagesEnvSchema = z.object({
    */
   PACKAGE_PAY_RATE_PER_ORDER: int(1, 1000).default(10),
   PACKAGE_PAY_RATE_PER_ORDER_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
+  /**
+   * ADR 0030: how long a pending (or failed) order holds one of its coupon's uses (default 30
+   * minutes). A paid order always counts.
+   */
+  PACKAGE_COUPON_HOLD_SECONDS: int(SECONDS_PER_MINUTE, 7 * SECONDS_PER_DAY).default(
+    30 * SECONDS_PER_MINUTE,
+  ),
+  /** POST /package-coupons/check per client IP and window (default 30 per 10 minutes). */
+  PACKAGE_COUPON_CHECK_RATE_PER_IP: requests.default(30),
+  PACKAGE_COUPON_CHECK_RATE_PER_IP_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
   /** `Cache-Control: public, max-age` of GET /packages (default 60 seconds). */
   PACKAGES_CACHE_MAX_AGE_SECONDS: int(0, SECONDS_PER_DAY).default(SECONDS_PER_MINUTE),
 });
@@ -109,6 +119,13 @@ export interface PackagesConfig {
     /** POST /package-orders/:id/pay per order (PACKAGE_PAY_RATE_PER_ORDER*). */
     payRatePerOrder: RateLimitRule;
   };
+  /** ADR 0030. */
+  coupons: {
+    /** PACKAGE_COUPON_HOLD_SECONDS. */
+    holdSeconds: number;
+    /** POST /package-coupons/check per IP (PACKAGE_COUPON_CHECK_RATE_PER_IP*). */
+    checkRatePerIp: RateLimitRule;
+  };
   /** GET /packages Cache-Control max-age, seconds. */
   listCacheMaxAgeSeconds: number;
 }
@@ -119,8 +136,9 @@ export interface PackagesConfig {
  * SIGNUP_RATE_PER_IP_WINDOW_SECONDS (3600), SIGNUP_EMAILS_PER_HOUR (3), SIGNUP_EMAILS_PER_DAY
  * (200), SIGNUP_LINK_TTL_SECONDS (86400), PACKAGE_ORDER_RATE_PER_IP (20) per
  * PACKAGE_ORDER_RATE_PER_IP_WINDOW_SECONDS (3600), PACKAGE_SET_PASSWORD_TTL_SECONDS (604800),
- * PACKAGE_ORDER_INQUIRE_AFTER_SECONDS (30), PACKAGE_ORDER_INQUIRE_INTERVAL_SECONDS (20) and
- * PACKAGES_CACHE_MAX_AGE_SECONDS (60).
+ * PACKAGE_ORDER_INQUIRE_AFTER_SECONDS (30), PACKAGE_ORDER_INQUIRE_INTERVAL_SECONDS (20),
+ * PACKAGE_COUPON_HOLD_SECONDS (1800), PACKAGE_COUPON_CHECK_RATE_PER_IP (30) per
+ * PACKAGE_COUPON_CHECK_RATE_PER_IP_WINDOW_SECONDS (600) and PACKAGES_CACHE_MAX_AGE_SECONDS (60).
  */
 export function loadPackagesConfig(env: Env): PackagesConfig {
   const e = parseEnv(packagesEnvSchema, env, 'packages');
@@ -148,6 +166,13 @@ export function loadPackagesConfig(env: Env): PackagesConfig {
       payRatePerOrder: {
         limit: e.PACKAGE_PAY_RATE_PER_ORDER,
         windowSeconds: e.PACKAGE_PAY_RATE_PER_ORDER_WINDOW_SECONDS,
+      },
+    },
+    coupons: {
+      holdSeconds: e.PACKAGE_COUPON_HOLD_SECONDS,
+      checkRatePerIp: {
+        limit: e.PACKAGE_COUPON_CHECK_RATE_PER_IP,
+        windowSeconds: e.PACKAGE_COUPON_CHECK_RATE_PER_IP_WINDOW_SECONDS,
       },
     },
     listCacheMaxAgeSeconds: e.PACKAGES_CACHE_MAX_AGE_SECONDS,

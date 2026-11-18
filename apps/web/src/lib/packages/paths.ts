@@ -12,6 +12,8 @@ export const PACKAGE_ORDER_PATHS = {
   fakeResult: '/checkout/order/fake-result',
   /** POST `{ orderId, method }`: one payment attempt from the pay page (ADR 0029). */
   pay: '/checkout/order/pay',
+  /** POST `{ packageCode, couponCode }`: what a coupon makes a package cost (ADR 0030). */
+  coupon: '/checkout/coupon',
 } as const;
 
 /**

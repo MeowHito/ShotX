@@ -4,6 +4,7 @@ import { ADMIN_LIST_PAGE_SIZE_LIMIT } from '../config/admin-console';
 import { CURSOR_MAX_LENGTH, decodeOpaqueCursor, encodeOpaqueCursor } from '../cursor-codec';
 import { EXPENSE_CATEGORIES, PACKAGE_ORDER_STATUSES, type FinanceAuditAction } from '../domain';
 import { byteCountSchema, idSchema, isoDateTimeSchema } from './common';
+import { COUPON_AUDIT_META_SCHEMAS } from './coupons';
 import { packageCodeSchema } from './packages';
 import { bangkokDateSchema } from './shares';
 
@@ -264,6 +265,7 @@ const expenseAuditMeta = z.object({
 export const FINANCE_AUDIT_META_SCHEMAS = {
   'finance.expense_created': expenseAuditMeta,
   'finance.expense_deleted': expenseAuditMeta,
+  ...COUPON_AUDIT_META_SCHEMAS,
 } as const satisfies Record<FinanceAuditAction, z.ZodType>;
 
 export type FinanceAuditMeta<A extends FinanceAuditAction> = z.output<

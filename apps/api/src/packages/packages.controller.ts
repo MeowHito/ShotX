@@ -115,6 +115,17 @@ export class PackagesController {
     );
   }
 
+  /** ADR 0030: what a coupon makes a package cost (holds nothing). */
+  @Post(R.checkCoupon.path)
+  @HttpCode(R.checkCoupon.status)
+  @UseGuards(PackageSalesGuard, BffGuard)
+  async checkCoupon(
+    @Body(new ZodPipe(R.checkCoupon.body, 'body')) body: Out<typeof R.checkCoupon.body>,
+    @BffIpHash() ipHash: string,
+  ) {
+    return respond(R.checkCoupon.response, await this.packages.checkCoupon(body, ipHash));
+  }
+
   @Post(R.createOrder.path)
   @HttpCode(R.createOrder.status)
   @UseGuards(PackageSalesGuard, BffGuard, OptionalPhotographerGuard)

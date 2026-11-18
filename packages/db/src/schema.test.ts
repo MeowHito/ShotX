@@ -79,6 +79,7 @@ describe('schema', () => {
         'photographer_packages',
         'package_orders',
         'expenses',
+        'package_coupons',
       ].sort(),
     );
   });
@@ -462,8 +463,24 @@ describe('schema', () => {
       expect.arrayContaining([
         'package_orders_photographer_created_idx',
         'package_orders_email_idx',
+        'package_orders_coupon_idx',
       ]),
     );
+    // ADR 0030: coupons.
+    expect(names('package_orders')).toEqual(
+      expect.arrayContaining(['coupon_id', 'coupon_code', 'discount_satang']),
+    );
+    expect(column('package_orders', 'discount_satang').default).toBe(0);
+    expect(uniques('package_coupons')).toContainEqual(['package_coupons_code_unique', ['code']]);
+    expect(checks('package_coupons')).toEqual(
+      expect.arrayContaining([
+        'package_coupons_code_format',
+        'package_coupons_percent_off_range',
+        'package_coupons_max_redemptions_positive',
+        'package_coupons_created_by_pool',
+      ]),
+    );
+    expect(checks('package_orders')).toContain('package_orders_coupon_consistent');
   });
 
   it('has the account columns, keys and checks of migration 0011 (ADR 0010)', () => {

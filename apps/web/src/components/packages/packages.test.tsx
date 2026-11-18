@@ -409,6 +409,66 @@ describe('paid package dialog', () => {
   });
 });
 
+describe('coupon in the paid dialog (ADR 0030)', () => {
+  const priced = (percentOff: number, priceSatang: number) => ({
+    couponCode: 'TEST99',
+    percentOff,
+    listTotalSatang: 42_693,
+    price: packageTotal(priceSatang, VAT),
+  });
+
+  it('prices the code, shows the discount and sends it with the order', async () => {
+    const sent = stubFetch((call) =>
+      call.path === PACKAGE_ORDER_PATHS.coupon
+        ? json(200, priced(99, 399))
+        : json(200, { redirectUrl: 'https://snap.example/checkout/pay?order=x' }),
+    );
+    renderIntl(<PackageCards data={response()} signedIn />);
+    const dialog = await choose('3 Days');
+    await userEvent.type(within(dialog).getByLabelText(th.packageDialog.coupon), 'test99');
+    await userEvent.click(
+      within(dialog).getByRole('button', { name: th.packageDialog.couponApply }),
+    );
+    expect(await within(dialog).findByText('ใช้โค้ด TEST99 ลด 99%')).toBeInTheDocument();
+    const summary = dialog.querySelector('dl');
+    expect(summary).toHaveTextContent('ส่วนลด 99%−฿395.01');
+    expect(summary).toHaveTextContent('ยอดชำระ฿426.93฿4.27');
+    expect(sent[0]).toMatchObject({
+      path: PACKAGE_ORDER_PATHS.coupon,
+      body: { packageCode: 'd3', couponCode: 'TEST99' },
+    });
+    await userEvent.click(within(dialog).getByRole('button', { name: th.packageDialog.pay }));
+    await waitFor(() => expect(navigate).toHaveBeenCalled());
+    expect(sent[1]).toMatchObject({
+      path: PACKAGE_ORDER_PATHS.order,
+      body: { packageCode: 'd3', couponCode: 'TEST99' },
+    });
+  });
+
+  it('a typed code is priced before paying; a refused one says why and sends no order', async () => {
+    const sent = stubFetch(() => apiError(409, ErrorCode.COUPON_USED_UP));
+    renderIntl(<PackageCards data={response()} signedIn />);
+    const dialog = await choose('3 Days');
+    await userEvent.type(within(dialog).getByLabelText(th.packageDialog.coupon), 'GONE-1');
+    await userEvent.click(within(dialog).getByRole('button', { name: th.packageDialog.pay }));
+    expect(await within(dialog).findByText(th.errors.codes.COUPON_USED_UP)).toBeInTheDocument();
+    expect(sent.map((c) => c.path)).toEqual([PACKAGE_ORDER_PATHS.coupon]);
+  });
+
+  it('says "get the package" for 100% off', async () => {
+    stubFetch(() => json(200, priced(100, 0)));
+    renderIntl(<PackageCards data={response()} signedIn />);
+    const dialog = await choose('3 Days');
+    await userEvent.type(within(dialog).getByLabelText(th.packageDialog.coupon), 'FREE100');
+    await userEvent.click(
+      within(dialog).getByRole('button', { name: th.packageDialog.couponApply }),
+    );
+    expect(
+      await within(dialog).findByRole('button', { name: th.packageDialog.getFree }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe('Free sign-up with Turnstile (CAPTCHA_PROVIDER=turnstile)', () => {
   const TURNSTILE = {
     provider: 'turnstile',

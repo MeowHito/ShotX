@@ -1,4 +1,7 @@
 import {
+  type CheckPackageCouponBody,
+  type CheckPackageCouponResponse,
+  checkPackageCouponResponseSchema,
   type CreatePackageOrderBody,
   IDEMPOTENCY_KEY_HEADER,
   type PackageOrderView,
@@ -88,6 +91,19 @@ export async function createPackageOrder(
     fetchImpl,
   );
   return parsed(response, createOrderResultSchema);
+}
+
+/** ADR 0030: what a coupon makes a package cost (the API's COUPON_* errors as ApiError). */
+export async function checkPackageCoupon(
+  input: CheckPackageCouponBody,
+  fetchImpl?: typeof fetch,
+): Promise<CheckPackageCouponResponse> {
+  const response = await send(
+    PACKAGE_ORDER_PATHS.coupon,
+    { method: 'POST', body: input },
+    fetchImpl,
+  );
+  return parsed(response, checkPackageCouponResponseSchema);
 }
 
 /** The order of this browser (its cookie), for /checkout/return. */

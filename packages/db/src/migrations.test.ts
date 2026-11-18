@@ -333,6 +333,17 @@ describe('migrations', () => {
     expect(list[0]).toContain("DEFAULT '{}'::text[]");
   });
 
+  it('0020 is package_coupons: a new table and additive order columns (ADR 0030)', () => {
+    expect(journal.entries[20]?.tag).toBe('0020_package_coupons');
+    const sql = sqlOf('0020_package_coupons');
+    expect(sql).toContain('CREATE TABLE "package_coupons"');
+    expect(sql).toContain('ADD COLUMN "coupon_id" uuid;');
+    expect(sql).toContain('ADD COLUMN "coupon_code" text;');
+    expect(sql).toContain('ADD COLUMN "discount_satang" integer DEFAULT 0 NOT NULL');
+    // Nothing existing is dropped or rewritten.
+    expect(sql).not.toMatch(/DROP|ALTER COLUMN|RENAME/);
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

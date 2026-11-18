@@ -50,7 +50,12 @@ describe('audit actions (ADR 0027)', () => {
       ...FINANCE_AUDIT_ACTIONS,
     ]);
     expect(new Set(AUDIT_ACTIONS).size).toBe(AUDIT_ACTIONS.length);
-    expect(FINANCE_AUDIT_ACTIONS).toEqual(['finance.expense_created', 'finance.expense_deleted']);
+    expect(FINANCE_AUDIT_ACTIONS).toEqual([
+      'finance.expense_created',
+      'finance.expense_deleted',
+      'finance.coupon_created',
+      'finance.coupon_updated',
+    ]);
     expect(AUDIT_ACTIONS).toEqual(
       expect.arrayContaining([
         'auth.photographer.sign_in',

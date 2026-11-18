@@ -93,6 +93,45 @@ export function packageTotal(priceSatang: number, vatRateBasisPoints: number): P
   return { priceSatang, vatSatang, totalSatang, vatRateBasisPoints };
 }
 
+/** ADR 0030: a coupon takes 1 to 100 percent off the VAT-exclusive price. */
+export const COUPON_PERCENT_MIN = 1;
+export const COUPON_PERCENT_MAX = 100;
+
+/** A package price after a coupon: packageTotal of the discounted price, plus what came off. */
+export interface DiscountedPackageTotal extends PackageTotal {
+  /** The package's VAT-exclusive list price. */
+  listPriceSatang: number;
+  /** `round_half_up(list × percent / 100)`, VAT-exclusive; `priceSatang = list − discount`. */
+  discountSatang: number;
+}
+
+/**
+ * ADR 0030: the order amounts with a coupon of `percentOff` (1–100): the discount comes off the
+ * VAT-exclusive price (rounded half up to the satang), then VAT goes on top of what is left. 100%
+ * is a total of 0. Example at 7%: 39,900 with 10% → discount 3,990, price 35,910, VAT 2,514,
+ * total 38,424.
+ */
+export function discountedPackageTotal(
+  listPriceSatang: number,
+  percentOff: number,
+  vatRateBasisPoints: number,
+): DiscountedPackageTotal {
+  assertSatang('listPriceSatang', listPriceSatang);
+  if (
+    !Number.isInteger(percentOff) ||
+    percentOff < COUPON_PERCENT_MIN ||
+    percentOff > COUPON_PERCENT_MAX
+  ) {
+    throw new RangeError(`percentOff must be an integer from 1 to 100, got ${percentOff}`);
+  }
+  const discountSatang = mulDivRoundHalfUp(listPriceSatang, percentOff, 100);
+  return {
+    ...packageTotal(listPriceSatang - discountSatang, vatRateBasisPoints),
+    listPriceSatang,
+    discountSatang,
+  };
+}
+
 export const satangSchema = z.number().int().nonnegative().max(MAX_AMOUNT_SATANG);
 
 export const packageTotalSchema = z

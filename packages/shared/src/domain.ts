@@ -379,6 +379,12 @@ export const PACKAGE_PAYMENT_GATEWAYS = ['fake', 'mpay'] as const;
 export type PackagePaymentGatewayName = (typeof PACKAGE_PAYMENT_GATEWAYS)[number];
 
 /**
+ * ADR 0030: `package_orders.gateway` of an order a 100% coupon made free. No gateway is asked:
+ * the order is settled when it is created, through the same transaction a paid callback uses.
+ */
+export const PACKAGE_COUPON_SETTLEMENT = 'coupon';
+
+/**
  * How a buyer pays on Snap's own pay page (ADR 0029): `qr` = a PromptPay QR shown on the page,
  * `card` = the gateway's hosted card form. Gateways with a hosted page of their own offer none.
  */
@@ -441,16 +447,22 @@ export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
  * always with the acting admin as `actor_id`; `target_type` `expense`, `target_id` the expense id.
  * Shapes (zod: FINANCE_AUDIT_META_SCHEMAS in api/finance):
  * - `finance.expense_created`: `{ spentOn, amountSatang, category }` (the note is not copied);
- * - `finance.expense_deleted`: `{ spentOn, amountSatang, category }` of the row soft-deleted.
+ * - `finance.expense_deleted`: `{ spentOn, amountSatang, category }` of the row soft-deleted;
+ * - `finance.coupon_created` (ADR 0030, `target_type` `coupon`): `{ code, percentOff,
+ *   maxRedemptions, expiresAt }` (the note is not copied);
+ * - `finance.coupon_updated` (ADR 0030, `target_type` `coupon`): `{ code, changes }` with only the
+ *   fields that changed (`isActive`, `maxRedemptions`, `expiresAt`), each `{ from, to }`.
  */
 export const FINANCE_AUDIT_ACTIONS = [
   'finance.expense_created',
   'finance.expense_deleted',
+  'finance.coupon_created',
+  'finance.coupon_updated',
 ] as const;
 export type FinanceAuditAction = (typeof FINANCE_AUDIT_ACTIONS)[number];
 
 /** `audit_log.target_type` of FINANCE_AUDIT_ACTIONS. */
-export const FINANCE_AUDIT_TARGET_TYPES = { expense: 'expense' } as const;
+export const FINANCE_AUDIT_TARGET_TYPES = { expense: 'expense', coupon: 'coupon' } as const;
 
 /**
  * Every `audit_log.action` the system writes today, in display groups (auth, admin, package and

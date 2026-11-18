@@ -5,7 +5,12 @@ import {
   newPasswordSchema,
 } from '../account/password-accounts';
 import { opaqueTokenSchema } from '../account/tokens';
-import { packageTotalSchema, satangSchema } from '../billing/money';
+import {
+  COUPON_PERCENT_MAX,
+  COUPON_PERCENT_MIN,
+  packageTotalSchema,
+  satangSchema,
+} from '../billing/money';
 import { PACKAGE_CODE_PATTERN, packagesClientConfigSchema } from '../config/packages';
 import {
   PACKAGE_ORDER_STATUSES,
@@ -23,6 +28,22 @@ import { captchaTokenSchema, IDEMPOTENCY_KEY_HEADER, idempotencyKeySchema } from
 export const packageCodeSchema = z.string().regex(PACKAGE_CODE_PATTERN, {
   error: 'must be a package code',
 });
+
+/**
+ * ADR 0030: `package_coupons.code` as stored: 3–32 of A–Z, 0–9, `-` and `_`, starting with a
+ * letter or digit (the `package_coupons_code_format` CHECK).
+ */
+export const COUPON_CODE_PATTERN = /^[A-Z0-9][A-Z0-9_-]{2,31}$/;
+
+/** A coupon code as typed: trimmed and upper-cased first, so codes are case-insensitive. */
+export const couponCodeSchema = z
+  .string()
+  .trim()
+  .transform((code) => code.toUpperCase())
+  .pipe(z.string().regex(COUPON_CODE_PATTERN, { error: 'must be a coupon code' }));
+
+/** A coupon's percent off (1–100, whole numbers). */
+export const couponPercentSchema = z.number().int().min(COUPON_PERCENT_MIN).max(COUPON_PERCENT_MAX);
 
 // --- Web paths, cookie and header names -------------------------------------------------------
 
@@ -175,6 +196,12 @@ export const createPackageOrderBodySchema = z.strictObject({
   packageCode: packageCodeSchema,
   email: accountEmailSchema.optional(),
   name: accountNameSchema.optional(),
+  /**
+   * ADR 0030: a coupon (COUPON_INVALID, COUPON_USED_UP). The order then holds one of its uses for
+   * PACKAGE_COUPON_HOLD_SECONDS; at 100% off it is settled at once (no gateway) and `redirectUrl`
+   * is PACKAGE_CHECKOUT_RETURN_PATH.
+   */
+  couponCode: couponCodeSchema.optional(),
 });
 export type CreatePackageOrderBody = z.input<typeof createPackageOrderBodySchema>;
 
@@ -218,8 +245,38 @@ export const packageOrderViewSchema = z.object({
    * while the order is `pending` or `failed` and its gateway is the configured one; else empty.
    */
   paymentMethods: z.array(z.enum(PACKAGE_PAYMENT_METHODS)),
+  /**
+   * ADR 0030: the order's coupon, with the total it would have been without it (VAT included);
+   * null without a coupon.
+   */
+  coupon: z
+    .object({ code: z.string().regex(COUPON_CODE_PATTERN), listTotalSatang: satangSchema })
+    .nullable(),
 });
 export type PackageOrderView = z.output<typeof packageOrderViewSchema>;
+
+// --- POST /package-coupons/check (bff) --------------------------------------------------------------
+
+/**
+ * ADR 0030: what a coupon makes a package cost, for the buy dialog. Holds nothing (the order does,
+ * when it is created). COUPON_INVALID, COUPON_USED_UP; PACKAGE_UNAVAILABLE as POST /package-orders;
+ * RATE_LIMITED past PACKAGE_COUPON_CHECK_RATE_PER_IP.
+ */
+export const checkPackageCouponBodySchema = z.strictObject({
+  packageCode: packageCodeSchema,
+  couponCode: couponCodeSchema,
+});
+export type CheckPackageCouponBody = z.input<typeof checkPackageCouponBodySchema>;
+
+export const checkPackageCouponResponseSchema = z.object({
+  couponCode: z.string().regex(COUPON_CODE_PATTERN),
+  percentOff: couponPercentSchema,
+  /** The package's total without the coupon (VAT included). */
+  listTotalSatang: satangSchema,
+  /** The amounts the order will charge (discountedPackageTotal). */
+  price: packageTotalSchema,
+});
+export type CheckPackageCouponResponse = z.output<typeof checkPackageCouponResponseSchema>;
 
 /**
  * The fake gateway's result buttons (PACKAGE_GATEWAY=fake only; any other gateway: NOT_FOUND).

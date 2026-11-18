@@ -22,6 +22,7 @@ import { type MetricsSource, nodeMetricsSource } from './admin/server-metrics';
 import { AdminSystemService, METRICS_SOURCE } from './admin/system.service';
 import { ActAsService } from './admin/act-as.service';
 import { AuditLogService } from './admin/audit-log.service';
+import { CouponsService } from './admin/coupons.service';
 import { ExpensesService } from './admin/expenses.service';
 import { FinanceService } from './admin/finance.service';
 import { AdminGuard } from './auth/admin.guard';
@@ -278,6 +279,7 @@ export class AppModule {
         ActAsService,
         AuditLogService,
         ExpensesService,
+        CouponsService,
         FinanceService,
         PackageSalesGuard,
         PackagesService,

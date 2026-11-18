@@ -48,6 +48,7 @@ export * from './api/auth';
 export * from './api/admin';
 export * from './api/packages';
 export * from './api/finance';
+export * from './api/coupons';
 export * from './api/routes';
 export * from './config/env';
 export * from './config/face';
