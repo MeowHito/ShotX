@@ -102,6 +102,8 @@ export const en: PublicMessages = {
       confirmBody: 'Your print quota is {limit, number}. Once ordered, it can’t be changed.',
       confirmSize: 'Paper size {size}',
       confirm: 'Confirm',
+      limitTitle: 'All prints ordered',
+      limitBody: 'You have ordered all {limit, number} prints in your quota. You can’t order more.',
       title: 'Order a print',
       body: 'The photographer prints it for you. Give your order number when you pick it up.',
       size: 'Paper size',

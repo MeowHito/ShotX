@@ -42,6 +42,9 @@ on their own or must be allowed first. It is a new studio tab.
    says the device's print quota ("โควต้าการสั่งพิมพ์ของคุณคือ 1 รูป เมื่อสั่งแล้วไม่สามารถ
    เปลี่ยนแปลงได้"), the paper size and name, with cancel and confirm; only confirm sends the
    order. (A note in the lightbox with the same quota was tried and replaced by this.)
+   A device that has used its quota gets a small "สั่งพิมพ์ครบแล้ว" popup ("คุณสั่งพิมพ์ครบ 1 รูป
+   ตามโควต้าแล้ว ไม่สามารถสั่งเพิ่มได้", one OK button) as soon as it taps the lightbox's print
+   button, without the form; the same popup answers PRINT_LIMIT_REACHED from the API.
 5. **Studio `/studio/print` ("สั่งพิมพ์")**: the settings, the orders by status with counts
    (polled every 5 s), allow / decline / print / print again. `auto` creates orders as `queued`,
    `manual` as `pending` until allowed.

@@ -41,7 +41,7 @@ import {
 import { ShareApiProvider, useShareApi } from '@/lib/share/share-api';
 import { DownloadBar, useLightboxDownload } from './download-bar';
 import { JustifiedGrid } from './justified-grid';
-import { PrintDialog } from './print-dialog';
+import { PrintDialog, PrintLimitDialog } from './print-dialog';
 import { FaceToolsProvider, type FaceTools } from './scan/face-tools';
 import { ScanFlow, type ScanSource } from './scan/scan-flow';
 import { LoginRequired, PasswordForm, ShareUnavailable } from './share-gates';
@@ -375,10 +375,13 @@ function ShareContent({
     [prints.data],
   );
   const [printItem, setPrintItem] = useState<ShareItem | null>(null);
+  /** The device used its quota: the print button opens "all prints ordered" instead of the form. */
+  const [printLimitOpen, setPrintLimitOpen] = useState(false);
   const printOpen = useRef(false);
   useEffect(() => {
-    printOpen.current = printItem !== null;
-  }, [printItem]);
+    printOpen.current = printItem !== null || printLimitOpen;
+  }, [printItem, printLimitOpen]);
+  const printUsed = prints.data?.used ?? 0;
   // ADR 0020: new photos appear on their own, without a reload or a spinner.
   useShareLiveUpdates(token, shareConfig.livePollMs);
 
@@ -393,12 +396,15 @@ function ShareContent({
       printOffer === null
         ? undefined
         : {
-            onClick: setPrintItem,
+            onClick: (item) => {
+              if (printUsed >= printOffer.perDeviceLimit) setPrintLimitOpen(true);
+              else setPrintItem(item);
+            },
             isAvailable: (item) => item.mediaKind === 'image',
             isOrdered: (item) => orderedFiles.has(item.id),
             isBlocking: () => printOpen.current,
           },
-    [printOffer, orderedFiles],
+    [printOffer, orderedFiles, printUsed],
   );
   const openLightbox = useLightbox(
     meta.allowDownload ? lightboxDownload : undefined,
@@ -588,6 +594,13 @@ function ShareContent({
 
           {design !== null ? <HowToSheet open={howToOpen} onOpenChange={setHowToOpen} /> : null}
 
+          {printOffer !== null ? (
+            <PrintLimitDialog
+              open={printLimitOpen}
+              limit={printOffer.perDeviceLimit}
+              onClose={() => setPrintLimitOpen(false)}
+            />
+          ) : null}
           {printOffer !== null && prints.data !== undefined ? (
             <PrintDialog
               token={token}

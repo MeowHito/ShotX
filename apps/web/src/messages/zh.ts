@@ -100,6 +100,8 @@ export const zh: PublicMessages = {
       confirmBody: '你的冲印额度为 {limit, number} 张，下单后无法更改。',
       confirmSize: '纸张尺寸 {size}',
       confirm: '确认',
+      limitTitle: '已达冲印上限',
+      limitBody: '你已用完 {limit, number} 张的冲印额度，无法再下单。',
       title: '冲印这张照片',
       body: '摄影师会为你冲印。取照片时请出示冲印单号。',
       size: '纸张尺寸',

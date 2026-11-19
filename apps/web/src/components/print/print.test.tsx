@@ -190,13 +190,51 @@ describe('share page: print orders (ADR 0031)', () => {
     expect(box.keydown('Escape')).toBe(false);
     await waitFor(() => expect(printButton).toHaveTextContent(tp.orderedShort));
 
-    // The device has no prints left.
+    // The device has no prints left: the print button opens the "all ordered" popup at once,
+    // not the form (owner, 2026-11-19).
     act(() => box.swipeTo(1));
     expect(printButton).toHaveTextContent(tp.submit);
     await user.click(printButton);
-    const second = await screen.findByRole('dialog');
-    expect(within(second).getByText('สั่งพิมพ์ครบ 1 รูปแล้ว')).toBeInTheDocument();
-    expect(within(second).getByRole('button', { name: tp.submit })).toBeDisabled();
+    const limit = await screen.findByRole('alertdialog', { name: tp.limitTitle });
+    expect(limit).toHaveTextContent('คุณสั่งพิมพ์ครบ 1 รูปตามโควต้าแล้ว ไม่สามารถสั่งเพิ่มได้');
+    expect(screen.queryByRole('dialog', { name: new RegExp(tp.title) })).not.toBeInTheDocument();
+    expect(within(limit).getByRole('button', { name: tp.close })).toHaveFocus();
+    // The lightbox ignores keys while it is up; OK closes it and gives them back.
+    expect(box.keydown('ArrowRight')).toBe(true);
+    await user.click(within(limit).getByRole('button', { name: tp.close }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(box.keydown('ArrowRight')).toBe(false);
+    expect(fake.prints.orders).toHaveLength(1);
+  });
+
+  it('shows the same popup when the API says the quota ran out meanwhile', async () => {
+    const user = userEvent.setup();
+    const fake = new FakeApi();
+    fake.prints.settings = {
+      enabled: true,
+      approval: 'auto',
+      perDeviceLimit: 1,
+      paperSizes: ['4r'],
+    };
+    const share = shareWithPhotos(fake);
+    renderSharePage(fake, share.token);
+    await waitFor(() =>
+      expect(fake.calls.some((c) => c.path.endsWith(`/s/${share.token}/prints`))).toBe(true),
+    );
+    const box = await openPhoto(user, 'ภาพ 1.jpg');
+    const printButton = box.buttons.get('print') as HTMLElement;
+    await waitFor(() => expect(printButton.style.display).toBe(''));
+    await user.click(printButton);
+    const dialog = await screen.findByRole('dialog', { name: new RegExp(tp.title) });
+    // Another tab of this device orders the last print while this form is open.
+    fake.prints.add({ token: share.token, status: 'queued' });
+    await user.click(within(dialog).getByRole('button', { name: tp.submit }));
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: tp.confirm }),
+    );
+    expect(await screen.findByRole('alertdialog', { name: tp.limitTitle })).toBeInTheDocument();
+    // The popup says it; no red error in the form.
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('shows the API refusal in Thai (e.g. the size was just switched off)', async () => {

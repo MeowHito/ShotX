@@ -1,10 +1,11 @@
 'use client';
 
-import type {
-  PrintPaperSize,
-  ShareItem,
-  SharePrintsResponse,
-  ViewerPrintOrder,
+import {
+  ErrorCode,
+  type PrintPaperSize,
+  type ShareItem,
+  type SharePrintsResponse,
+  type ViewerPrintOrder,
 } from '@shotx/shared';
 import {
   Alert,
@@ -18,9 +19,10 @@ import {
   Input,
   Label,
 } from '@shotx/ui';
-import { CheckCircle2Icon, PrinterIcon } from 'lucide-react';
+import { CheckCircle2Icon, CircleAlertIcon, PrinterIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useId, useRef, useState } from 'react';
+import { isApiError } from '@/lib/api/errors';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useCreatePrintOrder } from '@/lib/share/queries';
 
@@ -106,6 +108,8 @@ function PrintForm({
   const size = offer.paperSizes.includes(picked) ? picked : (offer.paperSizes[0] ?? picked);
   const [name, setName] = useState('');
   const [confirming, setConfirming] = useState(false);
+  /** The "all prints ordered" popup (owner, 2026-11-19). */
+  const [limitOpen, setLimitOpen] = useState(false);
   const sizeGroup = useId();
   const nameId = useId();
 
@@ -138,8 +142,10 @@ function PrintForm({
       className="grid gap-4"
       onSubmit={(e) => {
         e.preventDefault();
-        if (left === 0 || create.isPending) return;
-        setConfirming(true);
+        if (create.isPending) return;
+        // Over the quota: say so in a popup instead of a greyed-out button (owner, 2026-11-19).
+        if (left === 0) setLimitOpen(true);
+        else setConfirming(true);
       }}
     >
       <ConfirmPrint
@@ -150,8 +156,21 @@ function PrintForm({
         onCancel={() => setConfirming(false)}
         onConfirm={() => {
           setConfirming(false);
-          create.mutate({ fileId: item.id, paperSize: size, customerName: name });
+          create.mutate(
+            { fileId: item.id, paperSize: size, customerName: name },
+            {
+              // Another tab or a refetch-old count: the API's refusal gets the same popup.
+              onError: (err) => {
+                if (isApiError(err, ErrorCode.PRINT_LIMIT_REACHED)) setLimitOpen(true);
+              },
+            },
+          );
         }}
+      />
+      <PrintLimitDialog
+        open={limitOpen}
+        limit={offer.perDeviceLimit}
+        onClose={() => setLimitOpen(false)}
       />
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
@@ -202,7 +221,7 @@ function PrintForm({
           {thisPhoto.map((o) => `#${o.orderNumber} ${t(`status.${o.status}`)}`).join(', ')}
         </p>
       ) : null}
-      {create.isError ? (
+      {create.isError && !isApiError(create.error, ErrorCode.PRINT_LIMIT_REACHED) ? (
         <Alert variant="destructive" role="alert">
           {describe(create.error)}
         </Alert>
@@ -217,18 +236,20 @@ function PrintForm({
           ? t('limitReached', { limit: offer.perDeviceLimit })
           : t('remaining', { left, limit: offer.perDeviceLimit })}
       </p>
-      <Button
-        type="submit"
-        size="lg"
-        className="rounded-full"
-        disabled={left === 0 || create.isPending}
-      >
+      <Button type="submit" size="lg" className="rounded-full" disabled={create.isPending}>
         <PrinterIcon aria-hidden />
         {create.isPending ? t('submitting') : t('submit')}
       </Button>
     </form>
   );
 }
+
+/**
+ * A small dialog centred on every screen (not a bottom sheet), above the print dialog and the
+ * lightbox, so it shows wherever the page or the form was scrolled.
+ */
+const SMALL_POPUP =
+  'inset-auto top-1/2 left-1/2 z-[100020] w-[calc(100%-2rem)] max-w-xs -translate-x-1/2 -translate-y-1/2 animate-fade-in gap-3 rounded-2xl p-5 pb-5 text-center sm:max-w-xs';
 
 /**
  * The small confirmation over the print dialog (owner, 2026-11-19): the device's print quota,
@@ -265,7 +286,7 @@ function ConfirmPrint({
         <DialogContent
           role="alertdialog"
           closeLabel={tc('close')}
-          className="inset-auto top-1/2 left-1/2 z-[100020] w-[calc(100%-2rem)] max-w-xs -translate-x-1/2 -translate-y-1/2 animate-fade-in gap-3 rounded-2xl p-5 pb-5 text-center sm:max-w-xs"
+          className={SMALL_POPUP}
           overlayClassName="z-[100020]"
           onEscapeKeyDown={(e) => e.stopPropagation()}
           onOpenAutoFocus={(e) => {
@@ -288,6 +309,55 @@ function ConfirmPrint({
               {t('confirm')}
             </Button>
           </div>
+        </DialogContent>
+      ) : null}
+    </Dialog>
+  );
+}
+
+/**
+ * "All prints ordered" (owner, 2026-11-19): the device has used its quota on this link. Shown
+ * at once when such a viewer taps the lightbox's print button (no form), and when the API refuses
+ * an order with PRINT_LIMIT_REACHED. One button closes it.
+ */
+export function PrintLimitDialog({
+  open,
+  limit,
+  onClose,
+}: {
+  open: boolean;
+  limit: number;
+  onClose: () => void;
+}) {
+  const t = useTranslations('share.print');
+  const tc = useTranslations('common');
+  const okRef = useRef<HTMLButtonElement>(null);
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      {open ? (
+        <DialogContent
+          role="alertdialog"
+          closeLabel={tc('close')}
+          className={SMALL_POPUP}
+          overlayClassName="z-[100020]"
+          // Escape closes this popup only: the lightbox under it listens on the document too.
+          onEscapeKeyDown={(e) => e.stopPropagation()}
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            okRef.current?.focus();
+          }}
+        >
+          <CircleAlertIcon className="mx-auto size-8 text-destructive" aria-hidden />
+          <DialogTitle className="text-base">{t('limitTitle')}</DialogTitle>
+          <DialogDescription className="text-sm">{t('limitBody', { limit })}</DialogDescription>
+          <Button ref={okRef} type="button" className="mt-1 rounded-full" onClick={onClose}>
+            {t('close')}
+          </Button>
         </DialogContent>
       ) : null}
     </Dialog>
