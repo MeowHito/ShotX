@@ -26,6 +26,7 @@ vi.mock('photoswipe', () => ({
     private elements: {
       name: string;
       html: string;
+      isButton?: boolean;
       onInit?: (el: HTMLElement) => void;
       onClick?: () => void;
     }[] = [];
@@ -43,7 +44,7 @@ vi.mock('photoswipe', () => ({
       this.fire('uiRegister');
       const buttons = new Map<string, HTMLElement>();
       for (const el of this.elements) {
-        const button = document.createElement('button');
+        const button = document.createElement(el.isButton === false ? 'div' : 'button');
         button.innerHTML = el.html;
         button.addEventListener('click', () => el.onClick?.());
         document.body.appendChild(button);
@@ -131,6 +132,10 @@ describe('share page: print orders (ADR 0031)', () => {
     const box = await openPhoto(user, 'ภาพ 1.jpg');
     const printButton = box.buttons.get('print') as HTMLElement;
     await waitFor(() => expect(printButton.style.display).toBe(''));
+    // The small note: how many prints the photographer allows per device.
+    const hint = box.buttons.get('print-hint') as HTMLElement;
+    expect(hint.style.display).toBe('');
+    expect(hint).toHaveTextContent('สั่งพิมพ์ได้ 1 รูป');
     expect(printButton).toHaveTextContent(tp.submit);
     // Videos can't be printed: the button hides on them.
     act(() => box.swipeTo(2));
@@ -171,6 +176,34 @@ describe('share page: print orders (ADR 0031)', () => {
     const second = await screen.findByRole('dialog');
     expect(within(second).getByText('สั่งพิมพ์ครบ 1 รูปแล้ว')).toBeInTheDocument();
     expect(within(second).getByRole('button', { name: tp.submit })).toBeDisabled();
+  });
+
+  it('the print note closes with its × and stays closed for the page view', async () => {
+    const user = userEvent.setup();
+    const fake = new FakeApi();
+    fake.prints.settings = {
+      enabled: true,
+      approval: 'auto',
+      perDeviceLimit: 3,
+      paperSizes: ['4r'],
+    };
+    const share = shareWithPhotos(fake);
+    renderSharePage(fake, share.token);
+    await waitFor(() =>
+      expect(fake.calls.some((c) => c.path.endsWith(`/s/${share.token}/prints`))).toBe(true),
+    );
+    const box = await openPhoto(user, 'ภาพ 1.jpg');
+    const hint = box.buttons.get('print-hint') as HTMLElement;
+    await waitFor(() => expect(hint).toHaveTextContent('สั่งพิมพ์ได้ 3 รูป'));
+    expect(hint.style.display).toBe('');
+    await user.click(within(hint).getByRole('button', { name: th.lightbox.close }));
+    expect(hint.style.display).toBe('none');
+    // Swiping or opening another photo doesn't bring it back.
+    act(() => box.swipeTo(1));
+    expect(hint.style.display).toBe('none');
+    lightbox.current = null;
+    const again = await openPhoto(user, 'ภาพ 2.jpg');
+    await waitFor(() => expect(again.buttons.get('print-hint')?.style.display).toBe('none'));
   });
 
   it('shows the API refusal in Thai (e.g. the size was just switched off)', async () => {

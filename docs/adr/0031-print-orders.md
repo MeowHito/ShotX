@@ -38,6 +38,9 @@ on their own or must be allowed first. It is a new studio tab.
    lightbox (z-index above PhotoSwipe, PhotoSwipe's focus trap off, its keys ignored while the
    dialog is open, Escape closes the dialog only) and shows the sizes, the name field, how many
    prints are left, then the order number.
+   While the lightbox is open a small note under the bar says how many prints the photographer
+   allows per device ("สั่งพิมพ์ได้ 3 รูป", owner 2026-11-19), with a × that hides it for the rest
+   of the page view.
 5. **Studio `/studio/print` ("สั่งพิมพ์")**: the settings, the orders by status with counts
    (polled every 5 s), allow / decline / print / print again. `auto` creates orders as `queued`,
    `manual` as `pending` until allowed.
