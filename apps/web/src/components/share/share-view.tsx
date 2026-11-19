@@ -376,8 +376,6 @@ function ShareContent({
   );
   const [printItem, setPrintItem] = useState<ShareItem | null>(null);
   const printOpen = useRef(false);
-  // The lightbox's share.print.hint note ("you can order N prints"), until the viewer closes it (for this page view).
-  const [printHintClosed, setPrintHintClosed] = useState(false);
   useEffect(() => {
     printOpen.current = printItem !== null;
   }, [printItem]);
@@ -399,12 +397,8 @@ function ShareContent({
             isAvailable: (item) => item.mediaKind === 'image',
             isOrdered: (item) => orderedFiles.has(item.id),
             isBlocking: () => printOpen.current,
-            hint: printHintClosed
-              ? null
-              : t('share.print.hint', { limit: printOffer.perDeviceLimit }),
-            onHintClose: () => setPrintHintClosed(true),
           },
-    [printOffer, orderedFiles, printHintClosed, t],
+    [printOffer, orderedFiles],
   );
   const openLightbox = useLightbox(
     meta.allowDownload ? lightboxDownload : undefined,

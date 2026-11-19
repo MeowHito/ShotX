@@ -20,7 +20,7 @@ import {
 } from '@shotx/ui';
 import { CheckCircle2Icon, PrinterIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useErrorMessage } from '@/lib/errors/use-error-message';
 import { useCreatePrintOrder } from '@/lib/share/queries';
 
@@ -29,7 +29,8 @@ type Offer = NonNullable<SharePrintsResponse['offer']>;
 /**
  * ADR 0031: the viewer orders a print of one photo: a paper size the photographer offers, an
  * optional name or bib number, and how many prints this device has left on the link. After
- * sending it shows the order number to give when picking the print up.
+ * sending it shows the order number to give when picking the print up. The submit button first asks
+ * to confirm (owner, 2026-11-19): the device's print quota, and that an order can't be changed.
  */
 export function PrintDialog({
   token,
@@ -104,6 +105,7 @@ function PrintForm({
   // The offer may change while the dialog is open (refetch): fall back to a size on offer.
   const size = offer.paperSizes.includes(picked) ? picked : (offer.paperSizes[0] ?? picked);
   const [name, setName] = useState('');
+  const [confirming, setConfirming] = useState(false);
   const sizeGroup = useId();
   const nameId = useId();
 
@@ -137,9 +139,20 @@ function PrintForm({
       onSubmit={(e) => {
         e.preventDefault();
         if (left === 0 || create.isPending) return;
-        create.mutate({ fileId: item.id, paperSize: size, customerName: name });
+        setConfirming(true);
       }}
     >
+      <ConfirmPrint
+        open={confirming}
+        limit={offer.perDeviceLimit}
+        sizeLabel={t(`sizes.${size}`)}
+        name={name.trim()}
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => {
+          setConfirming(false);
+          create.mutate({ fileId: item.id, paperSize: size, customerName: name });
+        }}
+      />
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={item.thumbUrl}
@@ -214,5 +227,69 @@ function PrintForm({
         {create.isPending ? t('submitting') : t('submit')}
       </Button>
     </form>
+  );
+}
+
+/**
+ * The small confirmation over the print dialog (owner, 2026-11-19): the device's print quota,
+ * the order can't be changed afterwards, cancel or confirm. A dialog of its own, centred on every
+ * screen (not a bottom sheet), so it shows wherever the form was scrolled; Escape or × cancel it
+ * only. The confirm button takes the focus.
+ */
+function ConfirmPrint({
+  open,
+  limit,
+  sizeLabel,
+  name,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  limit: number;
+  sizeLabel: string;
+  name: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const t = useTranslations('share.print');
+  const tc = useTranslations('common');
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onCancel();
+      }}
+    >
+      {open ? (
+        <DialogContent
+          role="alertdialog"
+          closeLabel={tc('close')}
+          className="inset-auto top-1/2 left-1/2 z-[100020] w-[calc(100%-2rem)] max-w-xs -translate-x-1/2 -translate-y-1/2 animate-fade-in gap-3 rounded-2xl p-5 pb-5 text-center sm:max-w-xs"
+          overlayClassName="z-[100020]"
+          onEscapeKeyDown={(e) => e.stopPropagation()}
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            confirmRef.current?.focus();
+          }}
+        >
+          <PrinterIcon className="mx-auto size-8 text-primary" aria-hidden />
+          <DialogTitle className="text-base">{t('confirmTitle')}</DialogTitle>
+          <DialogDescription className="text-sm">{t('confirmBody', { limit })}</DialogDescription>
+          <p className="text-sm font-medium">
+            {t('confirmSize', { size: sizeLabel })}
+            {name !== '' ? ` · ${name}` : null}
+          </p>
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            <Button type="button" variant="outline" className="rounded-full" onClick={onCancel}>
+              {t('cancel')}
+            </Button>
+            <Button ref={confirmRef} type="button" className="rounded-full" onClick={onConfirm}>
+              {t('confirm')}
+            </Button>
+          </div>
+        </DialogContent>
+      ) : null}
+    </Dialog>
   );
 }

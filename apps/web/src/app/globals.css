@@ -89,51 +89,6 @@
   outline-offset: 2px;
 }
 /*
- * ADR 0031 (owner, 2026-11-19): a small note under the bar, "you can order N prints" (share.print.hint), with a ×.
- * Under the print button on wide screens, centred under the bar on phones.
- */
-.pswp .pswp__print-hint {
-  position: absolute;
-  top: 4.25rem;
-  right: 7.5rem;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  max-width: calc(100vw - 2rem);
-  padding: 0.35rem 0.35rem 0.35rem 0.75rem;
-  border-radius: 0.75rem;
-  background: white;
-  color: #111;
-  font-size: 0.875rem;
-  font-weight: 500;
-  line-height: 1.25rem;
-  white-space: nowrap;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
-  animation: fade-in 200ms ease-out;
-}
-.pswp .pswp__print-hint-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.75rem;
-  height: 1.75rem;
-  border-radius: 9999px;
-  color: #555;
-  cursor: pointer;
-}
-.pswp .pswp__print-hint-close:hover {
-  background: rgb(0 0 0 / 0.08);
-}
-@media (max-width: 767.98px) {
-  .pswp .pswp__print-hint {
-    top: 4rem;
-    right: auto;
-    left: 50%;
-    transform: translateX(-50%);
-  }
-}
-/*
  * Phones (owner, 2026-11-13): the same button sits at the bottom centre, within thumb reach.
  * `fixed` keeps it on the visible viewport (above the browser's toolbar and the home
  * indicator); the top bar has no transform, so it isn't the containing block.

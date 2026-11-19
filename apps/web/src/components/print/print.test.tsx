@@ -132,10 +132,6 @@ describe('share page: print orders (ADR 0031)', () => {
     const box = await openPhoto(user, 'ภาพ 1.jpg');
     const printButton = box.buttons.get('print') as HTMLElement;
     await waitFor(() => expect(printButton.style.display).toBe(''));
-    // The small note: how many prints the photographer allows per device.
-    const hint = box.buttons.get('print-hint') as HTMLElement;
-    expect(hint.style.display).toBe('');
-    expect(hint).toHaveTextContent('สั่งพิมพ์ได้ 1 รูป');
     expect(printButton).toHaveTextContent(tp.submit);
     // Videos can't be printed: the button hides on them.
     act(() => box.swipeTo(2));
@@ -150,6 +146,31 @@ describe('share page: print orders (ADR 0031)', () => {
     await user.click(within(dialog).getByRole('radio', { name: tp.sizes.a4 }));
     await user.type(within(dialog).getByLabelText(tp.name), 'บิบ 77');
     await user.click(within(dialog).getByRole('button', { name: tp.submit }));
+
+    // A confirmation first (owner, 2026-11-19): the quota, and that it can't be changed.
+    const confirm = await screen.findByRole('alertdialog', { name: tp.confirmTitle });
+    expect(confirm).toHaveTextContent(
+      'โควต้าการสั่งพิมพ์ของคุณคือ 1 รูป เมื่อสั่งแล้วไม่สามารถเปลี่ยนแปลงได้',
+    );
+    expect(confirm).toHaveTextContent('ขนาดกระดาษ A4 · บิบ 77');
+    expect(within(confirm).getByRole('button', { name: tp.confirm })).toHaveFocus();
+    // Cancel: nothing is sent, the form is still filled in.
+    await user.click(within(confirm).getByRole('button', { name: tp.cancel }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(fake.prints.orders).toEqual([]);
+    expect(within(dialog).getByLabelText(tp.name)).toHaveValue('บิบ 77');
+    // Escape cancels the confirmation only.
+    await user.click(within(dialog).getByRole('button', { name: tp.submit }));
+    await screen.findByRole('alertdialog');
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('dialog', { name: new RegExp(tp.title) })).toBeInTheDocument();
+    expect(fake.prints.orders).toEqual([]);
+    // Confirm: the order goes out.
+    await user.click(within(dialog).getByRole('button', { name: tp.submit }));
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: tp.confirm }),
+    );
 
     expect(await within(dialog).findByText('เลขคำสั่งพิมพ์ #1')).toBeInTheDocument();
     expect(within(dialog).getByText(tp.waitApproval)).toBeInTheDocument();
@@ -178,34 +199,6 @@ describe('share page: print orders (ADR 0031)', () => {
     expect(within(second).getByRole('button', { name: tp.submit })).toBeDisabled();
   });
 
-  it('the print note closes with its × and stays closed for the page view', async () => {
-    const user = userEvent.setup();
-    const fake = new FakeApi();
-    fake.prints.settings = {
-      enabled: true,
-      approval: 'auto',
-      perDeviceLimit: 3,
-      paperSizes: ['4r'],
-    };
-    const share = shareWithPhotos(fake);
-    renderSharePage(fake, share.token);
-    await waitFor(() =>
-      expect(fake.calls.some((c) => c.path.endsWith(`/s/${share.token}/prints`))).toBe(true),
-    );
-    const box = await openPhoto(user, 'ภาพ 1.jpg');
-    const hint = box.buttons.get('print-hint') as HTMLElement;
-    await waitFor(() => expect(hint).toHaveTextContent('สั่งพิมพ์ได้ 3 รูป'));
-    expect(hint.style.display).toBe('');
-    await user.click(within(hint).getByRole('button', { name: th.lightbox.close }));
-    expect(hint.style.display).toBe('none');
-    // Swiping or opening another photo doesn't bring it back.
-    act(() => box.swipeTo(1));
-    expect(hint.style.display).toBe('none');
-    lightbox.current = null;
-    const again = await openPhoto(user, 'ภาพ 2.jpg');
-    await waitFor(() => expect(again.buttons.get('print-hint')?.style.display).toBe('none'));
-  });
-
   it('shows the API refusal in Thai (e.g. the size was just switched off)', async () => {
     const user = userEvent.setup();
     const fake = new FakeApi();
@@ -227,6 +220,9 @@ describe('share page: print orders (ADR 0031)', () => {
     const dialog = await screen.findByRole('dialog');
     fake.prints.settings = { ...fake.prints.settings, paperSizes: ['a4'] };
     await user.click(within(dialog).getByRole('button', { name: tp.submit }));
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: tp.confirm }),
+    );
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
       th.errors.codes.PRINT_SIZE_UNAVAILABLE,
     );

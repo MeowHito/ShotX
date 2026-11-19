@@ -52,17 +52,6 @@ export interface LightboxPrint {
   isAvailable: (item: ShareItem) => boolean;
   isOrdered: (item: ShareItem) => boolean;
   isBlocking: () => boolean;
-  /**
-   * The small note shown while the lightbox is open (share.print.hint: "you can order 2 prints"), or null for none (the
-   * viewer closed it). `onHintClose` runs when its × is tapped.
-   */
-  hint: string | null;
-  onHintClose: () => void;
-}
-
-/** HTML of the print note: the text is escaped (it comes from the messages). */
-export function printHintHtml(text: string, closeLabel: string): string {
-  return `<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="1"/></svg><span>${escapeAttribute(text)}</span><button type="button" class="pswp__print-hint-close" aria-label="${escapeAttribute(closeLabel)}"><svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`;
 }
 
 /** The parts of a PhotoSwipe instance that carry PhotoSwipe's own (English) accessibility text. */
@@ -147,14 +136,7 @@ export function useLightbox(download?: LightboxDownload, print?: LightboxPrint) 
       // Print (ADR 0031): registered whenever the lightbox opens; shown only while the share
       // takes print orders and the photo can be printed.
       let printButton: HTMLElement | null = null;
-      let printHint: HTMLElement | null = null;
       const drawPrint = () => {
-        if (printHint !== null) {
-          const text = printRef.current?.hint ?? null;
-          printHint.style.display = text === null ? 'none' : '';
-          const span = printHint.querySelector('span');
-          if (text !== null && span !== null) span.textContent = text;
-        }
         if (printButton === null) return;
         const item = items[pswp.currIndex];
         const offer = printRef.current;
@@ -183,24 +165,6 @@ export function useLightbox(download?: LightboxDownload, print?: LightboxPrint) 
           onClick: () => {
             const item = items[pswp.currIndex];
             if (item !== undefined) printRef.current?.onClick(item);
-          },
-        });
-        // The note under the bar: how many prints the photographer allows, with a ×.
-        pswp.ui?.registerElement({
-          name: 'print-hint',
-          order: 30,
-          isButton: false,
-          appendTo: 'root',
-          className: 'pswp__print-hint',
-          html: printHintHtml(printRef.current?.hint ?? '', t('close')),
-          onInit: (el) => {
-            printHint = el;
-            el.setAttribute('role', 'status');
-            el.querySelector('button')?.addEventListener('click', () => {
-              el.style.display = 'none';
-              printRef.current?.onHintClose();
-            });
-            drawPrint();
           },
         });
       });
