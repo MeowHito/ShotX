@@ -92,6 +92,9 @@ const errorCodes = {
   ORDER_NOT_FOUND: 'ไม่พบรายการสั่งซื้อนี้',
   COUPON_INVALID: 'โค้ดส่วนลดนี้ใช้ไม่ได้',
   COUPON_USED_UP: 'โค้ดส่วนลดนี้ถูกใช้ครบจำนวนแล้ว',
+  PRINT_UNAVAILABLE: 'ช่างภาพไม่ได้เปิดรับสั่งพิมพ์รูปนี้',
+  PRINT_LIMIT_REACHED: 'เครื่องนี้สั่งพิมพ์ครบจำนวนที่ช่างภาพกำหนดแล้ว',
+  PRINT_SIZE_UNAVAILABLE: 'ช่างภาพไม่ได้เปิดรับขนาดกระดาษนี้',
 } as const satisfies Record<ErrorCode, string>;
 
 /** PASSWORD_TOO_WEAK details.reason, with the pool's minimum length. */

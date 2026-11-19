@@ -742,6 +742,9 @@ export const en: TranslatedMessages = {
       ORDER_NOT_FOUND: 'This order was not found.',
       COUPON_INVALID: 'This discount code can’t be used.',
       COUPON_USED_UP: 'This discount code has been used up.',
+      PRINT_UNAVAILABLE: 'The photographer doesn’t take print orders for this photo.',
+      PRINT_LIMIT_REACHED: 'This device has ordered all the prints the photographer allows.',
+      PRINT_SIZE_UNAVAILABLE: 'That paper size isn’t offered.',
     },
     passwordPolicy: {
       too_short: 'The password is too short. It must be at least {minLength, number} characters.',

@@ -712,6 +712,9 @@ export const zh: TranslatedMessages = {
       ORDER_NOT_FOUND: '未找到此订单',
       COUPON_INVALID: '此优惠码无法使用',
       COUPON_USED_UP: '此优惠码已用完',
+      PRINT_UNAVAILABLE: '摄影师未开放这张照片的冲印',
+      PRINT_LIMIT_REACHED: '此设备的冲印数量已达上限',
+      PRINT_SIZE_UNAVAILABLE: '不提供此纸张尺寸',
     },
     passwordPolicy: {
       too_short: '密码太短，至少需要 {minLength, number} 个字符',
