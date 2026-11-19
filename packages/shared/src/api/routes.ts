@@ -100,6 +100,17 @@ import {
 } from './designs';
 import { meResponseSchema } from './me';
 import {
+  createPrintOrderBodySchema,
+  createPrintOrderResponseSchema,
+  listPrintOrdersQuerySchema,
+  listPrintOrdersResponseSchema,
+  ownerPrintOrderSchema,
+  printPrintOrderBodySchema,
+  printSettingsSchema,
+  sharePrintsResponseSchema,
+  updatePrintSettingsBodySchema,
+} from './print';
+import {
   checkPackageCouponBodySchema,
   checkPackageCouponResponseSchema,
   createPackageOrderBodySchema,
@@ -1768,6 +1779,105 @@ export function allowedDuringPasswordChange(
   );
 }
 
+/**
+ * Print orders (ADR 0031). The two `public` routes live under the share's path (its unlock cookie
+ * reaches them) and pass every share gate like downloads; the photographer's `print` and the rest
+ * are studio routes through the BFF. Another photographer's order is NOT_FOUND.
+ */
+export const PRINT_ROUTES = {
+  /** Whether the share takes print orders (null `offer` when off) and this device's orders. */
+  shareStatus: {
+    method: 'GET',
+    path: '/s/:token/prints',
+    status: 200,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    response: sharePrintsResponseSchema,
+    errors: errors(...SHARE_GATE_ERRORS),
+  },
+  /**
+   * Order one photo. The file must be a ready image in the share's scope (and, face_only, in the
+   * viewer's grant): NOT_FOUND otherwise. PRINT_UNAVAILABLE when print orders are off or the
+   * file is a video, PRINT_SIZE_UNAVAILABLE for a size not offered, PRINT_LIMIT_REACHED once
+   * the device's non-rejected orders on the share reach the limit.
+   */
+  createOrder: {
+    method: 'POST',
+    path: '/s/:token/prints',
+    status: 201,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    body: createPrintOrderBodySchema,
+    response: createPrintOrderResponseSchema,
+    errors: errors(
+      ...SHARE_GATE_ERRORS,
+      ErrorCode.PRINT_UNAVAILABLE,
+      ErrorCode.PRINT_SIZE_UNAVAILABLE,
+      ErrorCode.PRINT_LIMIT_REACHED,
+    ),
+  },
+  getSettings: {
+    method: 'GET',
+    path: '/print/settings',
+    status: 200,
+    auth: 'photographer',
+    response: printSettingsSchema,
+    errors: signedIn(),
+  },
+  updateSettings: {
+    method: 'PUT',
+    path: '/print/settings',
+    status: 200,
+    auth: 'photographer',
+    body: updatePrintSettingsBodySchema,
+    response: printSettingsSchema,
+    errors: signedIn(),
+  },
+  listOrders: {
+    method: 'GET',
+    path: '/print/orders',
+    status: 200,
+    auth: 'photographer',
+    query: listPrintOrdersQuerySchema,
+    response: listPrintOrdersResponseSchema,
+    errors: signedIn(),
+  },
+  /** `pending` -> `queued`. CONFLICT in any other status. */
+  approveOrder: {
+    method: 'POST',
+    path: '/print/orders/:id/approve',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    response: ownerPrintOrderSchema,
+    errors: signedIn(ErrorCode.NOT_FOUND, ErrorCode.CONFLICT),
+  },
+  /** `pending` or `queued` -> `rejected`. CONFLICT once printed or already rejected. */
+  rejectOrder: {
+    method: 'POST',
+    path: '/print/orders/:id/reject',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    response: ownerPrintOrderSchema,
+    errors: signedIn(ErrorCode.NOT_FOUND, ErrorCode.CONFLICT),
+  },
+  /**
+   * Take the order for printing: `printed`, `print_count + 1`, a fresh `printUrl`. See
+   * printPrintOrderBodySchema for `onlyQueued`. CONFLICT when the file is gone (nothing to print).
+   */
+  printOrder: {
+    method: 'POST',
+    path: '/print/orders/:id/print',
+    status: 200,
+    auth: 'photographer',
+    params: idParamsSchema,
+    body: printPrintOrderBodySchema,
+    response: ownerPrintOrderSchema,
+    errors: signedIn(ErrorCode.NOT_FOUND, ErrorCode.CONFLICT),
+  },
+} as const satisfies Record<string, RouteContract>;
+
 /** Every route with a contract, by module. */
 export const API_ROUTES = {
   drive: DRIVE_ROUTES,
@@ -1781,6 +1891,7 @@ export const API_ROUTES = {
   photographerAccount: PHOTOGRAPHER_ACCOUNT_ROUTES,
   admin: ADMIN_ROUTES,
   packages: PACKAGE_ROUTES,
+  print: PRINT_ROUTES,
 } as const;
 
 /** Every route as a flat list, e.g. for OpenAPI generation. */

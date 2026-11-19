@@ -316,6 +316,18 @@ export const ErrorCode = {
   COUPON_INVALID: 'COUPON_INVALID',
   /** ADR 0030: the coupon's uses (paid orders plus orders still holding one) are all taken. */
   COUPON_USED_UP: 'COUPON_USED_UP',
+  /**
+   * ADR 0031: the share's photographer has print orders switched off (or the file is a video).
+   * Not 503: the feature is off on purpose.
+   */
+  PRINT_UNAVAILABLE: 'PRINT_UNAVAILABLE',
+  /**
+   * ADR 0031: this device (the anon_id cookie) has used all the prints the photographer allows
+   * per device on this share. Details: PrintLimitReachedDetails.
+   */
+  PRINT_LIMIT_REACHED: 'PRINT_LIMIT_REACHED',
+  /** ADR 0031: the paper size is not one the photographer offers. */
+  PRINT_SIZE_UNAVAILABLE: 'PRINT_SIZE_UNAVAILABLE',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -394,6 +406,9 @@ export const ERROR_HTTP_STATUS = {
   ORDER_NOT_FOUND: 404,
   COUPON_INVALID: 422,
   COUPON_USED_UP: 409,
+  PRINT_UNAVAILABLE: 404,
+  PRINT_LIMIT_REACHED: 409,
+  PRINT_SIZE_UNAVAILABLE: 422,
 } as const satisfies Record<ErrorCode, number>;
 
 /** Body of every API error response. */
@@ -663,6 +678,13 @@ export const photoLimitReachedDetailsSchema = z.object({
 });
 export type PhotoLimitReachedDetails = z.output<typeof photoLimitReachedDetailsSchema>;
 
+/** PRINT_LIMIT_REACHED (ADR 0031): prints allowed per device on the share, and already used. */
+export const printLimitReachedDetailsSchema = z.object({
+  limit: z.number().int().positive(),
+  used: z.number().int().nonnegative(),
+});
+export type PrintLimitReachedDetails = z.output<typeof printLimitReachedDetailsSchema>;
+
 /** Schema of `details` for the codes that have them. */
 export const ERROR_DETAILS_SCHEMAS = {
   VALIDATION_FAILED: validationFailedDetailsSchema,
@@ -691,6 +713,7 @@ export const ERROR_DETAILS_SCHEMAS = {
   DESIGN_DOC_TOO_LARGE: designDocTooLargeDetailsSchema,
   PLAN_EXPIRED: planExpiredDetailsSchema,
   PHOTO_LIMIT_REACHED: photoLimitReachedDetailsSchema,
+  PRINT_LIMIT_REACHED: printLimitReachedDetailsSchema,
 } as const satisfies Partial<Record<ErrorCode, z.ZodType>>;
 
 /**

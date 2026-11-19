@@ -11,4 +11,5 @@ export * from './analytics';
 export * from './face-vectors';
 export * from './packages';
 export * from './finance';
+export * from './print';
 export { bytea, driveNameKeySql, ltree, NIL_UUID, parentKeySql } from './columns';

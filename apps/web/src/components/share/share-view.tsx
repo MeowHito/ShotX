@@ -36,10 +36,12 @@ import {
   useShareItems,
   useShareLiveUpdates,
   useShareMeta,
+  useSharePrints,
 } from '@/lib/share/queries';
 import { ShareApiProvider, useShareApi } from '@/lib/share/share-api';
 import { DownloadBar, useLightboxDownload } from './download-bar';
 import { JustifiedGrid } from './justified-grid';
+import { PrintDialog } from './print-dialog';
 import { FaceToolsProvider, type FaceTools } from './scan/face-tools';
 import { ScanFlow, type ScanSource } from './scan/scan-flow';
 import { LoginRequired, PasswordForm, ShareUnavailable } from './share-gates';
@@ -362,6 +364,17 @@ function ShareContent({
   const [results, setResults] = useState<FaceSearchResponse | null>(null);
   const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const [selected, setSelected] = useState<ReadonlyMap<string, ShareItem>>(new Map());
+  // ADR 0031: print orders, when the photographer takes them.
+  const prints = useSharePrints(token);
+  const printOffer = prints.data?.offer ?? null;
+  const orderedFiles = useMemo(
+    () =>
+      new Set(
+        (prints.data?.orders ?? []).filter((o) => o.status !== 'rejected').map((o) => o.fileId),
+      ),
+    [prints.data],
+  );
+  const [printItem, setPrintItem] = useState<ShareItem | null>(null);
   // ADR 0020: new photos appear on their own, without a reload or a spinner.
   useShareLiveUpdates(token, shareConfig.livePollMs);
 
@@ -390,6 +403,11 @@ function ShareContent({
       selection={
         meta.allowDownload
           ? { selected: selected.has(item.id), onToggle: () => toggle(item) }
+          : undefined
+      }
+      print={
+        printOffer !== null && item.mediaKind === 'image'
+          ? { ordered: orderedFiles.has(item.id), onPrint: () => setPrintItem(item) }
           : undefined
       }
     />
@@ -554,6 +572,19 @@ function ShareContent({
           ) : null}
 
           {design !== null ? <HowToSheet open={howToOpen} onOpenChange={setHowToOpen} /> : null}
+
+          {printOffer !== null && prints.data !== undefined ? (
+            <PrintDialog
+              token={token}
+              item={printItem}
+              offer={printOffer}
+              used={prints.data.used}
+              orders={prints.data.orders}
+              onOpenChange={(open) => {
+                if (!open) setPrintItem(null);
+              }}
+            />
+          ) : null}
 
           {meta.allowDownload ? (
             <DownloadBar

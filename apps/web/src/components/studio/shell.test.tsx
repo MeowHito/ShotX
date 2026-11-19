@@ -61,6 +61,8 @@ describe('aside', () => {
       'ออกแบบหน้าแชร์',
       // ADR 0014: folder sync.
       'ซิงก์โฟลเดอร์',
+      // ADR 0031: print orders.
+      'สั่งพิมพ์',
       'ถังขยะ',
     ]);
     expect(links[0]).toHaveAttribute('aria-current', 'page');
@@ -71,6 +73,7 @@ describe('aside', () => {
     expect(activeNav('/studio/designs')).toBe('designs');
     expect(activeNav(`/studio/designs/${crypto.randomUUID()}`)).toBe('designs');
     expect(activeNav('/studio/sync')).toBe('sync');
+    expect(activeNav('/studio/print')).toBe('print');
     expect(activeNav('/studio/search')).toBeNull();
   });
 

@@ -21,6 +21,9 @@ export function designHref(designId: string): string {
 /** Folder sync from the computer (ADR 0014). */
 export const SYNC_HREF = '/studio/sync';
 
+/** Print orders from share viewers (ADR 0031). */
+export const PRINT_HREF = '/studio/print';
+
 /** Account settings: name, email and the password change (ADR 0010). */
 export const SETTINGS_HREF = '/studio/settings';
 

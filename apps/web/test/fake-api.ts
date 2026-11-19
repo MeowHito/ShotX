@@ -25,6 +25,7 @@ import {
 import { matchRoute } from '@/lib/bff/handler';
 import { FakeBilling, handleBilling } from './fake-billing-api';
 import { FakeDesigns, handleDesigns } from './fake-design-api';
+import { FakePrints, handlePrint } from './fake-print-api';
 import {
   createPublicShare,
   handlePhase3,
@@ -158,6 +159,8 @@ export class FakeApi {
   billing = new FakeBilling();
   /** Share page designs and design images (ADR 0013). */
   designs = new FakeDesigns();
+  /** Print orders (ADR 0031). */
+  prints = new FakePrints();
 
   constructor(options: FakeApiOptions = {}) {
     this.options = {
@@ -319,9 +322,13 @@ export class FakeApi {
         parsedBody,
         extra.headers,
       );
-      const designs =
+      const prints =
         billing !== NOT_HANDLED
           ? billing
+          : handlePrint(this, route, params as Record<string, string>, query, parsedBody);
+      const designs =
+        prints !== NOT_HANDLED
+          ? prints
           : handleDesigns(this, route, params as Record<string, string>, query, parsedBody);
       const phase3 =
         designs !== NOT_HANDLED

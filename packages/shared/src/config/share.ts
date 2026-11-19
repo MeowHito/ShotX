@@ -108,6 +108,9 @@ const shareEnvSchema = z
     /** Zip jobs per share and viewer (idempotent replays don't count). */
     ZIP_CREATE_RATE_PER_VIEWER: requests.default(10),
     ZIP_CREATE_RATE_PER_VIEWER_WINDOW_SECONDS: windowSeconds.default(SECONDS_PER_HOUR),
+    /** Print orders (ADR 0031) per share and device; the per-device limit is the photographer's. */
+    PRINT_ORDER_RATE_PER_VIEWER: requests.default(30),
+    PRINT_ORDER_RATE_PER_VIEWER_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
     /** "ไม่ใช่ฉัน" feedback per share and viewer. */
     SHARE_FEEDBACK_RATE_PER_VIEWER: requests.default(100),
     SHARE_FEEDBACK_RATE_PER_VIEWER_WINDOW_SECONDS: windowSeconds.default(10 * SECONDS_PER_MINUTE),
@@ -169,6 +172,8 @@ export interface ShareConfig {
     /** Keyed by share and viewer (viewerKey). */
     downloadPerViewer: RateLimitRule;
     zipCreatePerViewer: RateLimitRule;
+    /** Keyed by share and device (anon id). */
+    printOrderPerViewer: RateLimitRule;
     feedbackPerViewer: RateLimitRule;
     /** Keyed by IP: requests whose ref is a slug (ADR 0011). */
     slugResolvePerIp: RateLimitRule;
@@ -208,6 +213,10 @@ export function loadShareConfig(env: Env): ShareConfig {
       zipCreatePerViewer: {
         limit: e.ZIP_CREATE_RATE_PER_VIEWER,
         windowSeconds: e.ZIP_CREATE_RATE_PER_VIEWER_WINDOW_SECONDS,
+      },
+      printOrderPerViewer: {
+        limit: e.PRINT_ORDER_RATE_PER_VIEWER,
+        windowSeconds: e.PRINT_ORDER_RATE_PER_VIEWER_WINDOW_SECONDS,
       },
       feedbackPerViewer: {
         limit: e.SHARE_FEEDBACK_RATE_PER_VIEWER,

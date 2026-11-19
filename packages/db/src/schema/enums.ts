@@ -16,6 +16,8 @@ import {
   PAYMENT_EVENT_TYPES,
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
+  PRINT_APPROVAL_MODES,
+  PRINT_ORDER_STATUSES,
   SHARE_MODES,
   SHARE_TARGET_TYPES,
   SUBSCRIPTION_EVENT_TYPES,
@@ -59,3 +61,7 @@ export const accountStatus = pgEnum('account_status', ACCOUNT_STATUSES);
 export const packageOrderStatus = pgEnum('package_order_status', PACKAGE_ORDER_STATUSES);
 // Migration 0017 (ADR 0027).
 export const expenseCategory = pgEnum('expense_category', EXPENSE_CATEGORIES);
+
+// ADR 0031: print orders.
+export const printOrderStatus = pgEnum('print_order_status', PRINT_ORDER_STATUSES);
+export const printApproval = pgEnum('print_approval', PRINT_APPROVAL_MODES);

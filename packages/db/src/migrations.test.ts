@@ -344,6 +344,15 @@ describe('migrations', () => {
     expect(sql).not.toMatch(/DROP|ALTER COLUMN|RENAME/);
   });
 
+  it('0021 is print_orders: two new tables, nothing existing changed (ADR 0031)', () => {
+    expect(journal.entries[21]?.tag).toBe('0021_print_orders');
+    const sql = sqlOf('0021_print_orders');
+    expect(sql).toContain('CREATE TABLE "print_settings"');
+    expect(sql).toContain('CREATE TABLE "print_orders"');
+    expect(sql).toContain('UNIQUE("photographer_id","order_number")');
+    expect(sql).not.toMatch(/DROP|ALTER COLUMN|RENAME/);
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

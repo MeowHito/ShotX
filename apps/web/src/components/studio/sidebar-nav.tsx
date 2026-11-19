@@ -8,6 +8,7 @@ import {
   FolderSyncIcon,
   type LucideIcon,
   PaletteIcon,
+  PrinterIcon,
   Trash2Icon,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -15,6 +16,7 @@ import { useTranslations } from 'next-intl';
 import {
   BILLING_HREF,
   DESIGNS_HREF,
+  PRINT_HREF,
   RECENT_HREF,
   SHARES_HREF,
   SYNC_HREF,
@@ -23,13 +25,14 @@ import {
 import { useOptionalFolderSync } from '@/components/sync/folder-sync-context';
 import { useStudio } from './studio-context';
 
-export type StudioNavId = 'drive' | 'recent' | 'designs' | 'sync' | 'trash' | 'billing';
+export type StudioNavId = 'drive' | 'recent' | 'designs' | 'sync' | 'print' | 'trash' | 'billing';
 
 const NAV: { id: StudioNavId; href: string; icon: LucideIcon }[] = [
   { id: 'drive', href: '/studio', icon: CalendarDaysIcon },
   { id: 'recent', href: RECENT_HREF, icon: ClockIcon },
   { id: 'designs', href: DESIGNS_HREF, icon: PaletteIcon },
   { id: 'sync', href: SYNC_HREF, icon: FolderSyncIcon },
+  { id: 'print', href: PRINT_HREF, icon: PrinterIcon },
   { id: 'trash', href: TRASH_HREF, icon: Trash2Icon },
   { id: 'billing', href: BILLING_HREF, icon: CreditCardIcon },
 ];
@@ -42,6 +45,7 @@ export function activeNav(pathname: string): StudioNavId | null {
   if (under(RECENT_HREF)) return 'recent';
   if (under(DESIGNS_HREF)) return 'designs';
   if (under(SYNC_HREF)) return 'sync';
+  if (under(PRINT_HREF)) return 'print';
   if (under(TRASH_HREF)) return 'trash';
   if (under(BILLING_HREF)) return 'billing';
   return null;

@@ -80,6 +80,8 @@ describe('schema', () => {
         'package_orders',
         'expenses',
         'package_coupons',
+        'print_settings',
+        'print_orders',
       ].sort(),
     );
   });

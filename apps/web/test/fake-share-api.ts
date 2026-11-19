@@ -183,7 +183,7 @@ export function statsFor(shareId: string): ShareStatsResponse {
 }
 
 /** Resolves a ref (token or slug, parseShareRef) like the API; records which kind was used. */
-function publicShareOrFail(api: FakeApi, ref: string | undefined) {
+export function publicShareOrFail(api: FakeApi, ref: string | undefined) {
   const parsed = parseShareRef(ref ?? '');
   const share =
     parsed === null
@@ -203,7 +203,7 @@ function ownerShareOrFail(api: FakeApi, id: string | undefined) {
 }
 
 /** Availability, then require_login, then password (the gate order of api/share-page). */
-function gate(api: FakeApi, share: PublicShareFixture, until: 'login' | 'all' = 'all') {
+export function gate(api: FakeApi, share: PublicShareFixture, until: 'login' | 'all' = 'all') {
   if (share.expiredReason !== null)
     throw new Fail('SHARE_EXPIRED', { reason: share.expiredReason });
   if (share.requireLogin && !api.viewerSession) throw new Fail('LOGIN_REQUIRED');
@@ -211,7 +211,7 @@ function gate(api: FakeApi, share: PublicShareFixture, until: 'login' | 'all' = 
   if (share.password !== null && !share.unlocked) throw new Fail('PASSWORD_REQUIRED');
 }
 
-function visibleItems(share: PublicShareFixture) {
+export function visibleItems(share: PublicShareFixture) {
   return share.mode === 'face_only'
     ? share.items.filter((i) => share.grant.has(i.id))
     : share.items;

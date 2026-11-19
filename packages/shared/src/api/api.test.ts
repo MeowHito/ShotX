@@ -333,6 +333,15 @@ describe('route table', () => {
       'POST /package-orders/:id/pay',
       'POST /package-payments/webhooks/:gateway',
       'GET /me/package',
+      // ADR 0031: print orders.
+      'GET /s/:token/prints',
+      'POST /s/:token/prints',
+      'GET /print/settings',
+      'PUT /print/settings',
+      'GET /print/orders',
+      'POST /print/orders/:id/approve',
+      'POST /print/orders/:id/reject',
+      'POST /print/orders/:id/print',
     ]);
     expect(new Set(routes).size).toBe(routes.length);
   });

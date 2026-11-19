@@ -4,7 +4,9 @@ import {
   CAPTCHA_TOKEN_HEADER,
   type ConsentPolicyVersion,
   type ConsentPurpose,
+  type CreatePrintOrderBody,
   type FaceDeletionInfoResponse,
+  PRINT_ROUTES,
   PUBLIC_SHARE_ROUTES,
   SELFIE_FIELD_NAME,
   type ShareItem,
@@ -36,7 +38,38 @@ export const shareKeys = {
       ? (['share', token, 'items'] as const)
       : (['share', token, 'items', mode] as const),
   faceDeletion: (token: string) => ['share', token, 'face-deletion'] as const,
+  /** ADR 0031: whether the share takes print orders, and this device's orders. */
+  prints: (token: string) => ['share', token, 'prints'] as const,
 };
+
+/** How often the share page refreshes its print orders' statuses (ADR 0031). */
+const PRINT_STATUS_REFRESH_MS = 30_000;
+
+/** ADR 0031: the share's print offer (null: no print button) and this device's orders. */
+export function useSharePrints(token: string) {
+  const { api } = useShareApi();
+  return useQuery({
+    queryKey: shareKeys.prints(token),
+    queryFn: ({ signal }) => api.call(PRINT_ROUTES.shareStatus, { params: { token }, signal }),
+    staleTime: PRINT_STATUS_REFRESH_MS,
+    // Only while the viewer has orders whose status can still change.
+    refetchInterval: (query) =>
+      query.state.data?.orders.some((o) => o.status === 'pending' || o.status === 'queued')
+        ? PRINT_STATUS_REFRESH_MS
+        : false,
+  });
+}
+
+/** ADR 0031: order one print; the device's orders refresh afterwards (and after a refusal). */
+export function useCreatePrintOrder(token: string) {
+  const { api } = useShareApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreatePrintOrderBody) =>
+      api.call(PRINT_ROUTES.createOrder, { params: { token }, body }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: shareKeys.prints(token) }),
+  });
+}
 
 /**
  * Share meta as this browser sees it, by the page's ref (slug or token). The SSR copy (fetched

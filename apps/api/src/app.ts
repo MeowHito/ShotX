@@ -64,6 +64,8 @@ import { createPackageGateway } from './packages/gateways';
 import { PackageSalesGuard, PackagesController } from './packages/packages.controller';
 import { PackagesService } from './packages/packages.service';
 import { SignedUrls } from './media/signed-urls';
+import { PrintController, PublicPrintController } from './print/print.controller';
+import { PrintService } from './print/print.service';
 import { DownloadsService } from './public/downloads.service';
 import { FaceService } from './public/face.service';
 import { PublicShareController } from './public/public-share.controller';
@@ -187,6 +189,8 @@ export class AppModule {
         PhotographerAccountController,
         AdminController,
         PackagesController,
+        PublicPrintController,
+        PrintController,
       ],
       providers: [
         { provide: API_CONFIG, useValue: deps.config },
@@ -283,6 +287,7 @@ export class AppModule {
         FinanceService,
         PackageSalesGuard,
         PackagesService,
+        PrintService,
       ],
     };
   }

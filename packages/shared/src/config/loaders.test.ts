@@ -174,6 +174,7 @@ describe('loadShareConfig', () => {
         unlockPerIp: { limit: 10, windowSeconds: 900 },
         downloadPerViewer: { limit: 300, windowSeconds: 600 },
         zipCreatePerViewer: { limit: 10, windowSeconds: 3600 },
+        printOrderPerViewer: { limit: 30, windowSeconds: 600 },
         feedbackPerViewer: { limit: 100, windowSeconds: 600 },
         slugResolvePerIp: { limit: 300, windowSeconds: 300 },
         notFoundPerIp: { limit: 30, windowSeconds: 600 },

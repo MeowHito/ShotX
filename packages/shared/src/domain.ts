@@ -483,3 +483,40 @@ export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 export function isAuditAction(action: string): action is AuditAction {
   return (AUDIT_ACTIONS as readonly string[]).includes(action);
 }
+
+// --- Print orders (ADR 0031) ---------------------------------------------------------------------
+
+/**
+ * `print_orders.status`:
+ * - `pending`: a viewer asked; the photographer must allow it first (approval `manual`);
+ * - `queued`: allowed (or approval `auto`), waiting for the photographer's print station;
+ * - `printed`: a print station (or the photographer's print button) took it and printed it;
+ * - `rejected`: the photographer declined it; it no longer counts against the device's limit.
+ */
+export const PRINT_ORDER_STATUSES = ['pending', 'queued', 'printed', 'rejected'] as const;
+export type PrintOrderStatus = (typeof PRINT_ORDER_STATUSES)[number];
+
+/**
+ * `print_settings.approval`: `auto` queues every order for printing at once; `manual` holds it
+ * as `pending` until the photographer allows it.
+ */
+export const PRINT_APPROVAL_MODES = ['auto', 'manual'] as const;
+export type PrintApprovalMode = (typeof PRINT_APPROVAL_MODES)[number];
+
+/**
+ * Paper sizes a photographer can offer, portrait width x height in millimetres (the print page
+ * turns the sheet to the photo's orientation). Thai photo shops name the inch sizes 4R, 5R, ...
+ */
+export const PRINT_PAPER_SIZES = {
+  '4r': { widthMm: 102, heightMm: 152 },
+  '5r': { widthMm: 127, heightMm: 178 },
+  '6r': { widthMm: 152, heightMm: 203 },
+  '8r': { widthMm: 203, heightMm: 254 },
+  a5: { widthMm: 148, heightMm: 210 },
+  a4: { widthMm: 210, heightMm: 297 },
+} as const;
+export type PrintPaperSize = keyof typeof PRINT_PAPER_SIZES;
+export const PRINT_PAPER_SIZE_CODES = Object.keys(PRINT_PAPER_SIZES) as [
+  PrintPaperSize,
+  ...PrintPaperSize[],
+];

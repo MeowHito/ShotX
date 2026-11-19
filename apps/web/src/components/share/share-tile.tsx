@@ -2,7 +2,7 @@
 
 import type { ShareItem } from '@shotx/shared';
 import { cn } from '@shotx/ui';
-import { CheckIcon, PlayIcon } from 'lucide-react';
+import { CheckIcon, PlayIcon, PrinterIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 
 export interface ShareTileProps {
@@ -12,13 +12,18 @@ export interface ShareTileProps {
   onOpen: () => void;
   /** Present when downloads are allowed: the round selection dot. */
   selection?: { selected: boolean; onToggle: () => void };
+  /**
+   * ADR 0031: present when the photographer takes print orders (photos only): the printer button
+   * in the top-right corner (the selection dot moves left of it). `ordered`: this device ordered it.
+   */
+  print?: { ordered: boolean; onPrint: () => void };
 }
 
 /**
  * A photo of the share page in its original aspect ratio: tap to open the lightbox, tap the
  * round dot to select (tap again to unselect).
  */
-export function ShareTile({ item, size, onOpen, selection }: ShareTileProps) {
+export function ShareTile({ item, size, onOpen, selection, print }: ShareTileProps) {
   const t = useTranslations();
   const selected = selection?.selected === true;
   return (
@@ -58,7 +63,10 @@ export function ShareTile({ item, size, onOpen, selection }: ShareTileProps) {
           aria-checked={selected}
           aria-label={t('share.select', { name: item.name })}
           onClick={selection.onToggle}
-          className="group absolute top-0 right-0 flex size-11 items-start justify-end p-1.5 outline-none"
+          className={cn(
+            'group absolute top-0 flex size-11 items-start justify-end p-1.5 outline-none',
+            print !== undefined ? 'right-10' : 'right-0',
+          )}
         >
           <span
             className={cn(
@@ -69,6 +77,27 @@ export function ShareTile({ item, size, onOpen, selection }: ShareTileProps) {
             )}
           >
             <CheckIcon className="size-4" strokeWidth={3} aria-hidden />
+          </span>
+        </button>
+      ) : null}
+      {print !== undefined ? (
+        // A 44 px touch target around a 26 px round printer button in the top-right corner.
+        <button
+          type="button"
+          aria-label={t('share.print.button', { name: item.name })}
+          title={print.ordered ? t('share.print.ordered') : undefined}
+          onClick={print.onPrint}
+          className="group absolute top-0 right-0 flex size-11 items-start justify-end p-1.5 outline-none"
+        >
+          <span
+            className={cn(
+              'relative flex size-[26px] items-center justify-center rounded-full border-2 shadow-sm transition-colors group-focus-visible:ring-2 group-focus-visible:ring-ring',
+              print.ordered
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-white bg-black/35 text-white',
+            )}
+          >
+            <PrinterIcon className="size-3.5" strokeWidth={2.4} aria-hidden />
           </span>
         </button>
       ) : null}
