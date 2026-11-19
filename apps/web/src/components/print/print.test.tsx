@@ -1,6 +1,6 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeApi, shareItem } from '../../../test/fake-api';
 import { apiClientFor, renderWithProviders } from '../../../test/render';
 import { renderSharePage } from '../../../test/share-harness';
@@ -10,7 +10,71 @@ import { PrintOrdersPage } from './print-page';
 const tp = th.share.print;
 const ts = th.printStudio;
 
-vi.mock('photoswipe', () => ({ default: class {} }));
+/** A PhotoSwipe stand-in: the registered bar buttons are real elements tests can click. */
+const lightbox = vi.hoisted(() => ({
+  current: null as null | {
+    index: number;
+    buttons: Map<string, HTMLElement>;
+    keydown: (key: string) => boolean;
+    swipeTo: (index: number) => void;
+  },
+}));
+vi.mock('photoswipe', () => ({
+  default: class {
+    currIndex: number;
+    private handlers = new Map<string, ((e?: unknown) => void)[]>();
+    private elements: {
+      name: string;
+      html: string;
+      onInit?: (el: HTMLElement) => void;
+      onClick?: () => void;
+    }[] = [];
+    ui = { registerElement: (el: (typeof this.elements)[number]) => this.elements.push(el) };
+    constructor(options: { index: number }) {
+      this.currIndex = options.index;
+    }
+    on(name: string, fn: (e?: unknown) => void) {
+      this.handlers.set(name, [...(this.handlers.get(name) ?? []), fn]);
+    }
+    private fire(name: string, e?: unknown) {
+      for (const fn of this.handlers.get(name) ?? []) fn(e);
+    }
+    init() {
+      this.fire('uiRegister');
+      const buttons = new Map<string, HTMLElement>();
+      for (const el of this.elements) {
+        const button = document.createElement('button');
+        button.innerHTML = el.html;
+        button.addEventListener('click', () => el.onClick?.());
+        document.body.appendChild(button);
+        buttons.set(el.name, button);
+        el.onInit?.(button);
+      }
+      lightbox.current = {
+        index: this.currIndex,
+        buttons,
+        keydown: (key: string) => {
+          let prevented = false;
+          this.fire('keydown', {
+            originalEvent: new KeyboardEvent('keydown', { key }),
+            preventDefault: () => {
+              prevented = true;
+            },
+          });
+          return prevented;
+        },
+        swipeTo: (index: number) => {
+          this.currIndex = index;
+          this.fire('change');
+        },
+      };
+    }
+    destroy() {
+      for (const b of lightbox.current?.buttons.values() ?? []) b.remove();
+      this.fire('destroy');
+    }
+  },
+}));
 
 function shareWithPhotos(fake: FakeApi) {
   return fake.addPublicShare({
@@ -22,19 +86,32 @@ function shareWithPhotos(fake: FakeApi) {
   });
 }
 
+const open = (name: string) => th.share.open.replace('{name}', name);
+
+async function openPhoto(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(await screen.findByRole('button', { name: open(name) }));
+  await waitFor(() => expect(lightbox.current).not.toBeNull());
+  return lightbox.current as NonNullable<typeof lightbox.current>;
+}
+
 describe('share page: print orders (ADR 0031)', () => {
-  it('shows no printer button while the photographer has print orders off', async () => {
+  beforeEach(() => {
+    lightbox.current = null;
+  });
+
+  it('never puts a printer on the grid; the lightbox hides it while print orders are off', async () => {
+    const user = userEvent.setup();
     const fake = new FakeApi();
     const share = shareWithPhotos(fake);
     renderSharePage(fake, share.token);
-    await screen.findByRole('button', { name: th.share.open.replace('{name}', 'ภาพ 1.jpg') });
     await waitFor(() =>
       expect(fake.calls.some((c) => c.path.endsWith(`/s/${share.token}/prints`))).toBe(true),
     );
-    expect(screen.queryByRole('button', { name: /สั่งพิมพ์/ })).not.toBeInTheDocument();
+    const box = await openPhoto(user, 'ภาพ 1.jpg');
+    expect(box.buttons.get('print')?.style.display).toBe('none');
   });
 
-  it('orders a print on a chosen size with a name, then counts the device down to its limit', async () => {
+  it('orders from the lightbox: size, name, order number, then the device limit', async () => {
     const user = userEvent.setup();
     const fake = new FakeApi();
     fake.prints.settings = {
@@ -45,17 +122,25 @@ describe('share page: print orders (ADR 0031)', () => {
     };
     const share = shareWithPhotos(fake);
     renderSharePage(fake, share.token);
+    await waitFor(() =>
+      expect(fake.calls.some((c) => c.path.endsWith(`/s/${share.token}/prints`))).toBe(true),
+    );
+    // Before opening a photo: no printer anywhere on the page (owner, 2026-11-19).
+    expect(screen.queryByRole('button', { name: /สั่งพิมพ์/ })).not.toBeInTheDocument();
 
-    const printPhoto1 = await screen.findByRole('button', {
-      name: tp.button.replace('{name}', 'ภาพ 1.jpg'),
-    });
-    // Photos only: no printer on the video.
-    expect(
-      screen.queryByRole('button', { name: tp.button.replace('{name}', 'คลิป.mp4') }),
-    ).not.toBeInTheDocument();
+    const box = await openPhoto(user, 'ภาพ 1.jpg');
+    const printButton = box.buttons.get('print') as HTMLElement;
+    await waitFor(() => expect(printButton.style.display).toBe(''));
+    expect(printButton).toHaveTextContent(tp.submit);
+    // Videos can't be printed: the button hides on them.
+    act(() => box.swipeTo(2));
+    expect(printButton.style.display).toBe('none');
+    act(() => box.swipeTo(0));
 
-    await user.click(printPhoto1);
+    await user.click(printButton);
     const dialog = await screen.findByRole('dialog');
+    // The lightbox ignores keys (Escape, arrows) while the dialog is over it.
+    expect(box.keydown('Escape')).toBe(true);
     expect(within(dialog).getByText('สั่งได้อีก 1 จาก 1 รูป')).toBeInTheDocument();
     await user.click(within(dialog).getByRole('radio', { name: tp.sizes.a4 }));
     await user.type(within(dialog).getByLabelText(tp.name), 'บิบ 77');
@@ -74,16 +159,15 @@ describe('share page: print orders (ADR 0031)', () => {
     // Public route: straight to /api with the browser's cookies, never through the BFF.
     expect(create?.prefix).toBe('/api');
     await user.click(within(dialog).getByRole('button', { name: tp.close }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    // Dialog closed: the lightbox takes keys again, and its button says the photo is ordered.
+    expect(box.keydown('Escape')).toBe(false);
+    await waitFor(() => expect(printButton).toHaveTextContent(tp.orderedShort));
 
-    // The ordered photo's button is marked, and the device has no prints left.
-    await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: tp.button.replace('{name}', 'ภาพ 1.jpg') }),
-      ).toHaveAttribute('title', tp.ordered),
-    );
-    await user.click(
-      screen.getByRole('button', { name: tp.button.replace('{name}', 'ภาพ 2.jpg') }),
-    );
+    // The device has no prints left.
+    act(() => box.swipeTo(1));
+    expect(printButton).toHaveTextContent(tp.submit);
+    await user.click(printButton);
     const second = await screen.findByRole('dialog');
     expect(within(second).getByText('สั่งพิมพ์ครบ 1 รูปแล้ว')).toBeInTheDocument();
     expect(within(second).getByRole('button', { name: tp.submit })).toBeDisabled();
@@ -100,9 +184,13 @@ describe('share page: print orders (ADR 0031)', () => {
     };
     const share = shareWithPhotos(fake);
     renderSharePage(fake, share.token);
-    await user.click(
-      await screen.findByRole('button', { name: tp.button.replace('{name}', 'ภาพ 1.jpg') }),
+    await waitFor(() =>
+      expect(fake.calls.some((c) => c.path.endsWith(`/s/${share.token}/prints`))).toBe(true),
     );
+    const box = await openPhoto(user, 'ภาพ 1.jpg');
+    const printButton = box.buttons.get('print') as HTMLElement;
+    await waitFor(() => expect(printButton.style.display).toBe(''));
+    await user.click(printButton);
     const dialog = await screen.findByRole('dialog');
     fake.prints.settings = { ...fake.prints.settings, paperSizes: ['a4'] };
     await user.click(within(dialog).getByRole('button', { name: tp.submit }));

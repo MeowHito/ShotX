@@ -52,7 +52,14 @@ export function PrintDialog({
   return (
     <Dialog open={item !== null} onOpenChange={onOpenChange}>
       {item !== null ? (
-        <DialogContent closeLabel={tc('close')} className="max-h-[90dvh] overflow-y-auto">
+        <DialogContent
+          closeLabel={tc('close')}
+          // Opened from the lightbox (ADR 0031): above PhotoSwipe (--pswp-root-z-index 100000).
+          className="z-[100010] max-h-[90dvh] overflow-y-auto"
+          overlayClassName="z-[100010]"
+          // Escape closes this dialog only: the lightbox under it listens on the document too.
+          onEscapeKeyDown={(e) => e.stopPropagation()}
+        >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <PrinterIcon className="size-5" aria-hidden />
@@ -156,8 +163,8 @@ function PrintForm({
               className={cn(
                 'min-h-11 rounded-lg border px-3 text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 size === code
-                  ? 'border-primary bg-primary/10 font-semibold text-primary'
-                  : 'hover:bg-foreground/5',
+                  ? 'border-primary bg-primary font-semibold text-primary-foreground'
+                  : 'bg-background hover:bg-foreground/5',
               )}
             >
               {t(`sizes.${code}`)}

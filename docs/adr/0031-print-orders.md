@@ -32,9 +32,12 @@ on their own or must be allowed first. It is a new studio tab.
    applies, and the file must be a ready photo in the share's scope and, in face_only mode, in the
    viewer's grant (NOT_FOUND otherwise, like downloads). Videos and a switched-off photographer are
    PRINT_UNAVAILABLE, a size not offered PRINT_SIZE_UNAVAILABLE, the limit PRINT_LIMIT_REACHED
-   (details `limit`, `used`). The printer button sits in the photo's top-right corner (the
-   selection dot moves left of it) and is filled once the device ordered that photo; the dialog
-   shows the sizes, the name field, how many prints are left, then the order number.
+   (details `limit`, `used`). The print button ("สั่งพิมพ์") is in the lightbox's top bar, left
+   of download (owner, 2026-11-19: not on the grid, only once a photo is open); it hides on
+   videos and says "สั่งพิมพ์แล้ว" once the device ordered that photo. The dialog opens over the
+   lightbox (z-index above PhotoSwipe, PhotoSwipe's focus trap off, its keys ignored while the
+   dialog is open, Escape closes the dialog only) and shows the sizes, the name field, how many
+   prints are left, then the order number.
 5. **Studio `/studio/print` ("สั่งพิมพ์")**: the settings, the orders by status with counts
    (polled every 5 s), allow / decline / print / print again. `auto` creates orders as `queued`,
    `manual` as `pending` until allowed.

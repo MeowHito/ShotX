@@ -95,6 +95,7 @@ export const zh: PublicMessages = {
     print: {
       button: '冲印 {name}',
       ordered: '已下单冲印',
+      orderedShort: '已下单',
       title: '冲印这张照片',
       body: '摄影师会为你冲印。取照片时请出示冲印单号。',
       size: '纸张尺寸',

@@ -40,6 +40,34 @@
   outline-offset: 2px;
 }
 /*
+ * ADR 0031: the print button, left of download: the same pill, outlined, so download stays the
+ * main action. It stays in the top bar on phones too (download moves to the bottom there).
+ */
+.pswp .pswp__button.pswp__print {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 0.5rem;
+  width: auto;
+  height: 2.5rem;
+  margin: 0 0.5rem 0 0;
+  padding: 0 1.1rem;
+  overflow: visible;
+  opacity: 1;
+  border: 2px solid white;
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.35);
+  color: white;
+  font-weight: 600;
+  font-size: 1rem;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+  cursor: pointer;
+}
+.pswp .pswp__button.pswp__print:focus-visible {
+  outline: 2px solid white;
+  outline-offset: 2px;
+}
+/*
  * Phones (owner, 2026-11-13): the same button sits at the bottom centre, within thumb reach.
  * `fixed` keeps it on the visible viewport (above the browser's toolbar and the home
  * indicator); the top bar has no transform, so it isn't the containing block.

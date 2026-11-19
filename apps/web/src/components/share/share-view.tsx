@@ -47,7 +47,7 @@ import { ScanFlow, type ScanSource } from './scan/scan-flow';
 import { LoginRequired, PasswordForm, ShareUnavailable } from './share-gates';
 import { type ShareRuntime, ShareRuntimeContext, defaultShareRuntime } from './share-runtime';
 import { ShareTile } from './share-tile';
-import { useLightbox } from './use-lightbox';
+import { type LightboxPrint, useLightbox } from './use-lightbox';
 
 export interface SharePageProps {
   /** The ref of the URL: the share's slug, or an old token link (ADR 0011). */
@@ -375,6 +375,10 @@ function ShareContent({
     [prints.data],
   );
   const [printItem, setPrintItem] = useState<ShareItem | null>(null);
+  const printOpen = useRef(false);
+  useEffect(() => {
+    printOpen.current = printItem !== null;
+  }, [printItem]);
   // ADR 0020: new photos appear on their own, without a reload or a spinner.
   useShareLiveUpdates(token, shareConfig.livePollMs);
 
@@ -383,7 +387,23 @@ function ShareContent({
     [describe],
   );
   const lightboxDownload = useLightboxDownload(token, onLightboxError);
-  const openLightbox = useLightbox(meta.allowDownload ? lightboxDownload : undefined);
+  // ADR 0031: the print button is in the lightbox (owner, 2026-11-19: not on the grid).
+  const lightboxPrint = useMemo<LightboxPrint | undefined>(
+    () =>
+      printOffer === null
+        ? undefined
+        : {
+            onClick: setPrintItem,
+            isAvailable: (item) => item.mediaKind === 'image',
+            isOrdered: (item) => orderedFiles.has(item.id),
+            isBlocking: () => printOpen.current,
+          },
+    [printOffer, orderedFiles],
+  );
+  const openLightbox = useLightbox(
+    meta.allowDownload ? lightboxDownload : undefined,
+    lightboxPrint,
+  );
 
   const toggle = useCallback((item: ShareItem) => {
     setSelected((prev) => {
@@ -403,11 +423,6 @@ function ShareContent({
       selection={
         meta.allowDownload
           ? { selected: selected.has(item.id), onToggle: () => toggle(item) }
-          : undefined
-      }
-      print={
-        printOffer !== null && item.mediaKind === 'image'
-          ? { ordered: orderedFiles.has(item.id), onPrint: () => setPrintItem(item) }
           : undefined
       }
     />

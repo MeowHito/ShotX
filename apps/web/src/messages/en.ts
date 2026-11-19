@@ -97,6 +97,7 @@ export const en: PublicMessages = {
     print: {
       button: 'Order a print of {name}',
       ordered: 'Print ordered',
+      orderedShort: 'Ordered',
       title: 'Order a print',
       body: 'The photographer prints it for you. Give your order number when you pick it up.',
       size: 'Paper size',

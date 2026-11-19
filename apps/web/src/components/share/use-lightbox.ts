@@ -36,6 +36,24 @@ export function downloadButtonHtml(label: string): string {
   return `<svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${escapeAttribute(label)}</span>`;
 }
 
+/** HTML of the print button (ADR 0031): the label is escaped (it comes from the messages). */
+export function printButtonHtml(label: string): string {
+  return `<svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="1"/></svg><span>${escapeAttribute(label)}</span>`;
+}
+
+/**
+ * ADR 0031: the lightbox's print button, left of download, for the photos `isAvailable` accepts
+ * (hidden on the others, e.g. videos). `isOrdered` switches its text to "ordered". `isBlocking`
+ * is true while the print dialog is open over the lightbox: PhotoSwipe then ignores the keyboard
+ * (Escape closes the dialog only, arrows don't swipe behind it).
+ */
+export interface LightboxPrint {
+  onClick: (item: ShareItem) => void;
+  isAvailable: (item: ShareItem) => boolean;
+  isOrdered: (item: ShareItem) => boolean;
+  isBlocking: () => boolean;
+}
+
 /** The parts of a PhotoSwipe instance that carry PhotoSwipe's own (English) accessibility text. */
 interface LightboxDom {
   element?: HTMLElement;
@@ -80,13 +98,21 @@ export interface LightboxDownload {
  * bottom, where PhotoSwipe's button styles pushed it under the browser's toolbar). ADR 0022: on
  * phones globals.css moves the same button to the bottom centre (fixed, above the safe area).
  */
-export function useLightbox(download?: LightboxDownload) {
+export function useLightbox(download?: LightboxDownload, print?: LightboxPrint) {
   const t = useTranslations('lightbox');
+  const tp = useTranslations('share.print');
   const current = useRef<{ destroy: () => void } | null>(null);
   const downloadRef = useRef(download);
+  const printRef = useRef(print);
+  /** Redraws the open lightbox's print button (the offer or the ordered photos changed). */
+  const refreshPrint = useRef<(() => void) | null>(null);
   useEffect(() => {
     downloadRef.current = download;
   }, [download]);
+  useEffect(() => {
+    printRef.current = print;
+    refreshPrint.current?.();
+  }, [print]);
   useEffect(() => () => current.current?.destroy(), []);
 
   return useCallback(
@@ -104,7 +130,49 @@ export function useLightbox(download?: LightboxDownload) {
         arrowPrev: true,
         arrowNext: true,
         bgOpacity: 0.95,
+        // The print dialog (ADR 0031) opens over the lightbox and needs the focus.
+        trapFocus: false,
       });
+      // Print (ADR 0031): registered whenever the lightbox opens; shown only while the share
+      // takes print orders and the photo can be printed.
+      let printButton: HTMLElement | null = null;
+      const drawPrint = () => {
+        if (printButton === null) return;
+        const item = items[pswp.currIndex];
+        const offer = printRef.current;
+        const shown = offer !== undefined && item !== undefined && offer.isAvailable(item);
+        printButton.style.display = shown ? '' : 'none';
+        if (shown) {
+          printButton.innerHTML = printButtonHtml(
+            offer.isOrdered(item) ? tp('orderedShort') : tp('submit'),
+          );
+        }
+      };
+      pswp.on('uiRegister', () => {
+        pswp.ui?.registerElement({
+          name: 'print',
+          title: tp('title'),
+          ariaLabel: tp('title'),
+          order: 8,
+          isButton: true,
+          appendTo: 'bar',
+          className: 'pswp__print',
+          html: printButtonHtml(tp('submit')),
+          onInit: (el) => {
+            printButton = el;
+            drawPrint();
+          },
+          onClick: () => {
+            const item = items[pswp.currIndex];
+            if (item !== undefined) printRef.current?.onClick(item);
+          },
+        });
+      });
+      pswp.on('change', drawPrint);
+      pswp.on('keydown', (e) => {
+        if (printRef.current?.isBlocking() === true) e.preventDefault();
+      });
+      refreshPrint.current = drawPrint;
       const opened = downloadRef.current;
       if (opened !== undefined) {
         const label = opened.label ?? t('downloadShort');
@@ -141,6 +209,7 @@ export function useLightbox(download?: LightboxDownload) {
       }
       pswp.on('destroy', () => {
         if (current.current === pswp) current.current = null;
+        if (refreshPrint.current === drawPrint) refreshPrint.current = null;
         downloadRef.current?.onClose?.();
       });
       current.current = pswp;
@@ -154,6 +223,6 @@ export function useLightbox(download?: LightboxDownload) {
       const first = items[index];
       if (first !== undefined) downloadRef.current?.onShow?.(first);
     },
-    [t],
+    [t, tp],
   );
 }

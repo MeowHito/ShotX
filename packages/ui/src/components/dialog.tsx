@@ -11,14 +11,22 @@ export function DialogContent({
   className,
   children,
   closeLabel,
+  overlayClassName,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   /** Accessible name of the close button. The app passes translated text. */
   closeLabel: string;
+  /** Extra classes of the backdrop (e.g. a z-index above a lightbox). */
+  overlayClassName?: string;
 }) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-50 animate-fade-in bg-band/45 backdrop-blur-[2px]" />
+      <DialogPrimitive.Overlay
+        className={cn(
+          'fixed inset-0 z-50 animate-fade-in bg-band/45 backdrop-blur-[2px]',
+          overlayClassName,
+        )}
+      />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
