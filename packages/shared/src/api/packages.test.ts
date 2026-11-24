@@ -19,6 +19,7 @@ import {
   packageOrderTokenHeadersSchema,
   packageOrderViewSchema,
   packagesResponseSchema,
+  publicPackageSchema,
   packageWebhookParamsSchema,
   startPackagePaymentBodySchema,
   startPackagePaymentResponseSchema,
@@ -127,6 +128,7 @@ describe('package routes (ADR 0026)', () => {
       pay: 'POST /package-orders/:id/pay 200 bff/users',
       webhook: 'POST /package-payments/webhooks/:gateway 200 webhook',
       myPackage: 'GET /me/package 200 photographer',
+      offers: 'GET /me/package/offers 200 photographer',
     });
     expect(PACKAGE_ROUTES.createOrder.optionalAuth).toBe('photographer');
     expect(ALL_ROUTES.filter((r) => r.optionalAuth !== undefined)).toEqual([
@@ -261,6 +263,7 @@ describe('package routes (ADR 0026)', () => {
     const card = (code: string, price: number, featured = false) => ({
       code,
       name: code,
+      kind: 'plan' as const,
       days: 3,
       photoLimit: 100,
       featured,
@@ -275,6 +278,16 @@ describe('package routes (ADR 0026)', () => {
         sales: { salesEnabled: false, featuredCode: 'd7', onlinePayment: false },
       }).success,
     ).toBe(true);
+    // ADR 0032: add-on cards; days and photos must fit the kind.
+    const addon = { ...card('day1', 7_900), kind: 'days' as const, days: 1, photoLimit: 0 };
+    expect(publicPackageSchema.safeParse(addon).success).toBe(true);
+    expect(publicPackageSchema.safeParse({ ...addon, photoLimit: 5 }).success).toBe(false);
+    expect(
+      publicPackageSchema.safeParse({ ...addon, kind: 'photos', days: 0, photoLimit: 1_000 })
+        .success,
+    ).toBe(true);
+    expect(publicPackageSchema.safeParse({ ...addon, kind: 'photos' }).success).toBe(false);
+    expect(publicPackageSchema.safeParse({ ...card('d7', 1), days: 0 }).success).toBe(false);
     expect(myPackageResponseSchema.parse(null)).toBeNull();
     expect(
       myPackageResponseSchema.safeParse({

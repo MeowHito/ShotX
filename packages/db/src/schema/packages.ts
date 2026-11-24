@@ -12,7 +12,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { users } from './accounts';
 import { createdAt, id, timestamptz } from './columns';
-import { authPool, packageOrderStatus } from './enums';
+import { authPool, packageKind, packageOrderStatus } from './enums';
 
 // Time-boxed packages, self sign-up and online payment (ADR 0026, migration 0016). Separate from
 // the switched-off subscription billing (`plans`, `subscriptions`, `payments`), which is untouched.
@@ -24,6 +24,10 @@ import { authPool, packageOrderStatus } from './enums';
  * What can be bought (or, for `free`, signed up for). Seeded by migration 0016 with free, d3, d7,
  * d15 and d30 (`INSERT ... ON CONFLICT (code) DO NOTHING`); prices and limits are edited in the
  * DB, never in code. `free` must cost nothing (`packages_free_costs_nothing`).
+ *
+ * ADR 0032 (migration 0022): `kind` (PACKAGE_KINDS). A `plan` has days and photos; a `days`
+ * add-on has `photo_limit` 0 and a `photos` add-on `days` 0 (`packages_kind_terms`). Migration
+ * 0022 seeds day1, day3, day7, photo1000, photo3000 and photo5000.
  */
 export const packages = pgTable(
   'packages',
@@ -31,6 +35,7 @@ export const packages = pgTable(
     id: id(),
     code: text('code').notNull(),
     name: text('name').notNull(),
+    kind: packageKind('kind').notNull().default('plan'),
     days: integer('days').notNull(),
     photoLimit: integer('photo_limit').notNull(),
     /** VAT-exclusive price in satang. */
@@ -43,10 +48,13 @@ export const packages = pgTable(
     unique('packages_code_unique').on(t.code),
     check('packages_code_format', sql`${t.code} ~ '^[a-z][a-z0-9_]{0,31}$'`),
     check('packages_name_length', sql`char_length(${t.name}) BETWEEN 1 AND 100`),
-    check('packages_days_positive', sql`${t.days} > 0`),
-    check('packages_photo_limit_positive', sql`${t.photoLimit} > 0`),
+    check(
+      'packages_kind_terms',
+      sql`(${t.kind} = 'plan' AND ${t.days} > 0 AND ${t.photoLimit} > 0) OR (${t.kind} = 'days' AND ${t.days} > 0 AND ${t.photoLimit} = 0) OR (${t.kind} = 'photos' AND ${t.days} = 0 AND ${t.photoLimit} > 0)`,
+    ),
     check('packages_price_nonnegative', sql`${t.priceSatang} >= 0`),
     check('packages_free_costs_nothing', sql`${t.code} <> 'free' OR ${t.priceSatang} = 0`),
+    check('packages_free_is_plan', sql`${t.code} <> 'free' OR ${t.kind} = 'plan'`),
   ],
 );
 

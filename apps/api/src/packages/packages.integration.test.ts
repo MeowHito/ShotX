@@ -760,6 +760,101 @@ for (const backend of DATABASE_BACKENDS) {
       });
     });
 
+    describe('add-ons and renewal (ADR 0032)', () => {
+      const offers = (token: string) => api.request<unknown>('GET', apiPath(R.offers), { token });
+
+      it('offers plans (no Free) and add-ons to an account with a package, nothing to others', async () => {
+        const me = await freePhotographer();
+        const res = await offers(me.session.accessToken);
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        const body = packagesResponseSchema.parse(res.body);
+        expect(body.packages.map((p) => [p.code, p.kind])).toEqual([
+          ['d3', 'plan'],
+          ['d7', 'plan'],
+          ['d15', 'plan'],
+          ['d30', 'plan'],
+          ['day1', 'days'],
+          ['day3', 'days'],
+          ['day7', 'days'],
+          ['photo1000', 'photos'],
+          ['photo3000', 'photos'],
+          ['photo5000', 'photos'],
+        ]);
+        expect(body.packages.find((p) => p.code === 'day1')).toMatchObject({
+          days: 1,
+          photoLimit: 0,
+          price: { priceSatang: 7_900, vatSatang: 553, totalSatang: 8_453 },
+        });
+        // The home page never lists add-ons.
+        const list = packagesResponseSchema.parse((await api.request('GET', apiPath(R.list))).body);
+        expect(list.packages.every((p) => p.kind === 'plan')).toBe(true);
+
+        expect((await api.request('GET', apiPath(R.offers))).status).toBe(401);
+      });
+
+      it('refuses add-ons to anonymous buyers', async () => {
+        for (const packageCode of ['day1', 'photo1000']) {
+          expect(await order({ packageCode, email: newEmail('anon'), name: 'x' })).toMatchObject({
+            status: 404,
+            body: { code: 'PACKAGE_UNAVAILABLE' },
+          });
+        }
+      });
+
+      it('days on an expired package re-open it from now and keep the photos', async () => {
+        const me = await freePhotographer();
+        await api.db
+          .update(photographerPackages)
+          .set({
+            startsAt: new Date(api.clock.now().getTime() - 10 * DAY),
+            expiresAt: new Date(api.clock.now().getTime() - DAY),
+            photosUsed: 90,
+          })
+          .where(eq(photographerPackages.photographerId, me.id));
+        const before = await packageRow(me.id);
+        // Photos can't be added to an expired package.
+        expect(
+          await order({ packageCode: 'photo1000' }, { token: me.session.accessToken }),
+        ).toMatchObject({ status: 403, body: { code: 'PLAN_EXPIRED' } });
+
+        const created = await newOrder({ packageCode: 'day3' }, me.session.accessToken);
+        expect((await orderRow(created.orderId))?.totalSatang).toBe(21_293);
+        mailer.sent.length = 0;
+        await fakeResult(created.orderId, created.accessToken, 'paid');
+        const now = api.clock.now().getTime();
+        expect(await packageRow(me.id)).toMatchObject({
+          packageId: before?.packageId,
+          startsAt: new Date(now),
+          expiresAt: new Date(now + 3 * DAY),
+          photoLimit: 100,
+          photosUsed: 90,
+        });
+        // The chip keeps the plan's name.
+        const mine = await api.request<{ code: string }>('GET', apiPath(R.myPackage), {
+          token: me.session.accessToken,
+        });
+        expect(mine.body).toMatchObject({ code: 'free', expired: false });
+        expect(mailer.sent.map((m) => m.subject)).toEqual(['เพิ่มแพ็กเกจแล้ว - Snap']);
+        expect(await audits('package.order_paid', created.orderId)).toHaveLength(1);
+      });
+
+      it('days extend a running package; photos raise the limit only', async () => {
+        const me = await freePhotographer();
+        const before = await packageRow(me.id);
+        const days = await newOrder({ packageCode: 'day7' }, me.session.accessToken);
+        await fakeResult(days.orderId, days.accessToken, 'paid');
+        const photos = await newOrder({ packageCode: 'photo3000' }, me.session.accessToken);
+        await fakeResult(photos.orderId, photos.accessToken, 'paid');
+        expect(await packageRow(me.id)).toMatchObject({
+          packageId: before?.packageId,
+          startsAt: before?.startsAt,
+          expiresAt: new Date((before?.expiresAt.getTime() ?? 0) + 7 * DAY),
+          photoLimit: 3_100,
+          photosUsed: 0,
+        });
+      });
+    });
+
     describe('switches', () => {
       it('PACKAGE_SALES=off: sign-up and orders are NOT_FOUND, prices and polling still work', async () => {
         const created = await newOrder({ packageCode: 'd3', email: newEmail('off'), name: 'x' });

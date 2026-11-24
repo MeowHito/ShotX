@@ -56,6 +56,21 @@ export function packageDialogMode(
   return sales.onlinePayment ? 'paid' : 'soon';
 }
 
+/** The dialog's one-line description of `pkg`: a plan's name and terms, or an add-on's (ADR 0032). */
+function packageSummary(
+  pkg: PublicPackage,
+  t: ReturnType<typeof useTranslations<'packageDialog'>>,
+): string {
+  if (pkg.kind === 'days') return `${t('daysSummary')} · ${t('daysTerms', { days: pkg.days })}`;
+  if (pkg.kind === 'photos') {
+    return `${t('photosSummary')} · ${t('photosTerms', { photos: pkg.photoLimit })}`;
+  }
+  const name = pkg.free
+    ? t('freeSummary', { name: pkg.name })
+    : t('paidSummary', { name: pkg.name });
+  return `${name} · ${t('terms', { days: pkg.days, photos: pkg.photoLimit })}`;
+}
+
 /** Codes after which the dialog can only say "contact the team" (sales or email switched off). */
 const CONTACT_CODES: readonly ErrorCode[] = [ErrorCode.NOT_FOUND, ErrorCode.FEATURE_DISABLED];
 
@@ -378,11 +393,7 @@ function PackageDialogBody({
     <form onSubmit={(e) => void submit(e)} noValidate className="grid gap-4">
       <DialogHeader>
         <DialogTitle className="text-xl font-bold text-[#092e50]">{t('title')}</DialogTitle>
-        <DialogDescription className="text-[#667888]">
-          {pkg.free ? t('freeSummary', { name: pkg.name }) : t('paidSummary', { name: pkg.name })}
-          {' · '}
-          {t('terms', { days: pkg.days, photos: pkg.photoLimit })}
-        </DialogDescription>
+        <DialogDescription className="text-[#667888]">{packageSummary(pkg, t)}</DialogDescription>
       </DialogHeader>
 
       {pkg.free ? null : (

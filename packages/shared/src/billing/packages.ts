@@ -1,3 +1,4 @@
+import type { PackageKind } from '../domain';
 import { ErrorCode } from '../errors';
 
 // Time-boxed packages (ADR 0026): pure rules shared by api (applying a package, counting photos,
@@ -9,9 +10,11 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 /** The package being applied (a `packages` row). */
 export interface PackageTerms {
   id: string;
-  /** `packages.days` (> 0). */
+  /** `packages.kind` (ADR 0032); `plan` when absent. */
+  kind?: PackageKind;
+  /** `packages.days` (> 0; 0 for a `photos` add-on). */
   days: number;
-  /** `packages.photo_limit` (> 0). */
+  /** `packages.photo_limit` (> 0; 0 for a `days` add-on). */
   photoLimit: number;
 }
 
@@ -26,10 +29,12 @@ export interface PhotographerPackageState {
 
 /**
  * What applyPackage decided:
- * - `fresh`: no row, or the row had expired: a new period from now;
- * - `extend`: the row was still running: more days and more photos on top.
+ * - `fresh`: a plan on no row, or on an expired row: a new period from now;
+ * - `extend`: a plan on a running row: more days and more photos on top;
+ * - `add_days`: a `days` add-on (ADR 0032): more days, photos kept;
+ * - `add_photos`: a `photos` add-on (ADR 0032): more photos, expiry kept.
  */
-export const PACKAGE_APPLY_KINDS = ['fresh', 'extend'] as const;
+export const PACKAGE_APPLY_KINDS = ['fresh', 'extend', 'add_days', 'add_photos'] as const;
 export type PackageApplyKind = (typeof PACKAGE_APPLY_KINDS)[number];
 
 /** The row values to write (insert or update) after applying a package. */
@@ -65,22 +70,54 @@ export function packageExpired(
 }
 
 /**
- * The next `photographer_packages` values after applying `pkg` at `now` (ADR 0026 §2). The api
- * calls it inside the transaction that locked the row (`FOR UPDATE`; null when there is none):
+ * The next `photographer_packages` values after applying `pkg` at `now` (ADR 0026 §2, ADR 0032
+ * §2). The api calls it inside the transaction that locked the row (`FOR UPDATE`; null when there
+ * is none). A `plan`:
  * - no row, or expired (`expires_at <= now`): fresh period: `starts_at = now`,
  *   `expires_at = now + days`, `photo_limit = package.photo_limit`, `photos_used = 0`;
  * - still running: extend: `expires_at += days`, `photo_limit += package.photo_limit`,
  *   `starts_at` and `photos_used` kept.
- * `packageId` is always the package just applied (the last one applied).
+ * `packageId` is then the plan just applied. An add-on needs a row (it throws without one; the
+ * api refuses such orders) and keeps `packageId` (the last plan, whose name the studio shows):
+ * - `days`, running: `expires_at += days`; expired: `starts_at = now`, `expires_at = now + days`;
+ *   `photo_limit` and `photos_used` kept either way (the same event's photos stay shared);
+ * - `photos`: `photo_limit += n`, the period untouched (also when expired: money counts).
  */
 export function applyPackage(
   current: PhotographerPackageState | null,
   pkg: PackageTerms,
   now: Date,
 ): AppliedPackage {
+  assertValidDate('now', now);
+  const kind = pkg.kind ?? 'plan';
+  if (kind !== 'plan') {
+    if (current === null) throw new Error('An add-on needs a package to add to');
+    if (kind === 'days') {
+      assertPositiveInt('add-on days', pkg.days);
+      const expired = packageExpired(current, now);
+      return {
+        kind: 'add_days',
+        packageId: current.packageId,
+        startsAt: expired ? now : current.startsAt,
+        expiresAt: addPackageDays(expired ? now : current.expiresAt, pkg.days),
+        photoLimit: current.photoLimit,
+        photosUsed: current.photosUsed,
+      };
+    }
+    assertPositiveInt('add-on photoLimit', pkg.photoLimit);
+    const photoLimit = current.photoLimit + pkg.photoLimit;
+    assertPositiveInt('photoLimit', photoLimit);
+    return {
+      kind: 'add_photos',
+      packageId: current.packageId,
+      startsAt: current.startsAt,
+      expiresAt: current.expiresAt,
+      photoLimit,
+      photosUsed: current.photosUsed,
+    };
+  }
   assertPositiveInt('package days', pkg.days);
   assertPositiveInt('package photoLimit', pkg.photoLimit);
-  assertValidDate('now', now);
   if (current === null || packageExpired(current, now)) {
     return {
       kind: 'fresh',

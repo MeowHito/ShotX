@@ -333,6 +333,7 @@ describe('route table', () => {
       'POST /package-orders/:id/pay',
       'POST /package-payments/webhooks/:gateway',
       'GET /me/package',
+      'GET /me/package/offers',
       // ADR 0031: print orders.
       'GET /s/:token/prints',
       'POST /s/:token/prints',

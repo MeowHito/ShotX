@@ -1,6 +1,6 @@
 'use client';
 
-import { type MyPackage, PACKAGES_SECTION_PATH, packageDaysLeft } from '@shotx/shared';
+import { type MyPackage, packageDaysLeft, STUDIO_PACKAGE_PATH } from '@shotx/shared';
 import { Alert, buttonVariants, cn } from '@shotx/ui';
 import { TicketIcon } from 'lucide-react';
 import Link from 'next/link';
@@ -23,7 +23,7 @@ function usePackageText(pkg: MyPackage, now: Date) {
 
 /**
  * The photographer's package in the studio aside (ADR 0026): name · days left · photos used of
- * the limit, and "renew" to the home page's package cards. Renders nothing for an unlimited
+ * the limit, and "renew" to the studio's package page (ADR 0032). Renders nothing for an unlimited
  * account (GET /me/package is null: every admin-created account) or before the answer arrives.
  * `compact`: the tablet rail (an icon that links to the packages, the text as its label).
  */
@@ -54,7 +54,7 @@ function PackageChipView({
     const label = `${text.name} · ${text.days} · ${text.photos}`;
     return (
       <Link
-        href={PACKAGES_SECTION_PATH}
+        href={STUDIO_PACKAGE_PATH}
         aria-label={label}
         title={label}
         data-testid="package-chip"
@@ -91,7 +91,7 @@ function PackageChipView({
         <span>{text.photos}</span>
       </p>
       <Link
-        href={PACKAGES_SECTION_PATH}
+        href={STUDIO_PACKAGE_PATH}
         className={cn(
           buttonVariants({ variant: text.expired ? 'default' : 'outline', size: 'sm' }),
           'h-11 w-full rounded-full sm:h-9',
@@ -119,7 +119,7 @@ export function PackageExpiredBanner() {
     >
       <span>{t('expiredBanner')}</span>
       <Link
-        href={PACKAGES_SECTION_PATH}
+        href={STUDIO_PACKAGE_PATH}
         className={cn(buttonVariants({ size: 'sm' }), 'h-11 shrink-0 rounded-full sm:h-9')}
       >
         {t('renew')}

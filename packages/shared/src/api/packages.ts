@@ -13,6 +13,7 @@ import {
 } from '../billing/money';
 import { PACKAGE_CODE_PATTERN, packagesClientConfigSchema } from '../config/packages';
 import {
+  PACKAGE_KINDS,
   PACKAGE_ORDER_STATUSES,
   PACKAGE_PAYMENT_GATEWAYS,
   PACKAGE_PAYMENT_METHODS,
@@ -68,8 +69,14 @@ export const PACKAGE_PAY_PATH = '/checkout/pay';
  */
 export const PACKAGE_GATEWAY_RETURN_PATH = '/checkout/back';
 
-/** Where "ต่ออายุ" and `/pricing` send people: the package cards on the home page. */
+/** Where `/pricing` sends people: the package cards on the home page. */
 export const PACKAGES_SECTION_PATH = '/#packages';
+
+/**
+ * ADR 0032: the studio page where a photographer with a package renews it or buys more days or
+ * photos (GET /me/package/offers); the studio's "ต่ออายุ" links go here.
+ */
+export const STUDIO_PACKAGE_PATH = '/studio/package';
 
 /**
  * httpOnly cookie the web BFF sets after POST /package-orders: `{orderId}.{accessToken}`
@@ -105,23 +112,38 @@ export function parsePackageOrderCookie(
 
 // --- GET /packages (public) ------------------------------------------------------------------------
 
-/** One package card. */
-export const publicPackageSchema = z.object({
-  code: packageCodeSchema,
-  name: z.string().min(1),
-  days: z.number().int().positive(),
-  photoLimit: z.number().int().positive(),
-  /** `code === PACKAGES_FEATURED_CODE`. */
-  featured: z.boolean(),
-  /** The Free package (FREE_PACKAGE_CODE): signed up for, never ordered. */
-  free: z.boolean(),
-  /** packageTotal(price_satang, VAT_RATE_BASIS_POINTS): all zero for Free. */
-  price: packageTotalSchema,
-});
+/**
+ * One package card. ADR 0032: `kind` `plan` has days and photos; a `days` add-on has
+ * `photoLimit` 0 and a `photos` add-on `days` 0 (the `packages_kind_terms` CHECK).
+ */
+export const publicPackageSchema = z
+  .object({
+    code: packageCodeSchema,
+    name: z.string().min(1),
+    kind: z.enum(PACKAGE_KINDS),
+    days: z.number().int().nonnegative(),
+    photoLimit: z.number().int().nonnegative(),
+    /** `code === PACKAGES_FEATURED_CODE`. */
+    featured: z.boolean(),
+    /** The Free package (FREE_PACKAGE_CODE): signed up for, never ordered. */
+    free: z.boolean(),
+    /** packageTotal(price_satang, VAT_RATE_BASIS_POINTS): all zero for Free. */
+    price: packageTotalSchema,
+  })
+  .refine(
+    (p) =>
+      p.kind === 'plan'
+        ? p.days > 0 && p.photoLimit > 0
+        : p.kind === 'days'
+          ? p.days > 0 && p.photoLimit === 0
+          : p.days === 0 && p.photoLimit > 0,
+    { error: 'days and photoLimit must fit the kind' },
+  );
 export type PublicPackage = z.output<typeof publicPackageSchema>;
 
 /**
- * Active packages by `sort_order`, Free included (the home page shows five cards). Public, no
+ * Active `plan` packages by `sort_order`, Free included (the home page shows five cards; ADR 0032
+ * add-ons are never listed here, only in GET /me/package/offers). Public, no
  * token; answers whatever PACKAGE_SALES is (the home page always shows prices). Cacheable for a
  * minute.
  */
@@ -133,6 +155,14 @@ export const packagesResponseSchema = z.object({
   sales: packagesClientConfigSchema,
 });
 export type PackagesResponse = z.output<typeof packagesResponseSchema>;
+
+/**
+ * GET /me/package/offers (ADR 0032, photographer): what the signed-in account can buy from the
+ * studio, in the packagesResponseSchema shape: active, priced plans (no Free, "ต่ออายุ") and the
+ * add-ons (`days`, `photos`), by `sort_order`. Empty for an unlimited account (no package row).
+ */
+export const packageOffersResponseSchema = packagesResponseSchema;
+export type PackageOffersResponse = z.output<typeof packageOffersResponseSchema>;
 
 // --- POST /signup/free, POST /signup/free/confirm (bff) ---------------------------------------------
 

@@ -19,6 +19,7 @@ function pkg(code: string, name: string, priceSatang: number, vat = 700): Public
   return {
     code,
     name,
+    kind: 'plan',
     days: 7,
     photoLimit: 1000,
     featured: false,

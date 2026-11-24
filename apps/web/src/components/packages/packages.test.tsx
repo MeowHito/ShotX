@@ -37,6 +37,7 @@ function pkg(
   return {
     code,
     name,
+    kind: 'plan',
     days,
     photoLimit,
     featured: code === 'd7',

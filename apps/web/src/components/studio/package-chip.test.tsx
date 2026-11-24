@@ -1,4 +1,4 @@
-import { type MyPackage, PACKAGE_ROUTES, PACKAGES_SECTION_PATH } from '@shotx/shared';
+import { type MyPackage, PACKAGE_ROUTES, STUDIO_PACKAGE_PATH } from '@shotx/shared';
 import { render, screen, within } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it } from 'vitest';
@@ -38,7 +38,7 @@ function renderShell(fake: FakeApi) {
 }
 
 describe('package chip', () => {
-  it('shows name, days left and photos used, with "renew" to the home page packages', async () => {
+  it('shows name, days left and photos used, with "renew" to the studio package page', async () => {
     const fake = new FakeApi({ myPackage: myPackage() });
     renderWithProviders(<PackageChip now={NOW} />, { api: apiClientFor(fake.fetch) });
     const chip = await screen.findByTestId('package-chip');
@@ -47,7 +47,7 @@ describe('package chip', () => {
     expect(chip).toHaveTextContent('ใช้ไป 1,250 / 3,000 ภาพ');
     expect(within(chip).getByRole('link', { name: th.studio.package.renew })).toHaveAttribute(
       'href',
-      PACKAGES_SECTION_PATH,
+      STUDIO_PACKAGE_PATH,
     );
     expect(fake.callsTo(PACKAGE_ROUTES.myPackage)).toHaveLength(1);
     expect(fake.callsTo(PACKAGE_ROUTES.myPackage)[0]?.prefix).toBe('/bff');
@@ -69,7 +69,7 @@ describe('package chip', () => {
     const link = await screen.findByRole('link', {
       name: 'แพ็กเกจ 7 Days · เหลือ 5 วัน · ใช้ไป 1,250 / 3,000 ภาพ',
     });
-    expect(link).toHaveAttribute('href', PACKAGES_SECTION_PATH);
+    expect(link).toHaveAttribute('href', STUDIO_PACKAGE_PATH);
   });
 
   it('is in the studio aside and drawer; nothing at all for an unlimited account', async () => {
@@ -93,7 +93,7 @@ describe('package chip', () => {
     ) as HTMLElement;
     expect(within(banner).getByRole('link', { name: th.studio.package.renew })).toHaveAttribute(
       'href',
-      PACKAGES_SECTION_PATH,
+      STUDIO_PACKAGE_PATH,
     );
   });
 

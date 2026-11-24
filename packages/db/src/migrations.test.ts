@@ -353,6 +353,34 @@ describe('migrations', () => {
     expect(sql).not.toMatch(/DROP|ALTER COLUMN|RENAME/);
   });
 
+  it('0022 is package_add_ons: package kinds, one CHECK for the terms, six add-ons (ADR 0032)', () => {
+    expect(journal.entries[22]?.tag).toBe('0022_package_add_ons');
+    const list = statements(sqlOf('0022_package_add_ons'));
+    const at = (fragment: string) => list.findIndex((s) => s.includes(fragment));
+    // Only the two positive-terms CHECKs go; packages_kind_terms replaces them.
+    expect(list.filter((s) => /\bDROP\b/.test(s))).toEqual([
+      'ALTER TABLE "packages" DROP CONSTRAINT "packages_days_positive";',
+      'ALTER TABLE "packages" DROP CONSTRAINT "packages_photo_limit_positive";',
+    ]);
+    expect(list.some((s) => /RENAME|ALTER COLUMN|^UPDATE |^DELETE /.test(s))).toBe(false);
+    // Existing rows become plans through the column default.
+    expect(list[at('ADD COLUMN "kind"')]).toContain(`DEFAULT 'plan' NOT NULL`);
+    expect(at('ADD CONSTRAINT "packages_kind_terms"')).toBeGreaterThan(at('ADD COLUMN "kind"'));
+    const seed = list.at(-1) ?? '';
+    expect(seed).toMatch(/^INSERT INTO "packages" /);
+    expect(seed).toContain('ON CONFLICT ("code") DO NOTHING');
+    for (const row of [
+      `('day1', '+1 Day', 'days', 1, 0, 7900, true, 110)`,
+      `('day3', '+3 Days', 'days', 3, 0, 19900, true, 120)`,
+      `('day7', '+7 Days', 'days', 7, 0, 39900, true, 130)`,
+      `('photo1000', '+1,000 Photos', 'photos', 0, 1000, 19900, true, 210)`,
+      `('photo3000', '+3,000 Photos', 'photos', 0, 3000, 44900, true, 220)`,
+      `('photo5000', '+5,000 Photos', 'photos', 0, 5000, 64900, true, 230)`,
+    ]) {
+      expect(seed, row).toContain(row);
+    }
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

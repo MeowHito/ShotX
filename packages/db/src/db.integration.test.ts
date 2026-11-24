@@ -1712,11 +1712,11 @@ for (const backend of backends) {
           })
           .returning();
 
-      it('seeds the five packages with VAT-exclusive satang prices', async () => {
+      it('seeds the five plans and six add-ons with VAT-exclusive satang prices', async () => {
         const stored = await db()
           .select({
             code: schema.packages.code,
-            name: schema.packages.name,
+            kind: schema.packages.kind,
             days: schema.packages.days,
             photoLimit: schema.packages.photoLimit,
             priceSatang: schema.packages.priceSatang,
@@ -1724,43 +1724,29 @@ for (const backend of backends) {
           })
           .from(schema.packages)
           .orderBy(schema.packages.sortOrder);
+        const row = (
+          code: string,
+          kind: 'plan' | 'days' | 'photos',
+          days: number,
+          photoLimit: number,
+          priceSatang: number,
+        ) => ({ code, kind, days, photoLimit, priceSatang, isActive: true });
         expect(stored).toEqual([
-          { code: 'free', name: 'Free', days: 3, photoLimit: 100, priceSatang: 0, isActive: true },
-          {
-            code: 'd3',
-            name: '3 Days',
-            days: 3,
-            photoLimit: 1_000,
-            priceSatang: 39_900,
-            isActive: true,
-          },
-          {
-            code: 'd7',
-            name: '7 Days',
-            days: 7,
-            photoLimit: 3_000,
-            priceSatang: 59_900,
-            isActive: true,
-          },
-          {
-            code: 'd15',
-            name: '15 Days',
-            days: 15,
-            photoLimit: 5_000,
-            priceSatang: 79_900,
-            isActive: true,
-          },
-          {
-            code: 'd30',
-            name: '30 Days',
-            days: 30,
-            photoLimit: 10_000,
-            priceSatang: 129_900,
-            isActive: true,
-          },
+          row('free', 'plan', 3, 100, 0),
+          row('d3', 'plan', 3, 1_000, 39_900),
+          row('d7', 'plan', 7, 3_000, 59_900),
+          row('d15', 'plan', 15, 5_000, 79_900),
+          row('d30', 'plan', 30, 10_000, 129_900),
+          // ADR 0032 (migration 0022).
+          row('day1', 'days', 1, 0, 7_900),
+          row('day3', 'days', 3, 0, 19_900),
+          row('day7', 'days', 7, 0, 39_900),
+          row('photo1000', 'photos', 0, 1_000, 19_900),
+          row('photo3000', 'photos', 0, 3_000, 44_900),
+          row('photo5000', 'photos', 0, 5_000, 64_900),
         ]);
         await b.migrateAgain();
-        expect(await db().select().from(schema.packages)).toHaveLength(5);
+        expect(await db().select().from(schema.packages)).toHaveLength(11);
       });
 
       it('rejects packages that break the rules', async () => {
@@ -1774,12 +1760,29 @@ for (const backend of backends) {
         });
         expect(await pgError(insert({ days: 0 }))).toEqual({
           code: CHECK,
-          constraint: 'packages_days_positive',
+          constraint: 'packages_kind_terms',
         });
         expect(await pgError(insert({ photoLimit: 0 }))).toEqual({
           code: CHECK,
-          constraint: 'packages_photo_limit_positive',
+          constraint: 'packages_kind_terms',
         });
+        // ADR 0032: a days add-on has no photos, a photos add-on no days.
+        expect(await pgError(insert({ kind: 'days', photoLimit: 1 }))).toEqual({
+          code: CHECK,
+          constraint: 'packages_kind_terms',
+        });
+        expect(await pgError(insert({ kind: 'photos', days: 1 }))).toEqual({
+          code: CHECK,
+          constraint: 'packages_kind_terms',
+        });
+        expect(
+          await pgError(
+            db()
+              .update(schema.packages)
+              .set({ kind: 'days', photoLimit: 0 })
+              .where(eq(schema.packages.code, 'free')),
+          ),
+        ).toEqual({ code: CHECK, constraint: 'packages_free_is_plan' });
         expect(await pgError(insert({ priceSatang: -1 }))).toEqual({
           code: CHECK,
           constraint: 'packages_price_nonnegative',

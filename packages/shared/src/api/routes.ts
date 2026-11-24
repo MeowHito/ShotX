@@ -117,6 +117,7 @@ import {
   createPackageOrderHeadersSchema,
   createPackageOrderResponseSchema,
   myPackageResponseSchema,
+  packageOffersResponseSchema,
   packageOrderFakeResultBodySchema,
   startPackagePaymentBodySchema,
   startPackagePaymentResponseSchema,
@@ -1668,6 +1669,8 @@ export const PACKAGE_ROUTES = {
       ErrorCode.PAYMENT_GATEWAY_ERROR,
       ErrorCode.COUPON_INVALID,
       ErrorCode.COUPON_USED_UP,
+      // ADR 0032: a photos add-on for an expired package.
+      ErrorCode.PLAN_EXPIRED,
       ...SIGNED_IN_ROUTE_ERRORS,
     ),
   },
@@ -1756,6 +1759,18 @@ export const PACKAGE_ROUTES = {
     status: 200,
     auth: 'photographer',
     response: myPackageResponseSchema,
+    errors: signedIn(),
+  },
+  /**
+   * ADR 0032: plans and add-ons the signed-in photographer can buy in the studio (empty for an
+   * unlimited account).
+   */
+  offers: {
+    method: 'GET',
+    path: '/me/package/offers',
+    status: 200,
+    auth: 'photographer',
+    response: packageOffersResponseSchema,
     errors: signedIn(),
   },
 } as const satisfies Record<string, RouteContract>;

@@ -1,6 +1,7 @@
 import {
   ACCOUNT_STATUSES,
   ACTIVITY_TYPES,
+  PACKAGE_KINDS,
   PACKAGE_ORDER_STATUSES,
   AUTH_POOLS,
   BILLING_ACTORS,
@@ -333,6 +334,7 @@ describe('schema', () => {
     expect(schema.billingActor.enumValues).toEqual([...BILLING_ACTORS]);
     expect(schema.accountStatus.enumValues).toEqual([...ACCOUNT_STATUSES]);
     expect(schema.packageOrderStatus.enumValues).toEqual([...PACKAGE_ORDER_STATUSES]);
+    expect(schema.packageKind.enumValues).toEqual([...PACKAGE_KINDS]);
     expect(schema.expenseCategory.enumValues).toEqual([...EXPENSE_CATEGORIES]);
   });
 
@@ -379,6 +381,7 @@ describe('schema', () => {
       'id',
       'code',
       'name',
+      'kind',
       'days',
       'photo_limit',
       'price_satang',
@@ -441,8 +444,8 @@ describe('schema', () => {
     const checks = (table: string) => config(table).checks.map((c) => c.name);
     expect(checks('packages')).toEqual(
       expect.arrayContaining([
-        'packages_days_positive',
-        'packages_photo_limit_positive',
+        'packages_kind_terms',
+        'packages_free_is_plan',
         'packages_price_nonnegative',
       ]),
     );

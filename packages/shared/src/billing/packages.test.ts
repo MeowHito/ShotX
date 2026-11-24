@@ -117,6 +117,56 @@ describe('package rules (ADR 0026 §2)', () => {
     expect(applyPackage({ ...running, expiresAt: at(1) }, d3, now).kind).toBe('extend');
   });
 
+  // ADR 0032: add-ons.
+  const day1 = { id: 'pkg-day1', kind: 'days' as const, days: 1, photoLimit: 0 };
+  const photo1000 = { id: 'pkg-photo1000', kind: 'photos' as const, days: 0, photoLimit: 1_000 };
+
+  it('adds days to a running package and keeps the plan and its photos', () => {
+    expect(applyPackage(running, day1, now)).toEqual({
+      kind: 'add_days',
+      packageId: 'pkg-free',
+      startsAt: running.startsAt,
+      expiresAt: at(3 * DAY),
+      photoLimit: 100,
+      photosUsed: 40,
+    });
+  });
+
+  it('re-opens an expired package from now with days, photos and usage kept', () => {
+    const expired = { ...running, expiresAt: at(-5 * DAY), photosUsed: 90 };
+    expect(applyPackage(expired, day1, now)).toEqual({
+      kind: 'add_days',
+      packageId: 'pkg-free',
+      startsAt: now,
+      expiresAt: at(DAY),
+      photoLimit: 100,
+      photosUsed: 90,
+    });
+  });
+
+  it('adds photos without touching the period, running or expired', () => {
+    expect(applyPackage(running, photo1000, now)).toEqual({
+      kind: 'add_photos',
+      packageId: 'pkg-free',
+      startsAt: running.startsAt,
+      expiresAt: running.expiresAt,
+      photoLimit: 1_100,
+      photosUsed: 40,
+    });
+    const expired = { ...running, expiresAt: at(-1) };
+    expect(applyPackage(expired, photo1000, now)).toMatchObject({
+      expiresAt: at(-1),
+      photoLimit: 1_100,
+    });
+  });
+
+  it('refuses an add-on without a package, or with no days / photos', () => {
+    expect(() => applyPackage(null, day1, now)).toThrow(/add-on needs a package/);
+    expect(() => applyPackage(null, photo1000, now)).toThrow(/add-on needs a package/);
+    expect(() => applyPackage(running, { ...day1, days: 0 }, now)).toThrow(RangeError);
+    expect(() => applyPackage(running, { ...photo1000, photoLimit: 0 }, now)).toThrow(RangeError);
+  });
+
   it('refuses invalid packages and dates', () => {
     expect(() => applyPackage(null, { ...d7, days: 0 }, now)).toThrow(RangeError);
     expect(() => applyPackage(null, { ...d7, photoLimit: -5 }, now)).toThrow(RangeError);

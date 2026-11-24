@@ -371,6 +371,16 @@ export const PACKAGE_ORDER_STATUSES = ['pending', 'paid', 'failed', 'amount_mism
 export type PackageOrderStatus = (typeof PACKAGE_ORDER_STATUSES)[number];
 
 /**
+ * `packages.kind` (ADR 0032, migration 0022):
+ * - `plan`: a package of ADR 0026 (days and photos; the home page's cards, Free included);
+ * - `days`: an add-on with days only (`photo_limit` 0): more days, photos untouched;
+ * - `photos`: an add-on with photos only (`days` 0): more photos, expiry untouched.
+ * Add-ons are bought only by signed-in photographers who already have a package.
+ */
+export const PACKAGE_KINDS = ['plan', 'days', 'photos'] as const;
+export type PackageKind = (typeof PACKAGE_KINDS)[number];
+
+/**
  * Package payment gateways: `package_orders.gateway` and the `:gateway` of
  * POST /package-payments/webhooks/:gateway. Separate from PAYMENT_GATEWAYS (the switched-off
  * subscription billing). `fake` is for development and tests only (refused on APP_STAGE=prod).

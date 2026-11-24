@@ -201,6 +201,14 @@ export class PackagesController {
     return respond(R.webhook.response, { received: true });
   }
 
+  /** ADR 0032: plans and add-ons this photographer can buy in the studio. */
+  @Get(R.offers.path)
+  @HttpCode(R.offers.status)
+  @UseGuards(PhotographerGuard)
+  async offers(@CurrentPhotographer() photographer: Photographer) {
+    return respond(R.offers.response, await this.packages.offers(photographer.id));
+  }
+
   /** JSON `null` for an unlimited account (Nest would send an empty body for a null return). */
   @Get(R.myPackage.path)
   @HttpCode(R.myPackage.status)

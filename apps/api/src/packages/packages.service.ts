@@ -23,6 +23,7 @@ import {
   type PackagePaymentGateway,
   type PackagePaymentGatewayName,
   type PackagePaymentMethod,
+  type PackageOffersResponse,
   type PackagesResponse,
   packageExpired,
   packagesClientConfigOf,
@@ -71,7 +72,7 @@ import {
   WEB_SIGN_IN_PATH,
   WEB_STUDIO_PATH,
 } from './package-emails';
-import { photographerPackage } from './package-state';
+import { photographerPackage, planExpired } from './package-state';
 
 // Packages, Free sign-up and package orders (ADR 0026). Money is integer satang; prices are
 // VAT-exclusive and every amount comes from packageTotal. Emails go out after the answer (or the
@@ -268,10 +269,10 @@ async function writePackageAudit(
 async function applyPackageTo(
   tx: Tx,
   photographerId: string,
-  pkg: Pick<PackageRow, 'id' | 'days' | 'photoLimit'>,
+  pkg: Pick<PackageRow, 'id' | 'kind' | 'days' | 'photoLimit'>,
   now: Date,
 ): Promise<AppliedPackage> {
-  const terms = { id: pkg.id, days: pkg.days, photoLimit: pkg.photoLimit };
+  const terms = { id: pkg.id, kind: pkg.kind, days: pkg.days, photoLimit: pkg.photoLimit };
   for (let attempt = 0; attempt < 2; attempt++) {
     const current = await photographerPackage(tx, photographerId, { lock: 'update' });
     const next = applyPackage(current, terms, now);
@@ -389,17 +390,24 @@ export class PackagesService {
 
   // --- GET /packages -------------------------------------------------------------------------
 
+  /** Active `plan` packages only (ADR 0032: add-ons are offered in the studio, not here). */
   async list(): Promise<PackagesResponse> {
-    const vat = this.config.packages.vatRateBasisPoints;
     const rows = await this.db
       .select()
       .from(packages)
-      .where(eq(packages.isActive, true))
+      .where(and(eq(packages.isActive, true), eq(packages.kind, 'plan')))
       .orderBy(asc(packages.sortOrder), asc(packages.code));
+    return this.priceList(rows);
+  }
+
+  /** The cards of `rows` with their VAT-inclusive totals and the sales switches. */
+  private priceList(rows: readonly PackageRow[]): PackagesResponse {
+    const vat = this.config.packages.vatRateBasisPoints;
     return {
       packages: rows.map((row) => ({
         code: row.code,
         name: row.name,
+        kind: row.kind,
         days: row.days,
         photoLimit: row.photoLimit,
         featured: row.code === this.config.packages.featuredCode,
@@ -410,6 +418,22 @@ export class PackagesService {
       vatRateBasisPoints: vat,
       sales: packagesClientConfigOf(this.config.packages, this.config.packageGateway),
     };
+  }
+
+  // --- GET /me/package/offers (ADR 0032) -------------------------------------------------------
+
+  /**
+   * What the photographer can buy in the studio: active, priced plans (renewal) and add-ons, by
+   * `sort_order`. Empty for an unlimited account (no package row: nothing to renew or add to).
+   */
+  async offers(photographerId: string): Promise<PackageOffersResponse> {
+    if ((await photographerPackage(this.db, photographerId)) === null) return this.priceList([]);
+    const rows = await this.db
+      .select()
+      .from(packages)
+      .where(and(eq(packages.isActive, true), sql`${packages.priceSatang} > 0`))
+      .orderBy(asc(packages.sortOrder), asc(packages.code));
+    return this.priceList(rows.filter((row) => row.code !== FREE_PACKAGE_CODE));
   }
 
   // --- POST /signup/free ---------------------------------------------------------------------
@@ -642,6 +666,7 @@ export class PackagesService {
 
     const pkg = await this.buyablePackage(body.packageCode);
     const now = this.clock.now();
+    await this.assertAddOnBuyable(pkg, buyer.photographerId, now);
     const { holdSeconds } = this.config.packages.coupons;
     // ADR 0030: checked here for the price, and again with the row locked when the order goes in.
     const coupon =
@@ -705,6 +730,25 @@ export class PackagesService {
       throw new ApiError(ErrorCode.PACKAGE_UNAVAILABLE, 'This package cannot be bought online');
     }
     return pkg;
+  }
+
+  /**
+   * ADR 0032: an add-on is for a signed-in photographer only (anonymous: PACKAGE_UNAVAILABLE; one
+   * without a package row is EMAIL_UNAVAILABLE in assertEmailCanBuy, as for plans), and photos
+   * can't be added to an expired package (PLAN_EXPIRED: buy days or renew first).
+   */
+  private async assertAddOnBuyable(
+    pkg: PackageRow,
+    photographerId: string | null,
+    now: Date,
+  ): Promise<void> {
+    if (pkg.kind === 'plan') return;
+    if (photographerId === null) {
+      throw new ApiError(ErrorCode.PACKAGE_UNAVAILABLE, 'Add-ons are for signed-in photographers');
+    }
+    if (pkg.kind !== 'photos') return;
+    const row = await photographerPackage(this.db, photographerId);
+    if (row !== null && packageExpired(row, now)) throw planExpired(row.expiresAt);
   }
 
   /** The order amounts of `pkg`, with the coupon's discount when there is one (ADR 0030). */

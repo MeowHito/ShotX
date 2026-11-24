@@ -14,6 +14,7 @@ import {
   type MeResponse,
   multipartPlan,
   type MyPackageResponse,
+  type PackageOffersResponse,
   type OwnerShare,
   PACKAGE_ROUTES,
   type RouteContract,
@@ -105,6 +106,8 @@ export interface FakeApiOptions {
   zipOutcome?: 'ready' | 'failed';
   /** ADR 0026: GET /me/package (null: an unlimited, admin-created account). */
   myPackage?: MyPackageResponse;
+  /** ADR 0032: GET /me/package/offers (default: nothing to buy). */
+  packageOffers?: PackageOffersResponse;
 }
 
 export interface RecordedCall {
@@ -185,6 +188,12 @@ export class FakeApi {
       zipPollsUntilDone: 2,
       zipOutcome: 'ready',
       myPackage: null,
+      packageOffers: {
+        packages: [],
+        currency: 'THB',
+        vatRateBasisPoints: 700,
+        sales: { salesEnabled: true, featuredCode: 'd7', onlinePayment: true },
+      },
       ...options,
     };
     this.me = {
@@ -1035,6 +1044,8 @@ export class FakeApi {
       }
       case PACKAGE_ROUTES.myPackage:
         return this.options.myPackage;
+      case PACKAGE_ROUTES.offers:
+        return this.options.packageOffers;
       case UPLOAD_ROUTES.abort: {
         const upload = this.uploadOrFail(params.id);
         this.reservedBytes -= upload.file.sizeBytes;
