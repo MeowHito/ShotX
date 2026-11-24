@@ -476,6 +476,7 @@ export const zhStudio: StudioMessages = {
       photos: '已用 {used, number} / {limit, number} 张照片',
       expiresAt: '有效期至 {date}',
       renew: '续费',
+      upgrade: '升级',
       expiredBanner: '套餐已过期，分享链接暂时关闭。请续费后继续使用。',
     },
     myPackage: {
@@ -501,6 +502,10 @@ export const zhStudio: StudioMessages = {
       unlimited: '此账户没有到期日，也不限照片数量，无需购买。',
       loadFailed: '无法加载套餐',
       retry: '重试',
+      loading: '正在加载套餐…',
+      upgradeTitle: '升级套餐',
+      upgradeIntro: '增加天数让分享链接继续开放、增加照片，或续费套餐。',
+      seeAll: '打开我的套餐',
     },
   },
   search: {

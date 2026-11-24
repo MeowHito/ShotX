@@ -47,7 +47,7 @@ export function MyPackagePage({ now: fixedNow }: { now?: Date } = {}) {
     body = <Alert>{t('unlimited')}</Alert>;
   } else if (mine.data !== undefined && offers.data !== undefined) {
     body = (
-      <Offers
+      <PackageOffers
         pkg={mine.data}
         offers={offers.data}
         now={now}
@@ -77,16 +77,22 @@ export function MyPackagePage({ now: fixedNow }: { now?: Date } = {}) {
   );
 }
 
-function Offers({
+/**
+ * The package and its offers by kind: the studio page, and the sidebar's upgrade popup (`dense`:
+ * narrower card grid for the dialog).
+ */
+export function PackageOffers({
   pkg,
   offers,
   now,
   onChoose,
+  dense = false,
 }: {
   pkg: MyPackage;
   offers: PackagesResponse;
   now: Date;
   onChoose: (pkg: PublicPackage) => void;
+  dense?: boolean;
 }) {
   const t = useTranslations('studio.myPackage');
   const of = (kind: PackageKind) => offers.packages.filter((p) => p.kind === kind);
@@ -99,6 +105,7 @@ function Offers({
         intro={t('daysIntro')}
         icon={<CalendarPlusIcon className="size-5" aria-hidden />}
         items={of('days')}
+        dense={dense}
         onChoose={onChoose}
       />
       <OfferSection
@@ -107,6 +114,7 @@ function Offers({
         icon={<ImagePlusIcon className="size-5" aria-hidden />}
         items={of('photos')}
         disabledNote={expired ? t('photosNeedDays') : null}
+        dense={dense}
         onChoose={onChoose}
       />
       <OfferSection
@@ -114,6 +122,7 @@ function Offers({
         intro={t('plansIntro')}
         icon={<RefreshCwIcon className="size-5" aria-hidden />}
         items={of('plan')}
+        dense={dense}
         onChoose={onChoose}
       />
     </>
@@ -171,6 +180,7 @@ function OfferSection({
   icon,
   items,
   disabledNote = null,
+  dense,
   onChoose,
 }: {
   title: string;
@@ -178,6 +188,7 @@ function OfferSection({
   icon: ReactNode;
   items: PublicPackage[];
   disabledNote?: string | null;
+  dense: boolean;
   onChoose: (pkg: PublicPackage) => void;
 }) {
   const t = useTranslations('studio.myPackage');
@@ -194,7 +205,12 @@ function OfferSection({
         <p className="text-sm text-muted-foreground">{intro}</p>
       </div>
       {disabledNote !== null ? <Alert variant="warning">{disabledNote}</Alert> : null}
-      <ul className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 lg:grid-cols-4">
+      <ul
+        className={cn(
+          'grid grid-cols-1 gap-3 min-[480px]:grid-cols-2',
+          dense ? 'md:grid-cols-4' : 'lg:grid-cols-4',
+        )}
+      >
         {items.map((pkg) => (
           <li
             key={pkg.code}

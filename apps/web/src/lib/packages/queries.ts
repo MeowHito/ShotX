@@ -24,12 +24,16 @@ export function useMyPackage() {
   });
 }
 
-/** ADR 0032: what the signed-in photographer can buy in the studio (renewal and add-ons). */
-export function usePackageOffers() {
+/**
+ * ADR 0032: what the signed-in photographer can buy in the studio (renewal and add-ons). The
+ * sidebar's upgrade popup asks only once it opens (`enabled`).
+ */
+export function usePackageOffers({ enabled = true }: { enabled?: boolean } = {}) {
   const api = useApiClient();
   return useQuery({
     queryKey: packageKeys.offers,
     queryFn: ({ signal }) => api.call(PACKAGE_ROUTES.offers, { signal }),
     staleTime: 60_000,
+    enabled,
   });
 }

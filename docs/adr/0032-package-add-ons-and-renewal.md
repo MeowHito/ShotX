@@ -88,3 +88,11 @@ nav item); an unlimited account that opens it is told there is nothing to buy.
 - An expired account can buy one day to re-open its links without paying for photos again.
 - Add-ons are not offered to visitors; prices still aren't secret (the studio shows them).
 - Admin finance and the audit log show add-on orders like any package order, by name.
+
+## Amendment (owner, 2026-11-24): upgrade popup in the sidebar
+
+The sidebar's package card (bottom left, above storage) has an "อัปเกรด" button ("ต่ออายุ" once
+expired; the tablet rail's icon button) that opens a popup selling the same offers as
+`/studio/package` (current package, more days, more photos, renewal). A card closes the popup and
+opens the buy dialog. The offers are fetched only when the popup opens. Like the card, the button
+shows only for accounts with a package.

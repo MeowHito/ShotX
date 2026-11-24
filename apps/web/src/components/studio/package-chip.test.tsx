@@ -1,5 +1,12 @@
-import { type MyPackage, PACKAGE_ROUTES, STUDIO_PACKAGE_PATH } from '@shotx/shared';
+import {
+  type MyPackage,
+  PACKAGE_ROUTES,
+  type PackageKind,
+  packageTotal,
+  STUDIO_PACKAGE_PATH,
+} from '@shotx/shared';
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it } from 'vitest';
 import { FakeApi } from '../../../test/fake-api';
@@ -38,17 +45,16 @@ function renderShell(fake: FakeApi) {
 }
 
 describe('package chip', () => {
-  it('shows name, days left and photos used, with "renew" to the studio package page', async () => {
+  it('shows name, days left and photos used, with an "upgrade" button', async () => {
     const fake = new FakeApi({ myPackage: myPackage() });
     renderWithProviders(<PackageChip now={NOW} />, { api: apiClientFor(fake.fetch) });
     const chip = await screen.findByTestId('package-chip');
     expect(chip).toHaveTextContent('แพ็กเกจ 7 Days');
     expect(chip).toHaveTextContent('เหลือ 5 วัน');
     expect(chip).toHaveTextContent('ใช้ไป 1,250 / 3,000 ภาพ');
-    expect(within(chip).getByRole('link', { name: th.studio.package.renew })).toHaveAttribute(
-      'href',
-      STUDIO_PACKAGE_PATH,
-    );
+    expect(within(chip).getByRole('button', { name: th.studio.package.upgrade })).toBeEnabled();
+    // The offers are asked for only when the popup opens.
+    expect(fake.callsTo(PACKAGE_ROUTES.offers)).toHaveLength(0);
     expect(fake.callsTo(PACKAGE_ROUTES.myPackage)).toHaveLength(1);
     expect(fake.callsTo(PACKAGE_ROUTES.myPackage)[0]?.prefix).toBe('/bff');
   });
@@ -61,15 +67,62 @@ describe('package chip', () => {
     const chip = await screen.findByTestId('package-chip');
     expect(chip).toHaveTextContent(th.studio.package.expired);
     expect(chip).toHaveAttribute('data-expired', 'true');
+    // Expired: the same popup, labelled "renew".
+    expect(within(chip).getByRole('button', { name: th.studio.package.renew })).toBeEnabled();
   });
 
-  it('the tablet rail: an icon link to the packages, labelled with the whole summary', async () => {
+  it('"upgrade" opens a popup that sells days, photos and renewal, then the buy dialog', async () => {
+    const offer = (code: string, kind: PackageKind, days: number, photoLimit: number) => ({
+      code,
+      name: code,
+      kind,
+      days,
+      photoLimit,
+      featured: false,
+      free: false,
+      price: packageTotal(19_900, 700),
+    });
+    const fake = new FakeApi({
+      myPackage: myPackage(),
+      packageOffers: {
+        packages: [
+          offer('d7', 'plan', 7, 3000),
+          offer('day3', 'days', 3, 0),
+          offer('photo1000', 'photos', 0, 1000),
+        ],
+        currency: 'THB',
+        vatRateBasisPoints: 700,
+        sales: { salesEnabled: true, featuredCode: 'd7', onlinePayment: true },
+      },
+    });
+    renderWithProviders(<PackageChip now={NOW} />, { api: apiClientFor(fake.fetch) });
+    await userEvent.click(await screen.findByRole('button', { name: th.studio.package.upgrade }));
+    const popup = await screen.findByRole('dialog', { name: th.studio.myPackage.upgradeTitle });
+    expect(await within(popup).findByTestId('offer-day3')).toHaveTextContent('+3 วัน');
+    expect(within(popup).getByTestId('offer-photo1000')).toHaveTextContent('+1,000 ภาพ');
+    expect(within(popup).getByTestId('offer-d7')).toBeInTheDocument();
+    expect(within(popup).getByRole('link', { name: th.studio.myPackage.seeAll })).toHaveAttribute(
+      'href',
+      STUDIO_PACKAGE_PATH,
+    );
+    expect(fake.callsTo(PACKAGE_ROUTES.offers)).toHaveLength(1);
+
+    await userEvent.click(within(within(popup).getByTestId('offer-day3')).getByRole('button'));
+    const buy = await screen.findByRole('dialog', { name: th.packageDialog.title });
+    expect(buy).toHaveTextContent('ซื้อวันเพิ่ม · เพิ่ม 3 วัน');
+    expect(screen.queryByRole('dialog', { name: th.studio.myPackage.upgradeTitle })).toBeNull();
+  });
+
+  it('the tablet rail: an icon button to the upgrade popup, labelled with the summary', async () => {
     const fake = new FakeApi({ myPackage: myPackage() });
     renderWithProviders(<PackageChip compact now={NOW} />, { api: apiClientFor(fake.fetch) });
-    const link = await screen.findByRole('link', {
+    const button = await screen.findByRole('button', {
       name: 'แพ็กเกจ 7 Days · เหลือ 5 วัน · ใช้ไป 1,250 / 3,000 ภาพ',
     });
-    expect(link).toHaveAttribute('href', STUDIO_PACKAGE_PATH);
+    await userEvent.click(button);
+    expect(
+      await screen.findByRole('dialog', { name: th.studio.myPackage.upgradeTitle }),
+    ).toBeInTheDocument();
   });
 
   it('is in the studio aside and drawer; nothing at all for an unlimited account', async () => {

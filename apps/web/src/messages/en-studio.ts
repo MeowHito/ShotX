@@ -514,6 +514,7 @@ export const enStudio: StudioMessages = {
       photos: '{used, number} / {limit, number} photos used',
       expiresAt: 'Valid until {date}',
       renew: 'Renew',
+      upgrade: 'Upgrade',
       expiredBanner:
         'Your package has expired and your share links are closed for now. Renew to keep going.',
     },
@@ -541,6 +542,10 @@ export const enStudio: StudioMessages = {
       unlimited: 'This account has no expiry and no photo limit; there is nothing to buy.',
       loadFailed: 'Couldn’t load the packages',
       retry: 'Try again',
+      loading: 'Loading packages…',
+      upgradeTitle: 'Upgrade your package',
+      upgradeIntro: 'Add days to keep your links open, add photos, or renew your package.',
+      seeAll: 'Open My package',
     },
   },
   search: {

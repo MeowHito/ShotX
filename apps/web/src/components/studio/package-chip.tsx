@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { useFormatter, useTranslations } from 'next-intl';
 import { useState } from 'react';
 import { useMyPackage } from '@/lib/packages/queries';
+import { UpgradeButton } from './upgrade-dialog';
 
 /** The chip's text: days left (or expired), and the photos used of the limit. */
 function usePackageText(pkg: MyPackage, now: Date) {
@@ -23,9 +24,9 @@ function usePackageText(pkg: MyPackage, now: Date) {
 
 /**
  * The photographer's package in the studio aside (ADR 0026): name · days left · photos used of
- * the limit, and "renew" to the studio's package page (ADR 0032). Renders nothing for an unlimited
+ * the limit, and the "upgrade" button whose popup sells more days, photos or a renewal (ADR 0032). Renders nothing for an unlimited
  * account (GET /me/package is null: every admin-created account) or before the answer arrives.
- * `compact`: the tablet rail (an icon that links to the packages, the text as its label).
+ * `compact`: the tablet rail (the upgrade popup's icon button, the text as its label).
  */
 export function PackageChip({ compact = false, now }: { compact?: boolean; now?: Date }) {
   const pkg = useMyPackage();
@@ -53,19 +54,9 @@ function PackageChipView({
   if (compact) {
     const label = `${text.name} · ${text.days} · ${text.photos}`;
     return (
-      <Link
-        href={STUDIO_PACKAGE_PATH}
-        aria-label={label}
-        title={label}
-        data-testid="package-chip"
-        className={cn(
-          buttonVariants({ variant: 'outline', size: 'icon' }),
-          'mx-auto size-11 rounded-full',
-          text.expired && 'border-destructive/50 text-destructive',
-        )}
-      >
-        <TicketIcon aria-hidden />
-      </Link>
+      <div data-testid="package-chip" className="flex justify-center">
+        <UpgradeButton pkg={pkg} expired={text.expired} now={now} compact label={label} />
+      </div>
     );
   }
 
@@ -90,15 +81,7 @@ function PackageChipView({
         <span aria-hidden>·</span>
         <span>{text.photos}</span>
       </p>
-      <Link
-        href={STUDIO_PACKAGE_PATH}
-        className={cn(
-          buttonVariants({ variant: text.expired ? 'default' : 'outline', size: 'sm' }),
-          'h-11 w-full rounded-full sm:h-9',
-        )}
-      >
-        {t('renew')}
-      </Link>
+      <UpgradeButton pkg={pkg} expired={text.expired} now={now} />
     </section>
   );
 }
