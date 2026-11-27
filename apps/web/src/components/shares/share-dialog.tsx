@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { copyToClipboardWhenReady } from '@/lib/studio/clipboard';
 import { useCreateShare, useMe, useShares } from '@/lib/studio/queries';
 import { LinkDesignPicker } from './link-design-picker';
+import { LinkDisplayPicker } from './link-display-picker';
 import { ShareForm } from './share-form';
 import { ShareRow } from './share-row';
 
@@ -86,6 +87,15 @@ function ShareDialogBody({
                     {td('linkDesign')}
                   </summary>
                   <LinkDesignPicker share={share} />
+                </details>
+              ) : null}
+              {(share.status === 'active' || share.status === 'paused') &&
+              share.target.type === 'folder' ? (
+                <details className="rounded-xl border p-3 [&[open]>summary]:mb-3">
+                  <summary className="cursor-pointer text-sm font-medium">
+                    {td('linkDisplay')}
+                  </summary>
+                  <LinkDisplayPicker share={share} />
                 </details>
               ) : null}
             </div>

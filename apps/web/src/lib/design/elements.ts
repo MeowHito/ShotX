@@ -1,7 +1,9 @@
 import {
   DESIGN_ARTBOARD,
   DESIGN_COORDINATE_RANGE,
-  DESIGN_ELEMENT_CARDINALITY,
+  DESIGN_ELEMENT_CARDINALITY_BY_KIND,
+  DESIGN_LATEST_PHOTOS_INTERVAL_RANGE,
+  DESIGN_LATEST_PHOTOS_MAX,
   DESIGN_SHADOW_OFFSET_RANGE,
   DESIGN_SIZE_RANGE,
   DESIGN_REQUIRED_ELEMENT_MIN_OPACITY,
@@ -11,6 +13,7 @@ import {
   type DesignElement,
   type DesignElementOf,
   type DesignElementType,
+  designKind,
 } from '@shotx/shared';
 
 /**
@@ -168,6 +171,17 @@ export function makeHelpButton(): DesignElementOf<'helpButton'> {
   };
 }
 
+/** ADR 0033: a QR code of the link, black on white, centred low on the artboard. */
+export function makeQrCode(): DesignElementOf<'qrCode'> {
+  return {
+    ...base('qrCode', centredBox(120, 120, { x: DESIGN_ARTBOARD.width / 2, y: 700 })),
+    type: 'qrCode',
+    fg: '#000000',
+    bg: '#ffffff',
+    radius: 10,
+  };
+}
+
 /** The scan buttons' box height their layout needs (designScanButtonsElementSchema). */
 export function scanButtonsBoxHeight(
   e: Pick<DesignElementOf<'scanButtons'>, 'layout' | 'height' | 'gap'>,
@@ -237,18 +251,44 @@ export function normalizeElement(e: DesignElement): DesignElement {
     }
     case 'helpButton':
       return { ...e, ...common, radius: fit(e.radius, 0, 40) };
+    case 'latestPhotos':
+      return {
+        ...e,
+        ...common,
+        count: clamp(
+          Math.round(Number.isFinite(e.count) ? e.count : 1),
+          1,
+          DESIGN_LATEST_PHOTOS_MAX,
+        ),
+        intervalSec: fit(
+          e.intervalSec,
+          DESIGN_LATEST_PHOTOS_INTERVAL_RANGE.min,
+          DESIGN_LATEST_PHOTOS_INTERVAL_RANGE.max,
+        ),
+        radius: fit(e.radius, 0, 200),
+      };
+    case 'qrCode':
+      return { ...e, ...common, radius: fit(e.radius, 0, 40) };
   }
 }
 
-/** Whether an element may be deleted (DESIGN_UNDELETABLE_ELEMENT_TYPES: face icon, scan buttons). */
+/**
+ * Whether an element may be deleted (DESIGN_UNDELETABLE_ELEMENT_TYPES: face icon, scan buttons,
+ * a display's latest photos).
+ */
 export function isDeletable(e: Pick<DesignElement, 'type'>): boolean {
   return !(DESIGN_UNDELETABLE_ELEMENT_TYPES as readonly string[]).includes(e.type);
 }
 
 /** Whether one more element of this type fits the document's cardinality rule. */
-export function canAddType(doc: DesignDoc, type: DesignElementType, adding = 1): boolean {
-  const rule = DESIGN_ELEMENT_CARDINALITY[type];
+export function canAddType(
+  doc: Pick<DesignDoc, 'elements' | 'kind'>,
+  type: DesignElementType,
+  adding = 1,
+): boolean {
+  const rule: string = DESIGN_ELEMENT_CARDINALITY_BY_KIND[designKind(doc)][type];
   if (rule === 'any') return true;
+  if (rule === 'none') return false;
   const count = doc.elements.filter((e) => e.type === type).length;
   return count + adding <= 1;
 }
@@ -283,8 +323,12 @@ export function docColors(doc: DesignDoc): DesignColor[] {
         add(e.secondary.border);
         break;
       case 'helpButton':
+      case 'qrCode':
         add(e.bg);
         add(e.fg);
+        break;
+      case 'latestPhotos':
+        add(e.bg);
         break;
       case 'image':
         break;

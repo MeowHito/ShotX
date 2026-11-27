@@ -9,7 +9,9 @@ import {
   faceScanResultKey,
   type FaceDeletionInfoResponse,
   generateOpaqueToken,
+  type ShareDisplayResponse,
   type ShareItemsResponse,
+  SHARE_DISPLAY_PHOTOS_LIMIT,
   shareItemsCursorSchema,
   type ShareMetaResponse,
   sharePublicPath,
@@ -335,12 +337,41 @@ export class SharePageService {
       .from(files)
       .where(shareItemsScope(share));
     const version = sha256Hex(
-      [share.mode, share.designId ?? '-', row?.n ?? 0, row?.newest ?? '-'].join(':'),
+      [
+        share.mode,
+        share.designId ?? '-',
+        share.displayDesignId ?? '-',
+        row?.n ?? 0,
+        row?.newest ?? '-',
+      ].join(':'),
     ).slice(0, 16);
     // Bounded: entries of shares nobody polls any more are dropped wholesale now and then.
     if (this.changesCache.size >= 10_000) this.changesCache.clear();
     this.changesCache.set(share.id, { version, at: now });
     return { version };
+  }
+
+  // --- GET /s/:token/display ----------------------------------------------------------------------
+
+  /**
+   * ADR 0033: the event screen's display design (null: built-in) and the newest photos of a
+   * gallery share (face_only: none, those are found by a face only). Same gates as items; no
+   * activity event (a screen polls this).
+   */
+  async display(token: string, ctx: PublicContext): Promise<ShareDisplayResponse> {
+    const share = await this.access.open(token, ctx);
+    const design = await this.designs.displayDesign(share);
+    const rows =
+      share.mode === 'gallery'
+        ? await this.pageRows(share, null, null, SHARE_DISPLAY_PHOTOS_LIMIT)
+        : [];
+    const expiresAt = this.urls.viewExpiry();
+    return {
+      design,
+      photos: rows
+        .slice(0, SHARE_DISPLAY_PHOTOS_LIMIT)
+        .map((row) => toShareItem(row, this.urls, expiresAt)),
+    };
   }
 
   private pageRows(

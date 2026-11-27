@@ -23,6 +23,8 @@ export const zh: PublicMessages = {
     close: '关闭',
     loading: '加载中…',
     retry: '重试',
+    fullscreen: '全屏',
+    exitFullscreen: '退出全屏',
     showPassword: '显示密码',
     hidePassword: '隐藏密码',
     duration: {
@@ -31,12 +33,19 @@ export const zh: PublicMessages = {
     },
   },
   share: {
+    display: {
+      title: '照片屏幕',
+      label: '活动最新照片',
+      loadError: '无法加载最新照片，将自动重试。',
+    },
     design: {
       label: '活动首页',
       camera: '拍摄自拍',
       choosePhoto: '使用照片',
       help: '查找方法',
       seeAll: '向上滑动查看全部照片',
+      qr: '链接二维码',
+      latestPhotos: '最新照片',
       howTo: {
         title: '如何找到你的照片',
         camera: '点击“拍摄自拍”，并同意人脸数据使用条款。',

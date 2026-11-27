@@ -655,6 +655,7 @@ export const enStudio: StudioMessages = {
     scanTitle: 'Scan on a phone',
     scanHint: 'Opens the share page on iOS and Android',
     saveQr: 'Save QR code',
+    openDisplay: 'Open the latest-photos screen',
     visitorsWeek: 'Visitors, last 7 days',
     visitorsTotal: '{count, number} in all',
     totals: { visitors: 'Visitors', downloads: 'Downloads', scans: 'Face scans' },
@@ -882,6 +883,7 @@ export const enStudio: StudioMessages = {
     loadError: 'Couldn’t load your designs.',
     listLabel: 'Your designs',
     defaultBadge: 'Default',
+    displayBadge: 'Display screen',
     defaultHint: 'Links without a chosen design use the default.',
     updated: 'Edited {date}',
     edit: 'Edit',
@@ -901,6 +903,12 @@ export const enStudio: StudioMessages = {
     picker: {
       title: 'New design',
       choose: 'Choose a starting point',
+      groups: {
+        share: 'Share page (opens on phones)',
+        display: 'Display screen (latest photos + QR)',
+      },
+      displayHint:
+        "For a screen at the event: shows the photos just taken and a QR code that opens the link's share page.",
       blank: 'Blank',
       defaultName: 'New design',
       create: 'Create',
@@ -911,6 +919,8 @@ export const enStudio: StudioMessages = {
       'night-gala': 'Night gala',
       'tech-blue-glass': 'Tech blue glass',
       'bold-poster': 'Bold poster',
+      'display-spotlight': 'Display, blue',
+      'display-clean': 'Display, white',
     },
     editor: {
       back: 'Back to designs',
@@ -925,6 +935,9 @@ export const enStudio: StudioMessages = {
       preview: 'Preview',
       shortcuts: 'Keyboard shortcuts',
       showPhotos: 'Show all photos',
+      displayBadge: 'Display screen',
+      displayHint:
+        "This design is a screen at the event (the link + /display). Scanning its QR opens the link's share page design.",
       showPhotosHint:
         'On: viewers can scroll through all photos under the first screen · Off: no photos, viewers scan their face to see only their own',
       phoneNote: 'Edit designs on a computer or tablet. On a phone you can only preview them.',
@@ -965,6 +978,7 @@ export const enStudio: StudioMessages = {
         line: 'Line',
         glass: 'Frosted card',
         helpButton: 'How-it-works button',
+        qrCode: 'QR code of the link',
       },
       uploads: {
         drop: 'Drop images here',
@@ -1004,6 +1018,8 @@ export const enStudio: StudioMessages = {
           faceIcon: 'Face icon',
           scanButtons: 'Face scan buttons',
           helpButton: 'How-it-works button',
+          latestPhotos: 'Latest photos',
+          qrCode: 'QR code',
         },
       },
       props: {
@@ -1042,6 +1058,12 @@ export const enStudio: StudioMessages = {
         fitCover: 'Fill',
         fitContain: 'Fit',
         flipX: 'Flip',
+        latestPhotosHint:
+          'Shows the photos just uploaded to the event; new ones appear by themselves (links that show all photos only).',
+        photoCount: 'Photos to cycle',
+        intervalSec: 'Seconds per photo',
+        qrHint: "Made from the event's link automatically.",
+        qrFg: 'QR colour',
         layout: 'Button layout',
         row: 'Side by side',
         column: 'Stacked',
@@ -1061,6 +1083,8 @@ export const enStudio: StudioMessages = {
         unlock: 'Unlock',
         duplicate: 'Duplicate',
         delete: 'Delete',
+        cantDeleteDisplay:
+          'The latest-photos box must stay. You can move, resize or restyle it, but not delete it.',
         cantDelete:
           'Every design keeps the face icon and the scan buttons. You can move, resize and restyle them, but not delete them.',
         swatches: 'Colours in this design',
@@ -1162,12 +1186,22 @@ export const enStudio: StudioMessages = {
       reprint: 'Print again',
     },
   },
+  displayPicker: {
+    hint: 'Open this on a screen at the event: it shows the photos just taken with a QR code; guests scan it to open the share page above.',
+    open: 'Open the screen',
+    manage: 'Design screens',
+    saved: 'Screen design changed. Open screens update by themselves.',
+    design: 'Screen design',
+    auto: "Automatic (the share page's background)",
+    empty: 'No screen designs yet. Create one in Share page designs > New design > Display screen.',
+  },
   shareDialog: {
     title: 'Share “{name}”',
     existing: 'Existing links',
     none: 'No links for this item yet',
     newLink: 'Create a new link',
     linkDesign: 'This link’s page design',
+    linkDisplay: 'Latest-photos screen (photos + QR)',
     designSaved: 'Design changed. The same link keeps working.',
     anotherLink: 'Create another link',
     anotherLinkHint: 'You don’t need a new link to change the design: change it on the link above.',
@@ -1292,6 +1326,7 @@ export const enStudio: StudioMessages = {
       details: 'Details',
       name: 'Event name',
       design: 'Link page design',
+      display: 'Latest-photos screen at the event',
       save: 'Save',
       saved: 'Saved',
       link: 'Link and publishing',

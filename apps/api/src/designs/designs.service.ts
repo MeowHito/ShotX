@@ -16,7 +16,9 @@ import {
   type DesignDoc,
   designDocAssetIds,
   type DesignSummary,
+  designKind,
   designTemplateDoc,
+  isDisplayDesign,
   encodeOpaqueCursor,
   fileExtension,
   type ListDesignAssetsResponse,
@@ -227,7 +229,8 @@ export class DesignsService {
           ownerId,
           name: body.name,
           doc,
-          isDefault: currentDefault === undefined,
+          // ADR 0033: an event screen is never the default (the default is a share page).
+          isDefault: currentDefault === undefined && !isDisplayDesign(doc),
           createdAt: now,
           updatedAt: now,
         })
@@ -264,12 +267,16 @@ export class DesignsService {
     const now = this.clock.now();
     return this.db.transaction(async (tx) => {
       const [current] = await tx
-        .select({ revision: shareDesigns.revision })
+        .select({ revision: shareDesigns.revision, doc: shareDesigns.doc })
         .from(shareDesigns)
         .where(and(eq(shareDesigns.id, id), eq(shareDesigns.ownerId, ownerId)))
         .for('update');
       if (current === undefined) throw designNotFound();
       if (current.revision !== body.revision) throw revisionConflict(current.revision);
+      // ADR 0033: a design keeps its kind (links use it as a share page or as a screen).
+      if (designKind(current.doc) !== designKind(body.doc)) {
+        throw validationError(['body', 'doc', 'kind'], "a design's kind can't change");
+      }
       const assets = await this.lockReferencedAssets(tx, ownerId, body.doc);
       const [row] = await tx
         .update(shareDesigns)
@@ -295,7 +302,10 @@ export class DesignsService {
 
   // --- DELETE /designs/:id ---------------------------------------------------------------------
 
-  /** Hard delete. Shares using it fall back to the default (shares.design_id ON DELETE SET NULL). */
+  /**
+   * Hard delete. Shares using it fall back to the default (shares.design_id ON DELETE SET NULL),
+   * or to the built-in screen (shares.display_design_id, ADR 0033).
+   */
   async delete(ownerId: string, id: string): Promise<void> {
     const [deleted] = await this.db
       .delete(shareDesigns)
@@ -311,12 +321,15 @@ export class DesignsService {
     await this.db.transaction(async (tx) => {
       await lockOwnerDesigns(tx, ownerId);
       const [design] = await tx
-        .select({ isDefault: shareDesigns.isDefault })
+        .select({ isDefault: shareDesigns.isDefault, doc: shareDesigns.doc })
         .from(shareDesigns)
         .where(and(eq(shareDesigns.id, id), eq(shareDesigns.ownerId, ownerId)))
         .for('update');
       if (design === undefined) throw designNotFound();
       if (design.isDefault) return;
+      if (isDisplayDesign(design.doc)) {
+        throw validationError(['params', 'id'], "a display design can't be the default");
+      }
       await tx
         .update(shareDesigns)
         .set({ isDefault: false })

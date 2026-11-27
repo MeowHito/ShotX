@@ -2,6 +2,7 @@ import type { Locale } from '@/i18n/config';
 import type { ViewerLoginOptions } from '@/lib/auth/viewer-login';
 import { TURNSTILE_SCRIPT_URL } from '@shotx/shared';
 import { vi } from 'vitest';
+import { DisplayPage } from '@/components/share/display-view';
 import { FaceDeletionPage } from '@/components/share/face-deletion-page';
 import { SharePage } from '@/components/share/share-view';
 import { createPublicApiClient } from '@/lib/api/client';
@@ -208,4 +209,21 @@ export function renderSharePage(
     { api: apiClientFor(fake.fetch), locale: options.locale },
   );
   return { ...view, scenario, detect, loadDetector, startDownload, mediaFetch, rendered, toJpeg };
+}
+
+/** ADR 0033: the event screen `/{ref}/display` against the fake API. */
+export function renderDisplayPage(
+  fake: FakeApi,
+  token: string,
+  options: { shareConfig?: Partial<ClientShareConfig>; locale?: Locale } = {},
+) {
+  return renderWithProviders(
+    <DisplayPage
+      shareRef={token}
+      signedIn={false}
+      shareConfig={{ ...SHARE_CONFIG, ...options.shareConfig }}
+      testing={{ publicApi: createPublicApiClient({ fetch: fake.fetch }) }}
+    />,
+    { api: apiClientFor(fake.fetch), locale: options.locale },
+  );
 }

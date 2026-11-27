@@ -72,6 +72,8 @@ export interface PublicShareFixture {
   searchConsentStale: boolean;
   /** meta.design (ADR 0013) once the gates pass; null: the plain layout. */
   design: ShareMetaDesign | null;
+  /** ADR 0033: the event screen's design (null: the built-in screen). */
+  displayDesign: ShareMetaDesign | null;
   /** What face search finds (ids of `items`). */
   faceMatches: { strong: string[]; maybe: string[] };
   /** The viewer's face-search result (the face_only grant). */
@@ -142,6 +144,7 @@ export function createPublicShare(
     consentMismatchOnce: false,
     searchConsentStale: false,
     design: null,
+    displayDesign: null,
     faceMatches: { strong: [], maybe: [] },
     grant: new Set(),
     noFace: false,
@@ -358,6 +361,7 @@ export function handlePhase3(
         passwordProtected: b.password !== null,
         expiresAt: b.expiresAt,
         designId: b.designId,
+        displayDesignId: b.displayDesignId,
         status: 'active',
         createdAt: NOW,
       };
@@ -486,6 +490,15 @@ export function handlePhase3(
       gate(api, share);
       const shown = visibleItems(share);
       return { version: `${share.mode}:${shown.length}:${shown[0]?.id ?? '-'}` };
+    }
+    case PUBLIC_SHARE_ROUTES.display: {
+      // ADR 0033: like the API, the newest photos of a gallery share only.
+      const share = publicShareOrFail(api, params.token);
+      gate(api, share);
+      return {
+        design: share.displayDesign,
+        photos: share.mode === 'gallery' ? share.items.slice(0, 20) : [],
+      };
     }
     case PUBLIC_SHARE_ROUTES.unlock: {
       const share = publicShareOrFail(api, params.token);

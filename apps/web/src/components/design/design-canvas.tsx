@@ -9,9 +9,19 @@ import {
   type ShareMode,
 } from '@shotx/shared';
 import { cn } from '@shotx/ui';
-import { CameraIcon, CircleHelpIcon, ImageIcon, LoaderCircleIcon } from 'lucide-react';
+import { CameraIcon, CircleHelpIcon, ImageIcon, ImagesIcon, LoaderCircleIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { useRef, type ChangeEvent, type CSSProperties, type ReactNode, type Ref } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+  type ReactNode,
+  type Ref,
+} from 'react';
+import { encodeQr, qrSvgPath } from '@/lib/billing/qr';
 import { designFontFamily } from '@/lib/design/fonts';
 import { GALLERY_PHOTO_ACCEPT } from '@/lib/face/selfie';
 import { FaceGlyph } from './face-glyph';
@@ -45,6 +55,16 @@ export interface DesignCanvasActions {
   onHelp: () => void;
 }
 
+/** ADR 0033: one of the newest photos a display's latest-photos box shows. */
+export interface DesignCanvasPhoto {
+  id: string;
+  /** Signed CDN URL (preview.webp, or a video's poster). */
+  url: string;
+}
+
+/** What the editor and the previews encode in a QR element (a stand-in for the link). */
+export const DESIGN_QR_SAMPLE_URL = 'https://snap.action.in.th/your-event';
+
 export type DesignCanvasLayout =
   { kind: 'fill'; maxWidth?: number } | { kind: 'artboard'; unit: number };
 
@@ -67,6 +87,16 @@ export interface DesignCanvasProps {
   editingId?: string | null;
   /** Editor: image assets still processing (a spinner instead of nothing). */
   pendingAssets?: ReadonlySet<string>;
+  /**
+   * ADR 0033: the newest photos for a latest-photos box, newest first (the display screen).
+   * Undefined (editor, previews): a placeholder; empty: the box's colour alone.
+   */
+  photos?: readonly DesignCanvasPhoto[];
+  /**
+   * ADR 0033: the link a QR element encodes. Undefined (editor, previews): a sample link; null:
+   * not known yet (an empty square, never a wrong code).
+   */
+  qrUrl?: string | null;
   /** Mini previews: hidden from assistive technology. */
   decorative?: boolean;
   /** Accessible name of the design (share page). */
@@ -441,6 +471,141 @@ function HelpButton({
   );
 }
 
+/** Quiet zone of a QR element, in modules (the standard four). */
+const QR_QUIET_ZONE = 4;
+
+function QrCodeElement({ e, url }: { e: DesignElementOf<'qrCode'>; url: string | null }) {
+  const t = useTranslations('share.design');
+  const matrix = useMemo(() => (url === null ? null : encodeQr(url)), [url]);
+  const side = du(Math.min(e.w, e.h));
+  const size = matrix === null ? 1 : matrix.size + QR_QUIET_ZONE * 2;
+  return (
+    <div
+      data-element-type="qrCode"
+      style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <div
+        style={{
+          width: side,
+          height: side,
+          background: e.bg,
+          borderRadius: du(e.radius),
+          overflow: 'hidden',
+        }}
+      >
+        {matrix !== null ? (
+          <svg
+            role="img"
+            aria-label={t('qr')}
+            viewBox={`0 0 ${size} ${size}`}
+            shapeRendering="crispEdges"
+            style={{ width: '100%', height: '100%', display: 'block' }}
+          >
+            <path d={qrSvgPath(matrix, QR_QUIET_ZONE)} fill={e.fg} />
+          </svg>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ADR 0033: the newest photos. One photo: always the newest. More: cycles through the newest
+ * `count`, `intervalSec` each, cross-fading; a new photo resets to it at once.
+ */
+function LatestPhotosElement({
+  e,
+  photos,
+}: {
+  e: DesignElementOf<'latestPhotos'>;
+  photos: readonly DesignCanvasPhoto[] | undefined;
+}) {
+  const t = useTranslations('share.design');
+  const shown = useMemo(() => (photos ?? []).slice(0, e.count), [photos, e.count]);
+  const newest = shown[0]?.id ?? null;
+  const [index, setIndex] = useState(0);
+  // A new photo (or a new set) starts over from the newest.
+  const [seen, setSeen] = useState(newest);
+  if (seen !== newest) {
+    setSeen(newest);
+    setIndex(0);
+  }
+  const total = shown.length;
+  useEffect(() => {
+    if (total <= 1) return;
+    const timer = window.setInterval(() => setIndex((i) => (i + 1) % total), e.intervalSec * 1000);
+    return () => window.clearInterval(timer);
+  }, [total, e.intervalSec, newest]);
+  const box: CSSProperties = {
+    position: 'relative',
+    width: '100%',
+    height: '100%',
+    background: e.bg,
+    borderRadius: du(e.radius),
+    overflow: 'hidden',
+  };
+  if (photos === undefined) {
+    // Editor and previews: a stand-in that says what goes here.
+    return (
+      <div data-element-type="latestPhotos" style={box}>
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: du(8),
+            color: '#ffffffcc',
+            background: 'linear-gradient(135deg, #64748b99, #33415599)',
+            fontFamily: 'var(--font-noto-thai), sans-serif',
+            fontSize: du(Math.min(18, e.w / 12)),
+            fontWeight: 600,
+          }}
+        >
+          <ImagesIcon
+            style={{ width: du(Math.min(56, e.w / 4)), height: du(Math.min(56, e.w / 4)) }}
+            aria-hidden
+          />
+          {t('latestPhotos')}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div data-element-type="latestPhotos" style={box}>
+      {shown.map((photo, i) => (
+        // Signed CDN URLs of the share's newest photos (preview.webp or a video's poster).
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          key={photo.id}
+          src={photo.url}
+          alt=""
+          draggable={false}
+          data-testid="latest-photo"
+          data-current={i === index ? 'true' : undefined}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: e.fit,
+            opacity: i === index ? 1 : 0,
+            transition: 'opacity 900ms ease',
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function ElementView({ e, props }: { e: DesignElement; props: DesignCanvasProps }) {
   const actions = props.actions ?? null;
   let content: ReactNode;
@@ -471,6 +636,14 @@ function ElementView({ e, props }: { e: DesignElement; props: DesignCanvasProps 
       break;
     case 'helpButton':
       content = <HelpButton e={e} actions={actions} />;
+      break;
+    case 'latestPhotos':
+      content = <LatestPhotosElement e={e} photos={props.photos} />;
+      break;
+    case 'qrCode':
+      content = (
+        <QrCodeElement e={e} url={props.qrUrl === undefined ? DESIGN_QR_SAMPLE_URL : props.qrUrl} />
+      );
       break;
   }
   return (

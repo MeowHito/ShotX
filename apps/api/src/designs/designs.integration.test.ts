@@ -10,6 +10,7 @@ import {
   type DesignDoc,
   type DesignElement,
   designSchema,
+  designDisplayTemplateDoc,
   designTemplateDoc,
   ERROR_HTTP_STATUS,
   listDesignAssetsResponseSchema,
@@ -17,6 +18,7 @@ import {
   ownerShareSchema,
   PUBLIC_SHARE_ROUTES as P,
   SHARE_ROUTES as S,
+  shareDisplayResponseSchema,
   shareItemsResponseSchema,
   shareMetaResponseSchema,
 } from '@shotx/shared';
@@ -727,6 +729,140 @@ for (const backend of DATABASE_BACKENDS) {
         expect(ownerShareSchema.parse((await patch({ designId: null })).body).designId).toBeNull();
         const list = await api.request('GET', apiPath(S.list), { token: owner.token });
         expect(list.body).toMatchObject({ items: [{ id: plain.id, designId: null }] });
+      });
+    });
+
+    describe('ADR 0033: display screens', () => {
+      const display = () => designDisplayTemplateDoc('display-spotlight');
+
+      it("never makes a display the default, and keeps a design's kind on save", async () => {
+        const owner = await api.photographer();
+        // The owner's first design, but a screen: not the default.
+        const screen = await newDesign(owner.token, { name: 'Screen', doc: display() });
+        expect(screen.isDefault).toBe(false);
+        const page = await newDesign(owner.token, { name: 'Page' });
+        expect(page.isDefault).toBe(true);
+        const setDefault = await api.request('POST', apiPath(D.setDefault, { id: screen.id }), {
+          token: owner.token,
+        });
+        expect(setDefault.body).toMatchObject({ code: 'VALIDATION_FAILED' });
+        const toPage = await putDesign(owner.token, screen.id, {
+          name: screen.name,
+          revision: screen.revision,
+          doc: blankDesignDoc(),
+        });
+        expect(toPage.body).toMatchObject({ code: 'VALIDATION_FAILED' });
+        const toScreen = await putDesign(owner.token, page.id, {
+          name: page.name,
+          revision: page.revision,
+          doc: display(),
+        });
+        expect(toScreen.body).toMatchObject({ code: 'VALIDATION_FAILED' });
+      });
+
+      it('takes a display design only as displayDesignId, and a share page only as designId', async () => {
+        const owner = await api.photographer();
+        const other = await api.photographer();
+        const screen = await newDesign(owner.token, { name: 'Screen', doc: display() });
+        const page = await newDesign(owner.token, { name: 'Page' });
+        const theirs = await newDesign(other.token, { name: 'Theirs', doc: display() });
+        const folder = await api.folder(owner.id);
+        const target = { type: 'folder', folderId: folder.id };
+        const post = (body: object) =>
+          api.request('POST', apiPath(S.create), { token: owner.token, body: { target, ...body } });
+        for (const body of [
+          { designId: screen.id },
+          { displayDesignId: page.id },
+          { displayDesignId: theirs.id },
+        ]) {
+          expect((await post(body)).body, JSON.stringify(body)).toMatchObject({
+            code: 'DESIGN_NOT_FOUND',
+          });
+        }
+        const created = ownerShareSchema.parse(
+          (await post({ designId: page.id, displayDesignId: screen.id })).body,
+        );
+        expect(created).toMatchObject({ designId: page.id, displayDesignId: screen.id });
+        const patch = (body: unknown) =>
+          api.request('PATCH', apiPath(S.update, { id: created.id }), {
+            token: owner.token,
+            body,
+          });
+        expect((await patch({ displayDesignId: page.id })).body).toMatchObject({
+          code: 'DESIGN_NOT_FOUND',
+        });
+        expect(ownerShareSchema.parse((await patch({ displayDesignId: null })).body)).toMatchObject(
+          { designId: page.id, displayDesignId: null },
+        );
+        expect(
+          ownerShareSchema.parse((await patch({ displayDesignId: screen.id })).body)
+            .displayDesignId,
+        ).toBe(screen.id);
+        // Deleting the screen design clears only display_design_id.
+        await api.request('DELETE', apiPath(D.delete, { id: screen.id }), { token: owner.token });
+        const [row] = await api.db.select().from(shares).where(eq(shares.id, created.id));
+        expect(row).toMatchObject({ displayDesignId: null, designId: page.id, ownerId: owner.id });
+      });
+
+      it('serves the screen and the newest photos of a gallery share, without activity events', async () => {
+        const owner = await api.photographer();
+        const folder = await api.folder(owner.id);
+        const older = await insertReadyFile(api.db, owner.id, {
+          name: 'a.jpg',
+          folderId: folder.id,
+          takenAt: new Date('2026-11-27T01:00:00Z'),
+        });
+        const newer = await insertReadyFile(api.db, owner.id, {
+          name: 'b.jpg',
+          folderId: folder.id,
+          takenAt: new Date('2026-11-27T02:00:00Z'),
+        });
+        const share = await api.share(owner.id, { folderId: folder.id });
+        const browser = api.browser();
+        const read = async () => {
+          const res = await browser.request('GET', apiPath(P.display, { token: share.token }));
+          expect(res.status, JSON.stringify(res.body)).toBe(200);
+          return shareDisplayResponseSchema.parse(res.body);
+        };
+        const eventsBefore = await api.db
+          .select()
+          .from(activityEvents)
+          .where(eq(activityEvents.shareId, share.id));
+
+        // No screen design: null (web draws the built-in screen); newest first.
+        const plain = await read();
+        expect(plain.design).toBeNull();
+        expect(plain.photos.map((p) => p.id)).toEqual([newer.id, older.id]);
+
+        const screen = await newDesign(owner.token, { name: 'Screen', doc: display() });
+        await api.request('PATCH', apiPath(S.update, { id: share.id }), {
+          token: owner.token,
+          body: { displayDesignId: screen.id },
+        });
+        expect((await read()).design?.doc).toEqual(screen.doc);
+        // The phone page keeps its own (no) design.
+        const meta = shareMetaResponseSchema.parse(
+          (await browser.request('GET', apiPath(P.meta, { token: share.token }))).body,
+        );
+        expect(meta.design).toBeNull();
+
+        // Scan-only: the screen shows no photos (they are found by a face only).
+        await api.db.update(shares).set({ mode: 'face_only' }).where(eq(shares.id, share.id));
+        expect((await read()).photos).toEqual([]);
+
+        const eventsAfter = await api.db
+          .select()
+          .from(activityEvents)
+          .where(eq(activityEvents.shareId, share.id));
+        expect(eventsAfter).toHaveLength(eventsBefore.length);
+      });
+
+      it('keeps the screen behind the password gate', async () => {
+        const owner = await api.photographer();
+        const folder = await api.folder(owner.id);
+        const share = await api.share(owner.id, { folderId: folder.id }, { password: 'pin-1234' });
+        const res = await api.browser().request('GET', apiPath(P.display, { token: share.token }));
+        expect(res.body).toMatchObject({ code: 'PASSWORD_REQUIRED' });
       });
     });
 

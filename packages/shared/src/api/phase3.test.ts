@@ -133,6 +133,7 @@ describe('owner share schemas', () => {
       password: null,
       expiresAt: null,
       designId: null,
+      displayDesignId: null,
     });
   });
 

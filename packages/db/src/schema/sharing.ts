@@ -91,6 +91,12 @@ export const shares = pgTable(
      * hand-written in the migration as for `folders.cover_file_id`).
      */
     designId: uuid('design_id'),
+    /**
+     * The event screen design (ADR 0033, migration 0023): a `kind: 'display'` design of the owner
+     * shown at `/{slug}/display`; null: the built-in screen. Same owner foreign key and ON DELETE
+     * SET NULL (display_design_id only, hand-written) as `design_id`.
+     */
+    displayDesignId: uuid('display_design_id'),
   },
   (t) => [
     unique('shares_token_unique').on(t.token),
@@ -129,6 +135,15 @@ export const shares = pgTable(
     index('shares_design_idx')
       .on(t.designId, t.ownerId)
       .where(sql`${t.designId} IS NOT NULL`),
+    // Migration 0023 (ADR 0033).
+    foreignKey({
+      name: 'shares_display_design_same_owner_fk',
+      columns: [t.displayDesignId, t.ownerId],
+      foreignColumns: [shareDesigns.id, shareDesigns.ownerId],
+    }).onDelete('set null'),
+    index('shares_display_design_idx')
+      .on(t.displayDesignId, t.ownerId)
+      .where(sql`${t.displayDesignId} IS NOT NULL`),
     // Migration 0012.
     unique('shares_slug_unique').on(t.slug),
     check(

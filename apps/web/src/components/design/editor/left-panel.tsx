@@ -2,11 +2,14 @@
 
 import {
   DESIGN_ASSET_MIME_TYPES,
+  DESIGN_DISPLAY_TEMPLATE_IDS,
   DESIGN_TEMPLATE_IDS,
   type DesignAssetView,
   type DesignBackground,
   type DesignElement,
+  designDisplayTemplateDoc,
   designTemplateDoc,
+  isDisplayDesign,
 } from '@shotx/shared';
 import { Alert, cn } from '@shotx/ui';
 import { useQueryClient } from '@tanstack/react-query';
@@ -17,12 +20,14 @@ import {
   EyeOffIcon,
   GripVerticalIcon,
   ImageIcon,
+  ImagesIcon,
   LayersIcon,
   LayoutTemplateIcon,
   LoaderCircleIcon,
   LockIcon,
   MinusIcon,
   PaintBucketIcon,
+  QrCodeIcon,
   ScanFaceIcon,
   ShapesIcon,
   SquareIcon,
@@ -38,6 +43,7 @@ import {
   isDeletable,
   makeHelpButton,
   makeImage,
+  makeQrCode,
   makeShape,
   makeText,
   type ShapePreset,
@@ -135,10 +141,18 @@ export function LeftPanel({
 function TemplatesPanel() {
   const tDesigns = useTranslations('designs');
   const locale = useLocale();
-  const { dispatch } = useEditor();
+  const { state, dispatch } = useEditor();
+  // ADR 0033: a display design offers the display templates (its kind never changes).
+  const display = isDisplayDesign(state.doc);
   const docs = useMemo(
-    () => DESIGN_TEMPLATE_IDS.map((id) => ({ id, doc: designTemplateDoc(id, locale) })),
-    [locale],
+    () =>
+      display
+        ? DESIGN_DISPLAY_TEMPLATE_IDS.map((id) => ({
+            id,
+            doc: designDisplayTemplateDoc(id, locale),
+          }))
+        : DESIGN_TEMPLATE_IDS.map((id) => ({ id, doc: designTemplateDoc(id, locale) })),
+    [locale, display],
   );
   return (
     <div className="grid gap-3">
@@ -148,7 +162,7 @@ function TemplatesPanel() {
           <button
             key={id}
             type="button"
-            onClick={() => dispatch({ type: 'replaceDoc', doc: designTemplateDoc(id, locale) })}
+            onClick={() => dispatch({ type: 'replaceDoc', doc: structuredClone(doc) })}
             className="grid gap-1 rounded-lg border p-1 text-xs hover:border-primary"
           >
             <DesignPreview doc={doc} assets={{}} width={104} className="rounded" />
@@ -234,6 +248,14 @@ function ShapesPanel() {
           </button>
         ))}
       </div>
+      <button
+        type="button"
+        className="flex items-center gap-2 rounded-lg border bg-background p-3 text-xs hover:border-primary"
+        onClick={() => dispatch({ type: 'add', element: makeQrCode() })}
+      >
+        <QrCodeIcon className="size-5" aria-hidden />
+        {tShapes('qrCode')}
+      </button>
       {canAddType(state.doc, 'helpButton') ? (
         <button
           type="button"
@@ -675,6 +697,8 @@ const TYPE_ICONS: Record<DesignElement['type'], typeof TypeIcon> = {
   faceIcon: ScanFaceIcon,
   scanButtons: ScanFaceIcon,
   helpButton: CircleHelpIcon,
+  latestPhotos: ImagesIcon,
+  qrCode: QrCodeIcon,
 };
 
 /** A short name of an element for Layers: its text, else its type. */

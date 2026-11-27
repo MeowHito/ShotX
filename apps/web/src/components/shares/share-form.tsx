@@ -30,7 +30,8 @@ export function bangkokDate(iso: string): string {
   return new Date(Date.parse(iso) + 7 * 3_600_000).toISOString().slice(0, 10);
 }
 
-type Settings = Required<Omit<CreateShareBody, 'target'>>;
+// ADR 0033: the screen design is chosen on the live link (LinkDisplayPicker), not in this form.
+type Settings = Required<Omit<CreateShareBody, 'target' | 'displayDesignId'>>;
 
 export type ShareFormProps =
   | {

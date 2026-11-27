@@ -7,6 +7,8 @@ import {
   type DesignDoc,
   designDocAssetIds,
   designDocSchema,
+  type DesignKind,
+  designKind,
   type ShareMetaDesign,
 } from '@shotx/shared';
 import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
@@ -113,11 +115,32 @@ export class DesignViews {
     ownerId: string;
     designId: string | null;
   }): Promise<ShareMetaDesign | null> {
-    if (share.designId === null) return null;
+    return this.publicDesign(share, share.designId, 'share');
+  }
+
+  /**
+   * ADR 0033: the event screen of a share (`shares.display_design_id`), else null (web draws the
+   * built-in screen). Same rules as {@link shareDesign}.
+   */
+  async displayDesign(share: {
+    id: string;
+    ownerId: string;
+    displayDesignId: string | null;
+  }): Promise<ShareMetaDesign | null> {
+    return this.publicDesign(share, share.displayDesignId, 'display');
+  }
+
+  /** One design of the share's owner for a public page; a document of another kind is none. */
+  private async publicDesign(
+    share: { id: string; ownerId: string },
+    designId: string | null,
+    kind: DesignKind,
+  ): Promise<ShareMetaDesign | null> {
+    if (designId === null) return null;
     const [row] = await this.db
       .select({ id: shareDesigns.id, doc: shareDesigns.doc })
       .from(shareDesigns)
-      .where(and(eq(shareDesigns.id, share.designId), eq(shareDesigns.ownerId, share.ownerId)))
+      .where(and(eq(shareDesigns.id, designId), eq(shareDesigns.ownerId, share.ownerId)))
       .limit(1);
     if (row === undefined) return null;
     const parsed = designDocSchema.safeParse(row.doc);
@@ -125,6 +148,7 @@ export class DesignViews {
       this.events.warn('design.invalid_document', { designId: row.id, shareId: share.id });
       return null;
     }
+    if (designKind(parsed.data) !== kind) return null;
     const doc = parsed.data;
     const ids = designDocAssetIds(doc);
     const ready =

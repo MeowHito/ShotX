@@ -18,6 +18,9 @@ import { utf8ByteLength } from '../s3-keys';
  * phone); the renderer scales it to the viewport. `x`, `y` are the top-left corner of an
  * element's box before rotation, `rotation` turns the box about its centre, in degrees clockwise.
  * Elements are drawn bottom to top (array order).
+ *
+ * ADR 0033: a document of `kind: 'display'` is an event screen on the same artboard (the screen
+ * shows it fit to its height, the background filling the rest).
  */
 
 /** The artboard every document is laid out on, in design units. */
@@ -346,6 +349,44 @@ export const designHelpButtonElementSchema = z.strictObject({
   radius: num(0, 40),
 });
 
+/** Most photos a latest-photos box cycles through (ADR 0033). */
+export const DESIGN_LATEST_PHOTOS_MAX = 20;
+/** Seconds each photo of a latest-photos box stays (ADR 0033). */
+export const DESIGN_LATEST_PHOTOS_INTERVAL_RANGE = { min: 2, max: 60 } as const;
+
+/**
+ * ADR 0033: the newest photos of the share, on a display screen only (`kind: 'display'`). Shows
+ * the newest photo, or cycles through the newest `count` every `intervalSec` seconds; a new photo
+ * shows at once. Only a `gallery` share's photos (the ones anyone with the link may browse); a
+ * scan-only share shows `bg` alone. Fills its box like an image (`fit`, `radius`).
+ */
+export const designLatestPhotosElementSchema = z.strictObject({
+  ...elementBase,
+  type: z.literal('latestPhotos'),
+  count: z.number().int().min(1).max(DESIGN_LATEST_PHOTOS_MAX),
+  intervalSec: num(
+    DESIGN_LATEST_PHOTOS_INTERVAL_RANGE.min,
+    DESIGN_LATEST_PHOTOS_INTERVAL_RANGE.max,
+  ),
+  fit: z.enum(DESIGN_IMAGE_FITS),
+  radius: num(0, 200),
+  /** Behind the photo (letterboxing with `contain`) and alone while there is none. */
+  bg: designColorSchema,
+});
+
+/**
+ * ADR 0033: a QR code of the share's link (the page that is scanned, never a URL in the
+ * document), drawn by web as a square that fits the box, `fg` modules on `bg` with a quiet zone.
+ */
+export const designQrCodeElementSchema = z.strictObject({
+  ...elementBase,
+  type: z.literal('qrCode'),
+  fg: designColorSchema,
+  bg: designColorSchema,
+  /** Corner radius of the square, design units. */
+  radius: num(0, 40),
+});
+
 export const designElementSchema = z.discriminatedUnion('type', [
   designTextElementSchema,
   designImageElementSchema,
@@ -353,6 +394,8 @@ export const designElementSchema = z.discriminatedUnion('type', [
   designFaceIconElementSchema,
   designScanButtonsElementSchema,
   designHelpButtonElementSchema,
+  designLatestPhotosElementSchema,
+  designQrCodeElementSchema,
 ]);
 export type DesignElement = z.output<typeof designElementSchema>;
 export type DesignElementType = DesignElement['type'];
@@ -365,22 +408,62 @@ export const DESIGN_ELEMENT_TYPES = [
   'faceIcon',
   'scanButtons',
   'helpButton',
+  'latestPhotos',
+  'qrCode',
 ] as const satisfies readonly DesignElementType[];
 
-/** How many of each element type a document has: exactly one, at most one, or any number. */
-export const DESIGN_ELEMENT_CARDINALITY = {
-  text: 'any',
-  image: 'any',
-  shape: 'any',
-  faceIcon: 'one',
-  scanButtons: 'one',
-  helpButton: 'optional',
-} as const satisfies Record<DesignElementType, 'any' | 'one' | 'optional'>;
+/**
+ * ADR 0033: what a document is for. `share` (absent in every older document): the share page a
+ * phone opens. `display`: a screen at the event (`/{slug}/display`) showing the newest photos and
+ * the link's QR code; scanning it opens the share page with the share's own design.
+ */
+export const DESIGN_KINDS = ['share', 'display'] as const;
+export type DesignKind = (typeof DESIGN_KINDS)[number];
 
-/** Element types the editor can move and restyle but never delete. */
-export const DESIGN_UNDELETABLE_ELEMENT_TYPES = (
-  Object.keys(DESIGN_ELEMENT_CARDINALITY) as DesignElementType[]
-).filter((t) => DESIGN_ELEMENT_CARDINALITY[t] === 'one');
+export type DesignCardinality = 'any' | 'one' | 'optional' | 'none';
+
+/**
+ * How many of each element type a document of each kind has: exactly one, at most one, any
+ * number, or none.
+ */
+export const DESIGN_ELEMENT_CARDINALITY_BY_KIND = {
+  share: {
+    text: 'any',
+    image: 'any',
+    shape: 'any',
+    faceIcon: 'one',
+    scanButtons: 'one',
+    helpButton: 'optional',
+    latestPhotos: 'none',
+    qrCode: 'any',
+  },
+  display: {
+    text: 'any',
+    image: 'any',
+    shape: 'any',
+    faceIcon: 'none',
+    scanButtons: 'none',
+    helpButton: 'none',
+    latestPhotos: 'one',
+    qrCode: 'any',
+  },
+} as const satisfies Record<DesignKind, Record<DesignElementType, DesignCardinality>>;
+
+/** The share page's rules (documents without `kind`). */
+export const DESIGN_ELEMENT_CARDINALITY = DESIGN_ELEMENT_CARDINALITY_BY_KIND.share;
+
+/**
+ * Element types the editor can move and restyle but never delete (exactly one in some kind; each
+ * of them is `none` in the other kinds).
+ */
+export const DESIGN_UNDELETABLE_ELEMENT_TYPES = DESIGN_ELEMENT_TYPES.filter((t) =>
+  DESIGN_KINDS.some((k) => DESIGN_ELEMENT_CARDINALITY_BY_KIND[k][t] === 'one'),
+);
+
+/** A document's kind (absent: `share`). */
+export function designKind(doc: { kind?: DesignKind | undefined }): DesignKind {
+  return doc.kind ?? 'share';
+}
 
 // --- Document ---------------------------------------------------------------------------------
 
@@ -393,8 +476,9 @@ export function designDocByteLength(doc: unknown): number {
 }
 
 /**
- * A design document. Besides the shapes above: exactly one `faceIcon`, exactly one
- * `scanButtons`, at most one `helpButton`, unique element ids, at most DESIGN_MAX_ELEMENTS_LIMIT
+ * A design document. Besides the shapes above: the element counts of its kind
+ * (DESIGN_ELEMENT_CARDINALITY_BY_KIND: a share page has exactly one `faceIcon` and one
+ * `scanButtons` and at most one `helpButton`; a display exactly one `latestPhotos`), unique ids, at most DESIGN_MAX_ELEMENTS_LIMIT
  * elements and DESIGN_DOC_MAX_BYTES_LIMIT bytes (the hard ceilings; the configured
  * DESIGN_MAX_ELEMENTS and DESIGN_DOC_MAX_BYTES are checked with {@link checkDesignDocLimits}).
  * No transforms: the parsed document is the input, so it is stored as sent.
@@ -411,8 +495,11 @@ export const designDocSchema = z
      * serves a gallery folder share using this design as face_only.
      */
     showPhotos: z.boolean().optional(),
+    /** ADR 0033: absent or `share`: the share page; `display`: an event screen. */
+    kind: z.enum(DESIGN_KINDS).optional(),
   })
   .superRefine((doc, ctx) => {
+    const rules = DESIGN_ELEMENT_CARDINALITY_BY_KIND[designKind(doc)];
     const counts = new Map<DesignElementType, number>();
     const seen = new Set<string>();
     doc.elements.forEach((element, i) => {
@@ -427,7 +514,7 @@ export const designDocSchema = z
       seen.add(element.id);
       // The face icon and the scan buttons are the page's purpose: they can't be deleted, so they
       // can't be hidden or made (nearly) invisible either.
-      if (DESIGN_ELEMENT_CARDINALITY[element.type] === 'one') {
+      if (rules[element.type] === 'one') {
         if (element.hidden) {
           ctx.addIssue({
             code: 'custom',
@@ -446,7 +533,14 @@ export const designDocSchema = z
     });
     for (const type of DESIGN_ELEMENT_TYPES) {
       const count = counts.get(type) ?? 0;
-      const rule = DESIGN_ELEMENT_CARDINALITY[type];
+      const rule: DesignCardinality = rules[type];
+      if (rule === 'none' && count > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `a ${designKind(doc)} design can't have ${type} elements (has ${count})`,
+          path: ['elements'],
+        });
+      }
       if (rule === 'one' && count !== 1) {
         ctx.addIssue({
           code: 'custom',
@@ -476,6 +570,11 @@ export type DesignDoc = z.output<typeof designDocSchema>;
 /** ADR 0019: a design shows the photos unless its document turns `showPhotos` off. */
 export function designShowsPhotos(doc: Pick<DesignDoc, 'showPhotos'>): boolean {
   return doc.showPhotos !== false;
+}
+
+/** ADR 0033: whether a document is an event screen (`kind: 'display'`). */
+export function isDisplayDesign(doc: Pick<DesignDoc, 'kind'>): boolean {
+  return designKind(doc) === 'display';
 }
 
 /** Which configured limit a document breaks (DESIGN_DOC_TOO_LARGE details). */

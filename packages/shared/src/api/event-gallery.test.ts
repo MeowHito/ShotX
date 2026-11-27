@@ -81,6 +81,7 @@ describe('share slugs in responses', () => {
     passwordProtected: false,
     expiresAt: null,
     designId: null,
+    displayDesignId: null,
     status: 'active',
     createdAt: at,
   };

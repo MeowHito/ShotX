@@ -158,6 +158,7 @@ import {
   SELFIE_MIME_TYPES,
   shareItemsQuerySchema,
   shareChangesResponseSchema,
+  shareDisplayResponseSchema,
   shareItemsResponseSchema,
   shareMetaResponseSchema,
   shareTokenParamsSchema,
@@ -933,6 +934,16 @@ export const PUBLIC_SHARE_ROUTES = {
     response: shareChangesResponseSchema,
     errors: errors(...SHARE_GATE_ERRORS),
   },
+  /** ADR 0033: the event screen's design and newest photos. */
+  display: {
+    method: 'GET',
+    path: '/s/:token/display',
+    status: 200,
+    auth: 'public',
+    params: shareTokenParamsSchema,
+    response: shareDisplayResponseSchema,
+    errors: errors(...SHARE_GATE_ERRORS),
+  },
   /** Sets the share's unlock cookie. */
   unlock: {
     method: 'POST',
@@ -1077,6 +1088,7 @@ export const PUBLIC_SHARE_ROUTE_ACTIVITY = {
   meta: [],
   items: ['view'],
   changes: [],
+  display: [],
   unlock: [],
   giveConsent: [],
   withdrawConsent: [],

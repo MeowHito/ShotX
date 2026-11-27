@@ -9,6 +9,7 @@ import {
   type DesignLimits,
   designDocAssetIds,
   designShowsPhotos,
+  isDisplayDesign,
 } from '@shotx/shared';
 import { Alert, Button, Checkbox, cn } from '@shotx/ui';
 import { useQueryClient } from '@tanstack/react-query';
@@ -20,6 +21,7 @@ import {
   KeyboardIcon,
   LoaderCircleIcon,
   MaximizeIcon,
+  MonitorIcon,
   Redo2Icon,
   RotateCcwIcon,
   Undo2Icon,
@@ -406,17 +408,28 @@ export function DesignEditor({
           onReload={() => void reload()}
           reloading={reloading}
         />
-        {/* ADR 0019: off = viewers see no photos and must scan their face. */}
-        <label
-          className="ml-2 flex shrink-0 cursor-pointer items-center gap-2 rounded-md border px-2 py-1.5 text-sm"
-          title={t('showPhotosHint')}
-        >
-          <Checkbox
-            checked={designShowsPhotos(state.doc)}
-            onCheckedChange={(v) => dispatch({ type: 'showPhotos', value: v === true })}
-          />
-          {t('showPhotos')}
-        </label>
+        {isDisplayDesign(state.doc) ? (
+          // ADR 0033: an event screen; scanning its QR opens the link's share page design.
+          <span
+            className="ml-2 inline-flex shrink-0 items-center gap-1.5 rounded-md border bg-primary/10 px-2 py-1.5 text-sm font-medium text-primary"
+            title={t('displayHint')}
+          >
+            <MonitorIcon className="size-4" aria-hidden />
+            {t('displayBadge')}
+          </span>
+        ) : (
+          // ADR 0019: off = viewers see no photos and must scan their face.
+          <label
+            className="ml-2 flex shrink-0 cursor-pointer items-center gap-2 rounded-md border px-2 py-1.5 text-sm"
+            title={t('showPhotosHint')}
+          >
+            <Checkbox
+              checked={designShowsPhotos(state.doc)}
+              onCheckedChange={(v) => dispatch({ type: 'showPhotos', value: v === true })}
+            />
+            {t('showPhotos')}
+          </label>
+        )}
         <div className="ml-auto flex items-center gap-1">
           <Button
             variant="ghost"
@@ -489,7 +502,9 @@ export function DesignEditor({
         <Alert variant="warning" className="rounded-none border-x-0 py-2 text-sm" role="status">
           {state.blocked === 'limit'
             ? t('limit', { max: limits.maxElements })
-            : t('props.cantDelete')}
+            : isDisplayDesign(state.doc)
+              ? t('props.cantDeleteDisplay')
+              : t('props.cantDelete')}
         </Alert>
       ) : null}
       <div className="flex min-h-0 flex-1">

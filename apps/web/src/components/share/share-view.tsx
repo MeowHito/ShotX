@@ -24,6 +24,7 @@ import {
 } from 'react';
 import { DesignCanvas, type DesignCanvasActions } from '@/components/design/design-canvas';
 import { HowToSheet } from '@/components/design/how-to-sheet';
+import { useIsFullscreen } from '@/components/site/fullscreen-button';
 import { PublicTopBar } from '@/components/site/public-top-bar';
 import type { ApiClient } from '@/lib/api/client';
 import { isApiError } from '@/lib/api/errors';
@@ -264,6 +265,9 @@ function DesignedCard({
     [design.assets],
   );
   const photosBelow = meta.mode === 'gallery';
+  // ADR 0033: full screen (a monitor at the event) the card fills the screen's height, without
+  // the phone-sized width cap.
+  const fullscreen = useIsFullscreen();
   const cardRef = useRef<HTMLDivElement>(null);
   const setOverlay = useContext(TopBarOverlayContext);
   useEffect(() => {
@@ -288,9 +292,13 @@ function DesignedCard({
         // card (its scan buttons included) is visible without scrolling, also between a phone
         // browser's bars (svh).
         className={
-          photosBelow
-            ? 'min-h-[calc(100svh-3.5rem)] pt-[env(safe-area-inset-top)] [--design-cap:min(480px,calc((100svh_-_3.5rem_-_env(safe-area-inset-top))_*_390_/_844))]'
-            : 'min-h-svh pt-[env(safe-area-inset-top)] [--design-cap:min(480px,calc((100svh_-_env(safe-area-inset-top))_*_390_/_844))]'
+          fullscreen
+            ? photosBelow
+              ? 'min-h-[calc(100svh-3.5rem)] [--design-cap:calc((100svh_-_3.5rem)_*_390_/_844)]'
+              : 'min-h-svh [--design-cap:calc(100svh_*_390_/_844)]'
+            : photosBelow
+              ? 'min-h-[calc(100svh-3.5rem)] pt-[env(safe-area-inset-top)] [--design-cap:min(480px,calc((100svh_-_3.5rem_-_env(safe-area-inset-top))_*_390_/_844))]'
+              : 'min-h-svh pt-[env(safe-area-inset-top)] [--design-cap:min(480px,calc((100svh_-_env(safe-area-inset-top))_*_390_/_844))]'
         }
       />
       {photosBelow ? (

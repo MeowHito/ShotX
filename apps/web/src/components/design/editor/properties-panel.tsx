@@ -2,11 +2,14 @@
 
 import {
   DESIGN_COORDINATE_RANGE,
+  DESIGN_LATEST_PHOTOS_INTERVAL_RANGE,
+  DESIGN_LATEST_PHOTOS_MAX,
   DESIGN_FONT_INFO,
   DESIGN_FONTS,
   DESIGN_REQUIRED_ELEMENT_MIN_OPACITY,
   DESIGN_SIZE_RANGE,
   type DesignColor,
+  isDisplayDesign,
   type DesignElement,
   type DesignElementOf,
 } from '@shotx/shared';
@@ -135,7 +138,9 @@ export function PropertiesPanel() {
             ) : null}
           </div>
           {selected.some((e) => !isDeletable(e)) ? (
-            <p className="text-xs text-muted-foreground">{t('cantDelete')}</p>
+            <p className="text-xs text-muted-foreground">
+              {isDisplayDesign(state.doc) ? t('cantDeleteDisplay') : t('cantDelete')}
+            </p>
           ) : null}
         </>
       )}
@@ -216,6 +221,10 @@ function ElementProperties({ element: e }: { element: DesignElement }) {
       {e.type === 'faceIcon' ? <FaceIconProperties e={e} update={update} end={end} /> : null}
       {e.type === 'scanButtons' ? <ScanButtonsProperties e={e} update={update} end={end} /> : null}
       {e.type === 'helpButton' ? <HelpButtonProperties e={e} update={update} end={end} /> : null}
+      {e.type === 'latestPhotos' ? (
+        <LatestPhotosProperties e={e} update={update} end={end} />
+      ) : null}
+      {e.type === 'qrCode' ? <QrCodeProperties e={e} update={update} end={end} /> : null}
     </>
   );
 }
@@ -658,6 +667,97 @@ function HelpButtonProperties({ e, update, end }: TypeProps<'helpButton'>) {
           value={e.fg}
           swatches={swatches}
           onChange={(fg) => update({ fg }, 'fg')}
+          onCommit={end}
+        />
+      </div>
+      <NumberField
+        label={t('radius')}
+        value={e.radius}
+        min={0}
+        max={40}
+        onChange={(radius) => update({ radius }, 'radius')}
+        onCommit={end}
+      />
+    </Section>
+  );
+}
+
+/** ADR 0033: how many of the newest photos, how long each, fit, corners, colour. */
+function LatestPhotosProperties({ e, update, end }: TypeProps<'latestPhotos'>) {
+  const t = useTranslations('designs.editor.props');
+  const swatches = useSwatches();
+  return (
+    <Section>
+      <p className="text-xs text-muted-foreground">{t('latestPhotosHint')}</p>
+      <div className="grid grid-cols-2 gap-2">
+        <NumberField
+          label={t('photoCount')}
+          value={e.count}
+          min={1}
+          max={DESIGN_LATEST_PHOTOS_MAX}
+          onChange={(count) => update({ count: Math.round(count) }, 'count')}
+          onCommit={end}
+        />
+        <NumberField
+          label={t('intervalSec')}
+          value={e.intervalSec}
+          min={DESIGN_LATEST_PHOTOS_INTERVAL_RANGE.min}
+          max={DESIGN_LATEST_PHOTOS_INTERVAL_RANGE.max}
+          onChange={(intervalSec) => update({ intervalSec }, 'intervalSec')}
+          onCommit={end}
+        />
+      </div>
+      <SelectField
+        label={t('fit')}
+        value={e.fit}
+        options={[
+          { value: 'cover', label: t('fitCover') },
+          { value: 'contain', label: t('fitContain') },
+        ]}
+        onChange={(fit) => {
+          update({ fit }, 'fit');
+          end();
+        }}
+      />
+      <NumberField
+        label={t('radius')}
+        value={e.radius}
+        min={0}
+        max={200}
+        onChange={(radius) => update({ radius }, 'radius')}
+        onCommit={end}
+      />
+      <ColorField
+        label={t('bg')}
+        value={e.bg}
+        swatches={swatches}
+        onChange={(bg) => update({ bg }, 'bg')}
+        onCommit={end}
+      />
+    </Section>
+  );
+}
+
+/** ADR 0033: the QR code's colours and corners (it always encodes the link). */
+function QrCodeProperties({ e, update, end }: TypeProps<'qrCode'>) {
+  const t = useTranslations('designs.editor.props');
+  const swatches = useSwatches();
+  return (
+    <Section>
+      <p className="text-xs text-muted-foreground">{t('qrHint')}</p>
+      <div className="grid grid-cols-2 gap-2">
+        <ColorField
+          label={t('qrFg')}
+          value={e.fg}
+          swatches={swatches}
+          onChange={(fg) => update({ fg }, 'fg')}
+          onCommit={end}
+        />
+        <ColorField
+          label={t('bg')}
+          value={e.bg}
+          swatches={swatches}
+          onChange={(bg) => update({ bg }, 'bg')}
           onCommit={end}
         />
       </div>

@@ -553,3 +553,138 @@ export function blankDesignDoc(): DesignDoc {
     helpButton(652, { bg: '#f3f4f6', fg: '#374151', radius: 18 }),
   ]);
 }
+
+// --- Display screens (ADR 0033) ------------------------------------------------------------------
+
+/** Built-in templates of event screens (`kind: 'display'`), in picker order. */
+export const DESIGN_DISPLAY_TEMPLATE_IDS = ['display-spotlight', 'display-clean'] as const;
+export type DesignDisplayTemplateId = (typeof DESIGN_DISPLAY_TEMPLATE_IDS)[number];
+
+/** Placeholder text of the display templates, per UI language. */
+interface DisplayCopy {
+  title: string;
+  /** Next to the QR code. */
+  scan: string;
+}
+
+const DISPLAY_COPY = {
+  th: { title: 'ชื่องานของคุณ', scan: 'สแกนหาภาพ\nของคุณได้เลย' },
+  en: { title: 'Your Event Name', scan: 'Scan to find\nyour photos' },
+  zh: { title: '活动名称', scan: '扫码查找\n你的照片' },
+} as const satisfies Record<SupportedLocale, DisplayCopy>;
+
+const latestPhotos = (
+  box: Box,
+  style: Partial<
+    Pick<DesignElementOf<'latestPhotos'>, 'count' | 'intervalSec' | 'fit' | 'radius' | 'bg'>
+  > = {},
+): DesignElementOf<'latestPhotos'> => ({
+  ...common('latest-photos', box),
+  type: 'latestPhotos',
+  count: 1,
+  intervalSec: 6,
+  fit: 'cover',
+  radius: 20,
+  bg: '#00000033',
+  ...style,
+});
+
+const qrCode = (
+  box: Box,
+  style: Partial<Pick<DesignElementOf<'qrCode'>, 'fg' | 'bg' | 'radius'>> = {},
+): DesignElementOf<'qrCode'> => ({
+  ...common('qr-code', box),
+  type: 'qrCode',
+  fg: '#000000',
+  bg: '#ffffff',
+  radius: 10,
+  ...style,
+});
+
+/**
+ * The display layout every template shares (owner's sketch, 2026-11-27): the event name on top,
+ * the newest photo large in the middle, a line of text and the link's QR code at the bottom.
+ */
+function displayLayout(
+  background: DesignBackground,
+  copy: DisplayCopy,
+  colors: { text: DesignColor; photoBg: DesignColor; shadow: boolean },
+): DesignDoc {
+  const shadow = colors.shadow ? { color: '#00000066', blur: 8, x: 0, y: 2 } : null;
+  return {
+    ...doc(background, [
+      text('title', centred(36, 340, 76), copy.title, {
+        font: 'kanit',
+        size: 30,
+        weight: 700,
+        color: colors.text,
+        lineHeight: 1.2,
+        shadow,
+      }),
+      latestPhotos(centred(128, 330, 500), { bg: colors.photoBg }),
+      text('scan-text', { x: 30, y: 672, w: 190, h: 90 }, copy.scan, {
+        font: 'kanit',
+        size: 24,
+        weight: 700,
+        color: colors.text,
+        align: 'left',
+        lineHeight: 1.3,
+        shadow,
+      }),
+      qrCode({ x: 236, y: 652, w: 124, h: 124 }),
+    ]),
+    kind: 'display',
+  };
+}
+
+const DISPLAY_BUILDERS = {
+  'display-spotlight': (c: DisplayCopy) =>
+    displayLayout(
+      {
+        type: 'gradient',
+        angle: 160,
+        stops: [
+          { color: '#0b1a4a', at: 0 },
+          { color: '#1d3f9a', at: 0.55 },
+          { color: '#13b5d8', at: 1 },
+        ],
+      },
+      c,
+      { text: '#ffffff', photoBg: '#ffffff1a', shadow: true },
+    ),
+  'display-clean': (c: DisplayCopy) =>
+    displayLayout({ type: 'color', color: '#f5f6f8' }, c, {
+      text: '#111827',
+      photoBg: '#e5e7eb',
+      shadow: false,
+    }),
+} as const satisfies Record<DesignDisplayTemplateId, (copy: DisplayCopy) => DesignDoc>;
+
+/** A fresh copy of a display template's document with placeholder text in `locale`. */
+export function designDisplayTemplateDoc(
+  id: DesignDisplayTemplateId,
+  locale: SupportedLocale = DEFAULT_LOCALE,
+): DesignDoc {
+  const build = DISPLAY_BUILDERS[id] as ((copy: DisplayCopy) => DesignDoc) | undefined;
+  if (build === undefined) throw new RangeError(`Unknown display template ${JSON.stringify(id)}`);
+  return build(DISPLAY_COPY[locale]);
+}
+
+/**
+ * The screen of a link without a chosen display design (ADR 0033): the display layout on the
+ * share page design's background (else the spotlight gradient) with the event's name as title.
+ * Text is white with a shadow, which reads on most backgrounds.
+ */
+export function autoDisplayDoc(
+  title: string,
+  background: DesignBackground | null,
+  locale: SupportedLocale = DEFAULT_LOCALE,
+): DesignDoc {
+  const base = designDisplayTemplateDoc('display-spotlight', locale);
+  const copy = { ...DISPLAY_COPY[locale], title: [...title].slice(0, 120).join('') };
+  return displayLayout(background ?? base.background, copy, {
+    text: '#ffffff',
+    photoBg: '#ffffff1a',
+    shadow: true,
+  });
+}

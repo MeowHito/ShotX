@@ -162,7 +162,7 @@ describe('design document', () => {
     expect(issues(docWith([faceEl(), buttonsEl(), helpEl('a'), helpEl('b')]))).toContain(
       'must have at most one helpButton element (has 2)',
     );
-    expect(DESIGN_UNDELETABLE_ELEMENT_TYPES).toEqual(['faceIcon', 'scanButtons']);
+    expect(DESIGN_UNDELETABLE_ELEMENT_TYPES).toEqual(['faceIcon', 'scanButtons', 'latestPhotos']);
   });
 
   it("keeps the face icon and the scan buttons visible: they can't be hidden or faded out", () => {

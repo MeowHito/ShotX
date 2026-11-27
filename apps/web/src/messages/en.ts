@@ -23,6 +23,8 @@ export const en: PublicMessages = {
     close: 'Close',
     loading: 'Loading…',
     retry: 'Try again',
+    fullscreen: 'Full screen',
+    exitFullscreen: 'Exit full screen',
     showPassword: 'Show password',
     hidePassword: 'Hide password',
     duration: {
@@ -31,12 +33,19 @@ export const en: PublicMessages = {
     },
   },
   share: {
+    display: {
+      title: 'Photo screen',
+      label: "The event's latest photos",
+      loadError: "Couldn't load the latest photos. Retrying automatically.",
+    },
     design: {
       label: 'Event page',
       camera: 'Take a selfie',
       choosePhoto: 'Use a photo',
       help: 'How it works',
       seeAll: 'Swipe up for all photos',
+      qr: 'QR code of the link',
+      latestPhotos: 'Latest photos',
       howTo: {
         title: 'How to find your photos',
         camera: 'Tap “Take a selfie” and accept the face data terms.',

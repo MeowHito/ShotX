@@ -7,12 +7,14 @@ import {
   ExternalLinkIcon,
   ImageIcon,
   PencilIcon,
+  MonitorIcon,
   QrCodeIcon,
   SlidersHorizontalIcon,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useFormatter, useTranslations } from 'next-intl';
 import QRCode from 'qrcode';
+import { displayUrlOf } from '@/components/shares/link-display-picker';
 import { useEffect, useRef, useState } from 'react';
 import { useShareStats } from '@/lib/studio/queries';
 import { EventStatusBadge } from './item-card';
@@ -110,6 +112,16 @@ export function EventInspector({
                 <QrCodeIcon aria-hidden />
                 {t('saveQr')}
               </Button>
+              {/* ADR 0033: the event screen (newest photos + this QR) for a monitor at the event. */}
+              <a
+                href={displayUrlOf(link.url)}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1.5 text-sm font-medium text-primary hover:underline dark:text-cyan-300"
+              >
+                <MonitorIcon className="size-4" aria-hidden />
+                {t('openDisplay')}
+              </a>
             </div>
           </div>
           <VisitorsChart shareId={link.shareId} />

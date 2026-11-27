@@ -271,6 +271,7 @@ describe('route table', () => {
       'GET /s/:token',
       'GET /s/:token/items',
       'GET /s/:token/changes',
+      'GET /s/:token/display',
       'POST /s/:token/unlock',
       'POST /s/:token/consent',
       'DELETE /s/:token/consent',

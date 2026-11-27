@@ -3,6 +3,7 @@
 import { cn } from '@shotx/ui';
 import { useTranslations } from 'next-intl';
 import { useEffect, useState } from 'react';
+import { FullscreenButton } from './fullscreen-button';
 import { LanguageSwitcher } from './language-switcher';
 
 /**
@@ -42,7 +43,11 @@ export function PublicTopBar({ overlay = false }: { overlay?: boolean }) {
         <span className="flex h-11 items-center px-1 text-base font-bold tracking-[-0.015em]">
           {t('common.appName')}
         </span>
-        <LanguageSwitcher />
+        <div className="flex items-center gap-1">
+          {/* ADR 0033: a monitor at the event shows the page full screen (wide screens only). */}
+          <FullscreenButton className="hidden opacity-60 hover:bg-foreground/10 hover:opacity-100 sm:inline-flex" />
+          <LanguageSwitcher />
+        </div>
       </nav>
     </header>
   );

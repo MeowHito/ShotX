@@ -38,6 +38,8 @@ export const shareKeys = {
       ? (['share', token, 'items'] as const)
       : (['share', token, 'items', mode] as const),
   faceDeletion: (token: string) => ['share', token, 'face-deletion'] as const,
+  /** ADR 0033: the event screen's design and newest photos. */
+  display: (token: string) => ['share', token, 'display'] as const,
   /** ADR 0031: whether the share takes print orders, and this device's orders. */
   prints: (token: string) => ['share', token, 'prints'] as const,
 };
@@ -84,6 +86,33 @@ export function useShareMeta(ref: string, initial: ShareMetaResponse | null) {
     placeholderData: initial ?? undefined,
     staleTime: 60_000,
   });
+}
+
+/**
+ * ADR 0033: the event screen's display design and the newest photos. Refetched when the share
+ * changes (useShareLiveUpdates invalidates the page's queries) and before the photos' signed URLs
+ * expire, so a screen left on all day keeps working.
+ */
+export function useShareDisplay(token: string) {
+  const { api } = useShareApi();
+  const query = useQuery({
+    queryKey: shareKeys.display(token),
+    queryFn: ({ signal }) => api.call(PUBLIC_SHARE_ROUTES.display, { params: { token }, signal }),
+    staleTime: 60_000,
+  });
+  const firstExpiry = (query.data?.photos ?? []).reduce(
+    (min, p) => Math.min(min, Date.parse(p.urlsExpireAt)),
+    Number.POSITIVE_INFINITY,
+  );
+  const { refetch } = query;
+  useEffect(() => {
+    if (!Number.isFinite(firstExpiry)) return;
+    const delay = Math.max(0, firstExpiry - URL_REFRESH_MARGIN_MS - Date.now());
+    if (delay > 2 ** 31 - 1) return;
+    const timer = setTimeout(() => void refetch(), delay);
+    return () => clearTimeout(timer);
+  }, [firstExpiry, refetch]);
+  return query;
 }
 
 /** Refetch this long before signed URLs expire. */

@@ -1,14 +1,18 @@
 'use client';
 
 import {
+  DESIGN_DISPLAY_TEMPLATE_IDS,
   DESIGN_NAME_MAX_LENGTH,
   DESIGN_TEMPLATE_IDS,
+  type DesignDisplayTemplateId,
   type DesignDoc,
   type DesignSummary,
   type DesignTemplateId,
+  designDisplayTemplateDoc,
   designNameSchema,
   designTemplateDoc,
   blankDesignDoc,
+  isDisplayDesign,
 } from '@shotx/shared';
 import {
   Alert,
@@ -30,6 +34,7 @@ import {
 } from '@shotx/ui';
 import {
   CopyIcon,
+  MonitorIcon,
   MoreHorizontalIcon,
   PencilIcon,
   PlusIcon,
@@ -204,6 +209,8 @@ function DesignCard({
 }) {
   const t = useTranslations('designs');
   const format = useFormatter();
+  // ADR 0033: an event screen; never the default (that is a share page).
+  const display = isDisplayDesign(design.doc);
   return (
     <article
       className="group relative flex h-full flex-col gap-2 rounded-xl border bg-background p-2 shadow-card"
@@ -230,6 +237,12 @@ function DesignCard({
             <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
               <StarIcon className="size-3" aria-hidden />
               {t('defaultBadge')}
+            </span>
+          ) : null}
+          {display ? (
+            <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:text-cyan-300">
+              <MonitorIcon className="size-3" aria-hidden />
+              {t('displayBadge')}
             </span>
           ) : null}
         </div>
@@ -259,10 +272,12 @@ function DesignCard({
               <CopyIcon aria-hidden />
               {t('duplicate')}
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={onToggleDefault}>
-              {design.isDefault ? <StarOffIcon aria-hidden /> : <StarIcon aria-hidden />}
-              {design.isDefault ? t('unsetDefault') : t('makeDefault')}
-            </DropdownMenuItem>
+            {display ? null : (
+              <DropdownMenuItem onSelect={onToggleDefault}>
+                {design.isDefault ? <StarOffIcon aria-hidden /> : <StarIcon aria-hidden />}
+                {design.isDefault ? t('unsetDefault') : t('makeDefault')}
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={onDelete} className="text-destructive">
               <Trash2Icon aria-hidden />
@@ -275,7 +290,10 @@ function DesignCard({
   );
 }
 
-type StartingPoint = DesignTemplateId | 'blank';
+type StartingPoint = DesignTemplateId | DesignDisplayTemplateId | 'blank';
+
+const isDisplayTemplate = (p: StartingPoint): p is DesignDisplayTemplateId =>
+  (DESIGN_DISPLAY_TEMPLATE_IDS as readonly string[]).includes(p);
 
 /** The template picker: blank or one of DESIGN_TEMPLATES, with live previews, and a name. */
 function CreateDesignDialog({
@@ -326,9 +344,14 @@ function CreateDesignForm({
   const docs = useMemo(() => {
     const map = new Map<StartingPoint, DesignDoc>([['blank', blankDesignDoc()]]);
     for (const id of DESIGN_TEMPLATE_IDS) map.set(id, designTemplateDoc(id, locale));
+    for (const id of DESIGN_DISPLAY_TEMPLATE_IDS) map.set(id, designDisplayTemplateDoc(id, locale));
     return map;
   }, [locale]);
-  const options: StartingPoint[] = [...DESIGN_TEMPLATE_IDS, 'blank'];
+  // ADR 0033: share pages first, then event screens (their own group).
+  const groups: { key: 'share' | 'display'; options: StartingPoint[] }[] = [
+    { key: 'share', options: [...DESIGN_TEMPLATE_IDS, 'blank'] },
+    { key: 'display', options: [...DESIGN_DISPLAY_TEMPLATE_IDS] },
+  ];
   const label = (p: StartingPoint) => (p === 'blank' ? t('picker.blank') : t(`templates.${p}`));
 
   async function submit(event: FormEvent) {
@@ -344,7 +367,9 @@ function CreateDesignForm({
       const design = await create.mutateAsync(
         choice === 'blank'
           ? { name: parsed.data }
-          : { name: parsed.data, templateId: choice, locale },
+          : isDisplayTemplate(choice)
+            ? { name: parsed.data, doc: designDisplayTemplateDoc(choice, locale) }
+            : { name: parsed.data, templateId: choice, locale },
       );
       onDone(false);
       onCreated(design.id);
@@ -355,40 +380,45 @@ function CreateDesignForm({
 
   return (
     <form onSubmit={(e) => void submit(e)} className="grid gap-4" noValidate>
-      <fieldset className="grid gap-2">
-        <legend className="mb-1 text-sm font-medium">{t('picker.choose')}</legend>
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(7.5rem,1fr))] gap-3">
-          {options.map((p) => {
-            const checked = choice === p;
-            return (
-              <label
-                key={p}
-                className={cn(
-                  'flex cursor-pointer flex-col items-center gap-2 rounded-xl border p-2 text-center text-sm transition-colors',
-                  checked ? 'border-primary ring-2 ring-primary' : 'hover:bg-accent/60',
-                )}
-              >
-                <input
-                  type="radio"
-                  name={`${inputId}-template`}
-                  value={p}
-                  checked={checked}
-                  onChange={() => setChoice(p)}
-                  className="sr-only"
-                />
-                <span className="overflow-hidden rounded-lg border">
-                  <DesignPreview
-                    doc={docs.get(p) as DesignDoc}
-                    assets={{}}
-                    width={PICKER_PREVIEW_WIDTH}
+      {groups.map((group) => (
+        <fieldset key={group.key} className="grid gap-2">
+          <legend className="mb-1 text-sm font-medium">{t(`picker.groups.${group.key}`)}</legend>
+          {group.key === 'display' ? (
+            <p className="-mt-1 text-xs text-muted-foreground">{t('picker.displayHint')}</p>
+          ) : null}
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(7.5rem,1fr))] gap-3">
+            {group.options.map((p) => {
+              const checked = choice === p;
+              return (
+                <label
+                  key={p}
+                  className={cn(
+                    'flex cursor-pointer flex-col items-center gap-2 rounded-xl border p-2 text-center text-sm transition-colors',
+                    checked ? 'border-primary ring-2 ring-primary' : 'hover:bg-accent/60',
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name={`${inputId}-template`}
+                    value={p}
+                    checked={checked}
+                    onChange={() => setChoice(p)}
+                    className="sr-only"
                   />
-                </span>
-                <span className={cn(checked && 'font-semibold text-primary')}>{label(p)}</span>
-              </label>
-            );
-          })}
-        </div>
-      </fieldset>
+                  <span className="overflow-hidden rounded-lg border">
+                    <DesignPreview
+                      doc={docs.get(p) as DesignDoc}
+                      assets={{}}
+                      width={PICKER_PREVIEW_WIDTH}
+                    />
+                  </span>
+                  <span className={cn(checked && 'font-semibold text-primary')}>{label(p)}</span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+      ))}
       <div className="grid gap-2">
         <Label htmlFor={`${inputId}-name`}>{t('nameLabel')}</Label>
         <Input

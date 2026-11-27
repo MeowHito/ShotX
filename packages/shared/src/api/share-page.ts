@@ -247,6 +247,26 @@ export type ShareItemsResponse = z.output<typeof shareItemsResponseSchema>;
 export const shareChangesResponseSchema = z.object({ version: z.string() });
 export type ShareChangesResponse = z.output<typeof shareChangesResponseSchema>;
 
+// --- GET /s/:token/display ----------------------------------------------------------------------
+
+/** Newest photos `GET /s/:token/display` returns at most (a latest-photos box uses `count`). */
+export const SHARE_DISPLAY_PHOTOS_LIMIT = 20;
+
+/**
+ * ADR 0033: what the event screen `/{slug}/display` shows. `design`: the share's display design
+ * (`shares.display_design_id`, a `kind: 'display'` document with its ready images), else null:
+ * web draws the built-in screen (autoDisplayDoc) from the share page design. `photos`: the
+ * newest ready images and videos in scope, newest first, at most SHARE_DISPLAY_PHOTOS_LIMIT, in a
+ * `gallery` share only (empty when the share, or its design, is scan-only: those photos are
+ * found by a face only). Same gates as items; writes no activity event (a screen polls it, like
+ * `changes`, and counting it would inflate views).
+ */
+export const shareDisplayResponseSchema = z.object({
+  design: shareMetaDesignSchema.nullable(),
+  photos: z.array(shareItemSchema),
+});
+export type ShareDisplayResponse = z.output<typeof shareDisplayResponseSchema>;
+
 // --- POST /s/:token/unlock ----------------------------------------------------------------------
 
 /**

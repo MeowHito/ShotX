@@ -14,6 +14,7 @@ import {
 import { useTranslations } from 'next-intl';
 import { type FormEvent, useId, useState } from 'react';
 import { LinkDesignPicker } from '@/components/shares/link-design-picker';
+import { LinkDisplayPicker } from '@/components/shares/link-display-picker';
 import { ShareForm } from '@/components/shares/share-form';
 import { SavedToast } from '@/components/studio/saved-toast';
 import { useRenameItem } from '@/lib/drive/queries';
@@ -214,6 +215,10 @@ function LinkSection({
           <section className="grid gap-2">
             <h4 className="text-sm font-medium">{te('dialog.design')}</h4>
             <LinkDesignPicker share={link} />
+          </section>
+          <section className="grid gap-2">
+            <h4 className="text-sm font-medium">{te('dialog.display')}</h4>
+            <LinkDisplayPicker share={link} />
           </section>
           <ShareForm
             key={`${link.id}-${shares.dataUpdatedAt}`}

@@ -47,6 +47,12 @@ const settings = {
    * the studio preselects it when a share is created.
    */
   designId: idSchema.nullable(),
+  /**
+   * ADR 0033: the event screen of `/{slug}/display`: one of the caller's display designs
+   * (`kind: 'display'`, else DESIGN_NOT_FOUND), or null: the built-in screen (autoDisplayDoc).
+   * `designId` must be a share page design (not `display`, else DESIGN_NOT_FOUND).
+   */
+  displayDesignId: idSchema.nullable(),
 };
 
 // --- POST /shares -----------------------------------------------------------------------------
@@ -68,6 +74,7 @@ export const createShareBodySchema = z
     password: settings.password.default(null),
     expiresAt: settings.expiresAt.default(null),
     designId: settings.designId.default(null),
+    displayDesignId: settings.displayDesignId.default(null),
   })
   .refine((b) => shareModeAllowedForTarget(b.mode, b.target.type), {
     error: 'face_only shares must target a folder',
@@ -110,6 +117,8 @@ export const ownerShareSchema = z.object({
    * time). Becomes null when the design is deleted.
    */
   designId: idSchema.nullable(),
+  /** `shares.display_design_id` (ADR 0033); null: the built-in screen. */
+  displayDesignId: idSchema.nullable(),
   /** ownerShareStatus: `revoked` (is_active false), `expired` (expires_at passed) or `active`. */
   status: z.enum(SHARE_STATUSES),
   createdAt: isoDateTimeSchema,
@@ -165,6 +174,7 @@ export const updateShareBodySchema = z
     password: settings.password.optional(),
     expiresAt: settings.expiresAt.optional(),
     designId: settings.designId.optional(),
+    displayDesignId: settings.displayDesignId.optional(),
     /**
      * Unpublish (`true`, sets `paused_at`) or publish again (`false`, clears it) without changing
      * the link (ADR 0016). Idempotent.

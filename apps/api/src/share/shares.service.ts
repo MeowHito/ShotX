@@ -24,6 +24,7 @@ import {
   subscriptionAllowsSharing,
   type updateShareBodySchema,
   viewerLoginAvailable,
+  type DesignKind,
 } from '@shotx/shared';
 import { and, asc, desc, eq, gte, isNull, lt, lte, type SQL, sql } from 'drizzle-orm';
 import type { z } from 'zod';
@@ -128,6 +129,7 @@ export class SharesService {
       passwordProtected: share.passwordHash !== null,
       expiresAt: share.expiresAt === null ? null : share.expiresAt.toISOString(),
       designId: share.designId,
+      displayDesignId: share.displayDesignId,
       status: ownerShareStatus(share, this.clock.now()),
       createdAt: share.createdAt.toISOString(),
     };
@@ -165,18 +167,24 @@ export class SharesService {
   }
 
   /**
-   * DESIGN_NOT_FOUND unless `designId` is one of the caller's designs. Locked FOR KEY SHARE until
-   * the share write commits, so the design can't be deleted in between (the foreign key on
-   * (design_id, owner_id) would refuse it anyway).
+   * DESIGN_NOT_FOUND unless `designId` is one of the caller's designs of `kind` (ADR 0033: a
+   * share page design for `designId`, a display design for `displayDesignId`). Locked FOR KEY
+   * SHARE until the share write commits, so the design can't be deleted in between (the foreign
+   * key on (design_id, owner_id) would refuse it anyway).
    */
-  private async assertOwnDesign(q: Queryable, ownerId: string, designId: string): Promise<void> {
+  private async assertOwnDesign(
+    q: Queryable,
+    ownerId: string,
+    designId: string,
+    kind: DesignKind = 'share',
+  ): Promise<void> {
     const [design] = await q
-      .select({ id: shareDesigns.id })
+      .select({ kind: sql<string | null>`${shareDesigns.doc} ->> 'kind'` })
       .from(shareDesigns)
       .where(and(eq(shareDesigns.id, designId), eq(shareDesigns.ownerId, ownerId)))
       .for('key share');
-    if (design === undefined) {
-      throw new ApiError('DESIGN_NOT_FOUND', 'No design of yours has this id');
+    if (design === undefined || (design.kind ?? 'share') !== kind) {
+      throw new ApiError('DESIGN_NOT_FOUND', `No ${kind} design of yours has this id`);
     }
   }
 
@@ -228,6 +236,9 @@ export class SharesService {
         targetName = folder.name;
       }
       if (body.designId !== null) await this.assertOwnDesign(tx, ownerId, body.designId);
+      if (body.displayDesignId !== null) {
+        await this.assertOwnDesign(tx, ownerId, body.displayDesignId, 'display');
+      }
       // ADR 0011: the readable ref, from the target's name; the base first, then suffixed
       // candidates while `shares_slug_unique` says taken. Never changed afterwards.
       const slugBase = slugifyEventName(shareSlugSourceName(body.target.type, targetName));
@@ -250,6 +261,7 @@ export class SharesService {
                 passwordHash,
                 expiresAt,
                 designId: body.designId,
+                displayDesignId: body.displayDesignId,
               })
               .returning({ id: shares.id }),
           );
@@ -356,6 +368,9 @@ export class SharesService {
       if (body.designId !== undefined && body.designId !== null) {
         await this.assertOwnDesign(tx, ownerId, body.designId);
       }
+      if (body.displayDesignId !== undefined && body.displayDesignId !== null) {
+        await this.assertOwnDesign(tx, ownerId, body.displayDesignId, 'display');
+      }
       await tx
         .update(shares)
         .set({
@@ -366,6 +381,7 @@ export class SharesService {
           ...(passwordHash === undefined ? {} : { passwordHash }),
           ...(expiresAt === undefined ? {} : { expiresAt }),
           ...(body.designId === undefined ? {} : { designId: body.designId }),
+          ...(body.displayDesignId === undefined ? {} : { displayDesignId: body.displayDesignId }),
           // ADR 0016: unpublish keeps the first pause time; publish clears it. Same link either way.
           ...(body.paused === undefined
             ? {}

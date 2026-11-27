@@ -204,6 +204,7 @@ describe('item menus', () => {
       passwordProtected: false,
       expiresAt: null,
       designId: null,
+      displayDesignId: null,
       status: 'active',
       createdAt: '2026-10-25T05:00:00.000Z',
     } satisfies OwnerShare;

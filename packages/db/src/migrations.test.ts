@@ -381,6 +381,15 @@ describe('migrations', () => {
     }
   });
 
+  it('0023 is display_screen: shares.display_design_id, same-owner FK nulling only itself (ADR 0033)', () => {
+    expect(journal.entries[23]?.tag).toBe('0023_display_screen');
+    const sql = sqlOf('0023_display_screen');
+    expect(sql).toContain('ALTER TABLE "shares" ADD COLUMN "display_design_id" uuid;');
+    expect(sql).toContain('ON DELETE SET NULL ("display_design_id")');
+    expect(sql).toContain('CREATE INDEX "shares_display_design_idx"');
+    expect(sql).not.toMatch(/DROP|ALTER COLUMN|RENAME/);
+  });
+
   it('never edits a committed migration: each snapshot chains to the previous one', () => {
     const snapshots = journal.entries.map(
       (e) =>

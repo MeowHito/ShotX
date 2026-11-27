@@ -1,6 +1,6 @@
 'use client';
 
-import { designShowsPhotos } from '@shotx/shared';
+import { designShowsPhotos, isDisplayDesign } from '@shotx/shared';
 import { Button, cn } from '@shotx/ui';
 import { PaletteIcon } from 'lucide-react';
 import Link from 'next/link';
@@ -33,7 +33,8 @@ export function DesignPicker({
   const designs = useDesigns();
   // The default design comes first, ahead of "no design" (owner, 2026-11-16, ADR 0028).
   const items = useMemo(() => {
-    const list = designs.data?.items ?? [];
+    // ADR 0033: event screens are chosen on their own (DisplayDesignPicker).
+    const list = (designs.data?.items ?? []).filter((d) => !isDisplayDesign(d.doc));
     return [...list.filter((d) => d.isDefault), ...list.filter((d) => !d.isDefault)];
   }, [designs.data]);
   const assets = useMemo(() => assetUrls(designs.data?.assets ?? {}), [designs.data]);
